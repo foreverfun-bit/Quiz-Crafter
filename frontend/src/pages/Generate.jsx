@@ -217,30 +217,46 @@ const Generate = () => {
   };
 
   // Like/Dislike handlers
+  // Like = Save question to library
   const handleLike = async (questionId, key) => {
     try {
-      await api.patch(`/questions/${questionId}/like`);
+      // Find the question in our generated questions
+      const question = generatedQuestions[key]?.find(q => q.id === questionId);
+      if (!question) {
+        toast.error("Question not found");
+        return;
+      }
+      
+      // Save to database via new endpoint
+      await api.post("/questions/save", {
+        id: question.id,
+        category: question.category,
+        question: question.question,
+        answer: question.answer,
+        question_type: question.question_type,
+        options: question.options,
+        fun_fact: question.fun_fact,
+        image_url: question.image_url
+      });
+      
       setGeneratedQuestions(prev => ({
         ...prev,
         [key]: prev[key].map(q => q.id === questionId ? { ...q, status: "liked" } : q)
       }));
       toast.success("Question saved to library!");
     } catch (error) {
-      toast.error("Failed to like question");
+      toast.error("Failed to save question");
     }
   };
 
+  // Dislike = Just remove from view (not saved to DB)
   const handleDislike = async (questionId, key) => {
-    try {
-      await api.patch(`/questions/${questionId}/dislike`);
-      setGeneratedQuestions(prev => ({
-        ...prev,
-        [key]: prev[key].filter(q => q.id !== questionId)
-      }));
-      toast.success("Question hidden");
-    } catch (error) {
-      toast.error("Failed to dislike question");
-    }
+    // Just remove from the generated list - it was never saved to DB
+    setGeneratedQuestions(prev => ({
+      ...prev,
+      [key]: prev[key].filter(q => q.id !== questionId)
+    }));
+    toast.success("Question removed");
   };
 
   // Check if all categories have questions

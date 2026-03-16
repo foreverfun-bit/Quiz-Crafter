@@ -315,6 +315,55 @@ async def delete_question(question_id: str, current_user: dict = Depends(get_cur
         raise HTTPException(status_code=404, detail="Question not found")
     return {"message": "Question deleted"}
 
+class SaveQuestionRequest(BaseModel):
+    id: str
+    category: str
+    question: str
+    answer: str
+    question_type: str
+    options: Optional[List[str]] = None
+    fun_fact: Optional[str] = None
+    image_url: Optional[str] = None
+
+@api_router.post("/questions/save", response_model=Question)
+async def save_question(
+    question_data: SaveQuestionRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Save a generated question to the library (when liked)"""
+    # Check if question already exists
+    existing = await db.questions.find_one({
+        "id": question_data.id,
+        "user_id": current_user["id"]
+    })
+    
+    if existing:
+        # Already saved, just update status to liked
+        await db.questions.update_one(
+            {"id": question_data.id},
+            {"$set": {"status": "liked"}}
+        )
+        updated = await db.questions.find_one({"id": question_data.id}, {"_id": 0})
+        return updated
+    
+    # Create new question with liked status
+    question = Question(
+        id=question_data.id,
+        category=question_data.category,
+        question=question_data.question,
+        answer=question_data.answer,
+        question_type=question_data.question_type,
+        options=question_data.options,
+        fun_fact=question_data.fun_fact,
+        image_url=question_data.image_url,
+        user_id=current_user["id"],
+        source="ai",
+        status="liked"
+    )
+    
+    await db.questions.insert_one(question.model_dump())
+    return question
+
 @api_router.patch("/questions/{question_id}/like")
 async def like_question(question_id: str, current_user: dict = Depends(get_current_user)):
     result = await db.questions.update_one(
@@ -410,6 +459,8 @@ Make questions engaging, varied in difficulty, and factually accurate."""
         
         questions_data = json.loads(json_match.group())
         
+        # Return questions WITHOUT saving to database
+        # They will only be saved when user likes them
         generated_questions = []
         for q_data in questions_data:
             question = Question(
@@ -422,7 +473,7 @@ Make questions engaging, varied in difficulty, and factually accurate."""
                 user_id=current_user["id"],
                 source="ai"
             )
-            await db.questions.insert_one(question.model_dump())
+            # NOT saving to database - just returning the question object
             generated_questions.append(question)
         
         return generated_questions
