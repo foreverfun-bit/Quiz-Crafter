@@ -649,15 +649,34 @@ async def generate_single_category(
     request: SingleCategoryRequest,
     current_user: dict = Depends(get_current_user)
 ):
+    import random
+    
+    # First, try to pick from user's existing categories (same logic as batch)
+    all_categories = await db.questions.distinct("category", {"user_id": current_user["id"]})
+    disliked_categories = await db.disliked_categories.distinct("category", {"user_id": current_user["id"]})
+    
+    # Available = existing categories minus disliked and minus currently excluded (in-use)
+    excluded_set = set(c.lower().strip() for c in request.exclude_categories)
+    disliked_set = set(c.lower().strip() for c in disliked_categories)
+    
+    available_from_library = [
+        c for c in all_categories 
+        if c.lower().strip() not in excluded_set and c.lower().strip() not in disliked_set
+    ]
+    
+    if available_from_library:
+        random.shuffle(available_from_library)
+        return SingleCategoryResponse(category=available_from_library[0])
+    
+    # Fall back to AI generation if no existing categories are available
     from emergentintegrations.llm.chat import LlmChat, UserMessage
     
     api_key = os.environ.get("EMERGENT_LLM_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="AI service not configured")
     
-    # Also get used categories from database
     used_categories = await db.questions.distinct("category", {"user_id": current_user["id"]})
-    all_excluded = list(set(request.exclude_categories + used_categories))
+    all_excluded = list(set(request.exclude_categories + used_categories + disliked_categories))
     
     chat = LlmChat(
         api_key=api_key,
@@ -679,10 +698,7 @@ Return ONLY the category name. No quotes, no explanation."""
 
     try:
         response = await chat.send_message(UserMessage(text=prompt))
-        
-        # Clean up the response
         category = response.strip().strip('"').strip("'")
-        
         return SingleCategoryResponse(category=category)
     except Exception as e:
         logging.error(f"Single category generation error: {str(e)}")
