@@ -1,34 +1,200 @@
-.App-logo {
-    height: 40vmin;
-    pointer-events: none;
+/* Trivia Forge - Main App Styles */
+
+/* Layout */
+.app-layout {
+  display: flex;
+  min-height: 100vh;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-    .App-logo {
-        animation: App-logo-spin infinite 20s linear;
-    }
+.main-content {
+  flex: 1;
+  margin-left: 256px;
+  min-height: 100vh;
 }
 
-.App-header {
-    background-color: #0f0f10;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    font-size: calc(10px + 2vmin);
-    color: white;
+@media (max-width: 1024px) {
+  .main-content {
+    margin-left: 0;
+  }
 }
 
-.App-link {
-    color: #61dafb;
+/* Card styles */
+.trivia-card {
+  background: rgba(24, 24, 27, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.75rem;
+  padding: 1.5rem;
+  transition: all 0.3s ease;
 }
 
-@keyframes App-logo-spin {
-    from {
-        transform: rotate(0deg);
-    }
-    to {
-        transform: rotate(360deg);
-    }
+.trivia-card:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(24, 24, 27, 0.8);
+}
+
+/* Question type badges */
+.badge-true-false {
+  background: rgba(113, 224, 220, 0.2);
+  color: #71E0DC;
+  border: 1px solid rgba(113, 224, 220, 0.3);
+}
+
+.badge-multiple-choice {
+  background: rgba(174, 178, 239, 0.2);
+  color: #AEB2EF;
+  border: 1px solid rgba(174, 178, 239, 0.3);
+}
+
+.badge-written {
+  background: rgba(16, 185, 129, 0.2);
+  color: #10B981;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.badge-picture {
+  background: rgba(245, 158, 11, 0.2);
+  color: #F59E0B;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+/* Status badges */
+.badge-liked {
+  background: rgba(16, 185, 129, 0.2);
+  color: #10B981;
+}
+
+.badge-disliked {
+  background: rgba(239, 68, 68, 0.2);
+  color: #EF4444;
+}
+
+.badge-neutral {
+  background: rgba(161, 161, 170, 0.2);
+  color: #A1A1AA;
+}
+
+/* Source badges */
+.badge-ai {
+  background: rgba(113, 224, 220, 0.15);
+  color: #71E0DC;
+}
+
+.badge-imported {
+  background: rgba(174, 178, 239, 0.15);
+  color: #AEB2EF;
+}
+
+.badge-manual {
+  background: rgba(161, 161, 170, 0.15);
+  color: #A1A1AA;
+}
+
+/* Input styles */
+.trivia-input {
+  background: rgba(9, 9, 11, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  transition: all 0.2s ease;
+}
+
+.trivia-input:focus {
+  border-color: #71E0DC;
+  box-shadow: 0 0 0 2px rgba(113, 224, 220, 0.2);
+}
+
+/* Stat card */
+.stat-card {
+  background: linear-gradient(145deg, rgba(24, 24, 27, 0.6) 0%, rgba(24, 24, 27, 0.4) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.75rem;
+  padding: 1.5rem;
+}
+
+/* Category pill */
+.category-pill {
+  background: rgba(39, 39, 42, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9999px;
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.category-pill:hover {
+  background: rgba(113, 224, 220, 0.2);
+  border-color: rgba(113, 224, 220, 0.3);
+}
+
+.category-pill.selected {
+  background: linear-gradient(135deg, #71E0DC 0%, #AEB2EF 100%);
+  color: #18181B;
+  font-weight: 600;
+}
+
+/* Question card in session builder */
+.session-question-card {
+  background: rgba(24, 24, 27, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.session-question-card:hover {
+  background: rgba(24, 24, 27, 0.9);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.session-question-card.selected {
+  border-color: #71E0DC;
+  background: rgba(113, 224, 220, 0.1);
+}
+
+/* Loading spinner */
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid rgba(113, 224, 220, 0.2);
+  border-top-color: #71E0DC;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Responsive sidebar */
+.sidebar {
+  width: 256px;
+  height: 100vh;
+  position: fixed;
+  left: 0;
+  top: 0;
+  background: rgba(9, 9, 11, 0.95);
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(12px);
+  z-index: 40;
+  transition: transform 0.3s ease;
+}
+
+@media (max-width: 1024px) {
+  .sidebar {
+    transform: translateX(-100%);
+  }
+  
+  .sidebar.open {
+    transform: translateX(0);
+  }
+}
+
+/* Page header */
+.page-header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(9, 9, 11, 0.95);
+  backdrop-filter: blur(12px);
+  position: sticky;
+  top: 0;
+  z-index: 30;
 }
