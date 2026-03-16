@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../App";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import { Badge } from "../components/ui/badge";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { 
@@ -11,7 +12,8 @@ import {
   Loader2,
   Eye,
   Trash2,
-  FileText
+  FileText,
+  Search
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -19,6 +21,7 @@ const PastSessions = () => {
   const navigate = useNavigate();
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     fetchSessions();
@@ -57,6 +60,13 @@ const PastSessions = () => {
     );
   };
 
+  // Filter sessions by search query
+  const filteredSessions = sessions.filter(session => {
+    if (!searchQuery.trim()) return true;
+    const query = searchQuery.toLowerCase();
+    return session.name.toLowerCase().includes(query);
+  });
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -77,6 +87,29 @@ const PastSessions = () => {
         </p>
       </div>
 
+      {/* Search */}
+      {sessions.length > 0 && (
+        <Card className="glass-card mb-6">
+          <CardContent className="p-4">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
+              <Input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search by venue or date..."
+                className="pl-9 bg-zinc-950/50 border-white/10 text-white"
+                data-testid="search-sessions-input"
+              />
+            </div>
+            {searchQuery && (
+              <p className="text-zinc-500 text-sm mt-2">
+                Found {filteredSessions.length} session{filteredSessions.length !== 1 ? 's' : ''} matching "{searchQuery}"
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {sessions.length === 0 ? (
         <Card className="glass-card">
           <CardContent className="py-16 text-center">
@@ -96,9 +129,21 @@ const PastSessions = () => {
             </Button>
           </CardContent>
         </Card>
+      ) : filteredSessions.length === 0 ? (
+        <Card className="glass-card">
+          <CardContent className="py-16 text-center">
+            <div className="w-16 h-16 rounded-full bg-zinc-800 flex items-center justify-center mx-auto mb-4">
+              <Search className="text-zinc-600" size={32} />
+            </div>
+            <p className="text-zinc-500 mb-2">No sessions match your search</p>
+            <p className="text-zinc-600 text-sm">
+              Try a different search term
+            </p>
+          </CardContent>
+        </Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {sessions.map((session, index) => (
+          {filteredSessions.map((session, index) => (
             <Card 
               key={session.id}
               className="glass-card cursor-pointer transition-all hover:scale-[1.02]"

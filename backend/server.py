@@ -502,17 +502,21 @@ async def generate_categories_batch(
     # Get used categories to avoid repetition
     used_categories = await db.questions.distinct("category", {"user_id": current_user["id"]})
     
+    # Get sample of past categories as style inspiration
+    sample_categories = used_categories[:30] if used_categories else []
+    
     total_needed = request.true_false_count + request.multiple_choice_count + request.written_count + request.picture_count
     
     chat = LlmChat(
         api_key=api_key,
         session_id=f"batch-category-gen-{uuid.uuid4()}",
-        system_message="You are a creative trivia category generator for pub trivia nights."
+        system_message="You are a creative trivia category generator for pub trivia nights. You create specific, interesting categories - not generic ones."
     ).with_model("openai", "gpt-5.2")
     
     exclude_str = ", ".join(used_categories[:100]) if used_categories else "none"
+    inspiration_str = ", ".join(sample_categories[:20]) if sample_categories else "80s One-Hit Wonders, Oscar-Winning Directors, NFL Quarterbacks, European Capitals, Classic Cocktails, Video Game Villains"
     
-    prompt = f"""Generate exactly {total_needed} unique, broad trivia categories for a pub trivia night.
+    prompt = f"""Generate exactly {total_needed} unique, SPECIFIC trivia categories for a pub trivia night.
 
 I need:
 - {request.true_false_count} categories suitable for TRUE/FALSE questions
@@ -520,11 +524,21 @@ I need:
 - {request.written_count} categories suitable for WRITTEN ANSWER questions
 - {request.picture_count} categories suitable for PICTURE ROUND questions (identifying people, places, logos, etc.)
 
+IMPORTANT - Categories should be SPECIFIC, not generic. 
+BAD examples (too broad): "Music", "History", "Science", "Movies", "Sports"
+GOOD examples (specific): "{inspiration_str}"
+
+More good examples:
+- Instead of "Music" use "90s Boy Bands", "Classic Rock Album Covers", "Grammy Winners 2020s"
+- Instead of "History" use "Ancient Egyptian Pharaohs", "World War II Battles", "US Presidents' Pets"
+- Instead of "Science" use "Planet Facts", "Nobel Prize Winners", "Periodic Table Elements"
+- Instead of "Movies" use "Pixar Films", "James Bond Villains", "90s Rom-Coms"
+- Instead of "Sports" use "Olympic Host Cities", "NBA MVP Winners", "World Cup Finals"
+
 Requirements:
 - ALL {total_needed} categories must be COMPLETELY UNIQUE (no duplicates)
-- Categories should be broad enough for multiple questions
-- Mix of history, pop culture, science, sports, geography, entertainment, food, music, etc.
-- Avoid these already-used categories: {exclude_str}
+- Make categories specific enough to be interesting but broad enough for 5+ questions
+- AVOID these already-used categories: {exclude_str}
 
 Return ONLY a JSON object with this exact structure:
 {{
@@ -582,22 +596,30 @@ async def generate_single_category(
     used_categories = await db.questions.distinct("category", {"user_id": current_user["id"]})
     all_excluded = list(set(request.exclude_categories + used_categories))
     
+    # Get sample categories as style inspiration
+    sample_categories = used_categories[:10] if used_categories else []
+    inspiration_str = ", ".join(sample_categories[:5]) if sample_categories else "80s One-Hit Wonders, Oscar-Winning Directors, NFL Quarterbacks"
+    
     chat = LlmChat(
         api_key=api_key,
         session_id=f"single-category-gen-{uuid.uuid4()}",
-        system_message="You are a creative trivia category generator."
+        system_message="You are a creative trivia category generator. You create specific, interesting categories - not generic ones."
     ).with_model("openai", "gpt-5.2")
     
     exclude_str = ", ".join(all_excluded[:100]) if all_excluded else "none"
     
-    prompt = f"""Generate exactly ONE unique, broad trivia category for a pub trivia night.
+    prompt = f"""Generate exactly ONE unique, SPECIFIC trivia category for a pub trivia night.
+
+IMPORTANT - Be SPECIFIC, not generic.
+BAD: "Music", "History", "Science", "Movies"
+GOOD: "{inspiration_str}", "Disney Sidekicks", "Famous Astronauts", "Beatles Songs"
 
 Requirements:
-- Must be different from these existing categories: {exclude_str}
-- Should be broad enough to generate multiple questions
-- Can be from any topic: history, pop culture, science, sports, geography, entertainment, etc.
+- Must be different from: {exclude_str}
+- Specific enough to be interesting (like the GOOD examples above)
+- Broad enough for 5+ questions
 
-Return ONLY the category name as a plain string, nothing else. No quotes, no JSON, just the category name."""
+Return ONLY the category name. No quotes, no explanation."""
 
     try:
         response = await chat.send_message(UserMessage(text=prompt))
