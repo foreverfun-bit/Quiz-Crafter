@@ -84,7 +84,9 @@ const Library = () => {
     question_type: "multiple_choice",
     options: ["", "", "", ""],
     fun_fact: "",
-    image_url: ""
+    image_url: "",
+    venue: "",
+    date_used: ""
   });
   const [saving, setSaving] = useState(false);
 
@@ -178,7 +180,9 @@ const Library = () => {
       question_type: question.question_type,
       options: question.options || ["", "", "", ""],
       fun_fact: question.fun_fact || "",
-      image_url: question.image_url || ""
+      image_url: question.image_url || "",
+      venue: question.venue || "",
+      date_used: question.date_used || ""
     });
     setShowAddModal(true);
   };
@@ -192,7 +196,9 @@ const Library = () => {
       question_type: "multiple_choice",
       options: ["", "", "", ""],
       fun_fact: "",
-      image_url: ""
+      image_url: "",
+      venue: "",
+      date_used: ""
     });
     setShowAddModal(true);
   };
@@ -211,7 +217,9 @@ const Library = () => {
           ? formData.options.filter(o => o.trim())
           : null,
         fun_fact: formData.fun_fact || null,
-        image_url: formData.image_url || null
+        image_url: formData.image_url || null,
+        venue: formData.venue || null,
+        date_used: formData.date_used || null
       };
 
       if (editingQuestion) {
@@ -472,6 +480,22 @@ const Library = () => {
                         <span className="text-zinc-300">{question.fun_fact}</span>
                       </p>
                     )}
+                    {(question.venue || question.date_used) && (
+                      <div className="flex items-center gap-4 mt-2 pt-2 border-t border-white/5">
+                        {question.venue && (
+                          <p className="text-xs">
+                            <span className="text-zinc-600">Venue: </span>
+                            <span className="text-zinc-400">{question.venue}</span>
+                          </p>
+                        )}
+                        {question.date_used && (
+                          <p className="text-xs">
+                            <span className="text-zinc-600">Date Used: </span>
+                            <span className="text-zinc-400">{question.date_used}</span>
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </CardContent>
               </Card>
@@ -591,6 +615,29 @@ const Library = () => {
                 />
               </div>
             )}
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="text-zinc-300">Venue (optional)</Label>
+                <Input
+                  value={formData.venue}
+                  onChange={(e) => setFormData({...formData, venue: e.target.value})}
+                  placeholder="e.g., The Pub"
+                  className="bg-zinc-950/50 border-white/10 text-white"
+                  data-testid="modal-venue-input"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-zinc-300">Date Used (optional)</Label>
+                <Input
+                  value={formData.date_used}
+                  onChange={(e) => setFormData({...formData, date_used: e.target.value})}
+                  placeholder="e.g., 2024-01-15"
+                  className="bg-zinc-950/50 border-white/10 text-white"
+                  data-testid="modal-dateused-input"
+                />
+              </div>
+            </div>
           </div>
 
           <DialogFooter>
