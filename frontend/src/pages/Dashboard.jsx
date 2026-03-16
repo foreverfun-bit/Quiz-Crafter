@@ -151,7 +151,11 @@ const Dashboard = () => {
           </CardContent>
         </Card>
 
-        <Card className="glass-card">
+        <Card 
+          className="glass-card cursor-pointer hover:border-[#AEB2EF]/50 transition-all"
+          onClick={() => navigate("/categories")}
+          data-testid="categories-card"
+        >
           <CardContent className="p-6">
             <div className="flex items-center justify-between">
               <div>
@@ -162,6 +166,7 @@ const Dashboard = () => {
                 <FolderOpen className="text-[#AEB2EF]" size={24} />
               </div>
             </div>
+            <p className="text-zinc-600 text-xs mt-2">Click to view all →</p>
           </CardContent>
         </Card>
 

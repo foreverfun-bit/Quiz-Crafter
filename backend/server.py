@@ -545,73 +545,91 @@ async def generate_categories_batch(
     current_user: dict = Depends(get_current_user)
 ):
     from emergentintegrations.llm.chat import LlmChat, UserMessage
+    import random
     
     api_key = os.environ.get("EMERGENT_LLM_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="AI service not configured")
     
-    # Get used categories to avoid repetition
-    used_categories = await db.questions.distinct("category", {"user_id": current_user["id"]})
+    # Get all categories from user's questions
+    all_categories = await db.questions.distinct("category", {"user_id": current_user["id"]})
+    
+    # Get disliked categories to exclude
+    disliked_categories = await db.disliked_categories.distinct("category", {"user_id": current_user["id"]})
+    
+    # Available categories = all - disliked
+    available_categories = [c for c in all_categories if c not in disliked_categories]
     
     total_needed = request.true_false_count + request.multiple_choice_count + request.written_count + request.picture_count
     
-    chat = LlmChat(
-        api_key=api_key,
-        session_id=f"batch-category-gen-{uuid.uuid4()}",
-        system_message="You are a trivia category generator for pub trivia nights."
-    ).with_model("openai", "gpt-5.2")
+    # Shuffle available categories
+    random.shuffle(available_categories)
     
-    exclude_str = ", ".join(used_categories[:100]) if used_categories else "none"
+    # If we have enough existing categories, use them directly
+    if len(available_categories) >= total_needed:
+        selected = available_categories[:total_needed]
+        return BatchCategoryResponse(
+            true_false=selected[:request.true_false_count],
+            multiple_choice=selected[request.true_false_count:request.true_false_count + request.multiple_choice_count],
+            written=selected[request.true_false_count + request.multiple_choice_count:request.true_false_count + request.multiple_choice_count + request.written_count],
+            picture=selected[-request.picture_count:] if request.picture_count > 0 else []
+        )
     
-    prompt = f"""Generate exactly {total_needed} unique trivia categories for a pub trivia night.
-
-I need:
-- {request.true_false_count} categories suitable for TRUE/FALSE questions
-- {request.multiple_choice_count} categories suitable for MULTIPLE CHOICE questions  
-- {request.written_count} categories suitable for WRITTEN ANSWER questions
-- {request.picture_count} categories suitable for PICTURE ROUND questions (identifying people, places, logos, etc.)
+    # Otherwise, use available categories + generate more with AI
+    categories_to_use = available_categories.copy()
+    remaining_needed = total_needed - len(categories_to_use)
+    
+    if remaining_needed > 0:
+        chat = LlmChat(
+            api_key=api_key,
+            session_id=f"batch-category-gen-{uuid.uuid4()}",
+            system_message="You are a trivia category generator for pub trivia nights."
+        ).with_model("openai", "gpt-5.2")
+        
+        exclude_str = ", ".join(all_categories + disliked_categories) if (all_categories or disliked_categories) else "none"
+        
+        prompt = f"""Generate exactly {remaining_needed} unique trivia categories for a pub trivia night.
 
 Use BROAD, GENERAL categories like:
 Music, Movies, Television, Sports, History, Geography, Science, Food & Drink, Literature, Art, Animals, Technology, Politics, Celebrities, Video Games, Mythology, Space, Fashion, Business, Medicine
 
 Requirements:
-- ALL {total_needed} categories must be COMPLETELY UNIQUE (no duplicates)
+- ALL categories must be COMPLETELY UNIQUE
 - Keep categories broad and general (one or two words ideally)
-- AVOID these already-used categories: {exclude_str}
+- AVOID these categories: {exclude_str}
 
-Return ONLY a JSON object with this exact structure:
-{{
-  "true_false": ["category1", "category2", ...],
-  "multiple_choice": ["category1", "category2", ...],
-  "written": ["category1", "category2", ...],
-  "picture": ["category1", "category2", ...]
-}}"""
+Return ONLY a JSON array of category names, like: ["Category 1", "Category 2", ...]"""
 
-    try:
-        response = await chat.send_message(UserMessage(text=prompt))
-        
-        import json
-        import re
-        
-        # Extract JSON object from response
-        json_match = re.search(r'\{[\s\S]*\}', response)
-        if not json_match:
-            raise HTTPException(status_code=500, detail="Failed to parse AI response")
-        
-        data = json.loads(json_match.group())
-        
-        return BatchCategoryResponse(
-            true_false=data.get("true_false", [])[:request.true_false_count],
-            multiple_choice=data.get("multiple_choice", [])[:request.multiple_choice_count],
-            written=data.get("written", [])[:request.written_count],
-            picture=data.get("picture", [])[:request.picture_count]
-        )
-    except json.JSONDecodeError as e:
-        logging.error(f"JSON parse error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to parse AI response as JSON")
-    except Exception as e:
-        logging.error(f"Batch category generation error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Category generation failed: {str(e)}")
+        try:
+            response = await chat.send_message(UserMessage(text=prompt))
+            
+            import json
+            import re
+            
+            json_match = re.search(r'\[[\s\S]*\]', response)
+            if json_match:
+                new_categories = json.loads(json_match.group())
+                categories_to_use.extend(new_categories[:remaining_needed])
+        except Exception as e:
+            logging.error(f"AI category generation error: {str(e)}")
+    
+    # Pad with defaults if still not enough
+    default_categories = ["Music", "Movies", "Sports", "History", "Geography", "Science", "Food & Drink", 
+                         "Television", "Literature", "Animals", "Technology", "Celebrities", "Video Games",
+                         "Mythology", "Space", "Fashion", "Art", "Nature", "Politics", "Business"]
+    while len(categories_to_use) < total_needed:
+        for cat in default_categories:
+            if cat not in categories_to_use and cat not in disliked_categories:
+                categories_to_use.append(cat)
+                if len(categories_to_use) >= total_needed:
+                    break
+    
+    return BatchCategoryResponse(
+        true_false=categories_to_use[:request.true_false_count],
+        multiple_choice=categories_to_use[request.true_false_count:request.true_false_count + request.multiple_choice_count],
+        written=categories_to_use[request.true_false_count + request.multiple_choice_count:request.true_false_count + request.multiple_choice_count + request.written_count],
+        picture=categories_to_use[-request.picture_count:] if request.picture_count > 0 else []
+    )
 
 
 class SingleCategoryRequest(BaseModel):
@@ -888,8 +906,49 @@ async def import_csv(
 
 @api_router.get("/categories", response_model=List[str])
 async def get_categories(current_user: dict = Depends(get_current_user)):
+    # Get all categories from questions
     categories = await db.questions.distinct("category", {"user_id": current_user["id"]})
+    # Get disliked categories
+    disliked = await db.disliked_categories.distinct("category", {"user_id": current_user["id"]})
+    # Return only non-disliked categories
+    return sorted([c for c in categories if c not in disliked])
+
+@api_router.get("/categories/disliked", response_model=List[str])
+async def get_disliked_categories(current_user: dict = Depends(get_current_user)):
+    categories = await db.disliked_categories.distinct("category", {"user_id": current_user["id"]})
     return sorted(categories)
+
+class DislikeCategoryRequest(BaseModel):
+    category: str
+
+@api_router.post("/categories/dislike")
+async def dislike_category(
+    request: DislikeCategoryRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    # Check if already disliked
+    existing = await db.disliked_categories.find_one({
+        "category": request.category,
+        "user_id": current_user["id"]
+    })
+    if not existing:
+        await db.disliked_categories.insert_one({
+            "category": request.category,
+            "user_id": current_user["id"],
+            "created_at": datetime.now(timezone.utc).isoformat()
+        })
+    return {"message": f"Category '{request.category}' hidden"}
+
+@api_router.delete("/categories/dislike/{category}")
+async def restore_category(
+    category: str,
+    current_user: dict = Depends(get_current_user)
+):
+    await db.disliked_categories.delete_one({
+        "category": category,
+        "user_id": current_user["id"]
+    })
+    return {"message": f"Category '{category}' restored"}
 
 # ============ SESSIONS ROUTES ============
 

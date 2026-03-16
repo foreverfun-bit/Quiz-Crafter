@@ -13,6 +13,7 @@ import BuildSession from "./pages/BuildSession";
 import ImportCSV from "./pages/ImportCSV";
 import SessionDetail from "./pages/SessionDetail";
 import PastSessions from "./pages/PastSessions";
+import Categories from "./pages/Categories";
 
 // Components
 import Sidebar from "./components/Sidebar";
@@ -243,6 +244,16 @@ function App() {
                 <ProtectedRoute>
                   <AppLayout>
                     <SessionDetail />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/categories"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <Categories />
                   </AppLayout>
                 </ProtectedRoute>
               }
