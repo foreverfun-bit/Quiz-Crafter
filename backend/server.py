@@ -460,6 +460,141 @@ Return ONLY a JSON array of category names, like: ["Category 1", "Category 2", .
         logging.error(f"Category generation error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Category generation failed: {str(e)}")
 
+
+class BatchCategoryRequest(BaseModel):
+    true_false_count: int = 9
+    multiple_choice_count: int = 9
+    written_count: int = 9
+    picture_count: int = 3
+
+class BatchCategoryResponse(BaseModel):
+    true_false: List[str]
+    multiple_choice: List[str]
+    written: List[str]
+    picture: List[str]
+
+@api_router.post("/generate/categories-batch", response_model=BatchCategoryResponse)
+async def generate_categories_batch(
+    request: BatchCategoryRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
+    
+    api_key = os.environ.get("EMERGENT_LLM_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="AI service not configured")
+    
+    # Get used categories to avoid repetition
+    used_categories = await db.questions.distinct("category", {"user_id": current_user["id"]})
+    
+    total_needed = request.true_false_count + request.multiple_choice_count + request.written_count + request.picture_count
+    
+    chat = LlmChat(
+        api_key=api_key,
+        session_id=f"batch-category-gen-{uuid.uuid4()}",
+        system_message="You are a creative trivia category generator for pub trivia nights."
+    ).with_model("openai", "gpt-5.2")
+    
+    exclude_str = ", ".join(used_categories[:100]) if used_categories else "none"
+    
+    prompt = f"""Generate exactly {total_needed} unique, broad trivia categories for a pub trivia night.
+
+I need:
+- {request.true_false_count} categories suitable for TRUE/FALSE questions
+- {request.multiple_choice_count} categories suitable for MULTIPLE CHOICE questions  
+- {request.written_count} categories suitable for WRITTEN ANSWER questions
+- {request.picture_count} categories suitable for PICTURE ROUND questions (identifying people, places, logos, etc.)
+
+Requirements:
+- ALL {total_needed} categories must be COMPLETELY UNIQUE (no duplicates)
+- Categories should be broad enough for multiple questions
+- Mix of history, pop culture, science, sports, geography, entertainment, food, music, etc.
+- Avoid these already-used categories: {exclude_str}
+
+Return ONLY a JSON object with this exact structure:
+{{
+  "true_false": ["category1", "category2", ...],
+  "multiple_choice": ["category1", "category2", ...],
+  "written": ["category1", "category2", ...],
+  "picture": ["category1", "category2", ...]
+}}"""
+
+    try:
+        response = await chat.send_message(UserMessage(text=prompt))
+        
+        import json
+        import re
+        
+        # Extract JSON object from response
+        json_match = re.search(r'\{[\s\S]*\}', response)
+        if not json_match:
+            raise HTTPException(status_code=500, detail="Failed to parse AI response")
+        
+        data = json.loads(json_match.group())
+        
+        return BatchCategoryResponse(
+            true_false=data.get("true_false", [])[:request.true_false_count],
+            multiple_choice=data.get("multiple_choice", [])[:request.multiple_choice_count],
+            written=data.get("written", [])[:request.written_count],
+            picture=data.get("picture", [])[:request.picture_count]
+        )
+    except json.JSONDecodeError as e:
+        logging.error(f"JSON parse error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to parse AI response as JSON")
+    except Exception as e:
+        logging.error(f"Batch category generation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Category generation failed: {str(e)}")
+
+
+class SingleCategoryRequest(BaseModel):
+    exclude_categories: List[str] = []
+
+class SingleCategoryResponse(BaseModel):
+    category: str
+
+@api_router.post("/generate/single-category", response_model=SingleCategoryResponse)
+async def generate_single_category(
+    request: SingleCategoryRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
+    
+    api_key = os.environ.get("EMERGENT_LLM_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="AI service not configured")
+    
+    # Also get used categories from database
+    used_categories = await db.questions.distinct("category", {"user_id": current_user["id"]})
+    all_excluded = list(set(request.exclude_categories + used_categories))
+    
+    chat = LlmChat(
+        api_key=api_key,
+        session_id=f"single-category-gen-{uuid.uuid4()}",
+        system_message="You are a creative trivia category generator."
+    ).with_model("openai", "gpt-5.2")
+    
+    exclude_str = ", ".join(all_excluded[:100]) if all_excluded else "none"
+    
+    prompt = f"""Generate exactly ONE unique, broad trivia category for a pub trivia night.
+
+Requirements:
+- Must be different from these existing categories: {exclude_str}
+- Should be broad enough to generate multiple questions
+- Can be from any topic: history, pop culture, science, sports, geography, entertainment, etc.
+
+Return ONLY the category name as a plain string, nothing else. No quotes, no JSON, just the category name."""
+
+    try:
+        response = await chat.send_message(UserMessage(text=prompt))
+        
+        # Clean up the response
+        category = response.strip().strip('"').strip("'")
+        
+        return SingleCategoryResponse(category=category)
+    except Exception as e:
+        logging.error(f"Single category generation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Category generation failed: {str(e)}")
+
 # ============ IMPORT ROUTES ============
 
 @api_router.post("/import/csv")

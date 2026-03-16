@@ -255,7 +255,7 @@ class TriviaAPITester:
             return False
 
     def test_ai_category_generation(self):
-        """Test AI category generation"""
+        """Test AI category generation (old endpoint)"""
         success, response = self.make_request(
             'POST', 
             'generate/categories',
@@ -266,13 +266,82 @@ class TriviaAPITester:
             data = response.json()
             if 'categories' in data and isinstance(data['categories'], list):
                 categories = data['categories']
-                self.log_result("AI Category Generation", True, f"Generated {len(categories)} categories")
+                self.log_result("AI Category Generation (Legacy)", True, f"Generated {len(categories)} categories")
                 return categories[:3] if categories else []  # Return first 3 for testing
             else:
-                self.log_result("AI Category Generation", False, error="Invalid response format")
+                self.log_result("AI Category Generation (Legacy)", False, error="Invalid response format")
         else:
-            self.log_result("AI Category Generation", False, error=str(response))
+            self.log_result("AI Category Generation (Legacy)", False, error=str(response))
         return []
+
+    def test_batch_category_generation(self):
+        """Test new batch category generation API"""
+        request_data = {
+            "true_false_count": 9,
+            "multiple_choice_count": 9, 
+            "written_count": 9,
+            "picture_count": 3
+        }
+
+        success, response = self.make_request(
+            'POST',
+            'generate/categories-batch',
+            data=request_data,
+            expected_status=200
+        )
+        
+        if success:
+            data = response.json()
+            required_fields = ['true_false', 'multiple_choice', 'written', 'picture']
+            if all(field in data for field in required_fields):
+                tf_count = len(data['true_false'])
+                mc_count = len(data['multiple_choice'])
+                written_count = len(data['written'])
+                picture_count = len(data['picture'])
+                
+                total_categories = tf_count + mc_count + written_count + picture_count
+                expected_total = request_data['true_false_count'] + request_data['multiple_choice_count'] + request_data['written_count'] + request_data['picture_count']
+                
+                self.log_result("Batch Category Generation", True, 
+                    f"Generated {total_categories}/{expected_total} categories (TF:{tf_count}, MC:{mc_count}, W:{written_count}, P:{picture_count})")
+                return data
+            else:
+                self.log_result("Batch Category Generation", False, error=f"Missing fields: {required_fields}")
+        else:
+            self.log_result("Batch Category Generation", False, error=str(response))
+        return {}
+
+    def test_single_category_generation(self, exclude_categories):
+        """Test single category regeneration API"""
+        request_data = {
+            "exclude_categories": exclude_categories
+        }
+
+        success, response = self.make_request(
+            'POST',
+            'generate/single-category',
+            data=request_data,
+            expected_status=200
+        )
+        
+        if success:
+            data = response.json()
+            if 'category' in data and isinstance(data['category'], str) and data['category'].strip():
+                category = data['category']
+                is_duplicate = category.lower() in [cat.lower() for cat in exclude_categories]
+                if is_duplicate:
+                    self.log_result("Single Category Generation", False, 
+                        error=f"Generated duplicate category: '{category}'")
+                    return None
+                else:
+                    self.log_result("Single Category Generation", True, 
+                        f"Generated unique category: '{category}'")
+                    return category
+            else:
+                self.log_result("Single Category Generation", False, error="Invalid response format")
+        else:
+            self.log_result("Single Category Generation", False, error=str(response))
+        return None
 
     def test_ai_question_generation(self, categories):
         """Test AI question generation"""
@@ -416,8 +485,31 @@ Geography,What is the capital of France?,Paris,"A. London, B. Berlin, C. Paris, 
         
         # Test AI features (might fail if EMERGENT_LLM_KEY is invalid)
         print("\n🤖 Testing AI Features (might timeout if LLM service is slow)...")
-        categories = self.test_ai_category_generation()
-        ai_questions = self.test_ai_question_generation(categories)
+        
+        # Test new batch category generation 
+        batch_categories = self.test_batch_category_generation()
+        
+        # Test single category generation
+        exclude_list = []
+        if batch_categories:
+            exclude_list.extend(batch_categories.get('true_false', []))
+            exclude_list.extend(batch_categories.get('multiple_choice', []))
+            exclude_list.extend(batch_categories.get('written', []))
+            exclude_list.extend(batch_categories.get('picture', []))
+        
+        if exclude_list:
+            single_category = self.test_single_category_generation(exclude_list[:10])  # Limit to avoid huge request
+        
+        # Test legacy category generation for compatibility 
+        legacy_categories = self.test_ai_category_generation()
+        
+        # Test question generation with batch categories
+        ai_questions = []
+        if batch_categories and batch_categories.get('multiple_choice'):
+            test_category = batch_categories['multiple_choice'][0]
+            ai_questions = self.test_ai_question_generation([test_category])
+        elif legacy_categories:
+            ai_questions = self.test_ai_question_generation(legacy_categories)
         
         # Test CSV import
         self.test_csv_import()
