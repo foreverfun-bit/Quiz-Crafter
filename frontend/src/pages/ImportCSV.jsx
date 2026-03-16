@@ -347,9 +347,16 @@ const ImportCSV = () => {
                     <>
                       <p className="text-emerald-400 font-semibold mb-2">Import Complete</p>
                       <ul className="text-sm space-y-1">
-                        <li className="text-zinc-300">
-                          <span className="text-emerald-400">{result.imported}</span> questions imported
-                        </li>
+                        {result.imported > 0 && (
+                          <li className="text-zinc-300">
+                            <span className="text-emerald-400">{result.imported}</span> new questions imported
+                          </li>
+                        )}
+                        {result.updated > 0 && (
+                          <li className="text-zinc-300">
+                            <span className="text-[#AEB2EF]">{result.updated}</span> existing questions updated with new info
+                          </li>
+                        )}
                         {result.sessions_created > 0 && (
                           <li className="text-zinc-300">
                             <span className="text-[#71E0DC]">{result.sessions_created}</span> past session{result.sessions_created !== 1 ? 's' : ''} created
@@ -357,7 +364,7 @@ const ImportCSV = () => {
                         )}
                         {result.skipped > 0 && (
                           <li className="text-zinc-300">
-                            <span className="text-amber-400">{result.skipped}</span> duplicates skipped
+                            <span className="text-zinc-500">{result.skipped}</span> unchanged duplicates skipped
                           </li>
                         )}
                         {result.errors?.length > 0 && (

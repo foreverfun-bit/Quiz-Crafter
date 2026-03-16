@@ -693,6 +693,7 @@ async def import_csv(
         return ''
     
     imported_count = 0
+    updated_count = 0
     skipped_count = 0
     errors = []
     
@@ -713,16 +714,6 @@ async def import_csv(
             if not question_text or not answer:
                 continue
             
-            # Check if question already exists
-            existing = await db.questions.find_one({
-                "question": question_text,
-                "user_id": current_user["id"]
-            })
-            
-            if existing:
-                skipped_count += 1
-                continue
-            
             # Determine question type based on answer and options
             options = None
             if options_raw:
@@ -733,22 +724,60 @@ async def import_csv(
             else:
                 question_type = "written"
             
-            question = Question(
-                category=category or "Imported",
-                question=question_text,
-                answer=answer,
-                question_type=question_type,
-                options=options,
-                fun_fact=fun_fact or None,
-                venue=venue or None,
-                date_used=date_used or None,
-                user_id=current_user["id"],
-                source="imported",
-                status="used"  # Mark as used so it doesn't appear in build session
-            )
+            # Check if question already exists
+            existing = await db.questions.find_one({
+                "question": question_text,
+                "user_id": current_user["id"]
+            }, {"_id": 0})
             
-            await db.questions.insert_one(question.model_dump())
-            imported_count += 1
+            if existing:
+                # Check if any field has new info to update
+                updates = {}
+                if category and category != existing.get("category"):
+                    updates["category"] = category
+                if answer != existing.get("answer"):
+                    updates["answer"] = answer
+                if options and options != existing.get("options"):
+                    updates["options"] = options
+                    updates["question_type"] = question_type
+                if fun_fact and fun_fact != existing.get("fun_fact"):
+                    updates["fun_fact"] = fun_fact
+                if venue and venue != existing.get("venue"):
+                    updates["venue"] = venue
+                if date_used and date_used != existing.get("date_used"):
+                    updates["date_used"] = date_used
+                
+                if updates:
+                    # Update the existing question with new info
+                    await db.questions.update_one(
+                        {"id": existing["id"]},
+                        {"$set": updates}
+                    )
+                    updated_count += 1
+                    question_id = existing["id"]
+                else:
+                    # Truly a duplicate with no new info
+                    skipped_count += 1
+                    question_id = existing["id"]
+            else:
+                # Create new question
+                question = Question(
+                    category=category or "Imported",
+                    question=question_text,
+                    answer=answer,
+                    question_type=question_type,
+                    options=options,
+                    fun_fact=fun_fact or None,
+                    venue=venue or None,
+                    date_used=date_used or None,
+                    user_id=current_user["id"],
+                    source="imported",
+                    status="used"  # Mark as used so it doesn't appear in build session
+                )
+                
+                await db.questions.insert_one(question.model_dump())
+                imported_count += 1
+                question_id = question.id
             
             # Group by date+venue for session creation
             if date_used:
@@ -762,7 +791,7 @@ async def import_csv(
                         "written": [],
                         "picture": []
                     }
-                session_groups[session_key][question_type].append(question.id)
+                session_groups[session_key][question_type].append(question_id)
             
         except Exception as e:
             errors.append(str(e))
@@ -795,6 +824,7 @@ async def import_csv(
     return {
         "message": f"Import complete",
         "imported": imported_count,
+        "updated": updated_count,
         "skipped": skipped_count,
         "sessions_created": sessions_created,
         "errors": errors[:10] if errors else []
