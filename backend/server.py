@@ -604,6 +604,43 @@ Return ONLY the category name as a plain string, nothing else. No quotes, no JSO
 
 # ============ IMPORT ROUTES ============
 
+@api_router.post("/import/preview")
+async def preview_csv(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user)
+):
+    """Preview CSV file to show detected columns and first few rows"""
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="File must be a CSV")
+    
+    content = await file.read()
+    try:
+        decoded = content.decode('utf-8')
+    except UnicodeDecodeError:
+        try:
+            decoded = content.decode('utf-8-sig')
+        except UnicodeDecodeError:
+            decoded = content.decode('latin-1')
+    
+    if decoded.startswith('\ufeff'):
+        decoded = decoded[1:]
+    
+    reader = csv.DictReader(io.StringIO(decoded))
+    fieldnames = reader.fieldnames or []
+    
+    # Get first 3 rows as preview
+    preview_rows = []
+    for i, row in enumerate(reader):
+        if i >= 3:
+            break
+        preview_rows.append(dict(row))
+    
+    return {
+        "columns": fieldnames,
+        "preview": preview_rows,
+        "row_count": len(preview_rows)
+    }
+
 @api_router.post("/import/csv")
 async def import_csv(
     file: UploadFile = File(...),
@@ -613,8 +650,39 @@ async def import_csv(
         raise HTTPException(status_code=400, detail="File must be a CSV")
     
     content = await file.read()
-    decoded = content.decode('utf-8')
+    # Try different encodings
+    try:
+        decoded = content.decode('utf-8')
+    except UnicodeDecodeError:
+        try:
+            decoded = content.decode('utf-8-sig')  # Handle BOM
+        except UnicodeDecodeError:
+            decoded = content.decode('latin-1')
+    
+    # Remove BOM if present
+    if decoded.startswith('\ufeff'):
+        decoded = decoded[1:]
+    
     reader = csv.DictReader(io.StringIO(decoded))
+    
+    # Log the detected fieldnames for debugging
+    fieldnames = reader.fieldnames or []
+    logging.info(f"CSV Import - Detected columns: {fieldnames}")
+    
+    # Create a normalized column lookup (case-insensitive, whitespace-stripped)
+    def find_column(row, possible_names):
+        """Find a column value trying multiple possible header names"""
+        for name in possible_names:
+            # Direct match
+            if name in row and row[name]:
+                return row[name].strip()
+        # Try case-insensitive match with whitespace handling
+        row_lower = {k.lower().strip().replace('\t', ' '): v for k, v in row.items()}
+        for name in possible_names:
+            name_lower = name.lower().strip()
+            if name_lower in row_lower and row_lower[name_lower]:
+                return row_lower[name_lower].strip()
+        return ''
     
     imported_count = 0
     skipped_count = 0
@@ -625,14 +693,14 @@ async def import_csv(
     
     for row in reader:
         try:
-            # Map CSV columns to question fields
-            category = row.get('Category', row.get('category', '')).strip()
-            question_text = row.get('Question', row.get('question', '')).strip()
-            answer = row.get('Answer', row.get('answer', '')).strip()
-            options_raw = row.get('Multiple choice options', row.get('options', '')).strip()
-            fun_fact = row.get('Fun Fact', row.get('fun_fact', '')).strip()
-            venue = row.get('Venue', row.get('venue', '')).strip()
-            date_used = row.get('Date Used', row.get('date_used', '')).strip()
+            # Map CSV columns to question fields using flexible matching
+            category = find_column(row, ['Category', 'category', 'CATEGORY'])
+            question_text = find_column(row, ['Question', 'question', 'QUESTION'])
+            answer = find_column(row, ['Answer', 'answer', 'ANSWER'])
+            options_raw = find_column(row, ['Multiple choice options', 'Multiple Choice Options', 'options', 'Options', 'OPTIONS', 'Choices', 'choices'])
+            fun_fact = find_column(row, ['Fun Fact', 'Fun fact', 'fun_fact', 'FunFact', 'Funfact', 'fun fact', 'FUN FACT'])
+            venue = find_column(row, ['Venue', 'venue', 'VENUE', 'Location', 'location', 'LOCATION', 'Place', 'place'])
+            date_used = find_column(row, ['Date Used', 'Date used', 'date used', 'date_used', 'DateUsed', 'DATE USED', 'Date', 'date', 'DATE', 'Used Date', 'used date', 'Used', 'used'])
             
             if not question_text or not answer:
                 continue

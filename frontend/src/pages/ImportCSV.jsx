@@ -2,23 +2,27 @@ import { useState, useRef } from "react";
 import { api } from "../App";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
 import { Button } from "../components/ui/button";
+import { Badge } from "../components/ui/badge";
 import { 
   Upload, 
   FileText, 
   CheckCircle, 
   AlertCircle,
   Loader2,
-  Download
+  Download,
+  Eye
 } from "lucide-react";
 import { toast } from "sonner";
 
 const ImportCSV = () => {
   const [file, setFile] = useState(null);
   const [importing, setImporting] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+  const [preview, setPreview] = useState(null);
   const [result, setResult] = useState(null);
   const fileInputRef = useRef(null);
 
-  const handleFileChange = (e) => {
+  const handleFileChange = async (e) => {
     const selectedFile = e.target.files[0];
     if (selectedFile) {
       if (!selectedFile.name.endsWith('.csv')) {
@@ -27,6 +31,22 @@ const ImportCSV = () => {
       }
       setFile(selectedFile);
       setResult(null);
+      setPreview(null);
+      
+      // Auto-preview the file
+      setPreviewing(true);
+      try {
+        const formData = new FormData();
+        formData.append("file", selectedFile);
+        const response = await api.post("/import/preview", formData, {
+          headers: { "Content-Type": "multipart/form-data" }
+        });
+        setPreview(response.data);
+      } catch (error) {
+        console.error("Preview failed:", error);
+      } finally {
+        setPreviewing(false);
+      }
     }
   };
 
@@ -208,6 +228,82 @@ const ImportCSV = () => {
               )}
             </div>
           </div>
+
+          {/* CSV Preview */}
+          {previewing && (
+            <div className="mt-6 flex items-center justify-center py-4">
+              <Loader2 className="h-5 w-5 animate-spin text-zinc-500 mr-2" />
+              <span className="text-zinc-500">Analyzing CSV...</span>
+            </div>
+          )}
+
+          {preview && !previewing && (
+            <div className="mt-6 p-4 rounded-lg bg-zinc-900/50 border border-white/10">
+              <div className="flex items-center gap-2 mb-3">
+                <Eye size={16} className="text-[#71E0DC]" />
+                <span className="text-white font-medium">CSV Preview</span>
+              </div>
+              
+              <div className="mb-3">
+                <p className="text-zinc-500 text-sm mb-2">Detected Columns:</p>
+                <div className="flex flex-wrap gap-2">
+                  {preview.columns?.map((col, idx) => (
+                    <Badge 
+                      key={idx} 
+                      className={`${
+                        col.toLowerCase().trim().includes('date') 
+                          ? 'bg-[#71E0DC]/20 text-[#71E0DC] border-[#71E0DC]/30'
+                          : col.toLowerCase().trim().includes('venue') || col.toLowerCase().trim().includes('location')
+                          ? 'bg-[#AEB2EF]/20 text-[#AEB2EF] border-[#AEB2EF]/30'
+                          : 'bg-zinc-800 text-zinc-300'
+                      }`}
+                    >
+                      {col}{col !== col.trim() ? ' ⚠️' : ''}
+                    </Badge>
+                  ))}
+                </div>
+                {!preview.columns?.some(c => c.toLowerCase().trim().includes('date')) && (
+                  <p className="text-amber-400 text-xs mt-2">
+                    ⚠️ No "Date Used" column detected. Questions won't be grouped into past sessions.
+                  </p>
+                )}
+              </div>
+
+              {preview.preview?.length > 0 && (
+                <div className="overflow-x-auto">
+                  <p className="text-zinc-500 text-sm mb-2">First {preview.preview.length} row(s):</p>
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-white/10">
+                        {preview.columns?.slice(0, 5).map((col, idx) => (
+                          <th key={idx} className="text-left py-1 px-2 text-zinc-400 font-medium">
+                            {col}
+                          </th>
+                        ))}
+                        {preview.columns?.length > 5 && (
+                          <th className="text-left py-1 px-2 text-zinc-500">...</th>
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {preview.preview.map((row, rowIdx) => (
+                        <tr key={rowIdx} className="border-b border-white/5">
+                          {preview.columns?.slice(0, 5).map((col, colIdx) => (
+                            <td key={colIdx} className="py-1 px-2 text-zinc-300 max-w-[150px] truncate">
+                              {row[col] || '-'}
+                            </td>
+                          ))}
+                          {preview.columns?.length > 5 && (
+                            <td className="py-1 px-2 text-zinc-500">...</td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Import Button */}
           <div className="mt-6 flex justify-center">
