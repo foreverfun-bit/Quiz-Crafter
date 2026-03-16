@@ -288,6 +288,14 @@ async def update_question(
     )
     if not existing:
         raise HTTPException(status_code=404, detail="Question not found")
+
+@api_router.delete("/questions/all")
+async def delete_all_questions(current_user: dict = Depends(get_current_user)):
+    """Delete all questions for the current user"""
+    result = await db.questions.delete_many({"user_id": current_user["id"]})
+    # Also delete all sessions
+    await db.sessions.delete_many({"user_id": current_user["id"]})
+    return {"message": f"Deleted {result.deleted_count} questions and all sessions"}
     
     update_data = question_data.model_dump(exclude_unset=True)
     await db.questions.update_one(
