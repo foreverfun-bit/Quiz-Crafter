@@ -7,7 +7,8 @@ import {
   PlusCircle, 
   Upload, 
   LogOut,
-  X
+  X,
+  History
 } from "lucide-react";
 
 const Sidebar = ({ isOpen, onClose }) => {
@@ -24,6 +25,7 @@ const Sidebar = ({ isOpen, onClose }) => {
     { path: "/generate", icon: Sparkles, label: "Generate" },
     { path: "/library", icon: Library, label: "Library" },
     { path: "/build", icon: PlusCircle, label: "Build Session" },
+    { path: "/past-sessions", icon: History, label: "Past Sessions" },
     { path: "/import", icon: Upload, label: "Import CSV" },
   ];
 

@@ -54,6 +54,7 @@ const statusOptions = [
   { value: "all", label: "All Status" },
   { value: "liked", label: "Liked", color: "text-emerald-400" },
   { value: "neutral", label: "Neutral", color: "text-zinc-400" },
+  { value: "used", label: "Used (Past)", color: "text-[#71E0DC]" },
   { value: "disliked", label: "Disliked", color: "text-red-400" },
 ];
 
@@ -95,16 +96,24 @@ const Library = () => {
     fetchCategories();
   }, []);
 
+  useEffect(() => {
+    fetchQuestions();
+  }, [statusFilter]);
+
   const fetchQuestions = async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (statusFilter === "disliked") {
-        // Special case to show disliked
-        const response = await api.get("/questions/all?include_disliked=true");
-        setQuestions(response.data.filter(q => q.status === "disliked"));
+      if (statusFilter === "disliked" || statusFilter === "used") {
+        // Special case to show disliked or used questions
+        const response = await api.get("/questions?include_used=true");
+        const allQuestions = response.data;
+        if (statusFilter === "disliked") {
+          setQuestions(allQuestions.filter(q => q.status === "disliked"));
+        } else {
+          setQuestions(allQuestions.filter(q => q.status === "used"));
+        }
       } else {
-        const response = await api.get("/questions/all");
+        const response = await api.get("/questions");
         setQuestions(response.data);
       }
     } catch (error) {
@@ -249,7 +258,7 @@ const Library = () => {
       return false;
     }
     if (typeFilter !== "all" && q.question_type !== typeFilter) return false;
-    if (statusFilter !== "all" && statusFilter !== "disliked" && q.status !== statusFilter) return false;
+    if (statusFilter !== "all" && statusFilter !== "disliked" && statusFilter !== "used" && q.status !== statusFilter) return false;
     if (sourceFilter !== "all" && q.source !== sourceFilter) return false;
     if (categoryFilter !== "all" && q.category !== categoryFilter) return false;
     return true;
@@ -318,8 +327,8 @@ const Library = () => {
             </Select>
 
             {/* Status Filter */}
-            <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); if (v === "disliked") fetchQuestions(); }}>
-              <SelectTrigger className="w-full lg:w-36 bg-zinc-950/50 border-white/10 text-white" data-testid="status-filter">
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="w-full lg:w-40 bg-zinc-950/50 border-white/10 text-white" data-testid="status-filter">
                 <SelectValue placeholder="Status" />
               </SelectTrigger>
               <SelectContent className="bg-zinc-900 border-white/10">
@@ -393,7 +402,7 @@ const Library = () => {
               >
                 <CardContent className="p-6">
                   <div className="flex items-start justify-between gap-4 mb-4">
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 flex-wrap">
                       <Badge className={`${
                         question.question_type === 'true_false' ? 'badge-true-false' :
                         question.question_type === 'multiple_choice' ? 'badge-multiple-choice' :
@@ -413,30 +422,39 @@ const Library = () => {
                       }`}>
                         {question.source}
                       </Badge>
+                      {question.status === 'used' && (
+                        <Badge className="bg-[#71E0DC]/20 text-[#71E0DC] border-[#71E0DC]/30">
+                          Used
+                        </Badge>
+                      )}
                     </div>
                     <div className="flex items-center gap-1">
-                      <button
-                        onClick={() => question.status === 'liked' ? handleNeutral(question.id) : handleLike(question.id)}
-                        className={`p-2 rounded-lg transition-colors ${
-                          question.status === 'liked'
-                            ? 'bg-emerald-500/20 text-emerald-400'
-                            : 'hover:bg-zinc-800 text-zinc-500 hover:text-emerald-400'
-                        }`}
-                        data-testid={`like-btn-${index}`}
-                      >
-                        <Heart size={18} fill={question.status === 'liked' ? 'currentColor' : 'none'} />
-                      </button>
-                      <button
-                        onClick={() => question.status === 'disliked' ? handleNeutral(question.id) : handleDislike(question.id)}
-                        className={`p-2 rounded-lg transition-colors ${
-                          question.status === 'disliked'
-                            ? 'bg-red-500/20 text-red-400'
-                            : 'hover:bg-zinc-800 text-zinc-500 hover:text-red-400'
-                        }`}
-                        data-testid={`dislike-btn-${index}`}
-                      >
-                        <ThumbsDown size={18} fill={question.status === 'disliked' ? 'currentColor' : 'none'} />
-                      </button>
+                      {question.status !== 'used' && (
+                        <>
+                          <button
+                            onClick={() => question.status === 'liked' ? handleNeutral(question.id) : handleLike(question.id)}
+                            className={`p-2 rounded-lg transition-colors ${
+                              question.status === 'liked'
+                                ? 'bg-emerald-500/20 text-emerald-400'
+                                : 'hover:bg-zinc-800 text-zinc-500 hover:text-emerald-400'
+                            }`}
+                            data-testid={`like-btn-${index}`}
+                          >
+                            <Heart size={18} fill={question.status === 'liked' ? 'currentColor' : 'none'} />
+                          </button>
+                          <button
+                            onClick={() => question.status === 'disliked' ? handleNeutral(question.id) : handleDislike(question.id)}
+                            className={`p-2 rounded-lg transition-colors ${
+                              question.status === 'disliked'
+                                ? 'bg-red-500/20 text-red-400'
+                                : 'hover:bg-zinc-800 text-zinc-500 hover:text-red-400'
+                            }`}
+                            data-testid={`dislike-btn-${index}`}
+                          >
+                            <ThumbsDown size={18} fill={question.status === 'disliked' ? 'currentColor' : 'none'} />
+                          </button>
+                        </>
+                      )}
                       <button
                         onClick={() => openEditModal(question)}
                         className="p-2 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-white transition-colors"

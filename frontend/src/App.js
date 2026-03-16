@@ -12,6 +12,7 @@ import Library from "./pages/Library";
 import BuildSession from "./pages/BuildSession";
 import ImportCSV from "./pages/ImportCSV";
 import SessionDetail from "./pages/SessionDetail";
+import PastSessions from "./pages/PastSessions";
 
 // Components
 import Sidebar from "./components/Sidebar";
@@ -212,6 +213,16 @@ function App() {
                 <ProtectedRoute>
                   <AppLayout>
                     <BuildSession />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/past-sessions"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <PastSessions />
                   </AppLayout>
                 </ProtectedRoute>
               }

@@ -76,7 +76,7 @@ class Question(BaseModel):
     venue: Optional[str] = None
     date_used: Optional[str] = None
     user_id: str
-    status: str = "neutral"  # neutral, liked, disliked
+    status: str = "neutral"  # neutral, liked, disliked, used
     source: str = "manual"  # manual, ai, imported
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -107,6 +107,7 @@ class TriviaSession(BaseModel):
     multiple_choice_questions: List[str] = []
     written_questions: List[str] = []
     picture_questions: List[str] = []
+    is_past: bool = False  # True for imported/past sessions
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 class TriviaSessionCreate(BaseModel):
@@ -115,6 +116,7 @@ class TriviaSessionCreate(BaseModel):
     multiple_choice_questions: List[str] = []
     written_questions: List[str] = []
     picture_questions: List[str] = []
+    is_past: bool = False
 
 # ============ AUTH HELPERS ============
 
@@ -208,9 +210,14 @@ async def get_questions(
     category: Optional[str] = None,
     source: Optional[str] = None,
     search: Optional[str] = None,
+    include_used: bool = False,
     current_user: dict = Depends(get_current_user)
 ):
-    query = {"user_id": current_user["id"], "status": {"$ne": "disliked"}}
+    # By default, exclude disliked and used questions
+    query = {"user_id": current_user["id"], "status": {"$nin": ["disliked", "used"]}}
+    
+    if include_used:
+        query["status"] = {"$ne": "disliked"}  # Only exclude disliked
     
     if status:
         query["status"] = status
@@ -613,6 +620,9 @@ async def import_csv(
     skipped_count = 0
     errors = []
     
+    # Group questions by date+venue for session creation
+    session_groups = {}  # key: "date|venue" -> list of question IDs
+    
     for row in reader:
         try:
             # Map CSV columns to question fields
@@ -657,19 +667,60 @@ async def import_csv(
                 venue=venue or None,
                 date_used=date_used or None,
                 user_id=current_user["id"],
-                source="imported"
+                source="imported",
+                status="used"  # Mark as used so it doesn't appear in build session
             )
             
             await db.questions.insert_one(question.model_dump())
             imported_count += 1
             
+            # Group by date+venue for session creation
+            if date_used:
+                session_key = f"{date_used}|{venue or 'Unknown Venue'}"
+                if session_key not in session_groups:
+                    session_groups[session_key] = {
+                        "date": date_used,
+                        "venue": venue or "Unknown Venue",
+                        "true_false": [],
+                        "multiple_choice": [],
+                        "written": [],
+                        "picture": []
+                    }
+                session_groups[session_key][question_type].append(question.id)
+            
         except Exception as e:
             errors.append(str(e))
+    
+    # Create sessions for each date+venue group
+    sessions_created = 0
+    for session_key, group in session_groups.items():
+        # Create session name from date and venue
+        session_name = f"{group['venue']} - {group['date']}"
+        
+        # Check if session already exists with this name
+        existing_session = await db.sessions.find_one({
+            "name": session_name,
+            "user_id": current_user["id"]
+        })
+        
+        if not existing_session:
+            session = TriviaSession(
+                name=session_name,
+                user_id=current_user["id"],
+                true_false_questions=group["true_false"],
+                multiple_choice_questions=group["multiple_choice"],
+                written_questions=group["written"],
+                picture_questions=group["picture"],
+                is_past=True  # Mark as past session
+            )
+            await db.sessions.insert_one(session.model_dump())
+            sessions_created += 1
     
     return {
         "message": f"Import complete",
         "imported": imported_count,
         "skipped": skipped_count,
+        "sessions_created": sessions_created,
         "errors": errors[:10] if errors else []
     }
 
@@ -683,9 +734,16 @@ async def get_categories(current_user: dict = Depends(get_current_user)):
 # ============ SESSIONS ROUTES ============
 
 @api_router.get("/sessions", response_model=List[TriviaSession])
-async def get_sessions(current_user: dict = Depends(get_current_user)):
+async def get_sessions(
+    is_past: Optional[bool] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    query = {"user_id": current_user["id"]}
+    if is_past is not None:
+        query["is_past"] = is_past
+    
     sessions = await db.sessions.find(
-        {"user_id": current_user["id"]},
+        query,
         {"_id": 0}
     ).sort("created_at", -1).to_list(100)
     return sessions
@@ -701,7 +759,8 @@ async def create_session(
         true_false_questions=session_data.true_false_questions,
         multiple_choice_questions=session_data.multiple_choice_questions,
         written_questions=session_data.written_questions,
-        picture_questions=session_data.picture_questions
+        picture_questions=session_data.picture_questions,
+        is_past=session_data.is_past
     )
     await db.sessions.insert_one(session.model_dump())
     return session

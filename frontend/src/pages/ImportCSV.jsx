@@ -134,16 +134,21 @@ const ImportCSV = () => {
                 </tr>
                 <tr className="border-b border-white/5">
                   <td className="py-2 px-3 font-mono text-[#71E0DC]">Venue</td>
-                  <td className="py-2 px-3">Optional</td>
-                  <td className="py-2 px-3">Where the question was used</td>
+                  <td className="py-2 px-3">Recommended</td>
+                  <td className="py-2 px-3">Where the question was used (used for session grouping)</td>
                 </tr>
                 <tr>
                   <td className="py-2 px-3 font-mono text-[#71E0DC]">Date Used</td>
-                  <td className="py-2 px-3">Optional</td>
-                  <td className="py-2 px-3">When the question was last used</td>
+                  <td className="py-2 px-3">Recommended</td>
+                  <td className="py-2 px-3">When the question was used (groups questions into past sessions)</td>
                 </tr>
               </tbody>
             </table>
+          </div>
+          <div className="mt-4 p-3 rounded-lg bg-[#71E0DC]/10 border border-[#71E0DC]/20">
+            <p className="text-[#71E0DC] text-sm">
+              <strong>Auto-grouping:</strong> Questions with the same Date Used will be automatically grouped into a past session named "{'"'}Venue - Date{'"'}"
+            </p>
           </div>
           <div className="mt-4">
             <Button
@@ -249,6 +254,11 @@ const ImportCSV = () => {
                         <li className="text-zinc-300">
                           <span className="text-emerald-400">{result.imported}</span> questions imported
                         </li>
+                        {result.sessions_created > 0 && (
+                          <li className="text-zinc-300">
+                            <span className="text-[#71E0DC]">{result.sessions_created}</span> past session{result.sessions_created !== 1 ? 's' : ''} created
+                          </li>
+                        )}
                         {result.skipped > 0 && (
                           <li className="text-zinc-300">
                             <span className="text-amber-400">{result.skipped}</span> duplicates skipped
