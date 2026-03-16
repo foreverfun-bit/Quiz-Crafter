@@ -15,7 +15,8 @@ import {
   ArrowLeft,
   Trash2,
   Printer,
-  Copy
+  Copy,
+  Download
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -95,6 +96,24 @@ const SessionDetail = () => {
     toast.success("Session copied to clipboard!");
   };
 
+  const handleExportCSV = async () => {
+    try {
+      const response = await api.get(`/sessions/${id}/export-csv`, {
+        responseType: 'blob'
+      });
+      const blob = new Blob([response.data], { type: 'text/csv' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `trivia-${session.name.replace(/[^a-z0-9]/gi, '-').toLowerCase()}.csv`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+      toast.success("Exported as CSV!");
+    } catch (error) {
+      toast.error("Failed to export");
+    }
+  };
+
   const getQuestionsForType = (type) => {
     if (!session) return [];
     const questionIds = session[type.field] || [];
@@ -144,6 +163,15 @@ const SessionDetail = () => {
           </div>
         </div>
         <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={handleExportCSV}
+            className="border-[#71E0DC]/30 text-[#71E0DC] hover:bg-[#71E0DC]/10"
+            data-testid="export-csv-btn"
+          >
+            <Download className="mr-2" size={16} />
+            Export CSV
+          </Button>
           <Button
             variant="outline"
             onClick={copyToClipboard}
@@ -248,6 +276,20 @@ const SessionDetail = () => {
                               </div>
 
                               <p className="text-white font-medium mb-3">{question.question}</p>
+
+                              {/* Display image for picture questions */}
+                              {question.image_url && (
+                                <div className="mb-3">
+                                  <img 
+                                    src={question.image_url.startsWith("/api") 
+                                      ? `${process.env.REACT_APP_BACKEND_URL}${question.image_url}` 
+                                      : question.image_url}
+                                    alt="Question"
+                                    className="w-full max-w-sm rounded-lg border border-white/10"
+                                    data-testid={`session-question-image-${type.value}-${index}`}
+                                  />
+                                </div>
+                              )}
 
                               {question.options && question.options.length > 0 && (
                                 <div className="grid grid-cols-2 gap-2 mb-3">

@@ -474,6 +474,20 @@ const Library = () => {
 
                   <p className="text-white font-medium mb-3">{question.question}</p>
 
+                  {/* Display image for picture questions */}
+                  {question.image_url && (
+                    <div className="mb-3">
+                      <img 
+                        src={question.image_url.startsWith("/api") 
+                          ? `${process.env.REACT_APP_BACKEND_URL}${question.image_url}` 
+                          : question.image_url}
+                        alt="Question"
+                        className="w-full max-w-xs rounded-lg border border-white/10"
+                        data-testid={`library-question-image-${index}`}
+                      />
+                    </div>
+                  )}
+
                   {question.options && question.options.length > 0 && (
                     <div className="grid grid-cols-2 gap-2 mb-3">
                       {question.options.map((option, optIndex) => (

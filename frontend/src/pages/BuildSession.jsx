@@ -28,21 +28,63 @@ const questionTypes = [
   { value: "picture", label: "Picture", icon: Image, color: "text-amber-400", target: 3 },
 ];
 
+const BUILD_STORAGE_KEY = "trivia-build-session-state";
+
 const BuildSession = () => {
   const navigate = useNavigate();
-  const [sessionName, setSessionName] = useState("");
+  
+  // Load saved state from localStorage
+  const loadSavedState = () => {
+    try {
+      const saved = localStorage.getItem(BUILD_STORAGE_KEY);
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch (e) {
+      console.error("Failed to load saved state:", e);
+    }
+    return null;
+  };
+
+  const savedState = loadSavedState();
+
+  const [sessionName, setSessionName] = useState(savedState?.sessionName || "");
   const [questions, setQuestions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [activeTab, setActiveTab] = useState("true_false");
+  const [activeTab, setActiveTab] = useState(savedState?.activeTab || "true_false");
   const [searchQuery, setSearchQuery] = useState("");
   
-  const [selected, setSelected] = useState({
+  const [selected, setSelected] = useState(savedState?.selected || {
     true_false: [],
     multiple_choice: [],
     written: [],
     picture: []
   });
+
+  // Save state to localStorage whenever it changes
+  useEffect(() => {
+    const stateToSave = {
+      sessionName,
+      selected,
+      activeTab
+    };
+    localStorage.setItem(BUILD_STORAGE_KEY, JSON.stringify(stateToSave));
+  }, [sessionName, selected, activeTab]);
+
+  // Clear saved state after successful save
+  const clearSavedState = () => {
+    localStorage.removeItem(BUILD_STORAGE_KEY);
+  };
+
+  // Clear session manually
+  const handleClearSession = () => {
+    clearSavedState();
+    setSessionName("");
+    setSelected({ true_false: [], multiple_choice: [], written: [], picture: [] });
+    setActiveTab("true_false");
+    toast.success("Selection cleared!");
+  };
 
   useEffect(() => {
     fetchQuestions();
@@ -100,9 +142,11 @@ const BuildSession = () => {
         true_false_questions: selected.true_false,
         multiple_choice_questions: selected.multiple_choice,
         written_questions: selected.written,
-        picture_questions: selected.picture
+        picture_questions: selected.picture,
+        is_past: true
       });
-      toast.success("Session created!");
+      clearSavedState();
+      toast.success("Session created and saved to Past Sessions!");
       navigate(`/session/${response.data.id}`);
     } catch (error) {
       toast.error("Failed to create session");
@@ -150,24 +194,37 @@ const BuildSession = () => {
             Select questions for your trivia night (9 T/F, 9 MC, 9 Written, 3 Picture)
           </p>
         </div>
-        <Button
-          onClick={handleSave}
-          disabled={saving}
-          className="gradient-btn"
-          data-testid="save-session-btn"
-        >
-          {saving ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Saving...
-            </>
-          ) : (
-            <>
-              <Save className="mr-2" size={18} />
-              Save Session
-            </>
+        <div className="flex gap-2">
+          {(sessionName || Object.values(selected).flat().length > 0) && (
+            <Button
+              variant="outline"
+              onClick={handleClearSession}
+              className="border-zinc-700 text-zinc-400 hover:text-white hover:bg-zinc-800"
+              data-testid="clear-build-btn"
+            >
+              <X size={16} className="mr-2" />
+              Clear
+            </Button>
           )}
-        </Button>
+          <Button
+            onClick={handleSave}
+            disabled={saving}
+            className="gradient-btn"
+            data-testid="save-session-btn"
+          >
+            {saving ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Saving...
+              </>
+            ) : (
+              <>
+                <Save className="mr-2" size={18} />
+                Save Session
+              </>
+            )}
+          </Button>
+        </div>
       </div>
 
       {/* Session Name */}

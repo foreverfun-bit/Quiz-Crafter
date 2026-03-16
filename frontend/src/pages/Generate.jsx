@@ -27,7 +27,9 @@ import {
   ArrowRight,
   ArrowLeft,
   Check,
-  X
+  X,
+  Upload,
+  Wand2
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -38,12 +40,29 @@ const questionTypes = [
   { value: "picture", label: "Picture Round", icon: Image, color: "text-amber-400", count: 3 },
 ];
 
+const STORAGE_KEY = "trivia-generate-state";
+
 const Generate = () => {
+  // Load saved state from localStorage
+  const loadSavedState = () => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch (e) {
+      console.error("Failed to load saved state:", e);
+    }
+    return null;
+  };
+
+  const savedState = loadSavedState();
+
   // Step management
-  const [step, setStep] = useState(1); // 1 = category selection, 2 = question generation
+  const [step, setStep] = useState(savedState?.step || 1);
   
   // Category state for each type
-  const [categories, setCategories] = useState({
+  const [categories, setCategories] = useState(savedState?.categories || {
     true_false: [],
     multiple_choice: [],
     written: [],
@@ -57,13 +76,35 @@ const Generate = () => {
   const [generatingForCategory, setGeneratingForCategory] = useState(null);
   
   // Questions generated per category
-  const [generatedQuestions, setGeneratedQuestions] = useState({});
+  const [generatedQuestions, setGeneratedQuestions] = useState(savedState?.generatedQuestions || {});
   
   // Active tab
-  const [activeTab, setActiveTab] = useState("true_false");
+  const [activeTab, setActiveTab] = useState(savedState?.activeTab || "true_false");
   
   // Questions per category setting
-  const [questionsPerCategory, setQuestionsPerCategory] = useState(5);
+  const [questionsPerCategory, setQuestionsPerCategory] = useState(savedState?.questionsPerCategory || 5);
+
+  // Save state to localStorage whenever it changes
+  useEffect(() => {
+    const stateToSave = {
+      step,
+      categories,
+      generatedQuestions,
+      activeTab,
+      questionsPerCategory
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
+  }, [step, categories, generatedQuestions, activeTab, questionsPerCategory]);
+
+  // Clear saved state (for starting fresh)
+  const handleClearSession = () => {
+    localStorage.removeItem(STORAGE_KEY);
+    setStep(1);
+    setCategories({ true_false: [], multiple_choice: [], written: [], picture: [] });
+    setGeneratedQuestions({});
+    setActiveTab("true_false");
+    toast.success("Session cleared!");
+  };
 
   // Generate all categories at once
   const handleGenerateAllCategories = async () => {
@@ -220,14 +261,12 @@ const Generate = () => {
   // Like = Save question to library
   const handleLike = async (questionId, key) => {
     try {
-      // Find the question in our generated questions
       const question = generatedQuestions[key]?.find(q => q.id === questionId);
       if (!question) {
         toast.error("Question not found");
         return;
       }
       
-      // Save to database via new endpoint
       await api.post("/questions/save", {
         id: question.id,
         category: question.category,
@@ -251,12 +290,58 @@ const Generate = () => {
 
   // Dislike = Just remove from view (not saved to DB)
   const handleDislike = async (questionId, key) => {
-    // Just remove from the generated list - it was never saved to DB
     setGeneratedQuestions(prev => ({
       ...prev,
       [key]: prev[key].filter(q => q.id !== questionId)
     }));
     toast.success("Question removed");
+  };
+
+  // Image upload for picture questions
+  const handleImageUpload = async (questionId, key, file) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    
+    try {
+      const response = await api.post("/upload/image", formData, {
+        headers: { "Content-Type": "multipart/form-data" }
+      });
+      
+      setGeneratedQuestions(prev => ({
+        ...prev,
+        [key]: prev[key].map(q => 
+          q.id === questionId ? { ...q, image_url: response.data.image_url } : q
+        )
+      }));
+      toast.success("Image uploaded!");
+    } catch (error) {
+      toast.error("Failed to upload image");
+    }
+  };
+
+  // AI image generation for picture questions
+  const [generatingImageFor, setGeneratingImageFor] = useState(null);
+  
+  const handleGenerateImage = async (questionId, key, question) => {
+    setGeneratingImageFor(questionId);
+    try {
+      const response = await api.post("/generate/image", {
+        prompt: `A clear, high-quality image for a trivia question about: ${question.question}. Category: ${question.category}. The image should be identifiable but not contain any text or labels.`,
+        category: question.category
+      });
+      
+      setGeneratedQuestions(prev => ({
+        ...prev,
+        [key]: prev[key].map(q => 
+          q.id === questionId ? { ...q, image_url: response.data.image_url } : q
+        )
+      }));
+      toast.success("Image generated!");
+    } catch (error) {
+      toast.error("Failed to generate image");
+    } finally {
+      setGeneratingImageFor(null);
+    }
   };
 
   // Check if all categories have questions
@@ -291,16 +376,29 @@ const Generate = () => {
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto animate-fade-in" data-testid="generate-page">
       {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">
-          <span className="gradient-text">Generate</span> Trivia
-        </h1>
-        <p className="text-zinc-500">
-          {step === 1 
-            ? "Step 1: Generate and approve categories for your trivia session"
-            : "Step 2: Generate and select questions for each category"
-          }
-        </p>
+      <div className="flex items-start justify-between mb-8">
+        <div>
+          <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">
+            <span className="gradient-text">Generate</span> Trivia
+          </h1>
+          <p className="text-zinc-500">
+            {step === 1 
+              ? "Step 1: Generate and approve categories for your trivia session"
+              : "Step 2: Generate and select questions for each category"
+            }
+          </p>
+        </div>
+        {(categories.true_false.length > 0 || Object.keys(generatedQuestions).length > 0) && (
+          <Button
+            variant="outline"
+            onClick={handleClearSession}
+            className="border-zinc-700 text-zinc-400 hover:text-white hover:bg-zinc-800"
+            data-testid="clear-session-btn"
+          >
+            <X size={16} className="mr-2" />
+            Start Fresh
+          </Button>
+        )}
       </div>
 
       {/* Progress Indicator */}
@@ -632,6 +730,63 @@ const Generate = () => {
                                                   {opt}
                                                 </span>
                                               ))}
+                                            </div>
+                                          )}
+
+                                          {/* Picture question image section */}
+                                          {type.value === "picture" && (
+                                            <div className="my-3">
+                                              {question.image_url ? (
+                                                <div className="relative group">
+                                                  <img 
+                                                    src={question.image_url.startsWith("/api") 
+                                                      ? `${process.env.REACT_APP_BACKEND_URL}${question.image_url}` 
+                                                      : question.image_url} 
+                                                    alt="Question" 
+                                                    className="w-full max-w-xs rounded-lg border border-white/10"
+                                                    data-testid={`question-image-${catIndex}-${qIndex}`}
+                                                  />
+                                                  <div className="mt-2 flex gap-2">
+                                                    <label className="cursor-pointer">
+                                                      <input 
+                                                        type="file" 
+                                                        accept="image/*" 
+                                                        className="hidden"
+                                                        onChange={(e) => e.target.files[0] && handleImageUpload(question.id, key, e.target.files[0])}
+                                                      />
+                                                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs bg-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-700 transition-colors">
+                                                        <Upload size={12} /> Replace
+                                                      </span>
+                                                    </label>
+                                                  </div>
+                                                </div>
+                                              ) : (
+                                                <div className="flex gap-2">
+                                                  <label className="cursor-pointer">
+                                                    <input 
+                                                      type="file" 
+                                                      accept="image/*" 
+                                                      className="hidden"
+                                                      onChange={(e) => e.target.files[0] && handleImageUpload(question.id, key, e.target.files[0])}
+                                                    />
+                                                    <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-zinc-800 text-zinc-300 hover:text-white hover:bg-zinc-700 transition-colors border border-white/10">
+                                                      <Upload size={14} /> Upload Image
+                                                    </span>
+                                                  </label>
+                                                  <button
+                                                    onClick={() => handleGenerateImage(question.id, key, question)}
+                                                    disabled={generatingImageFor === question.id}
+                                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 transition-colors border border-amber-500/20 disabled:opacity-50"
+                                                    data-testid={`generate-image-${catIndex}-${qIndex}`}
+                                                  >
+                                                    {generatingImageFor === question.id ? (
+                                                      <><Loader2 size={14} className="animate-spin" /> Generating...</>
+                                                    ) : (
+                                                      <><Wand2 size={14} /> AI Generate</>
+                                                    )}
+                                                  </button>
+                                                </div>
+                                              )}
                                             </div>
                                           )}
                                           

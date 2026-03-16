@@ -1,7 +1,9 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
+from starlette.staticfiles import StaticFiles
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
@@ -9,6 +11,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional
 import uuid
+import base64
 from datetime import datetime, timezone, timedelta
 import jwt
 import bcrypt
@@ -17,6 +20,10 @@ import io
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+
+# Uploads directory
+UPLOADS_DIR = ROOT_DIR / 'uploads'
+UPLOADS_DIR.mkdir(exist_ok=True)
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
@@ -289,14 +296,6 @@ async def update_question(
     if not existing:
         raise HTTPException(status_code=404, detail="Question not found")
 
-@api_router.delete("/questions/all")
-async def delete_all_questions(current_user: dict = Depends(get_current_user)):
-    """Delete all questions for the current user"""
-    result = await db.questions.delete_many({"user_id": current_user["id"]})
-    # Also delete all sessions
-    await db.sessions.delete_many({"user_id": current_user["id"]})
-    return {"message": f"Deleted {result.deleted_count} questions and all sessions"}
-    
     update_data = question_data.model_dump(exclude_unset=True)
     await db.questions.update_one(
         {"id": question_id},
@@ -305,6 +304,13 @@ async def delete_all_questions(current_user: dict = Depends(get_current_user)):
     
     updated = await db.questions.find_one({"id": question_id}, {"_id": 0})
     return updated
+
+@api_router.delete("/questions/all")
+async def delete_all_questions(current_user: dict = Depends(get_current_user)):
+    """Delete all questions for the current user"""
+    result = await db.questions.delete_many({"user_id": current_user["id"]})
+    await db.sessions.delete_many({"user_id": current_user["id"]})
+    return {"message": f"Deleted {result.deleted_count} questions and all sessions"}
 
 @api_router.delete("/questions/{question_id}")
 async def delete_question(question_id: str, current_user: dict = Depends(get_current_user)):
@@ -894,7 +900,7 @@ async def import_csv(
             sessions_created += 1
     
     return {
-        "message": f"Import complete",
+        "message": "Import complete",
         "imported": imported_count,
         "updated": updated_count,
         "skipped": skipped_count,
@@ -1022,6 +1028,130 @@ async def delete_session(session_id: str, current_user: dict = Depends(get_curre
         raise HTTPException(status_code=404, detail="Session not found")
     return {"message": "Session deleted"}
 
+# ============ SESSION EXPORT ============
+
+@api_router.get("/sessions/{session_id}/export-csv")
+async def export_session_csv(session_id: str, current_user: dict = Depends(get_current_user)):
+    session = await db.sessions.find_one(
+        {"id": session_id, "user_id": current_user["id"]},
+        {"_id": 0}
+    )
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    all_question_ids = (
+        session.get("true_false_questions", []) +
+        session.get("multiple_choice_questions", []) +
+        session.get("written_questions", []) +
+        session.get("picture_questions", [])
+    )
+    
+    questions = await db.questions.find(
+        {"id": {"$in": all_question_ids}},
+        {"_id": 0}
+    ).to_list(200)
+    questions_map = {q["id"]: q for q in questions}
+    
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Category", "Question", "Answer", "Multiple Choice Options", "Fun Fact", "Question Type", "Venue", "Date Used"])
+    
+    type_map = {
+        "true_false_questions": "true_false",
+        "multiple_choice_questions": "multiple_choice",
+        "written_questions": "written",
+        "picture_questions": "picture"
+    }
+    
+    for field, q_type in type_map.items():
+        for qid in session.get(field, []):
+            q = questions_map.get(qid)
+            if not q:
+                continue
+            writer.writerow([
+                q.get("category", ""),
+                q.get("question", ""),
+                q.get("answer", ""),
+                ", ".join(q.get("options", []) or []),
+                q.get("fun_fact", ""),
+                q_type.replace("_", " ").title(),
+                q.get("venue", ""),
+                q.get("date_used", "")
+            ])
+    
+    output.seek(0)
+    safe_name = session.get("name", "session").replace(" ", "-")
+    return StreamingResponse(
+        io.BytesIO(output.getvalue().encode("utf-8")),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="trivia-{safe_name}.csv"'}
+    )
+
+# ============ IMAGE UPLOAD & GENERATION ============
+
+@api_router.post("/upload/image")
+async def upload_image(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user)
+):
+    allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="File must be an image (JPEG, PNG, GIF, or WebP)")
+    
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image too large (max 10MB)")
+    
+    ext = file.filename.split(".")[-1] if "." in file.filename else "png"
+    filename = f"{uuid.uuid4()}.{ext}"
+    filepath = UPLOADS_DIR / filename
+    
+    with open(filepath, "wb") as f:
+        f.write(content)
+    
+    image_url = f"/api/uploads/{filename}"
+    return {"image_url": image_url, "filename": filename}
+
+class GenerateImageRequest(BaseModel):
+    prompt: str
+    category: str = ""
+
+@api_router.post("/generate/image")
+async def generate_image(
+    request: GenerateImageRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    from emergentintegrations.llm.openai.image_generation import OpenAIImageGeneration
+    
+    api_key = os.environ.get("EMERGENT_LLM_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="AI service not configured")
+    
+    image_gen = OpenAIImageGeneration(api_key=api_key)
+    
+    try:
+        images = await image_gen.generate_images(
+            prompt=request.prompt,
+            model="gpt-image-1",
+            number_of_images=1
+        )
+        
+        if not images or len(images) == 0:
+            raise HTTPException(status_code=500, detail="No image generated")
+        
+        filename = f"{uuid.uuid4()}.png"
+        filepath = UPLOADS_DIR / filename
+        with open(filepath, "wb") as f:
+            f.write(images[0])
+        
+        image_url = f"/api/uploads/{filename}"
+        image_b64 = base64.b64encode(images[0]).decode("utf-8")
+        
+        return {"image_url": image_url, "image_base64": image_b64}
+    except Exception as e:
+        logging.error(f"Image generation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
+
 # ============ STATS ROUTES ============
 
 @api_router.get("/stats")
@@ -1061,6 +1191,9 @@ async def get_stats(current_user: dict = Depends(get_current_user)):
 
 # Include router
 app.include_router(api_router)
+
+# Serve uploaded images
+app.mount("/api/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 
 # CORS
 app.add_middleware(
