@@ -84,6 +84,9 @@ const Generate = () => {
   // Questions per category setting
   const [questionsPerCategory, setQuestionsPerCategory] = useState(savedState?.questionsPerCategory || 5);
 
+  // Track disliked question texts per category key to exclude on regeneration
+  const [dislikedQuestions, setDislikedQuestions] = useState(savedState?.dislikedQuestions || {});
+
   // Save state to localStorage whenever it changes
   useEffect(() => {
     const stateToSave = {
@@ -91,10 +94,11 @@ const Generate = () => {
       categories,
       generatedQuestions,
       activeTab,
-      questionsPerCategory
+      questionsPerCategory,
+      dislikedQuestions
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
-  }, [step, categories, generatedQuestions, activeTab, questionsPerCategory]);
+  }, [step, categories, generatedQuestions, activeTab, questionsPerCategory, dislikedQuestions]);
 
   // Clear saved state (for starting fresh)
   const handleClearSession = () => {
@@ -102,6 +106,7 @@ const Generate = () => {
     setStep(1);
     setCategories({ true_false: [], multiple_choice: [], written: [], picture: [] });
     setGeneratedQuestions({});
+    setDislikedQuestions({});
     setActiveTab("true_false");
     toast.success("Session cleared!");
   };
@@ -206,11 +211,17 @@ const Generate = () => {
     const key = `${type}-${category}`;
     setGeneratingForCategory(key);
     
+    // Collect disliked + currently visible question texts to exclude
+    const existingTexts = (generatedQuestions[key] || []).map(q => q.question);
+    const dislikedTexts = dislikedQuestions[key] || [];
+    const excludeQuestions = [...new Set([...existingTexts, ...dislikedTexts])];
+    
     try {
       const response = await api.post("/generate/questions", {
         category: category,
         question_type: type,
-        count: questionsPerCategory
+        count: questionsPerCategory,
+        exclude_questions: excludeQuestions
       });
       
       setGeneratedQuestions(prev => ({
@@ -235,11 +246,15 @@ const Generate = () => {
       const key = `${type}-${category}`;
       if (!generatedQuestions[key]) {
         setGeneratingForCategory(key);
+        
+        const dislikedTexts = dislikedQuestions[key] || [];
+        
         try {
           const response = await api.post("/generate/questions", {
             category: category,
             question_type: type,
-            count: questionsPerCategory
+            count: questionsPerCategory,
+            exclude_questions: dislikedTexts
           });
           
           setGeneratedQuestions(prev => ({
@@ -288,8 +303,15 @@ const Generate = () => {
     }
   };
 
-  // Dislike = Just remove from view (not saved to DB)
+  // Dislike = Remove from view AND track the text to exclude on regeneration
   const handleDislike = async (questionId, key) => {
+    const question = generatedQuestions[key]?.find(q => q.id === questionId);
+    if (question) {
+      setDislikedQuestions(prev => ({
+        ...prev,
+        [key]: [...(prev[key] || []), question.question]
+      }));
+    }
     setGeneratedQuestions(prev => ({
       ...prev,
       [key]: prev[key].filter(q => q.id !== questionId)

@@ -102,6 +102,7 @@ class GenerateQuestionsRequest(BaseModel):
     category: str
     question_type: str
     count: int = 5
+    exclude_questions: List[str] = []
 
 class CategoryResponse(BaseModel):
     categories: List[str]
@@ -429,6 +430,18 @@ async def generate_questions(
     mc_line = "4. Four answer options (for multiple choice)" if request.question_type == "multiple_choice" else ""
     options_json = '"options": ["A. option1", "B. option2", "C. option3", "D. option4"],' if request.question_type == "multiple_choice" else ""
     
+    # Also get existing questions from DB for this category to avoid repeats
+    existing_questions = await db.questions.find(
+        {"user_id": current_user["id"], "category": request.category},
+        {"_id": 0, "question": 1}
+    ).to_list(100)
+    existing_texts = [q["question"] for q in existing_questions]
+    all_excluded = list(set(request.exclude_questions + existing_texts))
+    
+    exclude_block = ""
+    if all_excluded:
+        exclude_block = "\n\nDo NOT generate any of these questions (they were already used or rejected):\n" + "\n".join(f"- {q}" for q in all_excluded[:30])
+    
     prompt = f"""Generate {request.count} {request.question_type.replace('_', ' ')} trivia questions about the category: "{request.category}".
 
 {type_instructions.get(request.question_type, '')}
@@ -449,7 +462,7 @@ Format your response as JSON array with this structure:
   }}
 ]
 
-Make questions engaging, varied in difficulty, and factually accurate."""
+Make questions engaging, varied in difficulty, and factually accurate.{exclude_block}"""
 
     try:
         response = await chat.send_message(UserMessage(text=prompt))
