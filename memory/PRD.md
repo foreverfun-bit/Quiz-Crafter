@@ -66,7 +66,15 @@ Build a trivia host app with:
 - Proper headers: Category, Question, Answer, MC Options, Fun Fact, Type, Venue, Date Used
 - Available on both Session Detail and Past Sessions pages
 
-### Picture-Based Questions
+### Theme Round Generator
+- Separate tab on Generate page: "Standard" vs "Theme Round"
+- Search/type any subject to generate a mixed round
+- Generates exactly 3 T/F + 3 MC + 3 Written + 1 Picture per subject
+- Multiple theme rounds simultaneously
+- Like/dislike/regenerate/delete per round
+- Disliked questions excluded on regeneration
+- Image upload/AI generation for picture questions
+- State persisted to localStorage
 - Image upload (JPEG, PNG, GIF, WebP, max 10MB)
 - AI image generation via OpenAI GPT Image 1
 - Image display in Generate, Library, and Session Detail pages
