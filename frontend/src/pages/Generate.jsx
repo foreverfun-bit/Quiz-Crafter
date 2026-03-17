@@ -508,6 +508,55 @@ const Generate = () => {
     toast.success("Theme round removed");
   };
 
+  // Regenerate a single question within a theme round
+  const [regeneratingQuestion, setRegeneratingQuestion] = useState(null);
+  
+  const handleThemeRegenerateQuestion = async (roundId, qType, questionId) => {
+    const round = themeRounds.find(r => r.id === roundId);
+    if (!round) return;
+    
+    const oldQuestion = round.questions[qType]?.find(q => q.id === questionId);
+    if (!oldQuestion) return;
+    
+    setRegeneratingQuestion(questionId);
+    
+    // Exclude all current questions of this type + disliked
+    const currentTexts = (round.questions[qType] || []).map(q => q.question);
+    const dislikedTexts = round.disliked || [];
+    const excludeQuestions = [...new Set([...currentTexts, ...dislikedTexts])];
+    
+    try {
+      const response = await api.post("/generate/questions", {
+        category: round.subject,
+        question_type: qType,
+        count: 1,
+        exclude_questions: excludeQuestions
+      });
+      
+      if (response.data && response.data.length > 0) {
+        const newQuestion = response.data[0];
+        setThemeRounds(prev => prev.map(r => {
+          if (r.id !== roundId) return r;
+          return {
+            ...r,
+            disliked: [...(r.disliked || []), oldQuestion.question],
+            questions: {
+              ...r.questions,
+              [qType]: r.questions[qType].map(q =>
+                q.id === questionId ? newQuestion : q
+              )
+            }
+          };
+        }));
+        toast.success("Question regenerated!");
+      }
+    } catch (error) {
+      toast.error("Failed to regenerate question");
+    } finally {
+      setRegeneratingQuestion(null);
+    }
+  };
+
   // Theme round image handlers
   const handleThemeImageUpload = async (roundId, qType, questionId, file) => {
     const formData = new FormData();
@@ -851,6 +900,19 @@ const Generate = () => {
                                       )}
                                     </div>
                                     <div className="flex items-center gap-1">
+                                      <button
+                                        onClick={() => handleThemeRegenerateQuestion(round.id, qType, question.id)}
+                                        disabled={regeneratingQuestion === question.id}
+                                        className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-[#71E0DC] transition-colors disabled:opacity-50"
+                                        title="Regenerate this question"
+                                        data-testid={`theme-regen-q-${roundIndex}-${qType}-${qIndex}`}
+                                      >
+                                        {regeneratingQuestion === question.id ? (
+                                          <Loader2 size={14} className="animate-spin" />
+                                        ) : (
+                                          <RefreshCw size={14} />
+                                        )}
+                                      </button>
                                       <button
                                         onClick={() => handleThemeLike(round.id, qType, question.id)}
                                         className={`p-1.5 rounded-lg transition-colors ${
