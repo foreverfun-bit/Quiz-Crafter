@@ -62,7 +62,6 @@ const PastSessions = () => {
     const url = `${process.env.REACT_APP_BACKEND_URL}/api/sessions/${session.id}/download-csv?token=${encodeURIComponent(token)}`;
     window.open(url, '_blank');
   };
-  };
 
   const getTotalQuestions = (session) => {
     return (
