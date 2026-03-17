@@ -1165,6 +1165,23 @@ async def delete_session(session_id: str, current_user: dict = Depends(get_curre
 
 @api_router.get("/sessions/{session_id}/export-csv")
 async def export_session_csv(session_id: str, current_user: dict = Depends(get_current_user)):
+    return await _export_session_csv(session_id, current_user)
+
+@api_router.get("/sessions/{session_id}/download-csv")
+async def download_session_csv(session_id: str, token: str):
+    """Download endpoint that accepts token as query param for direct browser downloads"""
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
+        if not user:
+            raise HTTPException(status_code=401, detail="User not found")
+        return await _export_session_csv(session_id, user)
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+async def _export_session_csv(session_id: str, current_user: dict):
     session = await db.sessions.find_one(
         {"id": session_id, "user_id": current_user["id"]},
         {"_id": 0}
