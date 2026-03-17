@@ -500,6 +500,110 @@ Make questions engaging, varied in difficulty, and factually accurate.{exclude_b
         logging.error(f"AI generation error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"AI generation failed: {str(e)}")
 
+class ThemeRoundRequest(BaseModel):
+    subject: str
+    exclude_questions: List[str] = []
+
+@api_router.post("/generate/theme-round")
+async def generate_theme_round(
+    request: ThemeRoundRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
+    import json
+    import re
+    
+    api_key = os.environ.get("EMERGENT_LLM_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="AI service not configured")
+    
+    # Get existing questions for this subject to avoid repeats
+    existing_questions = await db.questions.find(
+        {"user_id": current_user["id"], "category": {"$regex": request.subject, "$options": "i"}},
+        {"_id": 0, "question": 1}
+    ).to_list(100)
+    existing_texts = [q["question"] for q in existing_questions]
+    all_excluded = list(set(request.exclude_questions + existing_texts))
+    
+    exclude_block = ""
+    if all_excluded:
+        exclude_block = "\n\nDo NOT generate any of these questions (already used or rejected):\n" + "\n".join(f"- {q}" for q in all_excluded[:30])
+    
+    chat = LlmChat(
+        api_key=api_key,
+        session_id=f"theme-round-{uuid.uuid4()}",
+        system_message="You are a trivia question generator specializing in themed rounds."
+    ).with_model("openai", "gpt-5.2")
+    
+    prompt = f"""Generate a complete themed trivia round about "{request.subject}".
+
+Generate exactly:
+- 3 True/False questions (answer must be exactly "True" or "False")
+- 3 Multiple Choice questions (each with exactly 4 options: A, B, C, D)
+- 3 Written Answer questions (answer is a short phrase or word)
+- 1 Picture question (something visual that could be identified from a photo, like a person, place, logo, etc.)
+
+For each question provide: question text, correct answer, a fun fact, and options (for MC only).
+
+Return as JSON with this exact structure:
+{{
+  "true_false": [
+    {{"question": "...", "answer": "True", "fun_fact": "..."}}
+  ],
+  "multiple_choice": [
+    {{"question": "...", "answer": "...", "options": ["A. ...", "B. ...", "C. ...", "D. ..."], "fun_fact": "..."}}
+  ],
+  "written": [
+    {{"question": "...", "answer": "...", "fun_fact": "..."}}
+  ],
+  "picture": [
+    {{"question": "...", "answer": "...", "fun_fact": "..."}}
+  ]
+}}
+
+Make questions engaging, varied in difficulty, and factually accurate.{exclude_block}"""
+
+    try:
+        response = await chat.send_message(UserMessage(text=prompt))
+        
+        json_match = re.search(r'\{[\s\S]*\}', response)
+        if not json_match:
+            raise HTTPException(status_code=500, detail="Failed to parse AI response")
+        
+        round_data = json.loads(json_match.group())
+        
+        result = {}
+        type_map = {
+            "true_false": "true_false",
+            "multiple_choice": "multiple_choice", 
+            "written": "written",
+            "picture": "picture"
+        }
+        
+        for q_type, type_key in type_map.items():
+            questions = []
+            for q_data in round_data.get(q_type, []):
+                question = Question(
+                    category=request.subject,
+                    question=q_data.get("question", ""),
+                    answer=q_data.get("answer", ""),
+                    question_type=type_key,
+                    options=q_data.get("options") if q_type == "multiple_choice" else None,
+                    fun_fact=q_data.get("fun_fact"),
+                    user_id=current_user["id"],
+                    source="ai"
+                )
+                questions.append(question.model_dump())
+            result[q_type] = questions
+        
+        return result
+    except json.JSONDecodeError as e:
+        logging.error(f"Theme round JSON parse error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to parse AI response")
+    except Exception as e:
+        logging.error(f"Theme round generation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Theme round generation failed: {str(e)}")
+
 @api_router.post("/generate/categories", response_model=CategoryResponse)
 async def generate_categories(current_user: dict = Depends(get_current_user)):
     from emergentintegrations.llm.chat import LlmChat, UserMessage

@@ -29,7 +29,11 @@ import {
   Check,
   X,
   Upload,
-  Wand2
+  Wand2,
+  Search,
+  Plus,
+  Trash2,
+  Layers
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -57,6 +61,9 @@ const Generate = () => {
   };
 
   const savedState = loadSavedState();
+
+  // Mode: "standard" or "theme"
+  const [mode, setMode] = useState(savedState?.mode || "standard");
 
   // Step management
   const [step, setStep] = useState(savedState?.step || 1);
@@ -87,18 +94,25 @@ const Generate = () => {
   // Track disliked question texts per category key to exclude on regeneration
   const [dislikedQuestions, setDislikedQuestions] = useState(savedState?.dislikedQuestions || {});
 
+  // Theme Round state
+  const [themeRounds, setThemeRounds] = useState(savedState?.themeRounds || []);
+  const [themeSubject, setThemeSubject] = useState("");
+  const [generatingTheme, setGeneratingTheme] = useState(null);
+
   // Save state to localStorage whenever it changes
   useEffect(() => {
     const stateToSave = {
+      mode,
       step,
       categories,
       generatedQuestions,
       activeTab,
       questionsPerCategory,
-      dislikedQuestions
+      dislikedQuestions,
+      themeRounds
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
-  }, [step, categories, generatedQuestions, activeTab, questionsPerCategory, dislikedQuestions]);
+  }, [mode, step, categories, generatedQuestions, activeTab, questionsPerCategory, dislikedQuestions, themeRounds]);
 
   // Clear saved state (for starting fresh)
   const handleClearSession = () => {
@@ -107,6 +121,8 @@ const Generate = () => {
     setCategories({ true_false: [], multiple_choice: [], written: [], picture: [] });
     setGeneratedQuestions({});
     setDislikedQuestions({});
+    setThemeRounds([]);
+    setThemeSubject("");
     setActiveTab("true_false");
     toast.success("Session cleared!");
   };
@@ -366,6 +382,189 @@ const Generate = () => {
     }
   };
 
+  // ========== THEME ROUND HANDLERS ==========
+
+  const handleGenerateThemeRound = async (subject) => {
+    if (!subject.trim()) {
+      toast.error("Enter a subject for the theme round");
+      return;
+    }
+    
+    const roundId = `theme-${Date.now()}`;
+    setGeneratingTheme(roundId);
+    
+    // Collect all disliked questions for this subject across existing rounds
+    const allExcluded = themeRounds
+      .filter(r => r.subject.toLowerCase() === subject.toLowerCase())
+      .flatMap(r => r.disliked || []);
+    
+    try {
+      const response = await api.post("/generate/theme-round", {
+        subject: subject.trim(),
+        exclude_questions: allExcluded
+      });
+      
+      setThemeRounds(prev => [...prev, {
+        id: roundId,
+        subject: subject.trim(),
+        questions: response.data,
+        disliked: []
+      }]);
+      setThemeSubject("");
+      toast.success(`Theme round generated for "${subject}"!`);
+    } catch (error) {
+      toast.error("Failed to generate theme round");
+    } finally {
+      setGeneratingTheme(null);
+    }
+  };
+
+  const handleRegenerateThemeRound = async (roundId) => {
+    const round = themeRounds.find(r => r.id === roundId);
+    if (!round) return;
+    
+    setGeneratingTheme(roundId);
+    
+    // Exclude disliked + all existing questions from all rounds with same subject
+    const allExcluded = themeRounds
+      .filter(r => r.subject.toLowerCase() === round.subject.toLowerCase())
+      .flatMap(r => {
+        const allQs = Object.values(r.questions || {}).flat();
+        return [...allQs.map(q => q.question), ...(r.disliked || [])];
+      });
+    
+    try {
+      const response = await api.post("/generate/theme-round", {
+        subject: round.subject,
+        exclude_questions: allExcluded
+      });
+      
+      setThemeRounds(prev => prev.map(r => 
+        r.id === roundId ? { ...r, questions: response.data } : r
+      ));
+      toast.success(`Regenerated theme round for "${round.subject}"!`);
+    } catch (error) {
+      toast.error("Failed to regenerate theme round");
+    } finally {
+      setGeneratingTheme(null);
+    }
+  };
+
+  const handleThemeLike = async (roundId, qType, questionId) => {
+    const round = themeRounds.find(r => r.id === roundId);
+    if (!round) return;
+    
+    const question = round.questions[qType]?.find(q => q.id === questionId);
+    if (!question) return;
+    
+    try {
+      await api.post("/questions/save", {
+        id: question.id,
+        category: question.category,
+        question: question.question,
+        answer: question.answer,
+        question_type: question.question_type,
+        options: question.options,
+        fun_fact: question.fun_fact,
+        image_url: question.image_url
+      });
+      
+      setThemeRounds(prev => prev.map(r => {
+        if (r.id !== roundId) return r;
+        return {
+          ...r,
+          questions: {
+            ...r.questions,
+            [qType]: r.questions[qType].map(q => 
+              q.id === questionId ? { ...q, status: "liked" } : q
+            )
+          }
+        };
+      }));
+      toast.success("Question saved to library!");
+    } catch (error) {
+      toast.error("Failed to save question");
+    }
+  };
+
+  const handleThemeDislike = (roundId, qType, questionId) => {
+    setThemeRounds(prev => prev.map(r => {
+      if (r.id !== roundId) return r;
+      const question = r.questions[qType]?.find(q => q.id === questionId);
+      return {
+        ...r,
+        disliked: [...(r.disliked || []), question?.question].filter(Boolean),
+        questions: {
+          ...r.questions,
+          [qType]: r.questions[qType].filter(q => q.id !== questionId)
+        }
+      };
+    }));
+    toast.success("Question removed");
+  };
+
+  const handleDeleteThemeRound = (roundId) => {
+    setThemeRounds(prev => prev.filter(r => r.id !== roundId));
+    toast.success("Theme round removed");
+  };
+
+  // Theme round image handlers
+  const handleThemeImageUpload = async (roundId, qType, questionId, file) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const response = await api.post("/upload/image", formData, {
+        headers: { "Content-Type": "multipart/form-data" }
+      });
+      setThemeRounds(prev => prev.map(r => {
+        if (r.id !== roundId) return r;
+        return {
+          ...r,
+          questions: {
+            ...r.questions,
+            [qType]: r.questions[qType].map(q =>
+              q.id === questionId ? { ...q, image_url: response.data.image_url } : q
+            )
+          }
+        };
+      }));
+      toast.success("Image uploaded!");
+    } catch (error) {
+      toast.error("Failed to upload image");
+    }
+  };
+
+  const handleThemeGenerateImage = async (roundId, qType, questionId) => {
+    const round = themeRounds.find(r => r.id === roundId);
+    const question = round?.questions[qType]?.find(q => q.id === questionId);
+    if (!question) return;
+    
+    setGeneratingImageFor(questionId);
+    try {
+      const response = await api.post("/generate/image", {
+        prompt: `A clear, high-quality image for a trivia question about: ${question.question}. Category: ${question.category}. The image should be identifiable but not contain any text or labels.`,
+        category: question.category
+      });
+      setThemeRounds(prev => prev.map(r => {
+        if (r.id !== roundId) return r;
+        return {
+          ...r,
+          questions: {
+            ...r.questions,
+            [qType]: r.questions[qType].map(q =>
+              q.id === questionId ? { ...q, image_url: response.data.image_url } : q
+            )
+          }
+        };
+      }));
+      toast.success("Image generated!");
+    } catch (error) {
+      toast.error("Failed to generate image");
+    } finally {
+      setGeneratingImageFor(null);
+    }
+  };
+
   // Check if all categories have questions
   const getCategoryStatus = (type) => {
     return categories[type].map(cat => {
@@ -398,19 +597,21 @@ const Generate = () => {
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto animate-fade-in" data-testid="generate-page">
       {/* Header */}
-      <div className="flex items-start justify-between mb-8">
+      <div className="flex items-start justify-between mb-6">
         <div>
           <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">
             <span className="gradient-text">Generate</span> Trivia
           </h1>
           <p className="text-zinc-500">
-            {step === 1 
-              ? "Step 1: Generate and approve categories for your trivia session"
-              : "Step 2: Generate and select questions for each category"
+            {mode === "standard"
+              ? (step === 1 
+                ? "Step 1: Generate and approve categories for your trivia session"
+                : "Step 2: Generate and select questions for each category")
+              : "Generate themed rounds with all question types on one subject"
             }
           </p>
         </div>
-        {(categories.true_false.length > 0 || Object.keys(generatedQuestions).length > 0) && (
+        {(categories.true_false.length > 0 || Object.keys(generatedQuestions).length > 0 || themeRounds.length > 0) && (
           <Button
             variant="outline"
             onClick={handleClearSession}
@@ -423,6 +624,271 @@ const Generate = () => {
         )}
       </div>
 
+      {/* Mode Toggle */}
+      <div className="mb-6">
+        <div className="inline-flex rounded-lg bg-zinc-800/50 p-1 border border-white/10">
+          <button
+            onClick={() => setMode("standard")}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+              mode === "standard" 
+                ? "bg-gradient-to-r from-[#71E0DC] to-[#AEB2EF] text-zinc-900" 
+                : "text-zinc-400 hover:text-white"
+            }`}
+            data-testid="mode-standard"
+          >
+            <Sparkles size={14} className="inline mr-2" />
+            Standard
+          </button>
+          <button
+            onClick={() => setMode("theme")}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+              mode === "theme" 
+                ? "bg-gradient-to-r from-[#71E0DC] to-[#AEB2EF] text-zinc-900" 
+                : "text-zinc-400 hover:text-white"
+            }`}
+            data-testid="mode-theme"
+          >
+            <Layers size={14} className="inline mr-2" />
+            Theme Round
+          </button>
+        </div>
+      </div>
+
+      {/* ========== THEME ROUND MODE ========== */}
+      {mode === "theme" && (
+        <div className="space-y-6">
+          {/* Subject Input */}
+          <Card className="glass-card">
+            <CardContent className="p-6">
+              <div className="flex flex-col md:flex-row items-end gap-4">
+                <div className="flex-1 space-y-2">
+                  <label className="text-zinc-300 text-sm font-medium">Subject</label>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
+                    <Input
+                      value={themeSubject}
+                      onChange={(e) => setThemeSubject(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleGenerateThemeRound(themeSubject)}
+                      placeholder="e.g., Harry Potter, The Beatles, World War II..."
+                      className="pl-9 bg-zinc-950/50 border-white/10 text-white"
+                      data-testid="theme-subject-input"
+                    />
+                  </div>
+                  <p className="text-zinc-600 text-xs">Generates 3 T/F + 3 MC + 3 Written + 1 Picture</p>
+                </div>
+                <Button
+                  onClick={() => handleGenerateThemeRound(themeSubject)}
+                  disabled={!!generatingTheme || !themeSubject.trim()}
+                  className="gradient-btn"
+                  data-testid="generate-theme-btn"
+                >
+                  {generatingTheme && !themeRounds.find(r => r.id === generatingTheme) ? (
+                    <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Generating...</>
+                  ) : (
+                    <><Sparkles className="mr-2" size={18} /> Generate Round</>
+                  )}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Theme Rounds List */}
+          {themeRounds.length === 0 ? (
+            <Card className="glass-card">
+              <CardContent className="py-16 text-center">
+                <div className="w-16 h-16 rounded-full bg-zinc-800 flex items-center justify-center mx-auto mb-4">
+                  <Layers className="text-zinc-600" size={32} />
+                </div>
+                <p className="text-zinc-500 mb-1">No theme rounds yet</p>
+                <p className="text-zinc-600 text-sm">Enter a subject above to generate your first themed round</p>
+              </CardContent>
+            </Card>
+          ) : (
+            themeRounds.map((round, roundIndex) => {
+              const themeTypes = [
+                { key: "true_false", label: "True/False", icon: CheckCircle, color: "text-[#71E0DC]" },
+                { key: "multiple_choice", label: "Multiple Choice", icon: List, color: "text-[#AEB2EF]" },
+                { key: "written", label: "Written", icon: MessageSquare, color: "text-emerald-400" },
+                { key: "picture", label: "Picture", icon: Image, color: "text-amber-400" },
+              ];
+              const totalLiked = themeTypes.reduce((sum, t) => 
+                sum + (round.questions[t.key] || []).filter(q => q.status === "liked").length, 0
+              );
+              const totalQuestions = themeTypes.reduce((sum, t) => 
+                sum + (round.questions[t.key] || []).length, 0
+              );
+              
+              return (
+                <Card key={round.id} className="glass-card" data-testid={`theme-round-${roundIndex}`}>
+                  <CardHeader className="pb-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <CardTitle className="text-white flex items-center gap-2">
+                          <Layers size={18} className="text-[#71E0DC]" />
+                          {round.subject}
+                        </CardTitle>
+                        <CardDescription className="text-zinc-500">
+                          {totalLiked} liked / {totalQuestions} total questions
+                        </CardDescription>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleRegenerateThemeRound(round.id)}
+                          disabled={generatingTheme === round.id}
+                          className="border-[#71E0DC]/30 text-[#71E0DC] hover:bg-[#71E0DC]/10"
+                          data-testid={`regenerate-theme-${roundIndex}`}
+                        >
+                          {generatingTheme === round.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <><RefreshCw size={14} className="mr-1" /> Regenerate</>
+                          )}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleDeleteThemeRound(round.id)}
+                          className="text-zinc-500 hover:text-red-400"
+                          data-testid={`delete-theme-${roundIndex}`}
+                        >
+                          <Trash2 size={14} />
+                        </Button>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-4">
+                      {themeTypes.map(({ key: qType, label, icon: TypeIcon, color }) => {
+                        const questions = round.questions[qType] || [];
+                        if (questions.length === 0) return null;
+                        
+                        return (
+                          <div key={qType}>
+                            <div className="flex items-center gap-2 mb-2">
+                              <TypeIcon size={16} className={color} />
+                              <span className="text-zinc-300 text-sm font-medium">{label}</span>
+                              <Badge className="bg-zinc-800 text-zinc-400 text-xs">{questions.length}</Badge>
+                            </div>
+                            <div className="space-y-2 ml-6">
+                              {questions.map((question, qIndex) => (
+                                <div 
+                                  key={question.id}
+                                  className={`p-3 rounded-lg border transition-all ${
+                                    question.status === 'liked'
+                                      ? 'bg-emerald-500/10 border-emerald-500/30'
+                                      : 'bg-zinc-900/50 border-white/10'
+                                  }`}
+                                  data-testid={`theme-q-${roundIndex}-${qType}-${qIndex}`}
+                                >
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div className="flex-1">
+                                      <p className="text-white text-sm mb-1">{question.question}</p>
+                                      
+                                      {question.options && (
+                                        <div className="flex flex-wrap gap-1.5 mb-1">
+                                          {question.options.map((opt, i) => (
+                                            <span key={i} className="px-2 py-0.5 rounded text-xs bg-zinc-800 text-zinc-400">{opt}</span>
+                                          ))}
+                                        </div>
+                                      )}
+
+                                      {/* Picture image section */}
+                                      {qType === "picture" && (
+                                        <div className="my-2">
+                                          {question.image_url ? (
+                                            <div>
+                                              <img 
+                                                src={question.image_url.startsWith("/api") 
+                                                  ? `${process.env.REACT_APP_BACKEND_URL}${question.image_url}` 
+                                                  : question.image_url}
+                                                alt="Question"
+                                                className="w-full max-w-xs rounded-lg border border-white/10"
+                                              />
+                                              <label className="cursor-pointer mt-1 inline-block">
+                                                <input type="file" accept="image/*" className="hidden"
+                                                  onChange={(e) => e.target.files[0] && handleThemeImageUpload(round.id, qType, question.id, e.target.files[0])} />
+                                                <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs bg-zinc-800 text-zinc-400 hover:text-white transition-colors">
+                                                  <Upload size={12} /> Replace
+                                                </span>
+                                              </label>
+                                            </div>
+                                          ) : (
+                                            <div className="flex gap-2">
+                                              <label className="cursor-pointer">
+                                                <input type="file" accept="image/*" className="hidden"
+                                                  onChange={(e) => e.target.files[0] && handleThemeImageUpload(round.id, qType, question.id, e.target.files[0])} />
+                                                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-zinc-800 text-zinc-300 hover:text-white hover:bg-zinc-700 transition-colors border border-white/10">
+                                                  <Upload size={14} /> Upload Image
+                                                </span>
+                                              </label>
+                                              <button
+                                                onClick={() => handleThemeGenerateImage(round.id, qType, question.id)}
+                                                disabled={generatingImageFor === question.id}
+                                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 transition-colors border border-amber-500/20 disabled:opacity-50"
+                                              >
+                                                {generatingImageFor === question.id ? (
+                                                  <><Loader2 size={14} className="animate-spin" /> Generating...</>
+                                                ) : (
+                                                  <><Wand2 size={14} /> AI Generate</>
+                                                )}
+                                              </button>
+                                            </div>
+                                          )}
+                                        </div>
+                                      )}
+                                      
+                                      <p className="text-xs">
+                                        <span className="text-zinc-500">Answer: </span>
+                                        <span className="text-emerald-400">{question.answer}</span>
+                                      </p>
+                                      {question.fun_fact && (
+                                        <p className="text-xs mt-0.5">
+                                          <span className="text-zinc-500">Fun Fact: </span>
+                                          <span className="text-zinc-400">{question.fun_fact}</span>
+                                        </p>
+                                      )}
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      <button
+                                        onClick={() => handleThemeLike(round.id, qType, question.id)}
+                                        className={`p-1.5 rounded-lg transition-colors ${
+                                          question.status === 'liked'
+                                            ? 'bg-emerald-500/20 text-emerald-400'
+                                            : 'hover:bg-zinc-800 text-zinc-500 hover:text-emerald-400'
+                                        }`}
+                                        data-testid={`theme-like-${roundIndex}-${qType}-${qIndex}`}
+                                      >
+                                        <Heart size={14} fill={question.status === 'liked' ? 'currentColor' : 'none'} />
+                                      </button>
+                                      <button
+                                        onClick={() => handleThemeDislike(round.id, qType, question.id)}
+                                        className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-red-400 transition-colors"
+                                        data-testid={`theme-dislike-${roundIndex}-${qType}-${qIndex}`}
+                                      >
+                                        <ThumbsDown size={14} />
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })
+          )}
+        </div>
+      )}
+
+      {/* ========== STANDARD MODE ========== */}
+      {mode === "standard" && (
+      <>
       {/* Progress Indicator */}
       <div className="flex items-center gap-4 mb-8">
         <div className={`flex items-center gap-2 ${step === 1 ? 'text-[#71E0DC]' : 'text-zinc-500'}`}>
@@ -860,6 +1326,8 @@ const Generate = () => {
             </Tabs>
           </Card>
         </div>
+      )}
+      </>
       )}
     </div>
   );
