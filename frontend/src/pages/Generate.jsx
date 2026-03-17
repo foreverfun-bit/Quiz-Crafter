@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../App";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -6,6 +7,7 @@ import { Input } from "../components/ui/input";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { Badge } from "../components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
 import { 
   Select,
   SelectContent,
@@ -33,7 +35,8 @@ import {
   Search,
   Plus,
   Trash2,
-  Layers
+  Layers,
+  Save
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -47,6 +50,7 @@ const questionTypes = [
 const STORAGE_KEY = "trivia-generate-state";
 
 const Generate = () => {
+  const navigate = useNavigate();
   // Load saved state from localStorage
   const loadSavedState = () => {
     try {
@@ -614,6 +618,76 @@ const Generate = () => {
     }
   };
 
+  // ========== CREATE SESSION FROM LIKED QUESTIONS ==========
+  
+  const [showSessionDialog, setShowSessionDialog] = useState(false);
+  const [sessionName, setSessionName] = useState("");
+  const [savingSession, setSavingSession] = useState(false);
+
+  // Collect all liked question IDs from current mode
+  const getLikedQuestionIds = () => {
+    const ids = { true_false: [], multiple_choice: [], written: [], picture: [] };
+    
+    if (mode === "standard") {
+      Object.entries(generatedQuestions).forEach(([key, questions]) => {
+        const type = key.split("-")[0];
+        if (ids[type]) {
+          questions.filter(q => q.status === "liked").forEach(q => ids[type].push(q.id));
+        }
+      });
+    } else {
+      themeRounds.forEach(round => {
+        Object.entries(round.questions || {}).forEach(([qType, questions]) => {
+          if (ids[qType]) {
+            questions.filter(q => q.status === "liked").forEach(q => ids[qType].push(q.id));
+          }
+        });
+      });
+    }
+    
+    return ids;
+  };
+
+  const totalLikedCount = () => {
+    const ids = getLikedQuestionIds();
+    return Object.values(ids).flat().length;
+  };
+
+  const handleCreateSession = async () => {
+    if (!sessionName.trim()) {
+      toast.error("Enter a session name");
+      return;
+    }
+    
+    const ids = getLikedQuestionIds();
+    const total = Object.values(ids).flat().length;
+    if (total === 0) {
+      toast.error("No liked questions to save");
+      return;
+    }
+    
+    setSavingSession(true);
+    try {
+      const response = await api.post("/sessions", {
+        name: sessionName.trim(),
+        true_false_questions: ids.true_false,
+        multiple_choice_questions: ids.multiple_choice,
+        written_questions: ids.written,
+        picture_questions: ids.picture,
+        is_past: true
+      });
+      
+      toast.success("Session created!");
+      setShowSessionDialog(false);
+      setSessionName("");
+      navigate(`/session/${response.data.id}`);
+    } catch (error) {
+      toast.error("Failed to create session");
+    } finally {
+      setSavingSession(false);
+    }
+  };
+
   // Check if all categories have questions
   const getCategoryStatus = (type) => {
     return categories[type].map(cat => {
@@ -660,18 +734,88 @@ const Generate = () => {
             }
           </p>
         </div>
-        {(categories.true_false.length > 0 || Object.keys(generatedQuestions).length > 0 || themeRounds.length > 0) && (
-          <Button
-            variant="outline"
-            onClick={handleClearSession}
-            className="border-zinc-700 text-zinc-400 hover:text-white hover:bg-zinc-800"
-            data-testid="clear-session-btn"
-          >
-            <X size={16} className="mr-2" />
-            Start Fresh
-          </Button>
-        )}
+        <div className="flex gap-2">
+          {totalLikedCount() > 0 && (
+            <Button
+              onClick={() => setShowSessionDialog(true)}
+              className="gradient-btn"
+              data-testid="save-session-btn"
+            >
+              <Save size={16} className="mr-2" />
+              Save as Session ({totalLikedCount()})
+            </Button>
+          )}
+          {(categories.true_false.length > 0 || Object.keys(generatedQuestions).length > 0 || themeRounds.length > 0) && (
+            <Button
+              variant="outline"
+              onClick={handleClearSession}
+              className="border-zinc-700 text-zinc-400 hover:text-white hover:bg-zinc-800"
+              data-testid="clear-session-btn"
+            >
+              <X size={16} className="mr-2" />
+              Start Fresh
+            </Button>
+          )}
+        </div>
       </div>
+
+      {/* Save as Session Dialog */}
+      <Dialog open={showSessionDialog} onOpenChange={setShowSessionDialog}>
+        <DialogContent className="bg-zinc-900 border-white/10">
+          <DialogHeader>
+            <DialogTitle className="text-white">Save as Session</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div>
+              <label className="text-zinc-400 text-sm block mb-1.5">Session Name</label>
+              <Input
+                value={sessionName}
+                onChange={(e) => setSessionName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleCreateSession()}
+                placeholder="e.g., Tuesday Night Trivia"
+                className="bg-zinc-950/50 border-white/10 text-white"
+                data-testid="session-name-input"
+              />
+            </div>
+            {(() => {
+              const ids = getLikedQuestionIds();
+              return (
+                <div className="space-y-1.5">
+                  <p className="text-zinc-500 text-sm">Questions to include:</p>
+                  <div className="flex flex-wrap gap-2">
+                    {ids.true_false.length > 0 && (
+                      <Badge className="bg-[#71E0DC]/10 text-[#71E0DC]">{ids.true_false.length} True/False</Badge>
+                    )}
+                    {ids.multiple_choice.length > 0 && (
+                      <Badge className="bg-[#AEB2EF]/10 text-[#AEB2EF]">{ids.multiple_choice.length} Multiple Choice</Badge>
+                    )}
+                    {ids.written.length > 0 && (
+                      <Badge className="bg-emerald-500/10 text-emerald-400">{ids.written.length} Written</Badge>
+                    )}
+                    {ids.picture.length > 0 && (
+                      <Badge className="bg-amber-500/10 text-amber-400">{ids.picture.length} Picture</Badge>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowSessionDialog(false)} className="border-white/10 text-zinc-400">
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCreateSession}
+              disabled={savingSession || !sessionName.trim()}
+              className="gradient-btn"
+              data-testid="confirm-save-session-btn"
+            >
+              {savingSession ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2" size={16} />}
+              Create Session
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Mode Toggle */}
       <div className="mb-6">
