@@ -104,10 +104,15 @@ const SessionDetail = () => {
       const blob = new Blob([response.data], { type: 'text/csv' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
+      a.style.display = 'none';
       a.href = url;
       a.download = `trivia-${session.name.replace(/[^a-z0-9]/gi, '-').toLowerCase()}.csv`;
+      document.body.appendChild(a);
       a.click();
-      window.URL.revokeObjectURL(url);
+      setTimeout(() => {
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+      }, 100);
       toast.success("Exported as CSV!");
     } catch (error) {
       toast.error("Failed to export");
