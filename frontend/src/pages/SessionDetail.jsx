@@ -99,12 +99,7 @@ const SessionDetail = () => {
   const handleExportCSV = () => {
     const token = localStorage.getItem("token");
     const url = `${process.env.REACT_APP_BACKEND_URL}/api/sessions/${id}/download-csv?token=${encodeURIComponent(token)}`;
-    const iframe = document.createElement('iframe');
-    iframe.style.display = 'none';
-    iframe.src = url;
-    document.body.appendChild(iframe);
-    setTimeout(() => document.body.removeChild(iframe), 10000);
-    toast.success("Downloading CSV...");
+    window.location.href = url;
   };
 
   const getQuestionsForType = (type) => {
