@@ -321,8 +321,8 @@ class GameManager:
             "session_name": game["session_name"],
             "total_questions": len(game["questions"]),
             "current_index": game["current_index"],
-            "players_count": len(game["players"]),
-            "player_names": [p["name"] for p in game["players"].values()],
+            "players_count": len([p for p in game["players"].values() if p["name"] != "__presentation__"]),
+            "player_names": [p["name"] for p in game["players"].values() if p["name"] != "__presentation__"],
         }
 
         idx = game["current_index"]

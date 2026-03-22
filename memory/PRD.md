@@ -4,133 +4,93 @@
 Build a trivia host app with:
 - Format: 9 T/F, 9 Multiple Choice, 9 Written Answer, 3 Picture-based questions
 - All categories must be unique and non-repeating
-- Generate broad categories at random with ability to swap individual categories
-- Generate multiple question options per category to pick from
-- Search/filter feature for categories
-- Like/Save questions for future trivia sessions
-- Dislike questions to track preferences and hide from future suggestions
-- CSV import for old trivia sessions (prevents question repetition)
-- Simple JWT-based login
+- AI-powered question generation with category management
+- Like/Save/Dislike questions, CSV import
+- **Live hosting platform** similar to TrivNow — host controls game from laptop, projector shows questions/scores, players join via phone with room code
 
-## User Personas
-1. **Primary**: Trivia Hosts running pub trivia nights who need quick question generation
-2. **Secondary**: Casual trivia enthusiasts building personal question libraries
-
-## Core Requirements (Static)
-- Two-step question generation workflow
-- Unique categories across all question types
-- AI-powered question generation (GPT-5.2)
-- Manual question entry option
-- Question library with like/dislike functionality
-- CSV import with duplicate detection
-- Trivia session builder
+## Architecture
+- **Frontend**: React 19, Tailwind CSS, Shadcn/UI, React Router
+- **Backend**: FastAPI, Motor (async MongoDB), JWT auth, WebSocket for live games
+- **AI**: GPT-5.2 via emergentintegrations (text), GPT Image 1 (images)
+- **Real-time**: FastAPI WebSocket, in-memory game state
+- **Database**: MongoDB (questions, sessions, users, categories)
 
 ## What's Been Implemented
 
 ### Authentication
 - JWT-based registration and login
-- Protected routes with token refresh
 
-### Two-Step Generate Flow
-- **Step 1**: Batch category generation (9 T/F, 9 MC, 9 Written, 3 Picture)
-- Category swap/regenerate per slot
-- Category editing and removal
-- **Step 2**: Question generation per category
-- Like/dislike individual questions
-- Bulk generation per question type
-- **Picture Questions**: Upload own images or AI-generate images (GPT Image 1)
+### Two-Step Generate Flow + Theme Round
+- Standard mode: batch category generation, per-category questions
+- Theme Round mode: single subject generates 3 T/F + 3 MC + 3 Written + 1 Picture
+- Like/dislike with exclusion tracking, per-question regeneration
+- Save as Session directly from Generate page
 
 ### Question Library
-- View all questions with filters (type, status, source, category)
-- Search across questions, categories, answers
-- Manual question creation/editing
-- Like/dislike/neutral status management
-- Delete questions
+- View, filter, search, create, edit, delete questions
 - Image display for picture questions
 
 ### Trivia Session Builder
-- Select questions by type (9 T/F, 9 MC, 9 Written, 3 Picture)
-- Category uniqueness warning
-- Save sessions with custom names
-- Built sessions auto-move to Past Sessions (is_past: true)
-- View session details with copy to clipboard
+- Select questions by type, save as past session
+- Session detail view with copy to clipboard
 
-### CSV Import
-- Template download
-- Column mapping: Category, Question, Answer, Options, Fun Fact, Venue, Date Used
-- Duplicate detection with update capability
-- Import progress reporting
+### CSV Import/Export
+- Import with duplicate detection and update
+- CSV export endpoint (download-csv with token auth)
 
-### CSV Export
-- Export any session as CSV file
-- Proper headers: Category, Question, Answer, MC Options, Fun Fact, Type, Venue, Date Used
-- Available on both Session Detail and Past Sessions pages
-
-### Theme Round Generator
-- Separate tab on Generate page: "Standard" vs "Theme Round"
-- Search/type any subject to generate a mixed round
-- Generates exactly 3 T/F + 3 MC + 3 Written + 1 Picture per subject
-- Multiple theme rounds simultaneously
-- Like/dislike/regenerate/delete per round
-- Disliked questions excluded on regeneration
-- Image upload/AI generation for picture questions
-- State persisted to localStorage
-- Image upload (JPEG, PNG, GIF, WebP, max 10MB)
-- AI image generation via OpenAI GPT Image 1
-- Image display in Generate, Library, and Session Detail pages
-- Images served from /api/uploads/
-
-### Dashboard
-- Stats overview (total, liked, categories, sessions)
-- Questions by type breakdown
-- Questions by source breakdown
-- Quick action cards
+### Picture-Based Questions
+- Image upload (JPEG/PNG/GIF/WebP, max 10MB)
+- AI image generation via GPT Image 1
 
 ### Category Management
-- Categories page for viewing all categories
-- Dislike categories to hide from future generation
-- Restore disliked categories
-- Dashboard links to categories page
+- View, search, dislike/restore categories
 
-### State Persistence
-- Generate page saves state to localStorage
-- Build Session page saves state to localStorage
-- Clear/Start Fresh buttons on both pages
+### Live Trivia Hosting Platform
+- **Game Creation**: Host creates game from any session, gets 4-digit room code
+- **Player Join**: No account needed — enter code + name at /join
+- **Host Control Panel** (/host/:id): Advance questions, reveal answers, show scores, override scores, end game
+- **Presentation View** (/present/:code): Projector-optimized display with large question text, colored MC options, scoreboard, player lobby
+- **Player View** (/play/:id): Mobile-optimized answer submission — T/F buttons, MC option taps, written text input
+- **Auto-Scoring**: Exact match for T/F/MC (10pts), fuzzy match for written (>=85%=10pts, >=70%=5pts)
+- **Manual Override**: Host can edit any player's score for any question
+- **WebSocket Real-time**: All views update live via WebSocket broadcasts
+- **Game Flow**: Lobby → Question → Answer Reveal → Scoreboard → Next → ... → Game Over
 
-## Architecture
-- **Frontend**: React 19, Tailwind CSS, Shadcn/UI, React Router
-- **Backend**: FastAPI, Motor (async MongoDB), JWT auth
-- **AI**: GPT-5.2 via emergentintegrations (text), GPT Image 1 via emergentintegrations (images)
-- **Database**: MongoDB
-- **File Storage**: Local /app/backend/uploads/ served via /api/uploads/
+## DB Schema
+- **users**: {id, email, hashed_password}
+- **questions**: {id, user_id, question_text, answer, question_type, category, options, fun_fact, image_url, liked, disliked, used, venue, date_used}
+- **sessions**: {id, user_id, name, questions by type, is_past}
+- **categories**: {id, user_id, name, is_disliked}
+- **games**: In-memory only {id, code, host_user_id, session_id, status, questions, players, answers}
+
+## Key API Endpoints
+- `/api/auth/{register, login}` - Authentication
+- `/api/generate/{categories-batch, single-category, questions, theme-round, image}` - AI generation
+- `/api/questions[/all, /save]` - Question CRUD
+- `/api/sessions` - Session CRUD
+- `/api/sessions/{id}/download-csv` - CSV export
+- `/api/upload/image` - Image upload
+- `/api/games/{create, join, {id}/next, {id}/reveal, {id}/scores, {id}/override, {id}/end}` - Live game
+- `/api/ws/game/{id}` - WebSocket for real-time updates
 
 ## Prioritized Backlog
 
-### P0 (Critical) - DONE
-- [x] Two-step category/question generation
-- [x] Individual category swap
-- [x] Question like/dislike
-- [x] CSV import
-- [x] Session builder
-- [x] CSV export
-- [x] Picture question image upload
-- [x] AI image generation for picture rounds
-- [x] Built sessions auto-move to Past Sessions
-- [x] Fix DELETE /api/questions/all endpoint
-- [x] Fix PUT /api/questions/{id} endpoint
+### P0 — Done
+- [x] All core features implemented and tested
 
-### P1 (High Priority) - Next Phase
-- [ ] Session scheduling with calendar integration
-- [ ] Session templates (save category sets)
+### P1 — Next
+- [ ] Fix CSV download in Chrome (known issue — fetch+blob approach implemented but user reports still not working)
+- [ ] Timer for questions (configurable per-question countdown)
+- [ ] Sound effects for correct/wrong answers
+- [ ] Persistent game state (save to MongoDB for restart resilience)
+
+### P2 — Medium
+- [ ] Session templates (save category sets for reuse)
 - [ ] Question difficulty rating
+- [ ] Game history/stats saved to DB after game ends
 
-### P2 (Medium Priority)
-- [ ] Category search in Step 1
-- [ ] Favorite categories list
-- [ ] Batch export all sessions
-
-### P3 (Nice to Have)
+### P3 — Nice to Have
 - [ ] Multi-user collaboration
 - [ ] Public question library sharing
-- [ ] Score tracking integration
+- [ ] Score tracking across multiple game nights
 - [ ] Mobile-optimized presenter view
