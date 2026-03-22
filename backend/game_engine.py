@@ -275,8 +275,9 @@ class GameManager:
             return None
 
         game["status"] = "scores"
+        real = self._real_players(game)
         scoreboard = sorted(
-            [{"id": pid, "name": p["name"], "score": p["score"]} for pid, p in game["players"].items()],
+            [{"id": pid, "name": p["name"], "score": p["score"]} for pid, p in real.items()],
             key=lambda x: x["score"],
             reverse=True,
         )
@@ -306,6 +307,9 @@ class GameManager:
         if game:
             game["status"] = "finished"
 
+    def _real_players(self, game: dict) -> dict:
+        return {pid: p for pid, p in game["players"].items() if p["name"] != "__presentation__"}
+
     def get_host_state(self, game_id: str) -> Optional[dict]:
         game = self.games.get(game_id)
         if not game:
@@ -318,7 +322,7 @@ class GameManager:
             "session_name": game["session_name"],
             "total_questions": len(game["questions"]),
             "current_index": game["current_index"],
-            "players": game["players"],
+            "players": self._real_players(game),
             "default_points": game["default_points"],
         }
 
@@ -385,8 +389,9 @@ class GameManager:
                     state["score_awarded"] = my_answer["score_awarded"]
 
         if game["status"] in ("scores", "finished"):
+            real = self._real_players(game)
             scoreboard = sorted(
-                [{"id": pid, "name": p["name"], "score": p["score"]} for pid, p in game["players"].items()],
+                [{"id": pid, "name": p["name"], "score": p["score"]} for pid, p in real.items()],
                 key=lambda x: x["score"],
                 reverse=True,
             )
@@ -430,8 +435,9 @@ class GameManager:
                 state["fun_fact"] = q.get("fun_fact")
 
         if game["status"] in ("scores", "finished"):
+            real = self._real_players(game)
             scoreboard = sorted(
-                [{"id": pid, "name": p["name"], "score": p["score"]} for pid, p in game["players"].items()],
+                [{"id": pid, "name": p["name"], "score": p["score"]} for pid, p in real.items()],
                 key=lambda x: x["score"],
                 reverse=True,
             )

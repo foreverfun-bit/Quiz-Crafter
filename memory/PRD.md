@@ -49,19 +49,22 @@ Build a trivia host app with:
 - **Game Creation**: Host creates game from any session, gets 4-digit room code
 - **Player Join**: No account needed — enter code + name at /join
 - **Host Control Panel** (/host/:id): Advance questions, reveal answers, show scores, override scores, end game
-- **Presentation View** (/present/:code): Projector-optimized display with large question text, colored MC options, scoreboard, player lobby
+- **Presentation View** (/present/:code): Projector-optimized display with large question text, colored MC options, scoreboard, player lobby, wagering phase
 - **Player View** (/play/:id): Mobile-optimized answer submission — T/F buttons, MC option taps, written text input
-- **Auto-Scoring**: Exact match for T/F/MC (10pts), fuzzy match for written (>=85%=10pts, >=70%=5pts)
-- **Manual Override**: Host can edit any player's score for any question
+- **Auto-Scoring**: Exact match for T/F/MC, fuzzy match for written (>=70%)
+- **Manual Override**: Host can edit any player's answer (re-scored) or directly override score
+- **Configurable Points**: Host can set custom points per question
+- **Wagering System**: Picture questions trigger a wagering phase — players bet points capped at their current score. Correct = +wager, Incorrect = -wager
 - **WebSocket Real-time**: All views update live via WebSocket broadcasts
-- **Game Flow**: Lobby → Question → Answer Reveal → Scoreboard → Next → ... → Game Over
+- **Game Flow**: Lobby → Question|Wagering → (Start Answering) → Question → Answer Reveal → Scoreboard → Next → ... → Game Over
+- **Presentation filter**: `__presentation__` pseudo-player filtered from all player lists/scoreboards
 
 ## DB Schema
 - **users**: {id, email, hashed_password}
 - **questions**: {id, user_id, question_text, answer, question_type, category, options, fun_fact, image_url, liked, disliked, used, venue, date_used}
 - **sessions**: {id, user_id, name, questions by type, is_past}
 - **categories**: {id, user_id, name, is_disliked}
-- **games**: In-memory only {id, code, host_user_id, session_id, status, questions, players, answers}
+- **games**: In-memory only {id, code, host_user_id, session_id, status, questions, players, answers, wagers}
 
 ## Key API Endpoints
 - `/api/auth/{register, login}` - Authentication
@@ -70,27 +73,33 @@ Build a trivia host app with:
 - `/api/sessions` - Session CRUD
 - `/api/sessions/{id}/download-csv` - CSV export
 - `/api/upload/image` - Image upload
-- `/api/games/{create, join, {id}/next, {id}/reveal, {id}/scores, {id}/override, {id}/end}` - Live game
+- `/api/games/{create, join, {id}/next, {id}/reveal, {id}/scores, {id}/override, {id}/end, {id}/set-points, {id}/change-answer, {id}/start-answering, {id}/wager}` - Live game
 - `/api/ws/game/{id}` - WebSocket for real-time updates
 
 ## Prioritized Backlog
 
 ### P0 — Done
 - [x] All core features implemented and tested
+- [x] Wagering system for picture questions (tested Mar 2026)
+- [x] Configurable points per question (tested Mar 2026)
+- [x] Host manual answer change & score override (tested Mar 2026)
+- [x] PresentView wagering phase display (tested Mar 2026)
+- [x] Filter __presentation__ from player lists (fixed Mar 2026)
 
 ### P1 — Next
-- [ ] Fix CSV download in Chrome (known issue — fetch+blob approach implemented but user reports still not working)
 - [ ] Timer for questions (configurable per-question countdown)
-- [ ] Sound effects for correct/wrong answers
 - [ ] Persistent game state (save to MongoDB for restart resilience)
+- [ ] Save game history/scores to DB after game ends
 
 ### P2 — Medium
+- [ ] Sound effects for correct/wrong answers
 - [ ] Session templates (save category sets for reuse)
 - [ ] Question difficulty rating
-- [ ] Game history/stats saved to DB after game ends
+- [ ] Fix CSV download in Chrome (known issue — fetch+blob approach implemented but user reports still not working)
 
 ### P3 — Nice to Have
 - [ ] Multi-user collaboration
 - [ ] Public question library sharing
 - [ ] Score tracking across multiple game nights
 - [ ] Mobile-optimized presenter view
+- [ ] Category search in Generate Step 1
