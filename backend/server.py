@@ -1345,6 +1345,7 @@ async def get_stats(current_user: dict = Depends(get_current_user)):
 
 class CreateGameRequest(BaseModel):
     session_id: str
+    points_per_question: int = 10
 
 class JoinGameRequest(BaseModel):
     code: str
@@ -1352,6 +1353,18 @@ class JoinGameRequest(BaseModel):
 
 class SubmitAnswerRequest(BaseModel):
     answer: str
+
+class SubmitWagerRequest(BaseModel):
+    amount: int
+
+class ChangeAnswerRequest(BaseModel):
+    player_id: str
+    question_index: int
+    new_answer: str
+
+class SetPointsRequest(BaseModel):
+    question_index: int
+    points: int
 
 class OverrideScoreRequest(BaseModel):
     player_id: str
@@ -1377,7 +1390,7 @@ async def create_game(request: CreateGameRequest, current_user: dict = Depends(g
     questions = await db.questions.find({"id": {"$in": q_ids}}, {"_id": 0}).to_list(200)
     questions_map = {q["id"]: q for q in questions}
 
-    game = game_manager.create_game(current_user["id"], session, questions_map)
+    game = game_manager.create_game(current_user["id"], session, questions_map, request.points_per_question)
     return {"game_id": game["id"], "code": game["code"]}
 
 @api_router.post("/games/join")
@@ -1428,6 +1441,67 @@ async def next_question(game_id: str, current_user: dict = Depends(get_current_u
 
     await game_manager.broadcast(game_id, {
         "type": "new_question",
+        "data": game_manager.get_presentation_state(game_id)
+    })
+    return game_manager.get_host_state(game_id)
+
+@api_router.post("/games/{game_id}/start-answering")
+async def start_answering(game_id: str, current_user: dict = Depends(get_current_user)):
+    game = game_manager.get_game_by_id(game_id)
+    if not game or game["host_user_id"] != current_user["id"]:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    success = game_manager.start_answering(game_id)
+    if not success:
+        raise HTTPException(status_code=400, detail="Cannot start answering now")
+
+    await game_manager.broadcast(game_id, {
+        "type": "answering_started",
+        "data": game_manager.get_presentation_state(game_id)
+    })
+    return game_manager.get_host_state(game_id)
+
+@api_router.post("/games/{game_id}/wager")
+async def submit_wager(game_id: str, request: SubmitWagerRequest, player_id: str = None):
+    if not player_id:
+        raise HTTPException(status_code=400, detail="player_id query param required")
+
+    success = game_manager.submit_wager(game_id, player_id, request.amount)
+    if not success:
+        raise HTTPException(status_code=400, detail="Cannot submit wager")
+
+    game = game_manager.get_game_by_id(game_id)
+    idx = game["current_index"]
+    wager_count = len(game["wagers"].get(str(idx), {}))
+    await game_manager.broadcast(game_id, {
+        "type": "wager_submitted",
+        "data": {"wagers_count": wager_count}
+    })
+    return {"status": "wagered"}
+
+@api_router.post("/games/{game_id}/set-points")
+async def set_points(game_id: str, request: SetPointsRequest, current_user: dict = Depends(get_current_user)):
+    game = game_manager.get_game_by_id(game_id)
+    if not game or game["host_user_id"] != current_user["id"]:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    success = game_manager.set_question_points(game_id, request.question_index, request.points)
+    if not success:
+        raise HTTPException(status_code=400, detail="Invalid question index")
+    return game_manager.get_host_state(game_id)
+
+@api_router.post("/games/{game_id}/change-answer")
+async def change_answer(game_id: str, request: ChangeAnswerRequest, current_user: dict = Depends(get_current_user)):
+    game = game_manager.get_game_by_id(game_id)
+    if not game or game["host_user_id"] != current_user["id"]:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    success = game_manager.change_answer(game_id, request.player_id, request.question_index, request.new_answer)
+    if not success:
+        raise HTTPException(status_code=400, detail="Cannot change answer")
+
+    await game_manager.broadcast(game_id, {
+        "type": "score_updated",
         "data": game_manager.get_presentation_state(game_id)
     })
     return game_manager.get_host_state(game_id)
@@ -1545,6 +1619,16 @@ async def game_websocket(websocket: WebSocket, game_id: str):
                 await game_manager.broadcast(game_id, {
                     "type": "answer_submitted",
                     "data": {"answers_count": count}
+                })
+
+            elif msg.get("type") == "submit_wager" and role == "player":
+                game_manager.submit_wager(game_id, player_id, msg.get("amount", 0))
+                game = game_manager.get_game_by_id(game_id)
+                idx = game["current_index"]
+                wager_count = len(game["wagers"].get(str(idx), {}))
+                await game_manager.broadcast(game_id, {
+                    "type": "wager_submitted",
+                    "data": {"wagers_count": wager_count}
                 })
 
             elif msg.get("type") == "ping":

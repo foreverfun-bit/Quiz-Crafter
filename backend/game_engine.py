@@ -4,15 +4,15 @@ Manages real-time game sessions with WebSocket connections.
 """
 
 import uuid
-import asyncio
-import json
 import logging
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 from fastapi import WebSocket
 from rapidfuzz import fuzz
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_POINTS = 10
 
 
 class GameManager:
@@ -20,7 +20,7 @@ class GameManager:
 
     def __init__(self):
         self.games: Dict[str, dict] = {}
-        self.connections: Dict[str, Dict[str, WebSocket]] = {}  # game_id -> {conn_id: ws}
+        self.connections: Dict[str, Dict[str, WebSocket]] = {}
 
     def _generate_code(self) -> str:
         import random
@@ -29,11 +29,10 @@ class GameManager:
             if not any(g["code"] == code for g in self.games.values()):
                 return code
 
-    def create_game(self, host_user_id: str, session_data: dict, questions_map: dict) -> dict:
+    def create_game(self, host_user_id: str, session_data: dict, questions_map: dict, points_per_question: int = DEFAULT_POINTS) -> dict:
         game_id = str(uuid.uuid4())[:8]
         code = self._generate_code()
 
-        # Build ordered question list from session
         ordered_questions = []
         type_order = [
             ("true_false_questions", "true_false", "True / False"),
@@ -57,6 +56,7 @@ class GameManager:
                         "options": q.get("options"),
                         "fun_fact": q.get("fun_fact"),
                         "image_url": q.get("image_url"),
+                        "points": points_per_question,
                     })
 
         game = {
@@ -65,11 +65,14 @@ class GameManager:
             "host_user_id": host_user_id,
             "session_id": session_data["id"],
             "session_name": session_data.get("name", "Trivia Night"),
-            "status": "lobby",  # lobby, playing, question, answer_reveal, scores, finished
+            "status": "lobby",
+            # statuses: lobby, question, wagering, answer_reveal, scores, finished
             "questions": ordered_questions,
             "current_index": -1,
-            "players": {},  # player_id -> {name, score, connected}
-            "answers": {},  # question_index -> {player_id -> {answer, is_correct, score_awarded, timestamp}}
+            "players": {},
+            "answers": {},
+            "wagers": {},  # question_index -> {player_id -> wager_amount}
+            "default_points": points_per_question,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -91,7 +94,6 @@ class GameManager:
         if not game or game["status"] == "finished":
             return None
 
-        # Check for duplicate name
         for pid, p in game["players"].items():
             if p["name"].lower() == player_name.lower():
                 p["connected"] = True
@@ -105,6 +107,13 @@ class GameManager:
         }
         return player_id
 
+    def set_question_points(self, game_id: str, question_index: int, points: int) -> bool:
+        game = self.games.get(game_id)
+        if not game or question_index < 0 or question_index >= len(game["questions"]):
+            return False
+        game["questions"][question_index]["points"] = points
+        return True
+
     def next_question(self, game_id: str) -> Optional[dict]:
         game = self.games.get(game_id)
         if not game:
@@ -117,9 +126,46 @@ class GameManager:
             game["status"] = "finished"
             return None
 
-        game["status"] = "question"
+        question = game["questions"][idx]
+
+        # Picture questions go to wagering phase first
+        if question["question_type"] == "picture":
+            game["status"] = "wagering"
+            game["wagers"][str(idx)] = {}
+        else:
+            game["status"] = "question"
+
         game["answers"][str(idx)] = {}
-        return game["questions"][idx]
+        return question
+
+    def submit_wager(self, game_id: str, player_id: str, amount: int) -> bool:
+        game = self.games.get(game_id)
+        if not game or game["status"] != "wagering":
+            return False
+
+        player = game["players"].get(player_id)
+        if not player:
+            return False
+
+        idx = str(game["current_index"])
+        if idx not in game["wagers"]:
+            game["wagers"][idx] = {}
+
+        if player_id in game["wagers"][idx]:
+            return False  # Already wagered
+
+        # Cap wager at player's current score (minimum 0)
+        capped = max(0, min(amount, player["score"]))
+        game["wagers"][idx][player_id] = capped
+        return True
+
+    def start_answering(self, game_id: str) -> bool:
+        """Transition from wagering to question (answering) phase."""
+        game = self.games.get(game_id)
+        if not game or game["status"] != "wagering":
+            return False
+        game["status"] = "question"
+        return True
 
     def submit_answer(self, game_id: str, player_id: str, answer: str) -> bool:
         game = self.games.get(game_id)
@@ -131,10 +177,18 @@ class GameManager:
             game["answers"][idx] = {}
 
         if player_id in game["answers"][idx]:
-            return False  # Already answered
+            return False
 
         question = game["questions"][game["current_index"]]
-        is_correct, score = self._score_answer(question, answer)
+        is_correct = self._check_answer(question, answer)
+
+        # Determine score based on question type
+        if question["question_type"] == "picture":
+            wager = game["wagers"].get(idx, {}).get(player_id, 0)
+            score = wager if is_correct else -wager
+        else:
+            points = question.get("points", DEFAULT_POINTS)
+            score = points if is_correct else 0
 
         game["answers"][idx][player_id] = {
             "answer": answer,
@@ -143,41 +197,60 @@ class GameManager:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
-        if is_correct:
-            game["players"][player_id]["score"] += score
-
+        game["players"][player_id]["score"] += score
         return True
 
-    def _score_answer(self, question: dict, answer: str) -> tuple:
+    def _check_answer(self, question: dict, answer: str) -> bool:
         correct = question["answer"].strip()
         given = answer.strip()
-
         q_type = question["question_type"]
 
         if q_type == "true_false":
-            is_correct = given.lower() == correct.lower()
-            return is_correct, 10 if is_correct else 0
+            return given.lower() == correct.lower()
 
         elif q_type == "multiple_choice":
-            # Compare the answer text or check if given answer contains the correct answer
             given_clean = given.lower().strip().rstrip(".")
             correct_clean = correct.lower().strip().rstrip(".")
-            # Check exact match, or if given contains correct answer (e.g., "B. Queen" contains "queen")
-            # Also check if correct answer is in the given answer (for full option text submissions)
-            is_correct = (
-                given_clean == correct_clean or 
-                correct_clean in given_clean or
-                given_clean in correct_clean
+            return (
+                given_clean == correct_clean
+                or correct_clean in given_clean
+                or given_clean in correct_clean
             )
-            return is_correct, 10 if is_correct else 0
 
         else:  # written, picture
             ratio = fuzz.ratio(given.lower(), correct.lower())
-            if ratio >= 85:
-                return True, 10
-            elif ratio >= 70:
-                return True, 5  # Partial credit
-            return False, 0
+            return ratio >= 70
+
+    def change_answer(self, game_id: str, player_id: str, question_index: int, new_answer: str) -> bool:
+        """Host changes a player's answer and re-scores it."""
+        game = self.games.get(game_id)
+        if not game:
+            return False
+
+        idx_str = str(question_index)
+        if idx_str not in game["answers"] or player_id not in game["answers"][idx_str]:
+            return False
+
+        old = game["answers"][idx_str][player_id]
+        old_score = old["score_awarded"]
+
+        question = game["questions"][question_index]
+        is_correct = self._check_answer(question, new_answer)
+
+        if question["question_type"] == "picture":
+            wager = game["wagers"].get(idx_str, {}).get(player_id, 0)
+            new_score = wager if is_correct else -wager
+        else:
+            points = question.get("points", DEFAULT_POINTS)
+            new_score = points if is_correct else 0
+
+        game["players"][player_id]["score"] -= old_score
+        game["players"][player_id]["score"] += new_score
+
+        old["answer"] = new_answer
+        old["is_correct"] = is_correct
+        old["score_awarded"] = new_score
+        return True
 
     def reveal_answer(self, game_id: str) -> Optional[dict]:
         game = self.games.get(game_id)
@@ -226,7 +299,6 @@ class GameManager:
 
         old["is_correct"] = is_correct
         old["score_awarded"] = score
-
         return True
 
     def end_game(self, game_id: str):
@@ -247,14 +319,18 @@ class GameManager:
             "total_questions": len(game["questions"]),
             "current_index": game["current_index"],
             "players": game["players"],
+            "default_points": game["default_points"],
         }
 
-        if game["current_index"] >= 0 and game["current_index"] < len(game["questions"]):
-            q = game["questions"][game["current_index"]]
+        idx = game["current_index"]
+        if idx >= 0 and idx < len(game["questions"]):
+            q = game["questions"][idx]
             state["current_question"] = q
-            state["answers"] = game["answers"].get(str(game["current_index"]), {})
+            state["answers"] = game["answers"].get(str(idx), {})
             state["answers_count"] = len(state["answers"])
             state["players_count"] = len(game["players"])
+            state["wagers"] = game["wagers"].get(str(idx), {})
+            state["wagers_count"] = len(state["wagers"])
 
         return state
 
@@ -287,6 +363,14 @@ class GameManager:
                 "options": q.get("options"),
                 "image_url": q.get("image_url"),
             }
+
+            # Wagering state
+            if game["status"] == "wagering":
+                my_wager = game["wagers"].get(str(idx), {}).get(player_id)
+                state["has_wagered"] = my_wager is not None
+                if my_wager is not None:
+                    state["my_wager"] = my_wager
+                state["max_wager"] = max(0, player["score"])
 
             my_answer = game["answers"].get(str(idx), {}).get(player_id)
             state["has_answered"] = my_answer is not None
@@ -338,6 +422,9 @@ class GameManager:
             }
             state["answers_count"] = len(game["answers"].get(str(idx), {}))
 
+            if game["status"] == "wagering":
+                state["wagers_count"] = len(game["wagers"].get(str(idx), {}))
+
             if game["status"] == "answer_reveal":
                 state["correct_answer"] = q["answer"]
                 state["fun_fact"] = q.get("fun_fact")
@@ -352,7 +439,6 @@ class GameManager:
 
         return state
 
-    # WebSocket broadcast
     async def broadcast(self, game_id: str, message: dict):
         conns = self.connections.get(game_id, {})
         dead = []
@@ -374,5 +460,4 @@ class GameManager:
             self.connections[game_id].pop(conn_id, None)
 
 
-# Singleton
 game_manager = GameManager()

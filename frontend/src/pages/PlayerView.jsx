@@ -11,6 +11,7 @@ import {
   Trophy,
   Clock,
   Loader2,
+  Coins,
 } from "lucide-react";
 
 const API_URL = process.env.REACT_APP_BACKEND_URL;
@@ -19,46 +20,13 @@ const PlayerView = () => {
   const { gameId } = useParams();
   const [state, setState] = useState(null);
   const [answer, setAnswer] = useState("");
+  const [wagerAmount, setWagerAmount] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const wsRef = useRef(null);
 
   const playerId = sessionStorage.getItem("player_id");
   const playerName = sessionStorage.getItem("player_name");
 
-  useEffect(() => {
-    if (!playerId || !gameId) return;
-
-    const wsUrl = API_URL.replace("https://", "wss://").replace("http://", "ws://");
-    const ws = new WebSocket(`${wsUrl}/api/ws/game/${gameId}?role=player&player_id=${playerId}`);
-    wsRef.current = ws;
-
-    ws.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
-      if (msg.type === "init") {
-        setState(msg.data);
-      } else if (msg.data) {
-        // Refetch player state on any update
-        fetchState();
-      }
-    };
-
-    const fetchState = async () => {
-      try {
-        // Use websocket init for state - no direct player endpoint needed
-        // The WS init sends the full player state
-      } catch {}
-    };
-
-    ws.onclose = () => {};
-
-    const ping = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "ping" }));
-    }, 30000);
-
-    return () => { clearInterval(ping); ws.close(); };
-  }, [gameId, playerId]);
-
-  // Re-fetch state on WS updates by reconnecting
   useEffect(() => {
     if (!playerId || !gameId) return;
 
@@ -73,7 +41,6 @@ const PlayerView = () => {
         if (msg.type === "init") {
           setState(msg.data);
         } else {
-          // For non-init messages, reconnect to get fresh state
           ws.close();
           setTimeout(connect, 100);
         }
@@ -92,10 +59,9 @@ const PlayerView = () => {
     return cleanup;
   }, [gameId, playerId]);
 
-  const handleSubmit = async () => {
+  const handleSubmitAnswer = () => {
     if (!answer.trim()) return;
     setSubmitting(true);
-
     try {
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ type: "submit_answer", answer: answer.trim() }));
@@ -103,10 +69,24 @@ const PlayerView = () => {
         setAnswer("");
         toast.success("Answer submitted!");
       }
-    } catch {
-      toast.error("Failed to submit");
-    } finally {
-      setSubmitting(false);
+    } catch { toast.error("Failed to submit"); }
+    finally { setSubmitting(false); }
+  };
+
+  const handleSubmitWager = () => {
+    const amount = parseInt(wagerAmount) || 0;
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "submit_wager", amount }));
+      setState((prev) => prev ? { ...prev, has_wagered: true, my_wager: amount } : prev);
+      toast.success(`Wagered ${amount} points!`);
+    }
+  };
+
+  const handleDirectAnswer = (ans) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "submit_answer", answer: ans }));
+      setState((prev) => prev ? { ...prev, has_answered: true, my_answer: ans } : prev);
+      toast.success("Answer submitted!");
     }
   };
 
@@ -130,6 +110,7 @@ const PlayerView = () => {
   }
 
   const isLobby = state.status === "lobby";
+  const isWagering = state.status === "wagering";
   const isQuestion = state.status === "question";
   const isReveal = state.status === "answer_reveal";
   const isScores = state.status === "scores";
@@ -155,39 +136,92 @@ const PlayerView = () => {
           </div>
         )}
 
+        {/* Wagering phase (picture questions) */}
+        {isWagering && q && !state.has_wagered && (
+          <div className="w-full max-w-md text-center">
+            <Coins className="mx-auto text-purple-400 mb-4" size={40} />
+            <h2 className="text-2xl font-bold text-white mb-2">Wager Round!</h2>
+            <Badge className="bg-zinc-800 text-zinc-300 mb-4">{q.type_label} - {q.category}</Badge>
+            <p className="text-white text-lg mb-2">{q.question}</p>
+
+            {q.image_url && (
+              <img
+                src={q.image_url.startsWith("/api") ? `${API_URL}${q.image_url}` : q.image_url}
+                alt="Question"
+                className="mx-auto mt-3 mb-4 max-h-48 rounded-lg border border-white/10"
+              />
+            )}
+
+            <p className="text-zinc-400 text-sm mb-4">
+              How many points do you want to wager?
+              <br />
+              <span className="text-[#71E0DC]">Max: {state.max_wager || 0} pts</span>
+            </p>
+
+            <div className="flex gap-2 mb-3">
+              <Input
+                value={wagerAmount}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value) || 0;
+                  setWagerAmount(String(Math.min(val, state.max_wager || 0)));
+                }}
+                placeholder="0"
+                className="bg-zinc-900 border-white/10 text-white text-2xl text-center h-14 font-mono"
+                type="number"
+                inputMode="numeric"
+                data-testid="wager-input"
+              />
+            </div>
+
+            <div className="flex gap-2 mb-4">
+              {[0, Math.floor((state.max_wager || 0) * 0.25), Math.floor((state.max_wager || 0) * 0.5), state.max_wager || 0].map((preset, i) => (
+                <Button
+                  key={i}
+                  variant="outline"
+                  onClick={() => setWagerAmount(String(preset))}
+                  className="flex-1 border-purple-500/30 text-purple-300 hover:bg-purple-500/10 text-sm"
+                >
+                  {i === 3 ? "All In" : preset}
+                </Button>
+              ))}
+            </div>
+
+            <Button
+              onClick={handleSubmitWager}
+              disabled={submitting}
+              className="w-full h-12 text-lg bg-gradient-to-r from-purple-500 to-[#AEB2EF] text-white font-bold hover:opacity-90"
+              data-testid="submit-wager-btn"
+            >
+              <Coins size={20} className="mr-2" /> Lock In Wager
+            </Button>
+          </div>
+        )}
+
+        {/* Wagering - already wagered */}
+        {isWagering && state.has_wagered && (
+          <div className="text-center">
+            <Coins className="mx-auto text-purple-400 mb-4" size={48} />
+            <h2 className="text-2xl font-bold text-white mb-2">Wager Locked!</h2>
+            <p className="text-purple-300 text-xl font-mono font-bold">{state.my_wager} pts</p>
+            <p className="text-zinc-600 text-sm mt-2">Waiting for host to start answering...</p>
+          </div>
+        )}
+
         {/* Question - waiting to answer */}
         {isQuestion && q && !state.has_answered && (
           <div className="w-full max-w-md">
             <div className="text-center mb-6">
               <Badge className="bg-zinc-800 text-zinc-300 mb-3">{q.type_label} - {q.category}</Badge>
               <p className="text-white text-xl font-medium">{q.question}</p>
-
               {q.image_url && (
-                <img
-                  src={q.image_url.startsWith("/api") ? `${API_URL}${q.image_url}` : q.image_url}
-                  alt="Question"
-                  className="mx-auto mt-4 max-h-48 rounded-lg border border-white/10"
-                />
+                <img src={q.image_url.startsWith("/api") ? `${API_URL}${q.image_url}` : q.image_url} alt="Question" className="mx-auto mt-4 max-h-48 rounded-lg border border-white/10" />
               )}
             </div>
 
-            {/* Answer input based on type */}
             {q.question_type === "true_false" ? (
               <div className="flex gap-3">
-                <Button
-                  onClick={() => { setAnswer("True"); setTimeout(() => { handleSubmit(); }, 0); }}
-                  className="flex-1 h-16 text-xl bg-emerald-500/20 border-2 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30"
-                  data-testid="answer-true"
-                >
-                  True
-                </Button>
-                <Button
-                  onClick={() => { setAnswer("False"); setTimeout(() => { handleSubmit(); }, 0); }}
-                  className="flex-1 h-16 text-xl bg-red-500/20 border-2 border-red-500/40 text-red-300 hover:bg-red-500/30"
-                  data-testid="answer-false"
-                >
-                  False
-                </Button>
+                <Button onClick={() => handleDirectAnswer("True")} className="flex-1 h-16 text-xl bg-emerald-500/20 border-2 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30" data-testid="answer-true">True</Button>
+                <Button onClick={() => handleDirectAnswer("False")} className="flex-1 h-16 text-xl bg-red-500/20 border-2 border-red-500/40 text-red-300 hover:bg-red-500/30" data-testid="answer-false">False</Button>
               </div>
             ) : q.question_type === "multiple_choice" && q.options ? (
               <div className="space-y-3">
@@ -199,20 +233,7 @@ const PlayerView = () => {
                     "bg-emerald-500/20 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30",
                   ];
                   return (
-                    <Button
-                      key={i}
-                      onClick={() => {
-                        setAnswer(opt);
-                        // Submit directly
-                        if (wsRef.current?.readyState === WebSocket.OPEN) {
-                          wsRef.current.send(JSON.stringify({ type: "submit_answer", answer: opt }));
-                          setState((prev) => prev ? { ...prev, has_answered: true, my_answer: opt } : prev);
-                          toast.success("Answer submitted!");
-                        }
-                      }}
-                      className={`w-full h-14 text-lg border-2 justify-start px-4 ${colors[i] || colors[0]}`}
-                      data-testid={`answer-option-${i}`}
-                    >
+                    <Button key={i} onClick={() => handleDirectAnswer(opt)} className={`w-full h-14 text-lg border-2 justify-start px-4 ${colors[i] || colors[0]}`} data-testid={`answer-option-${i}`}>
                       {opt}
                     </Button>
                   );
@@ -220,21 +241,8 @@ const PlayerView = () => {
               </div>
             ) : (
               <div className="flex gap-2">
-                <Input
-                  value={answer}
-                  onChange={(e) => setAnswer(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-                  placeholder="Type your answer..."
-                  className="bg-zinc-900 border-white/10 text-white text-lg h-14"
-                  autoFocus
-                  data-testid="answer-text-input"
-                />
-                <Button
-                  onClick={handleSubmit}
-                  disabled={submitting || !answer.trim()}
-                  className="h-14 px-6 bg-gradient-to-r from-[#71E0DC] to-[#AEB2EF] text-zinc-900 font-bold"
-                  data-testid="submit-answer-btn"
-                >
+                <Input value={answer} onChange={(e) => setAnswer(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSubmitAnswer()} placeholder="Type your answer..." className="bg-zinc-900 border-white/10 text-white text-lg h-14" autoFocus data-testid="answer-text-input" />
+                <Button onClick={handleSubmitAnswer} disabled={submitting || !answer.trim()} className="h-14 px-6 bg-gradient-to-r from-[#71E0DC] to-[#AEB2EF] text-zinc-900 font-bold" data-testid="submit-answer-btn">
                   <Send size={20} />
                 </Button>
               </div>
@@ -248,7 +256,6 @@ const PlayerView = () => {
             <CheckCircle className="mx-auto text-emerald-400 mb-4" size={48} />
             <h2 className="text-2xl font-bold text-white mb-2">Answer Locked In!</h2>
             <p className="text-zinc-400">Your answer: <span className="text-white font-medium">{state.my_answer}</span></p>
-            <p className="text-zinc-600 text-sm mt-2">Waiting for everyone...</p>
           </div>
         )}
 
@@ -259,7 +266,6 @@ const PlayerView = () => {
               <p className="text-zinc-400 text-sm mb-1">Correct Answer</p>
               <p className="text-emerald-400 text-3xl font-bold">{state.correct_answer}</p>
             </div>
-
             {state.was_correct !== undefined && (
               <div className={`p-4 rounded-xl ${state.was_correct ? "bg-emerald-500/10" : "bg-red-500/10"}`}>
                 {state.was_correct ? (
@@ -270,18 +276,13 @@ const PlayerView = () => {
                 ) : (
                   <div className="flex items-center justify-center gap-2 text-red-400">
                     <XCircle size={24} />
-                    <span className="text-xl font-bold">Not this time</span>
+                    <span className="text-xl font-bold">{state.score_awarded < 0 ? `${state.score_awarded} points` : "Not this time"}</span>
                   </div>
                 )}
-                {state.my_answer && (
-                  <p className="text-zinc-400 text-sm mt-2">You answered: {state.my_answer}</p>
-                )}
+                {state.my_answer && <p className="text-zinc-400 text-sm mt-2">You answered: {state.my_answer}</p>}
               </div>
             )}
-
-            {state.fun_fact && (
-              <p className="text-zinc-400 text-sm mt-4">{state.fun_fact}</p>
-            )}
+            {state.fun_fact && <p className="text-zinc-400 text-sm mt-4">{state.fun_fact}</p>}
           </div>
         )}
 
@@ -296,14 +297,11 @@ const PlayerView = () => {
             )}
             <div className="space-y-2">
               {state.scoreboard.map((p, idx) => (
-                <div
-                  key={p.id}
-                  className={`flex items-center justify-between p-3 rounded-xl ${
-                    p.id === playerId ? "bg-[#71E0DC]/10 border-2 border-[#71E0DC]/30" :
-                    idx === 0 ? "bg-amber-500/5 border border-amber-500/20" :
-                    "bg-zinc-900 border border-white/5"
-                  }`}
-                >
+                <div key={p.id} className={`flex items-center justify-between p-3 rounded-xl ${
+                  p.id === playerId ? "bg-[#71E0DC]/10 border-2 border-[#71E0DC]/30" :
+                  idx === 0 ? "bg-amber-500/5 border border-amber-500/20" :
+                  "bg-zinc-900 border border-white/5"
+                }`}>
                   <div className="flex items-center gap-3">
                     <span className={`font-bold ${idx === 0 ? "text-amber-400" : "text-zinc-500"}`}>#{idx + 1}</span>
                     <span className={`font-medium ${p.id === playerId ? "text-[#71E0DC]" : "text-white"}`}>{p.name}</span>
