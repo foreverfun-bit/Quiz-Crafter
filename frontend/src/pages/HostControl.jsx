@@ -18,6 +18,7 @@ import {
   Square,
   Edit3,
 } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 
 const API_URL = process.env.REACT_APP_BACKEND_URL;
 
@@ -181,6 +182,16 @@ const HostControl = () => {
                 <p className="text-zinc-400 mb-6">
                   Share code <span className="text-[#71E0DC] font-mono text-2xl font-bold">{state.code}</span> with your players
                 </p>
+                <div className="flex justify-center mb-6">
+                  <div className="bg-white p-3 rounded-xl" data-testid="host-qr-code">
+                    <QRCodeSVG
+                      value={`${window.location.origin}/join?code=${state.code}`}
+                      size={160}
+                      level="H"
+                    />
+                  </div>
+                </div>
+                <p className="text-zinc-500 text-sm mb-6">Players can scan this QR code to join</p>
                 <Button
                   onClick={() => handleAction("next")}
                   disabled={actionLoading || players.length === 0}

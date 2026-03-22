@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Card, CardContent } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -10,9 +10,15 @@ const API_URL = process.env.REACT_APP_BACKEND_URL;
 
 const JoinGame = () => {
   const navigate = useNavigate();
-  const [code, setCode] = useState("");
+  const [searchParams] = useSearchParams();
+  const [code, setCode] = useState(searchParams.get("code") || "");
   const [name, setName] = useState("");
   const [joining, setJoining] = useState(false);
+
+  useEffect(() => {
+    const urlCode = searchParams.get("code");
+    if (urlCode) setCode(urlCode);
+  }, [searchParams]);
 
   const handleJoin = async () => {
     if (!code.trim() || !name.trim()) {

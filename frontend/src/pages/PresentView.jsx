@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useParams } from "react-router-dom";
 import { Trophy, Users, CheckCircle, HelpCircle, Image, List, MessageSquare } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 
 const API_URL = process.env.REACT_APP_BACKEND_URL;
 
@@ -101,9 +102,19 @@ const PresentView = () => {
           <div className="text-center">
             <p className="text-zinc-400 text-2xl mb-4">Join at</p>
             <p className="text-white text-xl mb-6">{window.location.origin}/join</p>
-            <div className="text-[#71E0DC] text-[10rem] font-mono font-bold leading-none tracking-[0.3em] mb-8">
-              {state.code}
+            <div className="flex items-center justify-center gap-12 mb-8">
+              <div className="text-[#71E0DC] text-[10rem] font-mono font-bold leading-none tracking-[0.3em]">
+                {state.code}
+              </div>
+              <div className="bg-white p-4 rounded-2xl" data-testid="join-qr-code">
+                <QRCodeSVG
+                  value={`${window.location.origin}/join?code=${state.code}`}
+                  size={200}
+                  level="H"
+                />
+              </div>
             </div>
+            <p className="text-zinc-500 text-lg mb-6">Scan QR code or enter the code above</p>
             <div className="flex flex-wrap justify-center gap-3">
               {state.player_names?.map((name, i) => (
                 <span key={i} className="px-4 py-2 rounded-full bg-zinc-800 text-white text-lg animate-fade-in">
