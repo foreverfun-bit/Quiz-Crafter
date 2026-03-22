@@ -56,11 +56,27 @@ const PastSessions = () => {
     }
   };
 
-  const handleExport = (session, e) => {
+  const handleExport = async (session, e) => {
     e.stopPropagation();
-    const token = localStorage.getItem("token");
-    const url = `${process.env.REACT_APP_BACKEND_URL}/api/sessions/${session.id}/download-csv?token=${encodeURIComponent(token)}`;
-    window.location.href = url;
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch(
+        `${process.env.REACT_APP_BACKEND_URL}/api/sessions/${session.id}/download-csv?token=${encodeURIComponent(token)}`
+      );
+      if (!res.ok) throw new Error("Export failed");
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = `trivia-${session.name.replace(/[^a-z0-9]/gi, "-").toLowerCase()}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(blobUrl);
+    } catch (error) {
+      console.error("Export error:", error);
+      toast.error("Failed to export session");
+    }
   };
 
   const getTotalQuestions = (session) => {
