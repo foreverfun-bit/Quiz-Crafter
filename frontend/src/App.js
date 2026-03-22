@@ -14,6 +14,10 @@ import ImportCSV from "./pages/ImportCSV";
 import SessionDetail from "./pages/SessionDetail";
 import PastSessions from "./pages/PastSessions";
 import Categories from "./pages/Categories";
+import JoinGame from "./pages/JoinGame";
+import HostControl from "./pages/HostControl";
+import PresentView from "./pages/PresentView";
+import PlayerView from "./pages/PlayerView";
 
 // Components
 import Sidebar from "./components/Sidebar";
@@ -255,6 +259,18 @@ function App() {
                   <AppLayout>
                     <Categories />
                   </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            {/* Live Game Routes (no sidebar) */}
+            <Route path="/join" element={<JoinGame />} />
+            <Route path="/play/:gameId" element={<PlayerView />} />
+            <Route path="/present/:code" element={<PresentView />} />
+            <Route
+              path="/host/:gameId"
+              element={
+                <ProtectedRoute>
+                  <HostControl />
                 </ProtectedRoute>
               }
             />

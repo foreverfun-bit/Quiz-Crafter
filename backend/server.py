@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
@@ -17,6 +17,8 @@ import jwt
 import bcrypt
 import csv
 import io
+import json as json_module
+from game_engine import game_manager
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -1338,6 +1340,221 @@ async def get_stats(current_user: dict = Depends(get_current_user)):
             "picture": picture_count
         }
     }
+
+# ============ LIVE GAME ENDPOINTS ============
+
+class CreateGameRequest(BaseModel):
+    session_id: str
+
+class JoinGameRequest(BaseModel):
+    code: str
+    player_name: str
+
+class SubmitAnswerRequest(BaseModel):
+    answer: str
+
+class OverrideScoreRequest(BaseModel):
+    player_id: str
+    question_index: int
+    is_correct: bool
+    score: int
+
+@api_router.post("/games/create")
+async def create_game(request: CreateGameRequest, current_user: dict = Depends(get_current_user)):
+    session = await db.sessions.find_one(
+        {"id": request.session_id, "user_id": current_user["id"]},
+        {"_id": 0}
+    )
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    q_ids = (
+        session.get("true_false_questions", []) +
+        session.get("multiple_choice_questions", []) +
+        session.get("written_questions", []) +
+        session.get("picture_questions", [])
+    )
+    questions = await db.questions.find({"id": {"$in": q_ids}}, {"_id": 0}).to_list(200)
+    questions_map = {q["id"]: q for q in questions}
+
+    game = game_manager.create_game(current_user["id"], session, questions_map)
+    return {"game_id": game["id"], "code": game["code"]}
+
+@api_router.post("/games/join")
+async def join_game(request: JoinGameRequest):
+    game = game_manager.get_game_by_code(request.code)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found. Check your code.")
+
+    player_id = game_manager.join_game(game["id"], request.player_name)
+    if not player_id:
+        raise HTTPException(status_code=400, detail="Could not join game")
+
+    # Broadcast player joined
+    await game_manager.broadcast(game["id"], {
+        "type": "player_joined",
+        "data": game_manager.get_host_state(game["id"])
+    })
+
+    return {"game_id": game["id"], "player_id": player_id, "player_name": request.player_name}
+
+@api_router.get("/games/{game_id}/host")
+async def get_host_state(game_id: str, current_user: dict = Depends(get_current_user)):
+    game = game_manager.get_game_by_id(game_id)
+    if not game or game["host_user_id"] != current_user["id"]:
+        raise HTTPException(status_code=404, detail="Game not found")
+    return game_manager.get_host_state(game_id)
+
+@api_router.get("/games/{game_id}/present")
+async def get_presentation_state(game_id: str):
+    state = game_manager.get_presentation_state(game_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Game not found")
+    return state
+
+@api_router.post("/games/{game_id}/next")
+async def next_question(game_id: str, current_user: dict = Depends(get_current_user)):
+    game = game_manager.get_game_by_id(game_id)
+    if not game or game["host_user_id"] != current_user["id"]:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    question = game_manager.next_question(game_id)
+    if question is None:
+        await game_manager.broadcast(game_id, {
+            "type": "game_finished",
+            "data": game_manager.get_presentation_state(game_id)
+        })
+        return {"status": "finished", "data": game_manager.get_presentation_state(game_id)}
+
+    await game_manager.broadcast(game_id, {
+        "type": "new_question",
+        "data": game_manager.get_presentation_state(game_id)
+    })
+    return game_manager.get_host_state(game_id)
+
+@api_router.post("/games/{game_id}/reveal")
+async def reveal_answer(game_id: str, current_user: dict = Depends(get_current_user)):
+    game = game_manager.get_game_by_id(game_id)
+    if not game or game["host_user_id"] != current_user["id"]:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    result = game_manager.reveal_answer(game_id)
+    if not result:
+        raise HTTPException(status_code=400, detail="Cannot reveal answer now")
+
+    await game_manager.broadcast(game_id, {
+        "type": "answer_revealed",
+        "data": game_manager.get_presentation_state(game_id)
+    })
+    return game_manager.get_host_state(game_id)
+
+@api_router.post("/games/{game_id}/scores")
+async def show_scores(game_id: str, current_user: dict = Depends(get_current_user)):
+    game = game_manager.get_game_by_id(game_id)
+    if not game or game["host_user_id"] != current_user["id"]:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    result = game_manager.show_scores(game_id)
+    _ = result  # used for side effect
+    await game_manager.broadcast(game_id, {
+        "type": "scores",
+        "data": game_manager.get_presentation_state(game_id)
+    })
+    return game_manager.get_host_state(game_id)
+
+@api_router.post("/games/{game_id}/answer")
+async def submit_answer(game_id: str, request: SubmitAnswerRequest, player_id: str = None):
+    if not player_id:
+        raise HTTPException(status_code=400, detail="player_id query param required")
+
+    success = game_manager.submit_answer(game_id, player_id, request.answer)
+    if not success:
+        raise HTTPException(status_code=400, detail="Cannot submit answer")
+
+    # Broadcast answer count update
+    await game_manager.broadcast(game_id, {
+        "type": "answer_submitted",
+        "data": {"answers_count": len(game_manager.games[game_id]["answers"].get(str(game_manager.games[game_id]["current_index"]), {}))}
+    })
+    return {"status": "submitted"}
+
+@api_router.post("/games/{game_id}/override")
+async def override_score(game_id: str, request: OverrideScoreRequest, current_user: dict = Depends(get_current_user)):
+    game = game_manager.get_game_by_id(game_id)
+    if not game or game["host_user_id"] != current_user["id"]:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    success = game_manager.override_score(game_id, request.player_id, request.question_index, request.is_correct, request.score)
+    if not success:
+        raise HTTPException(status_code=400, detail="Cannot override score")
+
+    await game_manager.broadcast(game_id, {
+        "type": "score_updated",
+        "data": game_manager.get_presentation_state(game_id)
+    })
+    return game_manager.get_host_state(game_id)
+
+@api_router.post("/games/{game_id}/end")
+async def end_game(game_id: str, current_user: dict = Depends(get_current_user)):
+    game = game_manager.get_game_by_id(game_id)
+    if not game or game["host_user_id"] != current_user["id"]:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    game_manager.end_game(game_id)
+    await game_manager.broadcast(game_id, {
+        "type": "game_finished",
+        "data": game_manager.get_presentation_state(game_id)
+    })
+    return {"status": "ended"}
+
+# ============ WEBSOCKET ============
+
+@app.websocket("/api/ws/game/{game_id}")
+async def game_websocket(websocket: WebSocket, game_id: str):
+    await websocket.accept()
+
+    conn_id = str(uuid.uuid4())[:8]
+    game_manager.add_connection(game_id, conn_id, websocket)
+
+    # Parse query params from the websocket URL
+    params = dict(websocket.query_params)
+    role = params.get("role", "spectator")
+    player_id = params.get("player_id", "")
+
+    try:
+        # Send initial state
+        if role == "host":
+            state = game_manager.get_host_state(game_id)
+        elif role == "player":
+            state = game_manager.get_player_state(game_id, player_id)
+        else:
+            state = game_manager.get_presentation_state(game_id)
+
+        if state:
+            await websocket.send_json({"type": "init", "data": state})
+
+        while True:
+            data = await websocket.receive_text()
+            msg = json_module.loads(data)
+
+            if msg.get("type") == "submit_answer" and role == "player":
+                game_manager.submit_answer(game_id, player_id, msg.get("answer", ""))
+                game = game_manager.get_game_by_id(game_id)
+                idx = game["current_index"]
+                count = len(game["answers"].get(str(idx), {}))
+                await game_manager.broadcast(game_id, {
+                    "type": "answer_submitted",
+                    "data": {"answers_count": count}
+                })
+
+            elif msg.get("type") == "ping":
+                await websocket.send_json({"type": "pong"})
+
+    except WebSocketDisconnect:
+        game_manager.remove_connection(game_id, conn_id)
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+        game_manager.remove_connection(game_id, conn_id)
 
 # Include router
 app.include_router(api_router)

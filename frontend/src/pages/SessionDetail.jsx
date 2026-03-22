@@ -16,7 +16,8 @@ import {
   Trash2,
   Printer,
   Copy,
-  Download
+  Download,
+  Radio,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -118,6 +119,19 @@ const SessionDetail = () => {
     }
   };
 
+  const [goingLive, setGoingLive] = useState(false);
+  const handleGoLive = async () => {
+    setGoingLive(true);
+    try {
+      const res = await api.post("/games/create", { session_id: id });
+      navigate(`/host/${res.data.game_id}`);
+    } catch {
+      toast.error("Failed to start live game");
+    } finally {
+      setGoingLive(false);
+    }
+  };
+
   const getQuestionsForType = (type) => {
     if (!session) return [];
     const questionIds = session[type.field] || [];
@@ -167,6 +181,15 @@ const SessionDetail = () => {
           </div>
         </div>
         <div className="flex gap-2">
+          <Button
+            onClick={handleGoLive}
+            disabled={goingLive}
+            className="bg-gradient-to-r from-[#71E0DC] to-[#AEB2EF] text-zinc-900 font-bold hover:opacity-90"
+            data-testid="go-live-btn"
+          >
+            <Radio size={16} className="mr-2" />
+            {goingLive ? "Starting..." : "Go Live"}
+          </Button>
           <Button
             variant="outline"
             onClick={handleExportCSV}
