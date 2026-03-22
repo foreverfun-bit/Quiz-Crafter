@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useParams } from "react-router-dom";
-import { Trophy, Users, CheckCircle, HelpCircle, Image, List, MessageSquare } from "lucide-react";
+import { Trophy, Users, CheckCircle, HelpCircle, Image, List, MessageSquare, Coins } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 
 const API_URL = process.env.REACT_APP_BACKEND_URL;
@@ -72,6 +72,7 @@ const PresentView = () => {
   }
 
   const isLobby = state.status === "lobby";
+  const isWagering = state.status === "wagering";
   const isQuestion = state.status === "question";
   const isReveal = state.status === "answer_reveal";
   const isScores = state.status === "scores";
@@ -121,6 +122,40 @@ const PresentView = () => {
                   {name}
                 </span>
               ))}
+            </div>
+          </div>
+        )}
+
+        {/* Wagering Phase */}
+        {isWagering && q && (
+          <div className="w-full max-w-4xl text-center" data-testid="present-wagering">
+            <div className="flex items-center justify-center gap-3 mb-6">
+              <Coins className="text-purple-400" size={36} />
+              <span className="text-purple-400 text-3xl font-bold">Wager Round</span>
+            </div>
+
+            <div className="flex items-center justify-center gap-3 mb-6">
+              <Image className="text-[#71E0DC]" size={28} />
+              <span className="text-[#71E0DC] text-xl font-medium">{q.type_label}</span>
+              <span className="text-zinc-500 text-xl">-</span>
+              <span className="text-zinc-400 text-xl">{q.category}</span>
+            </div>
+
+            {q.image_url && (
+              <div className="mb-6 flex justify-center">
+                <img
+                  src={q.image_url.startsWith("/api") ? `${API_URL}${q.image_url}` : q.image_url}
+                  alt="Question"
+                  className="max-h-[40vh] rounded-2xl border-2 border-white/10"
+                />
+              </div>
+            )}
+
+            <h2 className="text-white text-4xl lg:text-5xl font-bold leading-tight mb-8">{q.question}</h2>
+
+            <div className="mt-8 p-6 rounded-2xl bg-purple-500/10 border-2 border-purple-500/30">
+              <p className="text-purple-300 text-2xl font-medium mb-2">Players are placing their wagers...</p>
+              <p className="text-zinc-400 text-lg">{state.wagers_count || 0} / {state.players_count} wagered</p>
             </div>
           </div>
         )}
