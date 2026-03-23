@@ -133,6 +133,7 @@ const HostControl = () => {
 
   const players = Object.entries(state.players || {});
   const isLobby = state.status === "lobby";
+  const isRoundIntro = state.status === "round_intro";
   const isWagering = state.status === "wagering";
   const isQuestion = state.status === "question";
   const isReveal = state.status === "answer_reveal";
@@ -141,6 +142,7 @@ const HostControl = () => {
   const currentQ = state.current_question;
   const answers = state.answers || {};
   const wagers = state.wagers || {};
+  const roundInfo = state.round_info;
   const progressPct = state.total_questions > 0 ? ((state.current_index + 1) / state.total_questions) * 100 : 0;
 
   return (
@@ -212,8 +214,31 @@ const HostControl = () => {
             </Card>
           )}
 
+          {/* Round Intro */}
+          {isRoundIntro && roundInfo && (
+            <Card className="bg-zinc-900/80 border-white/10" data-testid="host-round-intro">
+              <CardContent className="p-8 text-center">
+                <Badge className="bg-[#71E0DC]/20 text-[#71E0DC] text-lg px-4 py-1 mb-4">
+                  {roundInfo.round_label}
+                </Badge>
+                <h2 className="text-2xl font-bold text-white mb-2">
+                  {roundInfo.question_count} Questions &middot; {roundInfo.points_per_question} pts each
+                </h2>
+                <div className="flex flex-wrap justify-center gap-2 my-4">
+                  {roundInfo.categories.map((cat, i) => (
+                    <Badge key={i} variant="outline" className="border-zinc-700 text-zinc-300 text-sm px-3 py-1">{cat}</Badge>
+                  ))}
+                </div>
+                <p className="text-zinc-500 text-sm mb-6">Showing on presentation screen</p>
+                <Button onClick={() => handleAction("start-round")} disabled={actionLoading} className="h-14 px-8 text-lg bg-gradient-to-r from-[#71E0DC] to-[#AEB2EF] text-zinc-900 font-bold" data-testid="begin-round-btn">
+                  <Play size={20} className="mr-2" /> Begin Round
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Current Question */}
-          {currentQ && !isLobby && !isFinished && (
+          {currentQ && !isLobby && !isFinished && !isRoundIntro && (
             <Card className="bg-zinc-900/80 border-white/10">
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">

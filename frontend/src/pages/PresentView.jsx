@@ -74,6 +74,7 @@ const PresentView = () => {
   }
 
   const isLobby = state.status === "lobby";
+  const isRoundIntro = state.status === "round_intro";
   const isWagering = state.status === "wagering";
   const isQuestion = state.status === "question";
   const isReveal = state.status === "answer_reveal";
@@ -81,6 +82,7 @@ const PresentView = () => {
   const isFinished = state.status === "finished";
   const q = state.current_question;
   const TypeIcon = q ? (typeIcons[q.question_type] || HelpCircle) : HelpCircle;
+  const roundInfo = state.round_info;
 
   return (
     <div className="min-h-screen bg-zinc-950 flex flex-col" data-testid="present-view">
@@ -134,6 +136,44 @@ const PresentView = () => {
                 </span>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Round Intro */}
+        {isRoundIntro && roundInfo && (
+          <div className="w-full max-w-4xl text-center" data-testid="present-round-intro">
+            {/* Round type badge */}
+            <div className="mb-8">
+              <span className="inline-block px-6 py-2 rounded-full bg-[#71E0DC]/10 border-2 border-[#71E0DC]/30 text-[#71E0DC] text-lg font-medium tracking-wider uppercase">
+                Round {state.current_index !== undefined ? (roundInfo.round_type === "true_false" ? "1" : roundInfo.round_type === "multiple_choice" ? "2" : "3") : ""}
+              </span>
+            </div>
+
+            {/* Round name */}
+            <h2 className="text-white text-5xl lg:text-7xl font-black mb-4 leading-tight">
+              {roundInfo.round_label}
+            </h2>
+
+            {/* Question count & points */}
+            <p className="text-zinc-400 text-xl mb-10">
+              {roundInfo.question_count} Questions &middot; {roundInfo.points_per_question} Points Each
+            </p>
+
+            {/* Categories grid */}
+            <div className="grid grid-cols-3 gap-4 max-w-3xl mx-auto">
+              {roundInfo.categories.map((cat, i) => (
+                <div
+                  key={i}
+                  className="p-5 rounded-2xl border-2 border-white/10 bg-white/[0.03] backdrop-blur-sm"
+                  style={{ animationDelay: `${i * 150}ms` }}
+                  data-testid={`round-category-${i}`}
+                >
+                  <span className="text-white text-xl font-semibold">{cat}</span>
+                </div>
+              ))}
+            </div>
+
+            <p className="text-zinc-600 mt-10 text-lg">Host will start the round shortly...</p>
           </div>
         )}
 

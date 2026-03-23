@@ -114,12 +114,14 @@ const PlayerView = () => {
   }
 
   const isLobby = state.status === "lobby";
+  const isRoundIntro = state.status === "round_intro";
   const isWagering = state.status === "wagering";
   const isQuestion = state.status === "question";
   const isReveal = state.status === "answer_reveal";
   const isScores = state.status === "scores";
   const isFinished = state.status === "finished";
   const q = state.current_question;
+  const roundInfo = state.round_info;
 
   return (
     <div className="min-h-screen bg-zinc-950 flex flex-col" data-testid="player-view">
@@ -147,6 +149,25 @@ const PlayerView = () => {
             <h2 className="text-2xl font-bold text-white mb-2">You're in!</h2>
             <p className="text-zinc-400">Waiting for the host to start...</p>
             <p className="text-zinc-600 text-sm mt-2">{state.players_count} players joined</p>
+          </div>
+        )}
+
+        {/* Round Intro */}
+        {isRoundIntro && roundInfo && (
+          <div className="text-center w-full max-w-md" data-testid="player-round-intro">
+            <div className="mb-4">
+              <span className="inline-block px-4 py-1 rounded-full bg-[#71E0DC]/10 border border-[#71E0DC]/30 text-[#71E0DC] text-sm font-medium uppercase tracking-wider">
+                Up Next
+              </span>
+            </div>
+            <h2 className="text-3xl font-bold text-white mb-2">{roundInfo.round_label}</h2>
+            <p className="text-zinc-400 mb-4">{roundInfo.question_count} Questions &middot; {roundInfo.points_per_question} pts each</p>
+            <div className="flex flex-wrap justify-center gap-2">
+              {roundInfo.categories.map((cat, i) => (
+                <span key={i} className="px-3 py-1 rounded-full bg-zinc-800 text-zinc-300 text-sm">{cat}</span>
+              ))}
+            </div>
+            <p className="text-zinc-600 text-xs mt-6">Get ready...</p>
           </div>
         )}
 

@@ -49,9 +49,10 @@ Build a trivia host app with:
 ### Live Trivia Hosting Platform
 - **Game Creation**: Host creates game from any session, gets 4-digit room code
 - **Player Join**: No account needed — enter code + name at /join
+- **Round Start Screen** (NEW): Before each non-picture round, a "Round Intro" screen displays the round type, categories, points per question, and question count on the Presentation view. Picture rounds skip the intro and go straight to wagering. Host clicks "Begin Round" to start.
 - **Host Control Panel** (/host/:id): Advance questions, reveal answers, show scores, override scores, inline answer editing in sidebar
-- **Presentation View** (/present/:code): Projector-optimized display with countdown timer circle, wagering phase
-- **Player View** (/play/:id): Mobile-optimized with countdown, Time's Up lockout
+- **Presentation View** (/present/:code): Projector-optimized display with round intro, countdown timer, wagering phase
+- **Player View** (/play/:id): Mobile-optimized with countdown, round preview, Time's Up lockout
 - **Auto-Scoring**: Exact match for T/F/MC, fuzzy match for written (>=70%)
 - **Manual Override**: Host can edit any player's answer or override score from sidebar
 - **Configurable Points**: Per-type scoring from session + host can adjust per-question

@@ -136,9 +136,33 @@ class GameManager:
     def _clear_timer(self, game: dict):
         game["timer_end_at"] = None
 
+    def _get_round_info(self, game: dict, question_type: str) -> dict:
+        """Get categories and points for a round type."""
+        categories = []
+        points = None
+        for q in game["questions"]:
+            if q["question_type"] == question_type:
+                if q["category"] and q["category"] not in categories:
+                    categories.append(q["category"])
+                if points is None:
+                    points = q.get("points", DEFAULT_POINTS)
+        type_labels = {
+            "true_false": "True / False",
+            "multiple_choice": "Multiple Choice",
+            "written": "Written Answer",
+            "picture": "Picture Round",
+        }
+        return {
+            "round_type": question_type,
+            "round_label": type_labels.get(question_type, question_type),
+            "categories": categories,
+            "points_per_question": points or DEFAULT_POINTS,
+            "question_count": len([q for q in game["questions"] if q["question_type"] == question_type]),
+        }
+
     def next_question(self, game_id: str) -> Optional[dict]:
         game = self.games.get(game_id)
-        if not game:
+        if not game or game["status"] == "finished":
             return None
 
         game["current_index"] += 1
@@ -151,6 +175,19 @@ class GameManager:
 
         question = game["questions"][idx]
 
+        # Detect round transition (new question type)
+        prev_type = game["questions"][idx - 1]["question_type"] if idx > 0 else None
+        new_type = question["question_type"]
+        is_new_round = prev_type != new_type
+
+        # Show round intro for non-picture rounds on round transition
+        if is_new_round and new_type != "picture":
+            game["status"] = "round_intro"
+            game["round_info"] = self._get_round_info(game, new_type)
+            self._clear_timer(game)
+            game["answers"][str(idx)] = {}
+            return question
+
         # Picture questions go to wagering phase first (no timer during wagering)
         if question["question_type"] == "picture":
             game["status"] = "wagering"
@@ -162,6 +199,16 @@ class GameManager:
 
         game["answers"][str(idx)] = {}
         return question
+
+    def start_round(self, game_id: str) -> bool:
+        """Transition from round_intro to the actual question."""
+        game = self.games.get(game_id)
+        if not game or game["status"] != "round_intro":
+            return False
+        game["status"] = "question"
+        game["round_info"] = None
+        self._start_timer(game)
+        return True
 
     def submit_wager(self, game_id: str, player_id: str, amount: int) -> bool:
         game = self.games.get(game_id)
@@ -353,6 +400,7 @@ class GameManager:
             "default_points": game["default_points"],
             "timer_duration": game.get("timer_duration", 0),
             "timer_end_at": game.get("timer_end_at"),
+            "round_info": game.get("round_info"),
         }
 
         idx = game["current_index"]
@@ -384,6 +432,7 @@ class GameManager:
             "current_index": game["current_index"],
             "players_count": len(game["players"]),
             "timer_end_at": game.get("timer_end_at"),
+            "round_info": game.get("round_info"),
         }
 
         idx = game["current_index"]
@@ -443,6 +492,7 @@ class GameManager:
             "players_count": len([p for p in game["players"].values() if p["name"] != "__presentation__"]),
             "player_names": [p["name"] for p in game["players"].values() if p["name"] != "__presentation__"],
             "timer_end_at": game.get("timer_end_at"),
+            "round_info": game.get("round_info"),
         }
 
         idx = game["current_index"]

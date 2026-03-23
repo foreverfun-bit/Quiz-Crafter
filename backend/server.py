@@ -1485,6 +1485,23 @@ async def start_answering(game_id: str, current_user: dict = Depends(get_current
     await _persist_game(game_id)
     return game_manager.get_host_state(game_id)
 
+@api_router.post("/games/{game_id}/start-round")
+async def start_round(game_id: str, current_user: dict = Depends(get_current_user)):
+    game = game_manager.get_game_by_id(game_id)
+    if not game or game["host_user_id"] != current_user["id"]:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    success = game_manager.start_round(game_id)
+    if not success:
+        raise HTTPException(status_code=400, detail="Cannot start round now")
+
+    await game_manager.broadcast(game_id, {
+        "type": "round_started",
+        "data": game_manager.get_presentation_state(game_id)
+    })
+    await _persist_game(game_id)
+    return game_manager.get_host_state(game_id)
+
 @api_router.post("/games/{game_id}/wager")
 async def submit_wager(game_id: str, request: SubmitWagerRequest, player_id: str = None):
     if not player_id:
