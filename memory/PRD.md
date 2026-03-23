@@ -12,8 +12,8 @@ Build a trivia host app with:
 - **Frontend**: React 19, Tailwind CSS, Shadcn/UI, React Router
 - **Backend**: FastAPI, Motor (async MongoDB), JWT auth, WebSocket for live games
 - **AI**: GPT-5.2 via emergentintegrations (text), GPT Image 1 (images)
-- **Real-time**: FastAPI WebSocket, in-memory game state
-- **Database**: MongoDB (questions, sessions, users, categories)
+- **Real-time**: FastAPI WebSocket, in-memory game state with MongoDB persistence
+- **Database**: MongoDB (questions, sessions, users, categories, game_history, active_games)
 
 ## What's Been Implemented
 
@@ -31,14 +31,9 @@ Build a trivia host app with:
 - Image display for picture questions
 
 ### Build Session (Enhanced Mar 2026)
-- **Library Selection**: Browse and select from existing question library with category conflict warnings
-- **Write Custom Questions**: Inline form per tab with type-specific inputs (T/F True/False buttons, MC 4-option grid, Written text, Picture with image URL). Auto-saves to library and auto-selects.
-- **Scoring Options**: Collapsible panel to set per-type point values (T/F, MC, Written). Picture rounds are wager-based. Scoring saved with session and applied when going live.
-- Progress summary cards, search, localStorage persistence
-
-### Trivia Session Builder
-- Select questions by type, save as past session
-- Session detail view with copy to clipboard
+- Library Selection with category conflict warnings
+- Write Custom Questions inline with type-specific forms
+- Scoring Options: per-type point values saved with session
 
 ### CSV Import/Export
 - Import with duplicate detection and update
@@ -54,57 +49,76 @@ Build a trivia host app with:
 ### Live Trivia Hosting Platform
 - **Game Creation**: Host creates game from any session, gets 4-digit room code
 - **Player Join**: No account needed — enter code + name at /join
-- **Host Control Panel** (/host/:id): Advance questions, reveal answers, show scores, override scores, end game. Sidebar shows each player's answer with inline edit for answers and scores
-- **Presentation View** (/present/:code): Projector-optimized display with large question text, colored MC options, scoreboard, player lobby, wagering phase
-- **Player View** (/play/:id): Mobile-optimized answer submission — T/F buttons, MC option taps, written text input
+- **Host Control Panel** (/host/:id): Advance questions, reveal answers, show scores, override scores, inline answer editing in sidebar
+- **Presentation View** (/present/:code): Projector-optimized display with countdown timer circle, wagering phase
+- **Player View** (/play/:id): Mobile-optimized with countdown, Time's Up lockout
 - **Auto-Scoring**: Exact match for T/F/MC, fuzzy match for written (>=70%)
-- **Manual Override**: Host can edit any player's answer (re-scored) or directly override score
-- **Configurable Points**: Per-type scoring from session + host can adjust per-question during live game
-- **Wagering System**: Picture questions trigger a wagering phase — players bet points capped at their current score. Correct = +wager, Incorrect = -wager
+- **Manual Override**: Host can edit any player's answer or override score from sidebar
+- **Configurable Points**: Per-type scoring from session + host can adjust per-question
+- **Wagering System**: Picture questions trigger wagering phase, capped at player's current score
+- **Configurable Timer** (NEW Mar 2026): Host sets countdown (Off/15s/30s/45s/60s/90s). Timer starts on question display, all views show countdown, player answers locked on expiry.
 - **WebSocket Real-time**: All views update live via WebSocket broadcasts
-- **Game Flow**: Lobby → Question|Wagering → (Start Answering) → Question → Answer Reveal → Scoreboard → Next → ... → Game Over
+
+### Game History (NEW Mar 2026)
+- Automatic save of final scoreboard, all answers, and game metadata to MongoDB when game ends
+- Game History page (/game-history) lists past games with session names, codes, dates, top 3 scores
+- Detail page shows full scoreboard and per-question breakdown with every player's answer
+- Duplicate prevention (no double-saves on natural finish + explicit end)
+
+### Crash Resilience (NEW Mar 2026)
+- Active game state persisted to MongoDB (active_games collection) on each major state change
+- Games automatically restored from DB on server restart
+- Active game cleaned up from DB when game ends
 
 ## DB Schema
 - **users**: {id, email, hashed_password}
-- **questions**: {id, user_id, question_text, answer, question_type, category, options, fun_fact, image_url, liked, disliked, used, venue, date_used}
+- **questions**: {id, user_id, question, answer, question_type, category, options, fun_fact, image_url}
 - **sessions**: {id, user_id, name, questions by type, scoring, is_past}
 - **categories**: {id, user_id, name, is_disliked}
-- **games**: In-memory only {id, code, host_user_id, session_id, status, questions, players, answers, wagers}
+- **game_history**: {id, game_id, code, session_name, host_user_id, scoreboard, question_results, player_count, created_at, ended_at}
+- **active_games**: Full game state for crash recovery
 
 ## Key API Endpoints
 - `/api/auth/{register, login}` - Authentication
 - `/api/generate/{categories-batch, single-category, questions, theme-round, image}` - AI generation
 - `/api/questions[/all, /save]` - Question CRUD
-- `/api/sessions` - Session CRUD (now with optional scoring field)
+- `/api/sessions` - Session CRUD (with optional scoring)
 - `/api/sessions/{id}/download-csv` - CSV export
 - `/api/upload/image` - Image upload
-- `/api/games/{create, join, {id}/next, {id}/reveal, {id}/scores, {id}/override, {id}/end, {id}/set-points, {id}/change-answer, {id}/start-answering, {id}/wager}` - Live game
+- `/api/games/{create, join, {id}/next, {id}/reveal, {id}/scores, {id}/override, {id}/end}` - Live game
+- `/api/games/{id}/set-points` - Configurable points
+- `/api/games/{id}/set-timer` - Timer configuration
+- `/api/games/{id}/change-answer` - Host answer change
+- `/api/games/{id}/start-answering` - Start after wagering
+- `/api/games/{id}/wager` - Player wagering
+- `/api/game-history` - Past game list
+- `/api/game-history/{id}` - Past game detail
 - `/api/ws/game/{id}` - WebSocket for real-time updates
 
 ## Prioritized Backlog
 
 ### P0 — Done
 - [x] All core features implemented and tested
-- [x] Wagering system for picture questions (tested Mar 2026)
-- [x] Configurable points per question (tested Mar 2026)
-- [x] Host manual answer change & score override (tested Mar 2026)
-- [x] PresentView wagering phase display (tested Mar 2026)
-- [x] Build Session: Library selection + Write Custom + Scoring Options (tested Mar 2026)
+- [x] Wagering system, configurable points, manual overrides (Mar 2026)
+- [x] Build Session: Library + Write Custom + Scoring (Mar 2026)
+- [x] Configurable question timer (Mar 2026)
+- [x] Game history saved to DB (Mar 2026)
+- [x] Crash resilience with DB persistence (Mar 2026)
 
 ### P1 — Next
-- [ ] Timer for questions (configurable per-question countdown)
-- [ ] Persistent game state (save to MongoDB for restart resilience)
-- [ ] Save game history/scores to DB after game ends
-
-### P2 — Medium
-- [ ] Sound effects for correct/wrong answers
+- [ ] Sound effects for correct/wrong answers in live games
 - [ ] Session templates (save category sets for reuse)
 - [ ] Question difficulty rating
-- [ ] Fix CSV download in Chrome (known issue — fetch+blob approach implemented but user reports still not working)
+
+### P2 — Medium
+- [ ] Fix CSV download in Chrome (known recurring issue)
+- [ ] Refactor Generate.jsx (~1400 lines) into smaller components
+- [ ] Category search in Generate Step 1
 
 ### P3 — Nice to Have
 - [ ] Multi-user collaboration
 - [ ] Public question library sharing
 - [ ] Score tracking across multiple game nights
 - [ ] Mobile-optimized presenter view
-- [ ] Category search in Generate Step 1
+- [ ] Question randomizer within rounds
+- [ ] Team mode with combined scoring
