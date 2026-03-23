@@ -30,6 +30,12 @@ Build a trivia host app with:
 - View, filter, search, create, edit, delete questions
 - Image display for picture questions
 
+### Build Session (Enhanced Mar 2026)
+- **Library Selection**: Browse and select from existing question library with category conflict warnings
+- **Write Custom Questions**: Inline form per tab with type-specific inputs (T/F True/False buttons, MC 4-option grid, Written text, Picture with image URL). Auto-saves to library and auto-selects.
+- **Scoring Options**: Collapsible panel to set per-type point values (T/F, MC, Written). Picture rounds are wager-based. Scoring saved with session and applied when going live.
+- Progress summary cards, search, localStorage persistence
+
 ### Trivia Session Builder
 - Select questions by type, save as past session
 - Session detail view with copy to clipboard
@@ -53,16 +59,15 @@ Build a trivia host app with:
 - **Player View** (/play/:id): Mobile-optimized answer submission — T/F buttons, MC option taps, written text input
 - **Auto-Scoring**: Exact match for T/F/MC, fuzzy match for written (>=70%)
 - **Manual Override**: Host can edit any player's answer (re-scored) or directly override score
-- **Configurable Points**: Host can set custom points per question
+- **Configurable Points**: Per-type scoring from session + host can adjust per-question during live game
 - **Wagering System**: Picture questions trigger a wagering phase — players bet points capped at their current score. Correct = +wager, Incorrect = -wager
 - **WebSocket Real-time**: All views update live via WebSocket broadcasts
 - **Game Flow**: Lobby → Question|Wagering → (Start Answering) → Question → Answer Reveal → Scoreboard → Next → ... → Game Over
-- **Presentation filter**: `__presentation__` pseudo-player filtered from all player lists/scoreboards
 
 ## DB Schema
 - **users**: {id, email, hashed_password}
 - **questions**: {id, user_id, question_text, answer, question_type, category, options, fun_fact, image_url, liked, disliked, used, venue, date_used}
-- **sessions**: {id, user_id, name, questions by type, is_past}
+- **sessions**: {id, user_id, name, questions by type, scoring, is_past}
 - **categories**: {id, user_id, name, is_disliked}
 - **games**: In-memory only {id, code, host_user_id, session_id, status, questions, players, answers, wagers}
 
@@ -70,7 +75,7 @@ Build a trivia host app with:
 - `/api/auth/{register, login}` - Authentication
 - `/api/generate/{categories-batch, single-category, questions, theme-round, image}` - AI generation
 - `/api/questions[/all, /save]` - Question CRUD
-- `/api/sessions` - Session CRUD
+- `/api/sessions` - Session CRUD (now with optional scoring field)
 - `/api/sessions/{id}/download-csv` - CSV export
 - `/api/upload/image` - Image upload
 - `/api/games/{create, join, {id}/next, {id}/reveal, {id}/scores, {id}/override, {id}/end, {id}/set-points, {id}/change-answer, {id}/start-answering, {id}/wager}` - Live game
@@ -84,7 +89,7 @@ Build a trivia host app with:
 - [x] Configurable points per question (tested Mar 2026)
 - [x] Host manual answer change & score override (tested Mar 2026)
 - [x] PresentView wagering phase display (tested Mar 2026)
-- [x] Filter __presentation__ from player lists (fixed Mar 2026)
+- [x] Build Session: Library selection + Write Custom + Scoring Options (tested Mar 2026)
 
 ### P1 — Next
 - [ ] Timer for questions (configurable per-question countdown)
