@@ -123,7 +123,11 @@ const SessionDetail = () => {
   const handleGoLive = async () => {
     setGoingLive(true);
     try {
-      const res = await api.post("/games/create", { session_id: id });
+      const payload = { session_id: id };
+      if (session.scoring) {
+        payload.scoring = session.scoring;
+      }
+      const res = await api.post("/games/create", payload);
       navigate(`/host/${res.data.game_id}`);
     } catch {
       toast.error("Failed to start live game");

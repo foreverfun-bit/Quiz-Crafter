@@ -29,9 +29,10 @@ class GameManager:
             if not any(g["code"] == code for g in self.games.values()):
                 return code
 
-    def create_game(self, host_user_id: str, session_data: dict, questions_map: dict, points_per_question: int = DEFAULT_POINTS) -> dict:
+    def create_game(self, host_user_id: str, session_data: dict, questions_map: dict, points_per_question: int = DEFAULT_POINTS, scoring: dict = None) -> dict:
         game_id = str(uuid.uuid4())[:8]
         code = self._generate_code()
+        scoring = scoring or {}
 
         ordered_questions = []
         type_order = [
@@ -43,6 +44,7 @@ class GameManager:
 
         for field, q_type, label in type_order:
             q_ids = session_data.get(field, [])
+            type_points = scoring.get(q_type, points_per_question)
             for qid in q_ids:
                 q = questions_map.get(qid)
                 if q:
@@ -56,7 +58,7 @@ class GameManager:
                         "options": q.get("options"),
                         "fun_fact": q.get("fun_fact"),
                         "image_url": q.get("image_url"),
-                        "points": points_per_question,
+                        "points": type_points,
                     })
 
         game = {

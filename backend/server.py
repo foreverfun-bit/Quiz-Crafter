@@ -117,6 +117,7 @@ class TriviaSession(BaseModel):
     multiple_choice_questions: List[str] = []
     written_questions: List[str] = []
     picture_questions: List[str] = []
+    scoring: Optional[dict] = None  # Per-type points, e.g. {"true_false": 10, "multiple_choice": 15, ...}
     is_past: bool = False  # True for imported/past sessions
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -126,6 +127,7 @@ class TriviaSessionCreate(BaseModel):
     multiple_choice_questions: List[str] = []
     written_questions: List[str] = []
     picture_questions: List[str] = []
+    scoring: Optional[dict] = None
     is_past: bool = False
 
 # ============ AUTH HELPERS ============
@@ -1120,6 +1122,7 @@ async def create_session(
         multiple_choice_questions=session_data.multiple_choice_questions,
         written_questions=session_data.written_questions,
         picture_questions=session_data.picture_questions,
+        scoring=session_data.scoring,
         is_past=session_data.is_past
     )
     await db.sessions.insert_one(session.model_dump())
@@ -1346,6 +1349,7 @@ async def get_stats(current_user: dict = Depends(get_current_user)):
 class CreateGameRequest(BaseModel):
     session_id: str
     points_per_question: int = 10
+    scoring: Optional[dict] = None  # Per-type points override
 
 class JoinGameRequest(BaseModel):
     code: str
@@ -1390,7 +1394,9 @@ async def create_game(request: CreateGameRequest, current_user: dict = Depends(g
     questions = await db.questions.find({"id": {"$in": q_ids}}, {"_id": 0}).to_list(200)
     questions_map = {q["id"]: q for q in questions}
 
-    game = game_manager.create_game(current_user["id"], session, questions_map, request.points_per_question)
+    # Merge scoring: request > session > default
+    scoring = request.scoring or session.get("scoring") or {}
+    game = game_manager.create_game(current_user["id"], session, questions_map, request.points_per_question, scoring)
     return {"game_id": game["id"], "code": game["code"]}
 
 @api_router.post("/games/join")
