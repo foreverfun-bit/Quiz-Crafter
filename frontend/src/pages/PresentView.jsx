@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { useParams } from "react-router-dom";
-import { Trophy, Users, CheckCircle, HelpCircle, Image, List, MessageSquare, Coins } from "lucide-react";
+import { Trophy, Users, CheckCircle, HelpCircle, Image, List, MessageSquare, Coins, Timer } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
+import { useCountdown } from "../hooks/useCountdown";
 
 const API_URL = process.env.REACT_APP_BACKEND_URL;
 
@@ -17,6 +18,7 @@ const PresentView = () => {
   const [state, setState] = useState(null);
   const [gameId, setGameId] = useState(null);
   const wsRef = useRef(null);
+  const countdown = useCountdown(state?.timer_end_at);
 
   // Find game by code first
   useEffect(() => {
@@ -92,6 +94,15 @@ const PresentView = () => {
           </div>
           {state.current_index >= 0 && (
             <span className="text-zinc-500">Q {state.current_index + 1} / {state.total_questions}</span>
+          )}
+          {countdown !== null && countdown > 0 && (isQuestion || isWagering) && (
+            <div className={`flex items-center gap-2 font-mono font-bold text-xl ${countdown <= 5 ? "text-red-400 animate-pulse" : countdown <= 10 ? "text-amber-400" : "text-[#71E0DC]"}`} data-testid="present-countdown">
+              <Timer size={20} />
+              {countdown}
+            </div>
+          )}
+          {countdown === 0 && isQuestion && (
+            <span className="text-red-400 font-bold text-xl animate-pulse" data-testid="present-times-up">TIME'S UP!</span>
           )}
         </div>
       </div>
@@ -181,6 +192,24 @@ const PresentView = () => {
             )}
 
             <h2 className="text-white text-4xl lg:text-5xl font-bold leading-tight mb-8">{q.question}</h2>
+
+            {/* Big countdown timer */}
+            {countdown !== null && countdown > 0 && (
+              <div className="flex justify-center mb-8" data-testid="present-timer-circle">
+                <div className={`w-24 h-24 rounded-full flex items-center justify-center border-4 ${
+                  countdown <= 5 ? "border-red-500 text-red-400 animate-pulse" : countdown <= 10 ? "border-amber-500 text-amber-300" : "border-[#71E0DC] text-[#71E0DC]"
+                }`}>
+                  <span className="text-4xl font-mono font-black">{countdown}</span>
+                </div>
+              </div>
+            )}
+            {countdown === 0 && (
+              <div className="flex justify-center mb-8">
+                <div className="px-8 py-3 rounded-full bg-red-500/20 border-2 border-red-500/40">
+                  <span className="text-red-400 text-2xl font-bold animate-pulse">TIME'S UP!</span>
+                </div>
+              </div>
+            )}
 
             {q.options && (
               <div className="grid grid-cols-2 gap-4 max-w-2xl mx-auto">

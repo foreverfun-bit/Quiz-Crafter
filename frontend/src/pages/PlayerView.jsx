@@ -12,7 +12,9 @@ import {
   Clock,
   Loader2,
   Coins,
+  Timer,
 } from "lucide-react";
+import { useCountdown } from "../hooks/useCountdown";
 
 const API_URL = process.env.REACT_APP_BACKEND_URL;
 
@@ -26,6 +28,8 @@ const PlayerView = () => {
 
   const playerId = sessionStorage.getItem("player_id");
   const playerName = sessionStorage.getItem("player_name");
+  const countdown = useCountdown(state?.timer_end_at);
+  const isTimedOut = countdown === 0;
 
   useEffect(() => {
     if (!playerId || !gameId) return;
@@ -122,7 +126,17 @@ const PlayerView = () => {
       {/* Header */}
       <div className="px-4 py-3 flex items-center justify-between border-b border-white/5">
         <span className="text-white font-medium">{playerName}</span>
-        <Badge className="bg-[#71E0DC]/20 text-[#71E0DC] font-mono">{state.player_score} pts</Badge>
+        <div className="flex items-center gap-2">
+          {countdown !== null && countdown > 0 && (isQuestion || isWagering) && (
+            <span className={`font-mono font-bold text-sm ${countdown <= 5 ? "text-red-400 animate-pulse" : countdown <= 10 ? "text-amber-400" : "text-[#71E0DC]"}`} data-testid="player-countdown">
+              <Timer size={14} className="inline mr-1" />{countdown}s
+            </span>
+          )}
+          {isTimedOut && isQuestion && (
+            <span className="text-red-400 text-xs font-bold animate-pulse">TIME'S UP</span>
+          )}
+          <Badge className="bg-[#71E0DC]/20 text-[#71E0DC] font-mono">{state.player_score} pts</Badge>
+        </div>
       </div>
 
       <div className="flex-1 flex items-center justify-center p-4">
@@ -218,7 +232,15 @@ const PlayerView = () => {
               )}
             </div>
 
-            {q.question_type === "true_false" ? (
+            {isTimedOut ? (
+              <div className="text-center p-6 rounded-2xl bg-red-500/10 border-2 border-red-500/30" data-testid="player-timed-out">
+                <Clock className="mx-auto text-red-400 mb-2" size={40} />
+                <p className="text-red-400 text-xl font-bold">Time's Up!</p>
+                <p className="text-zinc-500 text-sm mt-1">Waiting for the host...</p>
+              </div>
+            ) : (
+              <>
+                {q.question_type === "true_false" ? (
               <div className="flex gap-3">
                 <Button onClick={() => handleDirectAnswer("True")} className="flex-1 h-16 text-xl bg-emerald-500/20 border-2 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30" data-testid="answer-true">True</Button>
                 <Button onClick={() => handleDirectAnswer("False")} className="flex-1 h-16 text-xl bg-red-500/20 border-2 border-red-500/40 text-red-300 hover:bg-red-500/30" data-testid="answer-false">False</Button>
@@ -246,6 +268,8 @@ const PlayerView = () => {
                   <Send size={20} />
                 </Button>
               </div>
+            )}
+              </>
             )}
           </div>
         )}

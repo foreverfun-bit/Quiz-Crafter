@@ -20,7 +20,9 @@ import {
   Edit3,
   Coins,
   PenLine,
+  Timer,
 } from "lucide-react";
+import { useCountdown } from "../hooks/useCountdown";
 
 const API_URL = process.env.REACT_APP_BACKEND_URL;
 
@@ -37,6 +39,8 @@ const HostControl = () => {
   const [editingPoints, setEditingPoints] = useState(false);
   const [editPointsValue, setEditPointsValue] = useState("");
   const wsRef = useRef(null);
+
+  const countdown = useCountdown(state?.timer_end_at);
 
   const fetchState = useCallback(async () => {
     try {
@@ -114,6 +118,14 @@ const HostControl = () => {
     } catch { toast.error("Failed to set points"); }
   };
 
+  const handleSetTimer = async (duration) => {
+    try {
+      const res = await api.post(`/games/${gameId}/set-timer`, { duration });
+      setState(res.data);
+      toast.success(duration > 0 ? `Timer set to ${duration}s` : "Timer disabled");
+    } catch { toast.error("Failed to update timer"); }
+  };
+
   if (loading) {
     return <div className="min-h-screen bg-zinc-950 flex items-center justify-center"><div className="text-zinc-400">Loading game...</div></div>;
   }
@@ -141,6 +153,24 @@ const HostControl = () => {
             <Badge className="bg-[#71E0DC]/20 text-[#71E0DC] text-lg px-3 py-1 font-mono">Code: {state.code}</Badge>
             <Badge className="bg-zinc-800 text-zinc-300"><Users size={14} className="mr-1" /> {players.length} players</Badge>
             {!isLobby && <Badge className="bg-zinc-800 text-zinc-300">Q {state.current_index + 1} / {state.total_questions}</Badge>}
+            {/* Timer Config */}
+            <div className="flex items-center gap-1.5" data-testid="timer-config">
+              <Timer size={14} className="text-amber-400" />
+              {[0, 15, 30, 45, 60, 90].map((d) => (
+                <button
+                  key={d}
+                  onClick={() => handleSetTimer(d)}
+                  className={`px-2 py-0.5 text-xs rounded-md transition-colors ${
+                    state.timer_duration === d
+                      ? "bg-amber-400/20 text-amber-300 font-bold"
+                      : "bg-zinc-800/50 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800"
+                  }`}
+                  data-testid={`timer-${d}`}
+                >
+                  {d === 0 ? "Off" : `${d}s`}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
         <div className="flex gap-2">
@@ -206,9 +236,19 @@ const HostControl = () => {
                     )}
                     {currentQ.question_type === "picture" && <Badge className="bg-purple-500/20 text-purple-300"><Coins size={12} className="mr-1" /> Wager Round</Badge>}
                   </div>
-                  <span className="text-zinc-500 text-sm">
-                    {isWagering ? `${state.wagers_count || 0} / ${players.length} wagered` : `${state.answers_count || 0} / ${players.length} answered`}
-                  </span>
+                  <div className="flex items-center gap-3">
+                    {countdown !== null && countdown > 0 && (isQuestion || isWagering) && (
+                      <span className={`font-mono font-bold text-lg ${countdown <= 5 ? "text-red-400 animate-pulse" : countdown <= 10 ? "text-amber-400" : "text-[#71E0DC]"}`} data-testid="host-countdown">
+                        {countdown}s
+                      </span>
+                    )}
+                    {countdown === 0 && isQuestion && (
+                      <Badge className="bg-red-500/20 text-red-400 animate-pulse">Time's Up!</Badge>
+                    )}
+                    <span className="text-zinc-500 text-sm">
+                      {isWagering ? `${state.wagers_count || 0} / ${players.length} wagered` : `${state.answers_count || 0} / ${players.length} answered`}
+                    </span>
+                  </div>
                 </div>
               </CardHeader>
               <CardContent>

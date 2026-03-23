@@ -8,7 +8,8 @@ import {
   Upload, 
   LogOut,
   X,
-  History
+  History,
+  Trophy,
 } from "lucide-react";
 
 const Sidebar = ({ isOpen, onClose }) => {
@@ -26,6 +27,7 @@ const Sidebar = ({ isOpen, onClose }) => {
     { path: "/library", icon: Library, label: "Library" },
     { path: "/build", icon: PlusCircle, label: "Build Session" },
     { path: "/past-sessions", icon: History, label: "Past Sessions" },
+    { path: "/game-history", icon: Trophy, label: "Game History" },
     { path: "/import", icon: Upload, label: "Import CSV" },
   ];
 

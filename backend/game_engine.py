@@ -29,7 +29,7 @@ class GameManager:
             if not any(g["code"] == code for g in self.games.values()):
                 return code
 
-    def create_game(self, host_user_id: str, session_data: dict, questions_map: dict, points_per_question: int = DEFAULT_POINTS, scoring: dict = None) -> dict:
+    def create_game(self, host_user_id: str, session_data: dict, questions_map: dict, points_per_question: int = DEFAULT_POINTS, scoring: dict = None, timer_duration: int = 0) -> dict:
         game_id = str(uuid.uuid4())[:8]
         code = self._generate_code()
         scoring = scoring or {}
@@ -68,13 +68,14 @@ class GameManager:
             "session_id": session_data["id"],
             "session_name": session_data.get("name", "Trivia Night"),
             "status": "lobby",
-            # statuses: lobby, question, wagering, answer_reveal, scores, finished
             "questions": ordered_questions,
             "current_index": -1,
             "players": {},
             "answers": {},
-            "wagers": {},  # question_index -> {player_id -> wager_amount}
+            "wagers": {},
             "default_points": points_per_question,
+            "timer_duration": timer_duration,  # 0 = no limit
+            "timer_end_at": None,  # ISO timestamp when timer expires
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -116,6 +117,25 @@ class GameManager:
         game["questions"][question_index]["points"] = points
         return True
 
+    def set_timer_duration(self, game_id: str, duration: int) -> bool:
+        game = self.games.get(game_id)
+        if not game:
+            return False
+        game["timer_duration"] = max(0, duration)
+        return True
+
+    def _start_timer(self, game: dict):
+        """Set timer_end_at based on timer_duration. 0 = no timer."""
+        dur = game.get("timer_duration", 0)
+        if dur > 0:
+            from datetime import timedelta
+            game["timer_end_at"] = (datetime.now(timezone.utc) + timedelta(seconds=dur)).isoformat()
+        else:
+            game["timer_end_at"] = None
+
+    def _clear_timer(self, game: dict):
+        game["timer_end_at"] = None
+
     def next_question(self, game_id: str) -> Optional[dict]:
         game = self.games.get(game_id)
         if not game:
@@ -126,16 +146,19 @@ class GameManager:
 
         if idx >= len(game["questions"]):
             game["status"] = "finished"
+            self._clear_timer(game)
             return None
 
         question = game["questions"][idx]
 
-        # Picture questions go to wagering phase first
+        # Picture questions go to wagering phase first (no timer during wagering)
         if question["question_type"] == "picture":
             game["status"] = "wagering"
             game["wagers"][str(idx)] = {}
+            self._clear_timer(game)
         else:
             game["status"] = "question"
+            self._start_timer(game)
 
         game["answers"][str(idx)] = {}
         return question
@@ -167,6 +190,7 @@ class GameManager:
         if not game or game["status"] != "wagering":
             return False
         game["status"] = "question"
+        self._start_timer(game)
         return True
 
     def submit_answer(self, game_id: str, player_id: str, answer: str) -> bool:
@@ -260,6 +284,7 @@ class GameManager:
             return None
 
         game["status"] = "answer_reveal"
+        self._clear_timer(game)
         idx = game["current_index"]
         question = game["questions"][idx]
         answers = game["answers"].get(str(idx), {})
@@ -326,6 +351,8 @@ class GameManager:
             "current_index": game["current_index"],
             "players": self._real_players(game),
             "default_points": game["default_points"],
+            "timer_duration": game.get("timer_duration", 0),
+            "timer_end_at": game.get("timer_end_at"),
         }
 
         idx = game["current_index"]
@@ -356,6 +383,7 @@ class GameManager:
             "total_questions": len(game["questions"]),
             "current_index": game["current_index"],
             "players_count": len(game["players"]),
+            "timer_end_at": game.get("timer_end_at"),
         }
 
         idx = game["current_index"]
@@ -414,6 +442,7 @@ class GameManager:
             "current_index": game["current_index"],
             "players_count": len([p for p in game["players"].values() if p["name"] != "__presentation__"]),
             "player_names": [p["name"] for p in game["players"].values() if p["name"] != "__presentation__"],
+            "timer_end_at": game.get("timer_end_at"),
         }
 
         idx = game["current_index"]
@@ -446,6 +475,73 @@ class GameManager:
             state["scoreboard"] = scoreboard
 
         return state
+
+    def get_game_history_data(self, game_id: str) -> Optional[dict]:
+        """Extract full game data for saving to DB."""
+        game = self.games.get(game_id)
+        if not game:
+            return None
+
+        real = self._real_players(game)
+        scoreboard = sorted(
+            [{"id": pid, "name": p["name"], "score": p["score"]} for pid, p in real.items()],
+            key=lambda x: x["score"],
+            reverse=True,
+        )
+
+        question_results = []
+        for idx, q in enumerate(game["questions"]):
+            ans = game["answers"].get(str(idx), {})
+            player_answers = []
+            for pid, a in ans.items():
+                p = real.get(pid)
+                if p:
+                    player_answers.append({
+                        "player_id": pid,
+                        "player_name": p["name"],
+                        "answer": a["answer"],
+                        "is_correct": a["is_correct"],
+                        "score_awarded": a["score_awarded"],
+                    })
+            question_results.append({
+                "index": idx,
+                "question": q["question"],
+                "answer": q["answer"],
+                "question_type": q["question_type"],
+                "type_label": q["type_label"],
+                "category": q.get("category", ""),
+                "points": q.get("points", DEFAULT_POINTS),
+                "player_answers": player_answers,
+            })
+
+        return {
+            "game_id": game["id"],
+            "code": game["code"],
+            "session_id": game["session_id"],
+            "session_name": game["session_name"],
+            "host_user_id": game["host_user_id"],
+            "scoreboard": scoreboard,
+            "total_questions": len(game["questions"]),
+            "question_results": question_results,
+            "player_count": len(real),
+            "created_at": game["created_at"],
+            "ended_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def get_serializable_state(self, game_id: str) -> Optional[dict]:
+        """Get full game state for DB persistence (crash resilience)."""
+        game = self.games.get(game_id)
+        if not game or game["status"] == "finished":
+            return None
+        # Return a copy without WebSocket objects
+        return {k: v for k, v in game.items()}
+
+    def restore_game(self, game_data: dict):
+        """Restore a game from DB state."""
+        gid = game_data["id"]
+        self.games[gid] = game_data
+        if gid not in self.connections:
+            self.connections[gid] = {}
 
     async def broadcast(self, game_id: str, message: dict):
         conns = self.connections.get(game_id, {})

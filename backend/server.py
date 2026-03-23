@@ -1346,10 +1346,17 @@ async def get_stats(current_user: dict = Depends(get_current_user)):
 
 # ============ LIVE GAME ENDPOINTS ============
 
+async def _persist_game(game_id: str):
+    """Save active game state to DB for crash resilience."""
+    state = game_manager.get_serializable_state(game_id)
+    if state:
+        await db.active_games.replace_one({"id": game_id}, state, upsert=True)
+
 class CreateGameRequest(BaseModel):
     session_id: str
     points_per_question: int = 10
-    scoring: Optional[dict] = None  # Per-type points override
+    scoring: Optional[dict] = None
+    timer_duration: int = 0  # seconds, 0 = no limit
 
 class JoinGameRequest(BaseModel):
     code: str
@@ -1376,6 +1383,9 @@ class OverrideScoreRequest(BaseModel):
     is_correct: bool
     score: int
 
+class SetTimerRequest(BaseModel):
+    duration: int  # seconds, 0 = no limit
+
 @api_router.post("/games/create")
 async def create_game(request: CreateGameRequest, current_user: dict = Depends(get_current_user)):
     session = await db.sessions.find_one(
@@ -1394,9 +1404,9 @@ async def create_game(request: CreateGameRequest, current_user: dict = Depends(g
     questions = await db.questions.find({"id": {"$in": q_ids}}, {"_id": 0}).to_list(200)
     questions_map = {q["id"]: q for q in questions}
 
-    # Merge scoring: request > session > default
     scoring = request.scoring or session.get("scoring") or {}
-    game = game_manager.create_game(current_user["id"], session, questions_map, request.points_per_question, scoring)
+    game = game_manager.create_game(current_user["id"], session, questions_map, request.points_per_question, scoring, request.timer_duration)
+    await _persist_game(game["id"])
     return {"game_id": game["id"], "code": game["code"]}
 
 @api_router.post("/games/join")
@@ -1409,11 +1419,11 @@ async def join_game(request: JoinGameRequest):
     if not player_id:
         raise HTTPException(status_code=400, detail="Could not join game")
 
-    # Broadcast player joined
     await game_manager.broadcast(game["id"], {
         "type": "player_joined",
         "data": game_manager.get_host_state(game["id"])
     })
+    await _persist_game(game["id"])
 
     return {"game_id": game["id"], "player_id": player_id, "player_name": request.player_name}
 
@@ -1439,6 +1449,12 @@ async def next_question(game_id: str, current_user: dict = Depends(get_current_u
 
     question = game_manager.next_question(game_id)
     if question is None:
+        # Game finished - save history
+        history = game_manager.get_game_history_data(game_id)
+        if history:
+            history["id"] = str(uuid.uuid4())
+            await db.game_history.insert_one(history)
+        await db.active_games.delete_one({"id": game_id})
         await game_manager.broadcast(game_id, {
             "type": "game_finished",
             "data": game_manager.get_presentation_state(game_id)
@@ -1449,6 +1465,7 @@ async def next_question(game_id: str, current_user: dict = Depends(get_current_u
         "type": "new_question",
         "data": game_manager.get_presentation_state(game_id)
     })
+    await _persist_game(game_id)
     return game_manager.get_host_state(game_id)
 
 @api_router.post("/games/{game_id}/start-answering")
@@ -1465,6 +1482,7 @@ async def start_answering(game_id: str, current_user: dict = Depends(get_current
         "type": "answering_started",
         "data": game_manager.get_presentation_state(game_id)
     })
+    await _persist_game(game_id)
     return game_manager.get_host_state(game_id)
 
 @api_router.post("/games/{game_id}/wager")
@@ -1526,6 +1544,7 @@ async def reveal_answer(game_id: str, current_user: dict = Depends(get_current_u
         "type": "answer_revealed",
         "data": game_manager.get_presentation_state(game_id)
     })
+    await _persist_game(game_id)
     return game_manager.get_host_state(game_id)
 
 @api_router.post("/games/{game_id}/scores")
@@ -1540,6 +1559,7 @@ async def show_scores(game_id: str, current_user: dict = Depends(get_current_use
         "type": "scores",
         "data": game_manager.get_presentation_state(game_id)
     })
+    await _persist_game(game_id)
     return game_manager.get_host_state(game_id)
 
 @api_router.post("/games/{game_id}/answer")
@@ -1574,18 +1594,63 @@ async def override_score(game_id: str, request: OverrideScoreRequest, current_us
     })
     return game_manager.get_host_state(game_id)
 
+@api_router.post("/games/{game_id}/set-timer")
+async def set_timer(game_id: str, request: SetTimerRequest, current_user: dict = Depends(get_current_user)):
+    game = game_manager.get_game_by_id(game_id)
+    if not game or game["host_user_id"] != current_user["id"]:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    game_manager.set_timer_duration(game_id, request.duration)
+    await game_manager.broadcast(game_id, {
+        "type": "timer_updated",
+        "data": game_manager.get_presentation_state(game_id)
+    })
+    return game_manager.get_host_state(game_id)
+
 @api_router.post("/games/{game_id}/end")
 async def end_game(game_id: str, current_user: dict = Depends(get_current_user)):
     game = game_manager.get_game_by_id(game_id)
     if not game or game["host_user_id"] != current_user["id"]:
         raise HTTPException(status_code=404, detail="Game not found")
 
+    # Save game history before ending (only if not already saved)
+    existing = await db.game_history.find_one({"game_id": game_id})
+    if not existing:
+        history = game_manager.get_game_history_data(game_id)
+        if history:
+            history["id"] = str(uuid.uuid4())
+            await db.game_history.insert_one(history)
+
     game_manager.end_game(game_id)
     await game_manager.broadcast(game_id, {
         "type": "game_finished",
         "data": game_manager.get_presentation_state(game_id)
     })
+
+    # Clean up persisted state
+    await db.active_games.delete_one({"id": game_id})
+
     return {"status": "ended"}
+
+# ============ GAME HISTORY ============
+
+@api_router.get("/game-history")
+async def get_game_history(current_user: dict = Depends(get_current_user)):
+    history = await db.game_history.find(
+        {"host_user_id": current_user["id"]},
+        {"_id": 0}
+    ).sort("ended_at", -1).to_list(50)
+    return history
+
+@api_router.get("/game-history/{history_id}")
+async def get_game_history_detail(history_id: str, current_user: dict = Depends(get_current_user)):
+    record = await db.game_history.find_one(
+        {"id": history_id, "host_user_id": current_user["id"]},
+        {"_id": 0}
+    )
+    if not record:
+        raise HTTPException(status_code=404, detail="Game history not found")
+    return record
 
 # ============ WEBSOCKET ============
 
@@ -1668,6 +1733,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+@app.on_event("startup")
+async def startup_restore_games():
+    """Restore active games from DB on server restart."""
+    try:
+        active = await db.active_games.find({}, {"_id": 0}).to_list(100)
+        for game_data in active:
+            game_manager.restore_game(game_data)
+            logger.info(f"Restored game {game_data['id']} (code: {game_data['code']})")
+        if active:
+            logger.info(f"Restored {len(active)} active games from DB")
+    except Exception as e:
+        logger.error(f"Failed to restore games: {e}")
+
 @app.on_event("shutdown")
 async def shutdown_db_client():
+    # Persist all active games before shutdown
+    for gid in list(game_manager.games.keys()):
+        state = game_manager.get_serializable_state(gid)
+        if state:
+            await db.active_games.replace_one({"id": gid}, state, upsert=True)
     client.close()

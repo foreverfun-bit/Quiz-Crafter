@@ -18,6 +18,8 @@ import JoinGame from "./pages/JoinGame";
 import HostControl from "./pages/HostControl";
 import PresentView from "./pages/PresentView";
 import PlayerView from "./pages/PlayerView";
+import { GameHistory } from "./pages/GameHistory";
+import GameHistoryDetail from "./pages/GameHistory";
 
 // Components
 import Sidebar from "./components/Sidebar";
@@ -271,6 +273,26 @@ function App() {
               element={
                 <ProtectedRoute>
                   <HostControl />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/game-history"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <GameHistory />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/game-history/:historyId"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <GameHistoryDetail />
+                  </AppLayout>
                 </ProtectedRoute>
               }
             />
