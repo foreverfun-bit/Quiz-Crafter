@@ -348,7 +348,7 @@ const HostControl = () => {
           )}
         </div>
 
-        {/* Sidebar: Players & Scores */}
+        {/* Sidebar: Players, Answers & Scores */}
         <div>
           <Card className="bg-zinc-900/80 border-white/10 sticky top-4">
             <CardHeader className="pb-2">
@@ -359,15 +359,134 @@ const HostControl = () => {
                 <p className="text-zinc-500 text-sm">Waiting for players to join...</p>
               ) : (
                 <div className="space-y-2">
-                  {players.sort((a, b) => b[1].score - a[1].score).map(([pid, player], idx) => (
-                    <div key={pid} className="flex items-center justify-between p-2 rounded-lg bg-zinc-800/50">
-                      <div className="flex items-center gap-2">
-                        <span className={`text-xs font-bold w-6 text-center ${idx === 0 ? "text-amber-400" : idx === 1 ? "text-zinc-300" : idx === 2 ? "text-amber-700" : "text-zinc-500"}`}>#{idx + 1}</span>
-                        <span className="text-white text-sm">{player.name}</span>
+                  {players.sort((a, b) => b[1].score - a[1].score).map(([pid, player], idx) => {
+                    const ans = answers[pid];
+                    const wagerAmt = currentQ?.question_type === "picture" ? wagers[pid] : null;
+                    const hasAnswered = !!ans;
+                    const isEditingThisAnswer = editingAnswer === `sidebar-${pid}`;
+                    const isEditingThisScore = editingScore === `sidebar-${pid}`;
+
+                    return (
+                      <div key={pid} className="rounded-lg bg-zinc-800/50 overflow-hidden" data-testid={`sidebar-player-${idx}`}>
+                        {/* Player header row */}
+                        <div className="flex items-center justify-between p-2">
+                          <div className="flex items-center gap-2">
+                            <span className={`text-xs font-bold w-6 text-center ${idx === 0 ? "text-amber-400" : idx === 1 ? "text-zinc-300" : idx === 2 ? "text-amber-700" : "text-zinc-500"}`}>#{idx + 1}</span>
+                            <span className="text-white text-sm font-medium">{player.name}</span>
+                          </div>
+                          <span className="text-[#71E0DC] font-mono font-bold text-sm">{player.score}</span>
+                        </div>
+
+                        {/* Answer section - visible during question/reveal/scores when a question is active */}
+                        {currentQ && !isLobby && !isFinished && (
+                          <div className="px-2 pb-2">
+                            {/* Wager info */}
+                            {wagerAmt != null && (
+                              <div className="flex items-center gap-1 mb-1">
+                                <Coins size={11} className="text-purple-400" />
+                                <span className="text-purple-300 text-xs">Wagered: {wagerAmt}</span>
+                              </div>
+                            )}
+
+                            {/* Waiting to answer */}
+                            {isWagering && !wagers[pid] && (
+                              <span className="text-zinc-600 text-xs italic">Waiting to wager...</span>
+                            )}
+                            {isWagering && wagers[pid] != null && !hasAnswered && (
+                              <span className="text-purple-400/60 text-xs italic">Wager locked</span>
+                            )}
+
+                            {isQuestion && !hasAnswered && (
+                              <span className="text-zinc-600 text-xs italic">Waiting for answer...</span>
+                            )}
+
+                            {/* Submitted answer */}
+                            {hasAnswered && (
+                              <div className="space-y-1">
+                                {/* Answer text + edit */}
+                                {isEditingThisAnswer ? (
+                                  <div className="flex items-center gap-1">
+                                    <Input
+                                      value={editAnswerText}
+                                      onChange={(e) => setEditAnswerText(e.target.value)}
+                                      className="h-6 text-xs bg-zinc-950 border-white/10 text-white flex-1"
+                                      data-testid={`sidebar-edit-answer-input-${idx}`}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") {
+                                          handleChangeAnswer(pid, state.current_index, editAnswerText);
+                                          setEditingAnswer(null);
+                                        }
+                                      }}
+                                      autoFocus
+                                    />
+                                    <Button size="sm" variant="ghost" onClick={() => { handleChangeAnswer(pid, state.current_index, editAnswerText); setEditingAnswer(null); }} className="h-6 w-6 p-0 text-emerald-400"><CheckCircle size={12} /></Button>
+                                    <Button size="sm" variant="ghost" onClick={() => setEditingAnswer(null)} className="h-6 w-6 p-0 text-zinc-500"><XCircle size={12} /></Button>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-1.5 group">
+                                    {(isReveal || isScores) && (
+                                      ans.is_correct
+                                        ? <CheckCircle size={12} className="text-emerald-400 shrink-0" />
+                                        : <XCircle size={12} className="text-red-400 shrink-0" />
+                                    )}
+                                    <span className="text-zinc-300 text-xs truncate flex-1" title={ans.answer}>{ans.answer}</span>
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); setEditingAnswer(`sidebar-${pid}`); setEditAnswerText(ans.answer); }}
+                                      className="opacity-0 group-hover:opacity-100 transition-opacity text-zinc-500 hover:text-white"
+                                      title="Edit answer"
+                                      data-testid={`sidebar-edit-answer-${idx}`}
+                                    >
+                                      <PenLine size={11} />
+                                    </button>
+                                  </div>
+                                )}
+
+                                {/* Score display + override */}
+                                {(isReveal || isScores) && (
+                                  <div className="flex items-center gap-1.5 group">
+                                    {isEditingThisScore ? (
+                                      <div className="flex items-center gap-1">
+                                        <Input
+                                          value={editScore}
+                                          onChange={(e) => setEditScore(e.target.value)}
+                                          className="h-6 w-14 text-xs bg-zinc-950 border-white/10 text-white text-center"
+                                          type="number"
+                                          data-testid={`sidebar-edit-score-input-${idx}`}
+                                          onKeyDown={(e) => {
+                                            if (e.key === "Enter") {
+                                              handleOverride(pid, state.current_index, parseInt(editScore) > 0, parseInt(editScore) || 0);
+                                              setEditingScore(null);
+                                            }
+                                          }}
+                                          autoFocus
+                                        />
+                                        <Button size="sm" variant="ghost" onClick={() => { handleOverride(pid, state.current_index, parseInt(editScore) > 0, parseInt(editScore) || 0); setEditingScore(null); }} className="h-6 w-6 p-0 text-emerald-400"><CheckCircle size={12} /></Button>
+                                        <Button size="sm" variant="ghost" onClick={() => setEditingScore(null)} className="h-6 w-6 p-0 text-zinc-500"><XCircle size={12} /></Button>
+                                      </div>
+                                    ) : (
+                                      <>
+                                        <Badge className={`text-xs py-0 ${ans.score_awarded >= 0 ? (ans.is_correct ? "bg-emerald-500/20 text-emerald-400" : "bg-red-500/20 text-red-400") : "bg-red-500/20 text-red-400"}`}>
+                                          {ans.score_awarded >= 0 ? "+" : ""}{ans.score_awarded}
+                                        </Badge>
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); setEditingScore(`sidebar-${pid}`); setEditScore(String(ans.score_awarded)); }}
+                                          className="opacity-0 group-hover:opacity-100 transition-opacity text-zinc-500 hover:text-white"
+                                          title="Override score"
+                                          data-testid={`sidebar-edit-score-${idx}`}
+                                        >
+                                          <Edit3 size={11} />
+                                        </button>
+                                      </>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
-                      <span className="text-[#71E0DC] font-mono font-bold text-sm">{player.score}</span>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </CardContent>

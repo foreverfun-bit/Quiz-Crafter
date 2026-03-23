@@ -54,7 +54,7 @@ Build a trivia host app with:
 ### Live Trivia Hosting Platform
 - **Game Creation**: Host creates game from any session, gets 4-digit room code
 - **Player Join**: No account needed — enter code + name at /join
-- **Host Control Panel** (/host/:id): Advance questions, reveal answers, show scores, override scores, end game
+- **Host Control Panel** (/host/:id): Advance questions, reveal answers, show scores, override scores, end game. Sidebar shows each player's answer with inline edit for answers and scores
 - **Presentation View** (/present/:code): Projector-optimized display with large question text, colored MC options, scoreboard, player lobby, wagering phase
 - **Player View** (/play/:id): Mobile-optimized answer submission — T/F buttons, MC option taps, written text input
 - **Auto-Scoring**: Exact match for T/F/MC, fuzzy match for written (>=70%)
