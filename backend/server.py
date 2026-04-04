@@ -987,7 +987,7 @@ async def import_csv(
                     date_used=date_used or None,
                     user_id=current_user["id"],
                     source="imported",
-                    status="used"  # Mark as used so it doesn't appear in build session
+                    status="neutral"
                 )
                 
                 await db.questions.insert_one(question.model_dump())
