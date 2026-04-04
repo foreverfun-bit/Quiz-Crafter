@@ -920,24 +920,69 @@ async def import_csv(
             # Map CSV columns to question fields using flexible matching
             category = find_column(row, ['Category', 'category', 'CATEGORY'])
             question_text = find_column(row, ['Question', 'question', 'QUESTION'])
-            answer = find_column(row, ['Answer', 'answer', 'ANSWER'])
-            options_raw = find_column(row, ['Multiple choice options', 'Multiple Choice Options', 'options', 'Options', 'OPTIONS', 'Choices', 'choices'])
+            answer = find_column(row, ['Answer', 'answer', 'ANSWER', 'Correct Answer', 'correct answer', 'Correct answer', 'CORRECT ANSWER'])
+            options_raw = find_column(row, ['Multiple choice options', 'Multiple Choice Options', 'options', 'Options', 'OPTIONS', 'Choices', 'choices', 'Incorrect Answers', 'incorrect answers', 'Incorrect answers', 'INCORRECT ANSWERS', 'Wrong Answers', 'wrong answers'])
             fun_fact = find_column(row, ['Fun Fact', 'Fun fact', 'fun_fact', 'FunFact', 'Funfact', 'fun fact', 'FUN FACT'])
             venue = find_column(row, ['Venue', 'venue', 'VENUE', 'Location', 'location', 'LOCATION', 'Place', 'place'])
             date_used = find_column(row, ['Date Used', 'Date used', 'date used', 'date_used', 'DateUsed', 'DATE USED', 'Date', 'date', 'DATE', 'Used Date', 'used date', 'Used', 'used'])
+            image_url = find_column(row, ['Image', 'image', 'IMAGE', 'Images', 'images', 'IMAGES', 'Image URL', 'image_url', 'Picture', 'picture'])
+            explicit_type = find_column(row, ['Question Type', 'question type', 'QUESTION TYPE', 'Type', 'type', 'TYPE', 'Question_Type', 'question_type'])
             
             if not question_text or not answer:
                 continue
             
-            # Determine question type based on answer and options
+            # Determine question type
             options = None
-            if options_raw:
-                options = [opt.strip() for opt in options_raw.split(',') if opt.strip()]
-                question_type = "multiple_choice"
-            elif answer.lower() in ['true', 'false']:
-                question_type = "true_false"
+            
+            # If explicit type column exists, use it
+            if explicit_type:
+                et = explicit_type.lower().replace('/', '_').replace(' ', '_').strip()
+                if 'true' in et or 'false' in et or 't_f' in et or 'tf' in et:
+                    question_type = "true_false"
+                elif 'multiple' in et or 'mc' in et or 'choice' in et:
+                    question_type = "multiple_choice"
+                elif 'picture' in et or 'image' in et or 'photo' in et:
+                    question_type = "picture"
+                else:
+                    question_type = "written"
             else:
-                question_type = "written"
+                question_type = None  # Will be auto-detected below
+            
+            # Parse options - for MC, combine incorrect answers with correct answer
+            if options_raw:
+                raw_opts = [opt.strip() for opt in options_raw.split(',') if opt.strip()]
+                # Clean A. B. C. D. prefixes
+                cleaned = []
+                for opt in raw_opts:
+                    import re as re_mod
+                    cleaned_opt = re_mod.sub(r'^[A-Da-d][\.\)]\s*', '', opt).strip()
+                    if cleaned_opt:
+                        cleaned.append(cleaned_opt)
+                
+                # If these are "incorrect answers", add the correct answer to make full options list
+                col_name_lower = ''
+                for name in ['Incorrect Answers', 'incorrect answers', 'Wrong Answers', 'wrong answers']:
+                    if name in (reader.fieldnames or []) or name.lower() in [f.lower().strip() for f in (reader.fieldnames or [])]:
+                        col_name_lower = 'incorrect'
+                        break
+                
+                if col_name_lower == 'incorrect' and answer not in cleaned:
+                    # These are incorrect answers - add the correct one and shuffle
+                    import random
+                    cleaned.append(answer)
+                    random.shuffle(cleaned)
+                
+                if cleaned:
+                    options = cleaned
+                    if question_type is None:
+                        question_type = "multiple_choice"
+            
+            # Auto-detect type if not set
+            if question_type is None:
+                if answer.lower() in ['true', 'false']:
+                    question_type = "true_false"
+                else:
+                    question_type = "written"
             
             # Check if question already exists
             existing = await db.questions.find_one({
@@ -985,6 +1030,7 @@ async def import_csv(
                     fun_fact=fun_fact or None,
                     venue=venue or None,
                     date_used=date_used or None,
+                    image_url=image_url or None,
                     user_id=current_user["id"],
                     source="imported",
                     status="neutral"
