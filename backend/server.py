@@ -941,7 +941,7 @@ async def import_csv(
                     question_type = "true_false"
                 elif 'multiple' in et or 'mc' in et or 'choice' in et:
                     question_type = "multiple_choice"
-                elif 'picture' in et or 'image' in et or 'photo' in et:
+                elif 'picture' in et or 'image' in et or 'photo' in et or 'bonus' in et:
                     question_type = "picture"
                 else:
                     question_type = "written"
