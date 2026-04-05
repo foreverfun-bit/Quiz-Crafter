@@ -1,3 +1,4 @@
+import { supabase } from "./lib/supabase";
 import { useState, useEffect, createContext, useContext } from "react";
 import "@/App.css";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
@@ -108,64 +109,123 @@ function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const initAuth = async () => {
-      const token = localStorage.getItem("token");
-      const savedUser = localStorage.getItem("user");
-      
-      if (token && savedUser) {
-        try {
-          const response = await api.get("/auth/me");
-          setUser(response.data);
-        } catch (error) {
-          localStorage.removeItem("token");
-          localStorage.removeItem("user");
-        }
-      }
-      setLoading(false);
-    };
+ useEffect(() => {
+  const initAuth = async () => {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
 
-    initAuth();
-  }, []);
-
-  const login = async (email, password) => {
-    try {
-      const response = await axios.post(`${API}/auth/login`, { email, password });
-      const { token, user: userData } = response.data;
-      localStorage.setItem("token", token);
-      localStorage.setItem("user", JSON.stringify(userData));
-      setUser(userData);
-      toast.success("Welcome back!");
-      return { success: true };
-    } catch (error) {
-      const message = error.response?.data?.detail || "Login failed";
-      toast.error(message);
-      return { success: false, error: message };
+    if (session?.user) {
+      setUser({
+        id: session.user.id,
+        email: session.user.email,
+        name:
+          session.user.user_metadata?.name ||
+          session.user.user_metadata?.full_name ||
+          session.user.email,
+      });
+    } else {
+      setUser(null);
     }
+
+    setLoading(false);
   };
 
-  const register = async (email, password, name) => {
-    try {
-      const response = await axios.post(`${API}/auth/register`, { email, password, name });
-      const { token, user: userData } = response.data;
-      localStorage.setItem("token", token);
-      localStorage.setItem("user", JSON.stringify(userData));
-      setUser(userData);
-      toast.success("Account created successfully!");
-      return { success: true };
-    } catch (error) {
-      const message = error.response?.data?.detail || "Registration failed";
-      toast.error(message);
-      return { success: false, error: message };
+  initAuth();
+
+  const {
+    data: { subscription },
+  } = supabase.auth.onAuthStateChange((_event, session) => {
+    if (session?.user) {
+      setUser({
+        id: session.user.id,
+        email: session.user.email,
+        name:
+          session.user.user_metadata?.name ||
+          session.user.user_metadata?.full_name ||
+          session.user.email,
+      });
+    } else {
+      setUser(null);
     }
-  };
+  });
 
-  const logout = () => {
-    localStorage.removeItem("token");
-    localStorage.removeItem("user");
-    setUser(null);
-    toast.success("Logged out successfully");
-  };
+  return () => subscription.unsubscribe();
+}, []);
+
+const login = async (email, password) => {
+  try {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) {
+      toast.error(error.message || "Login failed");
+      return { success: false, error: error.message };
+    }
+
+    const supaUser = data.user;
+
+    setUser({
+      id: supaUser.id,
+      email: supaUser.email,
+      name:
+        supaUser.user_metadata?.name ||
+        supaUser.user_metadata?.full_name ||
+        supaUser.email,
+    });
+
+    toast.success("Welcome back!");
+    return { success: true };
+  } catch (error) {
+    toast.error("Login failed");
+    return { success: false, error: "Login failed" };
+  }
+};
+
+ const register = async (email, password, name) => {
+  try {
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          name,
+          full_name: name,
+        },
+      },
+    });
+
+    if (error) {
+      toast.error(error.message || "Registration failed");
+      return { success: false, error: error.message };
+    }
+
+    if (data.user) {
+      setUser({
+        id: data.user.id,
+        email: data.user.email,
+        name:
+          data.user.user_metadata?.name ||
+          data.user.user_metadata?.full_name ||
+          data.user.email,
+      });
+    }
+
+    toast.success("Account created successfully!");
+    return { success: true };
+  } catch (error) {
+    toast.error("Registration failed");
+    return { success: false, error: "Registration failed" };
+  }
+};
+
+const logout = async () => {
+  await supabase.auth.signOut();
+  setUser(null);
+  toast.success("Logged out successfully");
+};
 
   return (
     <AuthContext.Provider value={{ user, login, register, logout, loading }}>
