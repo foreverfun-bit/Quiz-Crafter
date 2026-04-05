@@ -148,7 +148,8 @@ const Generate = () => {
       }),
     });
 
-    const data = await res.json();
+    const text = await res.text();
+    const data = JSON.parse(text);
 
     if (!res.ok) {
       throw new Error(data.error || "Failed to generate categories");
@@ -163,12 +164,13 @@ const Generate = () => {
 
     toast.success("Categories generated!");
   } catch (error) {
+    console.error(error);
     toast.error(error.message || "Failed to generate categories");
   } finally {
     setGeneratingCategories(false);
   }
 };
-
+  
   // Regenerate a single category
   const handleRegenerateCategory = async (type, index) => {
     setRegeneratingIndex(`${type}-${index}`);
