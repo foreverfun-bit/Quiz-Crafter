@@ -133,29 +133,41 @@ const Generate = () => {
 
   // Generate all categories at once
   const handleGenerateAllCategories = async () => {
-    setGeneratingCategories(true);
-    try {
-      const response = await api.post("/generate/categories-batch", {
+  setGeneratingCategories(true);
+  try {
+    const res = await fetch("/api/generate-categories", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
         true_false_count: 9,
         multiple_choice_count: 9,
         written_count: 9,
-        picture_count: 3
-      });
-      
-      setCategories({
-        true_false: response.data.true_false || [],
-        multiple_choice: response.data.multiple_choice || [],
-        written: response.data.written || [],
-        picture: response.data.picture || []
-      });
-      
-      toast.success("Categories generated!");
-    } catch (error) {
-      toast.error("Failed to generate categories");
-    } finally {
-      setGeneratingCategories(false);
+        picture_count: 3,
+      }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(data.error || "Failed to generate categories");
     }
-  };
+
+    setCategories({
+      true_false: data.true_false || [],
+      multiple_choice: data.multiple_choice || [],
+      written: data.written || [],
+      picture: data.picture || [],
+    });
+
+    toast.success("Categories generated!");
+  } catch (error) {
+    toast.error(error.message || "Failed to generate categories");
+  } finally {
+    setGeneratingCategories(false);
+  }
+};
 
   // Regenerate a single category
   const handleRegenerateCategory = async (type, index) => {
