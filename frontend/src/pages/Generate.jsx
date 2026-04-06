@@ -132,7 +132,7 @@ const Generate = () => {
   };
 
   // Generate all categories at once
-  const handleGenerateAllCategories = async () => {
+const handleGenerateAllCategories = async () => {
   setGeneratingCategories(true);
   try {
     const res = await fetch("/api/generate-categories", {
@@ -148,8 +148,15 @@ const Generate = () => {
       }),
     });
 
-    const text = await res.text();
-    const data = JSON.parse(text);
+    const cloned = res.clone(); // ✅ KEY FIX
+
+    let data;
+    try {
+      data = await res.json();
+    } catch {
+      const text = await cloned.text();
+      data = JSON.parse(text);
+    }
 
     if (!res.ok) {
       throw new Error(data.error || "Failed to generate categories");
