@@ -1,3 +1,4 @@
+import axios from "axios";
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../App";
@@ -135,32 +136,14 @@ const Generate = () => {
 const handleGenerateAllCategories = async () => {
   setGeneratingCategories(true);
   try {
-    const res = await fetch("/api/generate-categories", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        true_false_count: 9,
-        multiple_choice_count: 9,
-        written_count: 9,
-        picture_count: 3,
-      }),
+    const response = await axios.post("/api/generate-categories", {
+      true_false_count: 9,
+      multiple_choice_count: 9,
+      written_count: 9,
+      picture_count: 3,
     });
 
-    const cloned = res.clone(); // ✅ KEY FIX
-
-    let data;
-    try {
-      data = await res.json();
-    } catch {
-      const text = await cloned.text();
-      data = JSON.parse(text);
-    }
-
-    if (!res.ok) {
-      throw new Error(data.error || "Failed to generate categories");
-    }
+    const data = response.data;
 
     setCategories({
       true_false: data.true_false || [],
@@ -172,7 +155,11 @@ const handleGenerateAllCategories = async () => {
     toast.success("Categories generated!");
   } catch (error) {
     console.error(error);
-    toast.error(error.message || "Failed to generate categories");
+    const message =
+      error.response?.data?.error ||
+      error.message ||
+      "Failed to generate categories";
+    toast.error(message);
   } finally {
     setGeneratingCategories(false);
   }
