@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "../App";
+import { supabase } from "../lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -97,16 +97,33 @@ const BuildSession = () => {
 
   useEffect(() => { fetchQuestions(); }, []);
 
-  const fetchQuestions = async () => {
-    try {
-      const response = await api.get("/questions");
-      setQuestions(response.data);
-    } catch {
-      toast.error("Failed to load questions");
-    } finally {
-      setLoading(false);
-    }
-  };
+ const fetchQuestions = async () => {
+  try {
+    const { data, error } = await supabase
+      .from("questions")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    const normalized = (data || []).map((q) => ({
+      ...q,
+      question: q.question_text,
+      answer: q.correct_answer,
+      options: q.incorrect_answers
+        ? q.incorrect_answers.split(";").map((x) => x.trim()).filter(Boolean)
+        : [],
+      image_url: q.image_url,
+    }));
+
+    setQuestions(normalized);
+  } catch (error) {
+    console.error(error);
+    toast.error("Failed to load questions");
+  } finally {
+    setLoading(false);
+  }
+};
 
   const toggleQuestion = (questionId, type) => {
     setSelected((prev) => {
