@@ -258,9 +258,19 @@ const handleSave = async () => {
               <X size={16} className="mr-2" /> Clear
             </Button>
           )}
-          <Button onClick={handleSave} disabled={saving} className="gradient-btn" data-testid="save-session-btn">
-            {saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...</> : <><Save className="mr-2" size={18} /> Build Standard Session</>
-          </Button>
+        <Button onClick={handleSave} disabled={saving} className="gradient-btn" data-testid="save-session-btn">
+  {saving ? (
+    <>
+      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+      Saving...
+    </>
+  ) : (
+    <>
+      <Save className="mr-2" size={18} />
+      Build Standard Session
+    </>
+  )}
+</Button>
         </div>
       </div>
 
