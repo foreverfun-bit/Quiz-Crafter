@@ -192,16 +192,33 @@ const BuildSession = () => {
     }
   };
 
-  const handleSave = async () => {
-    if (!sessionName.trim()) {
-      toast.error("Please enter a session name");
-      return;
-    }
-    const totalSelected = Object.values(selected).flat().length;
-    if (totalSelected === 0) {
-      toast.error("Please select at least one question");
-      return;
-    }
+const handleSave = async () => {
+  setSaving(true);
+  try {
+    const { data, error } = await supabase.rpc("build_session_from_template", {
+      template_uuid: (
+        await supabase
+          .from("session_templates")
+          .select("id")
+          .eq("mode", "standard")
+          .limit(1)
+          .single()
+      ).data?.id,
+    });
+
+    if (error) throw error;
+    if (!data) throw new Error("No session created");
+
+    clearSavedState();
+    toast.success("Standard session created!");
+    navigate(`/session/${data}`);
+  } catch (error) {
+    console.error(error);
+    toast.error(error.message || "Failed to create session");
+  } finally {
+    setSaving(false);
+  }
+};
 
     // Build scoring config (only include non-default)
     const scoringConfig = {};
@@ -261,7 +278,7 @@ const BuildSession = () => {
           <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">
             Build <span className="gradient-text">Trivia Session</span>
           </h1>
-          <p className="text-zinc-500">Select from your library, write custom questions, and set scoring</p>
+        <p className="text-zinc-500">Create a standard session from your saved template</p>
         </div>
         <div className="flex gap-2">
           {(sessionName || Object.values(selected).flat().length > 0) && (
@@ -270,7 +287,7 @@ const BuildSession = () => {
             </Button>
           )}
           <Button onClick={handleSave} disabled={saving} className="gradient-btn" data-testid="save-session-btn">
-            {saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...</> : <><Save className="mr-2" size={18} /> Save Session</>}
+            {saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...</> : <><Save className="mr-2" size={18} /> Build Standard Session</>
           </Button>
         </div>
       </div>
