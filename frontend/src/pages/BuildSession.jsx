@@ -195,31 +195,36 @@ const BuildSession = () => {
 const handleSave = async () => {
   setSaving(true);
   try {
-    const { data, error } = await supabase.rpc("build_session_from_template", {
-      template_uuid: (
-        await supabase
-          .from("session_templates")
-          .select("id")
-          .eq("mode", "standard")
-          .limit(1)
-          .single()
-      ).data?.id,
-    });
+    const { data: template, error: templateError } = await supabase
+      .from("session_templates")
+      .select("id")
+      .eq("mode", "standard")
+      .limit(1)
+      .single();
 
-    if (error) throw error;
-    if (!data) throw new Error("No session created");
+    if (templateError) throw templateError;
+    if (!template?.id) throw new Error("Standard template not found");
+
+    const { data: sessionId, error: rpcError } = await supabase.rpc(
+      "build_session_from_template",
+      {
+        template_uuid: template.id,
+      }
+    );
+
+    if (rpcError) throw rpcError;
+    if (!sessionId) throw new Error("No session created");
 
     clearSavedState();
     toast.success("Standard session created!");
-    navigate(`/session/${data}`);
+    navigate(`/session/${sessionId}`);
   } catch (error) {
-    console.error(error);
-    toast.error(error.message || "Failed to create session");
+    console.error("Build session error:", error);
+    toast.error("Failed to create session");
   } finally {
     setSaving(false);
   }
 };
-
   
 
   const getFilteredQuestions = (type) => {
