@@ -38,6 +38,8 @@ const SessionDetail = () => {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("true_false");
   const [deleting, setDeleting] = useState(false);
+  const [generatingTF, setGeneratingTF] = useState(false);
+  const [tfCandidates, setTfCandidates] = useState([]);
 
   useEffect(() => {
     fetchSessionData();
@@ -230,6 +232,36 @@ const SessionDetail = () => {
     URL.revokeObjectURL(url);
   };
 
+const handleGenerateTFCandidates = async () => {
+  setGeneratingTF(true);
+  try {
+    const res = await fetch("/api/generate-session-candidates", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        sessionId: id,
+        questionType: "true_false",
+      }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(data.error || "Failed to generate candidates");
+    }
+
+    setTfCandidates(data.candidates || []);
+    toast.success("True/False candidates generated!");
+  } catch (error) {
+    console.error(error);
+    toast.error(error.message || "Failed to generate candidates");
+  } finally {
+    setGeneratingTF(false);
+  }
+};
+  
   const handleGoLive = () => {
     toast.info("Live hosting will be wired next.");
   };
@@ -347,6 +379,16 @@ const SessionDetail = () => {
         </div>
       </div>
 
+<div className="mb-4">
+  <Button
+    onClick={handleGenerateTFCandidates}
+    disabled={generatingTF}
+    className="bg-gradient-to-r from-[#71E0DC] to-[#AEB2EF] text-zinc-900 font-bold hover:opacity-90"
+  >
+    {generatingTF ? "Generating..." : "Generate T/F Candidates"}
+  </Button>
+</div>
+      
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         {questionTypes.map((type) => {
           const TypeIcon = type.icon;
