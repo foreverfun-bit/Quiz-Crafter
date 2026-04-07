@@ -34,23 +34,15 @@ const Login = () => {
     return <Navigate to="/" replace />;
   }
 
- const handleLogin = async (e) => {
-  e.preventDefault()
-
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email,
-    password,
-  })
-
-  if (error) {
-    console.error("Login error:", error.message)
-    alert(error.message)
-  } else {
-    console.log("Logged in!", data)
-    // OPTIONAL redirect
-    window.location.href = "/"
+const handleLogin = async (e) => {
+  e.preventDefault();
+  setLoading(true);
+  const result = await login(loginEmail, loginPassword);
+  setLoading(false);
+  if (result.success) {
+    navigate("/");
   }
-}
+};
 
   const handleRegister = async (e) => {
     e.preventDefault();
