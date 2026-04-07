@@ -220,7 +220,7 @@ const handleSave = async () => {
     navigate(`/session/${sessionId}`);
   } catch (error) {
     console.error("Build session error:", error);
-    toast.error("Failed to create session");
+    toast.error(error.message || "Failed to create session");
   } finally {
     setSaving(false);
   }
