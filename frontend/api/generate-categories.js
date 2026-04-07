@@ -4,7 +4,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const response = await fetch("https://api.openai.com/v1/responses", {
+    const openaiRes = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -12,35 +12,99 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: "gpt-4.1-mini",
-        input: `
-Generate trivia categories for a session.
+        text: {
+          format: {
+            type: "json_schema",
+            name: "trivia_categories",
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                true_false: {
+                  type: "array",
+                  items: { type: "string" },
+                  minItems: 9,
+                  maxItems: 9,
+                },
+                multiple_choice: {
+                  type: "array",
+                  items: { type: "string" },
+                  minItems: 9,
+                  maxItems: 9,
+                },
+                written: {
+                  type: "array",
+                  items: { type: "string" },
+                  minItems: 9,
+                  maxItems: 9,
+                },
+                picture: {
+                  type: "array",
+                  items: { type: "string" },
+                  minItems: 3,
+                  maxItems: 3,
+                },
+              },
+              required: ["true_false", "multiple_choice", "written", "picture"],
+            },
+          },
+        },
+        input: [
+          {
+            role: "system",
+            content: [
+              {
+                type: "input_text",
+                text: "You generate fun, broad, pub-trivia-friendly categories.",
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: `
+Generate trivia categories for one session.
 
-Return ONLY valid JSON in this exact shape:
-{
-  "true_false": ["cat1", "cat2", "cat3", "cat4", "cat5", "cat6", "cat7", "cat8", "cat9"],
-  "multiple_choice": ["cat1", "cat2", "cat3", "cat4", "cat5", "cat6", "cat7", "cat8", "cat9"],
-  "written": ["cat1", "cat2", "cat3", "cat4", "cat5", "cat6", "cat7", "cat8", "cat9"],
-  "picture": ["cat1", "cat2", "cat3"]
-}
-
-Rules:
+Requirements:
+- true_false: exactly 9 categories
+- multiple_choice: exactly 9 categories
+- written: exactly 9 categories
+- picture: exactly 3 categories
 - all categories must be unique across all lists
-- categories should be broad, fun, pub-trivia friendly
+- categories should be broad, fun, and usable for pub trivia
 - picture categories should work visually
-- no explanation, no markdown, JSON only
-        `,
+                `,
+              },
+            ],
+          },
+        ],
       }),
     });
 
-    const data = await response.json();
+    const data = await openaiRes.json();
 
-    const text = data.output?.[0]?.content?.[0]?.text;
-
-    if (!text) {
-      return res.status(500).json({ error: "No AI response received" });
+    if (!openaiRes.ok) {
+      console.error("OpenAI error:", data);
+      return res.status(500).json({
+        error: data.error?.message || "OpenAI request failed",
+      });
     }
 
-    const parsed = JSON.parse(text);
+    const parsed =
+      data.output_parsed ||
+      (() => {
+        const text = data.output?.[0]?.content?.find(
+          (item) => item.type === "output_text"
+        )?.text;
+        return text ? JSON.parse(text) : null;
+      })();
+
+    if (!parsed) {
+      console.error("Unexpected OpenAI response:", data);
+      return res.status(500).json({ error: "No AI response received" });
+    }
 
     return res.status(200).json(parsed);
   } catch (error) {
