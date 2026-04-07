@@ -165,7 +165,12 @@ const login = async (email, password) => {
       return { success: false, error: error.message };
     }
 
-    const supaUser = data.user;
+    if (!data.session?.user) {
+      toast.error("Login failed");
+      return { success: false, error: "No active session returned" };
+    }
+
+    const supaUser = data.session.user;
 
     setUser({
       id: supaUser.id,
@@ -184,7 +189,7 @@ const login = async (email, password) => {
   }
 };
 
- const register = async (email, password, name) => {
+const register = async (email, password, name) => {
   try {
     const { data, error } = await supabase.auth.signUp({
       email,
@@ -202,19 +207,23 @@ const login = async (email, password) => {
       return { success: false, error: error.message };
     }
 
-    if (data.user) {
+    if (data.session?.user) {
+      const supaUser = data.session.user;
       setUser({
-        id: data.user.id,
-        email: data.user.email,
+        id: supaUser.id,
+        email: supaUser.email,
         name:
-          data.user.user_metadata?.name ||
-          data.user.user_metadata?.full_name ||
-          data.user.email,
+          supaUser.user_metadata?.name ||
+          supaUser.user_metadata?.full_name ||
+          supaUser.email,
       });
+
+      toast.success("Account created successfully!");
+      return { success: true };
     }
 
-    toast.success("Account created successfully!");
-    return { success: true };
+    toast.success("Account created. Please check your email to confirm your account.");
+    return { success: true, needsEmailConfirmation: true };
   } catch (error) {
     toast.error("Registration failed");
     return { success: false, error: "Registration failed" };
