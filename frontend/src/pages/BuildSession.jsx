@@ -220,35 +220,7 @@ const handleSave = async () => {
   }
 };
 
-    // Build scoring config (only include non-default)
-    const scoringConfig = {};
-    let hasCustomScoring = false;
-    for (const type of questionTypes) {
-      const val = parseInt(scoring[type.value]) || 0;
-      scoringConfig[type.value] = val;
-      if (val !== DEFAULT_SCORING[type.value]) hasCustomScoring = true;
-    }
-
-    setSaving(true);
-    try {
-      const response = await api.post("/sessions", {
-        name: sessionName,
-        true_false_questions: selected.true_false,
-        multiple_choice_questions: selected.multiple_choice,
-        written_questions: selected.written,
-        picture_questions: selected.picture,
-        scoring: hasCustomScoring ? scoringConfig : null,
-        is_past: true,
-      });
-      clearSavedState();
-      toast.success("Session created!");
-      navigate(`/session/${response.data.id}`);
-    } catch {
-      toast.error("Failed to create session");
-    } finally {
-      setSaving(false);
-    }
-  };
+  
 
   const getFilteredQuestions = (type) => {
     return questions.filter((q) => {
