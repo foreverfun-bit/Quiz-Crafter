@@ -232,6 +232,63 @@ const SessionDetail = () => {
     URL.revokeObjectURL(url);
   };
 
+const handleSaveAndInsertTFCandidate = async (candidate, candidateIndex) => {
+  try {
+    const { data: insertedQuestion, error: insertQuestionError } = await supabase
+      .from("questions")
+      .insert({
+        user_id: (await supabase.auth.getUser()).data.user.id,
+        question_text: candidate.question_text,
+        question_type: "true_false",
+        has_image: false,
+        image_url: null,
+        category: candidate.category,
+        theme: null,
+        correct_answer: candidate.correct_answer,
+        incorrect_answers: null,
+        fun_fact: candidate.fun_fact,
+        difficulty: candidate.difficulty || "medium",
+        source: "ai",
+        status: "saved",
+        notes: null,
+      })
+      .select()
+      .single();
+
+    if (insertQuestionError) throw insertQuestionError;
+
+    const tfRound = rounds.find((r) =>
+      (r.round_name || "").toLowerCase().includes("round 1")
+    ) || rounds[0];
+
+    if (!tfRound) throw new Error("No round found for true/false");
+
+    const openSlots = slots
+      .filter((s) => s.session_round_id === tfRound.id && !s.question_id)
+      .sort((a, b) => a.question_order - b.question_order);
+
+    if (openSlots.length === 0) {
+      throw new Error("No open true/false slots available");
+    }
+
+    const nextOpenSlot = openSlots[0];
+
+    const { error: updateSlotError } = await supabase
+      .from("session_questions")
+      .update({ question_id: insertedQuestion.id })
+      .eq("id", nextOpenSlot.id);
+
+    if (updateSlotError) throw updateSlotError;
+
+    setTfCandidates((prev) => prev.filter((_, i) => i !== candidateIndex));
+    toast.success("Question saved and inserted!");
+    fetchSessionData();
+  } catch (error) {
+    console.error(error);
+    toast.error(error.message || "Failed to save and insert");
+  }
+};
+  
 const handleGenerateTFCandidates = async () => {
   setGeneratingTF(true);
   try {
@@ -260,6 +317,10 @@ const handleGenerateTFCandidates = async () => {
   } finally {
     setGeneratingTF(false);
   }
+};
+
+const handleDiscardTFCandidate = (candidateIndex) => {
+  setTfCandidates((prev) => prev.filter((_, i) => i !== candidateIndex));
 };
   
   const handleGoLive = () => {
@@ -445,12 +506,21 @@ const handleGenerateTFCandidates = async () => {
               </div>
 
               <div className="flex gap-2 mt-4">
-                <Button size="sm" className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                  Save + Insert
-                </Button>
-                <Button size="sm" variant="outline" className="border-zinc-700 text-zinc-300">
-                  Discard
-                </Button>
+               <Button
+  size="sm"
+  className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+  onClick={() => handleSaveAndInsertTFCandidate(candidate, index)}
+>
+  Save + Insert
+</Button>
+               <Button
+  size="sm"
+  variant="outline"
+  className="border-zinc-700 text-zinc-300"
+  onClick={() => handleDiscardTFCandidate(index)}
+>
+  Discard
+</Button>
               </div>
             </CardContent>
           </Card>
