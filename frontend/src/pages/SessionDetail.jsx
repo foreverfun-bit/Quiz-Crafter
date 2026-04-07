@@ -412,6 +412,54 @@ const handleGenerateTFCandidates = async () => {
         })}
       </div>
 
+{tfCandidates.length > 0 && (
+  <Card className="glass-card mb-6">
+    <CardHeader>
+      <h2 className="text-white text-lg font-semibold">Generated True/False Candidates</h2>
+    </CardHeader>
+    <CardContent>
+      <div className="space-y-4">
+        {tfCandidates.map((candidate, index) => (
+          <Card key={index} className="bg-zinc-900/50 border-white/10">
+            <CardContent className="p-4">
+              <div className="flex items-start justify-between gap-4 mb-3">
+                <Badge variant="outline" className="border-zinc-700 text-zinc-400">
+                  {candidate.category}
+                </Badge>
+                <span className="text-zinc-600 text-sm font-mono">#{index + 1}</span>
+              </div>
+
+              <p className="text-white font-medium mb-3">{candidate.question_text}</p>
+
+              <div className="pt-3 border-t border-white/10 space-y-1">
+                <p className="text-sm">
+                  <span className="text-zinc-500">Answer: </span>
+                  <span className="text-emerald-400 font-medium">{candidate.correct_answer}</span>
+                </p>
+                {candidate.fun_fact && (
+                  <p className="text-sm">
+                    <span className="text-zinc-500">Fun Fact: </span>
+                    <span className="text-zinc-300">{candidate.fun_fact}</span>
+                  </p>
+                )}
+              </div>
+
+              <div className="flex gap-2 mt-4">
+                <Button size="sm" className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  Save + Insert
+                </Button>
+                <Button size="sm" variant="outline" className="border-zinc-700 text-zinc-300">
+                  Discard
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </CardContent>
+  </Card>
+)}
+      
       <Card className="glass-card">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <CardHeader className="pb-0">
