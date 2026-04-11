@@ -44,6 +44,7 @@ const SessionDetail = () => {
   const [currentGenerateType, setCurrentGenerateType] = useState("true_false");
   const [candidates, setCandidates] = useState([]);
   const [showCandidateDrawer, setShowCandidateDrawer] = useState(false);
+  const [savingCandidateIndex, setSavingCandidateIndex] = useState(null);
 
   useEffect(() => {
     fetchSessionData();
@@ -293,8 +294,60 @@ const SessionDetail = () => {
     });
   };
 
-  const handleSaveAndInsertCandidate = () => {
-    toast.info("Save + Insert is temporarily paused while we fix the slot-save flow.");
+  const handleSaveToLibrary = async (candidate, candidateIndex) => {
+    setSavingCandidateIndex(candidateIndex);
+
+    try {
+      if (!session?.user_id) {
+        throw new Error("Session user not found");
+      }
+
+      const payload = {
+        user_id: session.user_id,
+        category: candidate.category || null,
+        question_text: candidate.question_text,
+        question_type: candidate.question_type || currentGenerateType,
+        has_image: candidate.has_image || false,
+        image_url: candidate.image_url || null,
+        theme: null,
+        correct_answer: candidate.correct_answer,
+        incorrect_answers:
+          Array.isArray(candidate.incorrect_answers) && candidate.incorrect_answers.length > 0
+            ? candidate.incorrect_answers.join(";")
+            : null,
+        fun_fact: candidate.fun_fact || null,
+        difficulty: candidate.difficulty || "medium",
+      };
+
+      const { data, error } = await supabase
+        .from("questions")
+        .insert(payload)
+        .select()
+        .single();
+
+      if (error) throw error;
+      if (!data?.id) throw new Error("Question was not saved");
+
+      setQuestionsById((prev) => ({
+        ...prev,
+        [data.id]: data,
+      }));
+
+      setCandidates((prev) => {
+        const updated = prev.filter((_, i) => i !== candidateIndex);
+        if (updated.length === 0) {
+          setShowCandidateDrawer(false);
+        }
+        return updated;
+      });
+
+      toast.success("Saved to library!");
+    } catch (error) {
+      console.error("Save to library error:", error);
+      toast.error(error?.message || "Failed to save to library");
+    } finally {
+      setSavingCandidateIndex(null);
+    }
   };
 
   const handleGoLive = () => {
@@ -650,15 +703,17 @@ const SessionDetail = () => {
                     <div className="flex gap-2 mt-4">
                       <Button
                         size="sm"
+                        disabled={savingCandidateIndex === index}
                         className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                        onClick={handleSaveAndInsertCandidate}
+                        onClick={() => handleSaveToLibrary(candidate, index)}
                       >
-                        Save + Insert
+                        {savingCandidateIndex === index ? "Saving..." : "Save to Library"}
                       </Button>
 
                       <Button
                         size="sm"
                         variant="outline"
+                        disabled={savingCandidateIndex === index}
                         className="border-zinc-700 text-zinc-300"
                         onClick={() => handleDiscardCandidate(index)}
                       >
