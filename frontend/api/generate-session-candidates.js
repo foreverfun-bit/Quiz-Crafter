@@ -13,42 +13,30 @@ export default async function handler(req, res) {
     const typeConfigs = {
       true_false: {
         label: "True/False",
-        schemaItem: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            category: { type: "string" },
-            question_text: { type: "string" },
-            correct_answer: { type: "string", enum: ["True", "False"] },
-            incorrect_answers: {
-              type: "array",
-              items: { type: "string" },
-            },
-            fun_fact: { type: "string" },
-            difficulty: { type: "string", enum: ["easy", "medium", "hard"] },
-            question_type: { type: "string", enum: ["true_false"] },
-            has_image: { type: "boolean" },
-            image_url: { type: "string" },
-          },
-          required: [
-            "category",
-            "question_text",
-            "correct_answer",
-            "incorrect_answers",
-            "fun_fact",
-            "difficulty",
-            "question_type",
-            "has_image",
-            "image_url",
-          ],
-        },
         prompt: `
 Generate exactly 5 True/False trivia question candidates.
 
 Rules:
-- question_type must be "true_false"
+- Return valid JSON only.
+- Use this exact shape:
+{
+  "candidates": [
+    {
+      "category": "Science",
+      "question_text": "Venus is the hottest planet in our solar system.",
+      "correct_answer": "True",
+      "incorrect_answers": [],
+      "fun_fact": "Venus is hotter than Mercury because of its dense atmosphere.",
+      "difficulty": "medium",
+      "question_type": "true_false",
+      "has_image": false,
+      "image_url": ""
+    }
+  ]
+}
 - correct_answer must be exactly "True" or "False"
 - incorrect_answers must be []
+- question_type must be "true_false"
 - has_image must be false
 - image_url must be ""
 - difficulty should be "medium"
@@ -57,47 +45,33 @@ Rules:
 - avoid obscure or badly worded questions
         `,
       },
+
       multiple_choice: {
         label: "Multiple Choice",
-        schemaItem: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            category: { type: "string" },
-            question_text: { type: "string" },
-            correct_answer: { type: "string" },
-            incorrect_answers: {
-              type: "array",
-              items: { type: "string" },
-              minItems: 3,
-              maxItems: 3,
-            },
-            fun_fact: { type: "string" },
-            difficulty: { type: "string", enum: ["easy", "medium", "hard"] },
-            question_type: { type: "string", enum: ["multiple_choice"] },
-            has_image: { type: "boolean" },
-            image_url: { type: "string" },
-          },
-          required: [
-            "category",
-            "question_text",
-            "correct_answer",
-            "incorrect_answers",
-            "fun_fact",
-            "difficulty",
-            "question_type",
-            "has_image",
-            "image_url",
-          ],
-        },
         prompt: `
 Generate exactly 5 Multiple Choice trivia question candidates.
 
 Rules:
-- question_type must be "multiple_choice"
-- each question must have 1 correct answer and exactly 3 incorrect answers
+- Return valid JSON only.
+- Use this exact shape:
+{
+  "candidates": [
+    {
+      "category": "History",
+      "question_text": "Which empire built Machu Picchu?",
+      "correct_answer": "Inca",
+      "incorrect_answers": ["Maya", "Aztec", "Roman"],
+      "fun_fact": "Machu Picchu was built in the 15th century in Peru.",
+      "difficulty": "medium",
+      "question_type": "multiple_choice",
+      "has_image": false,
+      "image_url": ""
+    }
+  ]
+}
+- each question must have exactly 3 incorrect answers
 - incorrect_answers must NOT include the correct answer
-- all answers should be plausible
+- question_type must be "multiple_choice"
 - has_image must be false
 - image_url must be ""
 - difficulty should be "medium"
@@ -106,44 +80,32 @@ Rules:
 - avoid obscure or badly worded questions
         `,
       },
+
       written: {
         label: "Written",
-        schemaItem: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            category: { type: "string" },
-            question_text: { type: "string" },
-            correct_answer: { type: "string" },
-            incorrect_answers: {
-              type: "array",
-              items: { type: "string" },
-            },
-            fun_fact: { type: "string" },
-            difficulty: { type: "string", enum: ["easy", "medium", "hard"] },
-            question_type: { type: "string", enum: ["written"] },
-            has_image: { type: "boolean" },
-            image_url: { type: "string" },
-          },
-          required: [
-            "category",
-            "question_text",
-            "correct_answer",
-            "incorrect_answers",
-            "fun_fact",
-            "difficulty",
-            "question_type",
-            "has_image",
-            "image_url",
-          ],
-        },
         prompt: `
 Generate exactly 5 Written Answer trivia question candidates.
 
 Rules:
-- question_type must be "written"
-- correct_answer should be short and clear
+- Return valid JSON only.
+- Use this exact shape:
+{
+  "candidates": [
+    {
+      "category": "Geography",
+      "question_text": "What is the capital of Australia?",
+      "correct_answer": "Canberra",
+      "incorrect_answers": [],
+      "fun_fact": "Many people guess Sydney or Melbourne, but the capital is Canberra.",
+      "difficulty": "medium",
+      "question_type": "written",
+      "has_image": false,
+      "image_url": ""
+    }
+  ]
+}
 - incorrect_answers must be []
+- question_type must be "written"
 - has_image must be false
 - image_url must be ""
 - difficulty should be "medium"
@@ -160,7 +122,7 @@ Rules:
       return res.status(400).json({ error: `Unsupported questionType: ${questionType}` });
     }
 
-    const openaiRes = await fetch("https://api.openai.com/v1/responses", {
+    const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -168,51 +130,21 @@ Rules:
       },
       body: JSON.stringify({
         model: "gpt-4.1-mini",
-        text: {
-          format: {
-            type: "json_schema",
-            name: "session_candidates",
-            schema: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                candidates: {
-                  type: "array",
-                  minItems: 5,
-                  maxItems: 5,
-                  items: config.schemaItem,
-                },
-              },
-              required: ["candidates"],
-            },
-          },
-        },
-        input: [
+        temperature: 0.8,
+        messages: [
           {
             role: "system",
-            content: [
-              {
-                type: "input_text",
-                text:
-                  "You are a professional pub trivia writer. Write fresh, accurate, medium-difficulty questions suitable for live hosted trivia nights.",
-              },
-            ],
+            content:
+              "You are a professional pub trivia writer. Return only valid JSON. No markdown. No explanation.",
           },
           {
             role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: `
+            content: `
 Session ID: ${sessionId}
 Question Type: ${config.label}
 
 ${config.prompt}
-
-Return only valid JSON matching the required schema.
-                `,
-              },
-            ],
+            `,
           },
         ],
       }),
@@ -227,11 +159,24 @@ Return only valid JSON matching the required schema.
       });
     }
 
-    const parsed = data.output_parsed;
+    const content = data?.choices?.[0]?.message?.content;
+
+    if (!content) {
+      console.error("Missing completion content:", data);
+      return res.status(500).json({ error: "No AI response received" });
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(content);
+    } catch (parseError) {
+      console.error("Failed to parse model JSON:", content);
+      return res.status(500).json({ error: "AI returned invalid JSON" });
+    }
 
     if (!parsed || !Array.isArray(parsed.candidates)) {
-      console.error("Unexpected OpenAI response:", data);
-      return res.status(500).json({ error: "No AI response received" });
+      console.error("Unexpected parsed response:", parsed);
+      return res.status(500).json({ error: "No candidates returned" });
     }
 
     return res.status(200).json({
