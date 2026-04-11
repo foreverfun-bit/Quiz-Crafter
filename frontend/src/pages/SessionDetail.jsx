@@ -236,78 +236,84 @@ const SessionDetail = () => {
   };
 
   const handleSaveAndInsertTFCandidate = async (candidate, candidateIndex) => {
-    setSavingCandidateIndex(candidateIndex);
+  setSavingCandidateIndex(candidateIndex);
 
-    try {
-      const {
-        data: { session: authSession },
-        error: authError,
-      } = await supabase.auth.getSession();
-
-      if (authError) throw authError;
-      if (!authSession?.user?.id) throw new Error("You are not logged in");
-
-      const userId = authSession.user.id;
-
-      const tfRound =
-        rounds.find((r) => (r.round_name || "").toLowerCase().includes("round 1")) ||
-        rounds[0];
-
-      if (!tfRound) throw new Error("No round found for true/false");
-
-      const openSlots = slots
-        .filter((s) => s.session_round_id === tfRound.id && !s.question_id)
-        .sort((a, b) => a.question_order - b.question_order);
-
-      if (openSlots.length === 0) {
-        throw new Error("No open true/false slots available");
-      }
-
-      const nextOpenSlot = openSlots[0];
-
-      const { data: insertedQuestion, error: insertQuestionError } = await supabase
-        .from("questions")
-        .insert({
-          user_id: userId,
-          category: candidate.category,
-          question_text: candidate.question_text,
-          question_type: "true_false",
-          has_image: false,
-          image_url: null,
-          theme: null,
-          correct_answer: candidate.correct_answer,
-          incorrect_answers: null,
-          fun_fact: candidate.fun_fact || null,
-          difficulty: candidate.difficulty || "medium",
-        })
-        .select()
-        .single();
-
-      if (insertQuestionError) throw insertQuestionError;
-      if (!insertedQuestion?.id) throw new Error("Question insert failed");
-
-      const { error: updateSlotError } = await supabase
-        .from("session_questions")
-        .update({ question_id: insertedQuestion.id })
-        .eq("id", nextOpenSlot.id);
-
-      if (updateSlotError) throw updateSlotError;
-
-      setTfCandidates((prev) => {
-        const updated = prev.filter((_, i) => i !== candidateIndex);
-        if (updated.length === 0) setShowCandidateDrawer(false);
-        return updated;
-      });
-
-      toast.success("Question saved and inserted!");
-      await fetchSessionData();
-    } catch (error) {
-      console.error("Save + Insert error:", error);
-      toast.error(error?.message || "Failed to save and insert");
-    } finally {
-      setSavingCandidateIndex(null);
+  try {
+    if (!session?.user_id) {
+      throw new Error("Session user not found");
     }
-  };
+
+    const tfRound =
+      rounds.find((r) => (r.round_name || "").toLowerCase().includes("round 1")) ||
+      rounds[0];
+
+    if (!tfRound) throw new Error("No round found for true/false");
+
+    const openSlots = slots
+      .filter((s) => s.session_round_id === tfRound.id && !s.question_id)
+      .sort((a, b) => a.question_order - b.question_order);
+
+    if (openSlots.length === 0) {
+      throw new Error("No open true/false slots available");
+    }
+
+    const nextOpenSlot = openSlots[0];
+
+    const { data: insertedQuestion, error: insertQuestionError } = await supabase
+      .from("questions")
+      .insert({
+        user_id: session.user_id,
+        category: candidate.category,
+        question_text: candidate.question_text,
+        question_type: "true_false",
+        has_image: false,
+        image_url: null,
+        theme: null,
+        correct_answer: candidate.correct_answer,
+        incorrect_answers: null,
+        fun_fact: candidate.fun_fact || null,
+        difficulty: candidate.difficulty || "medium",
+      })
+      .select()
+      .single();
+
+    if (insertQuestionError) throw insertQuestionError;
+    if (!insertedQuestion?.id) throw new Error("Question insert failed");
+
+    const { error: updateSlotError } = await supabase
+      .from("session_questions")
+      .update({ question_id: insertedQuestion.id })
+      .eq("id", nextOpenSlot.id);
+
+    if (updateSlotError) throw updateSlotError;
+
+    setQuestionsById((prev) => ({
+      ...prev,
+      [insertedQuestion.id]: insertedQuestion,
+    }));
+
+    setSlots((prev) =>
+      prev.map((slot) =>
+        slot.id === nextOpenSlot.id
+          ? { ...slot, question_id: insertedQuestion.id }
+          : slot
+      )
+    );
+
+    setTfCandidates((prev) => {
+      const updated = prev.filter((_, i) => i !== candidateIndex);
+      if (updated.length === 0) setShowCandidateDrawer(false);
+      return updated;
+    });
+
+    toast.success("Question saved and inserted!");
+  } catch (error) {
+    console.error("Save + Insert error:", error);
+    toast.error(error?.message || "Failed to save and insert");
+  } finally {
+    setSavingCandidateIndex(null);
+  }
+};
 
   const handleGenerateTFCandidates = async () => {
     setGeneratingTF(true);
