@@ -43,7 +43,7 @@ export default async function handler(req, res) {
                       has_image: { type: "boolean" },
                       image_url: { type: "string" },
                       category: { type: "string" },
-                      correct_answer: { type: "string" },
+                      correct_answer: { type: "string", enum: ["True", "False"] },
                       incorrect_answers: {
                         type: "array",
                         items: { type: "string" }
@@ -75,7 +75,8 @@ export default async function handler(req, res) {
             content: [
               {
                 type: "input_text",
-                text: "You are a trivia writer for pub trivia. Write fresh, fun, clear true/false questions."
+                text:
+                  "You are a professional pub trivia writer. Return fresh, accurate, medium-difficulty true/false questions. Avoid duplicates, avoid vague wording, and keep answers factually correct."
               }
             ]
           },
@@ -85,19 +86,20 @@ export default async function handler(req, res) {
               {
                 type: "input_text",
                 text: `
-Generate 5 true/false trivia question candidates for a trivia session.
+Generate exactly 5 true/false trivia question candidates for a trivia session.
 
-Requirements:
-- return exactly 5 candidates
+Rules:
 - question_type must be "true_false"
 - has_image must be false
-- image_url must be an empty string
-- incorrect_answers should be an empty array
+- image_url must be ""
+- incorrect_answers must be []
 - correct_answer must be either "True" or "False"
-- fun_fact should be short and interesting
-- difficulty should be "medium"
-- categories should be broad pub trivia categories
-- avoid overly obscure questions
+- difficulty must be "medium"
+- fun_fact should be one short sentence
+- use a mix of broad pub trivia categories like history, science, geography, entertainment, sports, literature, food, etc.
+- avoid overly obscure facts
+- avoid trick wording
+- do not repeat categories too much
                 `
               }
             ]
@@ -109,21 +111,15 @@ Requirements:
     const data = await openaiRes.json();
 
     if (!openaiRes.ok) {
+      console.error("OpenAI error response:", data);
       return res.status(500).json({
-        error: data.error?.message || "OpenAI request failed"
+        error: data?.error?.message || "OpenAI request failed",
       });
     }
 
-    const parsed =
-      data.output_parsed ||
-      (() => {
-        const text = data.output?.[0]?.content?.find(
-          (item) => item.type === "output_text"
-        )?.text;
-        return text ? JSON.parse(text) : null;
-      })();
+    const parsed = data.output_parsed;
 
-    if (!parsed?.candidates) {
+    if (!parsed || !parsed.candidates || !Array.isArray(parsed.candidates)) {
       console.error("Unexpected OpenAI response:", data);
       return res.status(500).json({ error: "No AI response received" });
     }
@@ -131,6 +127,8 @@ Requirements:
     return res.status(200).json(parsed);
   } catch (error) {
     console.error("generate-session-candidates error:", error);
-    return res.status(500).json({ error: "Failed to generate candidates" });
+    return res.status(500).json({
+      error: error?.message || "Failed to generate candidates",
+    });
   }
 }
