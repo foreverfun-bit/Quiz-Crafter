@@ -299,8 +299,9 @@ const handleSaveAndInsertTFCandidate = async (candidate, candidateIndex) => {
   
 const handleGenerateTFCandidates = async () => {
   setGeneratingTF(true);
+
   try {
-    const res = await fetch("/api/generate-session-candidates", {
+    const response = await fetch("/api/generate-session-candidates", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -311,9 +312,17 @@ const handleGenerateTFCandidates = async () => {
       }),
     });
 
-    const data = await res.json();
+    const rawText = await response.text();
 
-    if (!res.ok) {
+    let data = {};
+    try {
+      data = rawText ? JSON.parse(rawText) : {};
+    } catch (parseError) {
+      console.error("Failed to parse API response:", rawText);
+      throw new Error("Invalid response from generator");
+    }
+
+    if (!response.ok) {
       throw new Error(data.error || "Failed to generate candidates");
     }
 
@@ -321,8 +330,8 @@ const handleGenerateTFCandidates = async () => {
     setShowCandidateDrawer(true);
     toast.success("True/False candidates generated!");
   } catch (error) {
-    console.error(error);
-    toast.error(error.message || "Failed to generate candidates");
+    console.error("Generate candidates error:", error);
+    toast.error(error?.message || "Failed to generate candidates");
   } finally {
     setGeneratingTF(false);
   }
