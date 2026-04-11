@@ -40,6 +40,7 @@ const SessionDetail = () => {
   const [deleting, setDeleting] = useState(false);
   const [generatingTF, setGeneratingTF] = useState(false);
   const [tfCandidates, setTfCandidates] = useState([]);
+  const [showCandidateDrawer, setShowCandidateDrawer] = useState(false);
 
   useEffect(() => {
     fetchSessionData();
@@ -280,7 +281,13 @@ const handleSaveAndInsertTFCandidate = async (candidate, candidateIndex) => {
 
     if (updateSlotError) throw updateSlotError;
 
-    setTfCandidates((prev) => prev.filter((_, i) => i !== candidateIndex));
+    setTfCandidates((prev) => {
+  const updated = prev.filter((_, i) => i !== candidateIndex);
+  if (updated.length === 0) {
+    setShowCandidateDrawer(false);
+  }
+  return updated;
+});
     toast.success("Question saved and inserted!");
     fetchSessionData();
   } catch (error) {
@@ -310,6 +317,7 @@ const handleGenerateTFCandidates = async () => {
     }
 
     setTfCandidates(data.candidates || []);
+    setShowCandidateDrawer(true);
     toast.success("True/False candidates generated!");
   } catch (error) {
     console.error(error);
@@ -320,7 +328,13 @@ const handleGenerateTFCandidates = async () => {
 };
 
 const handleDiscardTFCandidate = (candidateIndex) => {
-  setTfCandidates((prev) => prev.filter((_, i) => i !== candidateIndex));
+  setTfCandidates((prev) => {
+    const updated = prev.filter((_, i) => i !== candidateIndex);
+    if (updated.length === 0) {
+      setShowCandidateDrawer(false);
+    }
+    return updated;
+  });
 };
   
   const handleGoLive = () => {
@@ -446,7 +460,7 @@ const handleDiscardTFCandidate = (candidateIndex) => {
     disabled={generatingTF}
     className="bg-gradient-to-r from-[#71E0DC] to-[#AEB2EF] text-zinc-900 font-bold hover:opacity-90"
   >
-    {generatingTF ? "Generating..." : "Generate T/F Candidates"}
+    {generatingTF ? "Generating..." : "Generate True/False Candidates"}
   </Button>
 </div>
       
@@ -472,64 +486,7 @@ const handleDiscardTFCandidate = (candidateIndex) => {
           );
         })}
       </div>
-
-{tfCandidates.length > 0 && (
-  <Card className="glass-card mb-6">
-    <CardHeader>
-      <h2 className="text-white text-lg font-semibold">Generated True/False Candidates</h2>
-    </CardHeader>
-    <CardContent>
-      <div className="space-y-4">
-        {tfCandidates.map((candidate, index) => (
-          <Card key={index} className="bg-zinc-900/50 border-white/10">
-            <CardContent className="p-4">
-              <div className="flex items-start justify-between gap-4 mb-3">
-                <Badge variant="outline" className="border-zinc-700 text-zinc-400">
-                  {candidate.category}
-                </Badge>
-                <span className="text-zinc-600 text-sm font-mono">#{index + 1}</span>
-              </div>
-
-              <p className="text-white font-medium mb-3">{candidate.question_text}</p>
-
-              <div className="pt-3 border-t border-white/10 space-y-1">
-                <p className="text-sm">
-                  <span className="text-zinc-500">Answer: </span>
-                  <span className="text-emerald-400 font-medium">{candidate.correct_answer}</span>
-                </p>
-                {candidate.fun_fact && (
-                  <p className="text-sm">
-                    <span className="text-zinc-500">Fun Fact: </span>
-                    <span className="text-zinc-300">{candidate.fun_fact}</span>
-                  </p>
-                )}
-              </div>
-
-              <div className="flex gap-2 mt-4">
-               <Button
-  size="sm"
-  className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-  onClick={() => handleSaveAndInsertTFCandidate(candidate, index)}
->
-  Save + Insert
-</Button>
-               <Button
-  size="sm"
-  variant="outline"
-  className="border-zinc-700 text-zinc-300"
-  onClick={() => handleDiscardTFCandidate(index)}
->
-  Discard
-</Button>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-    </CardContent>
-  </Card>
-)}
-      
+     
       <Card className="glass-card">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <CardHeader className="pb-0">
@@ -642,6 +599,85 @@ const handleDiscardTFCandidate = (candidateIndex) => {
           </CardContent>
         </Tabs>
       </Card>
+      {showCandidateDrawer && (
+  <div className="fixed inset-0 z-50 flex justify-end">
+    <div
+      className="absolute inset-0 bg-black/50"
+      onClick={() => setShowCandidateDrawer(false)}
+    />
+
+    <div className="relative w-full max-w-xl h-full bg-zinc-950 border-l border-white/10 shadow-2xl p-6 overflow-y-auto">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-white text-xl font-bold">Generated T/F Candidates</h2>
+          <p className="text-zinc-500 text-sm">
+            Review and insert only the ones you want
+          </p>
+        </div>
+
+        <Button
+          variant="ghost"
+          onClick={() => setShowCandidateDrawer(false)}
+          className="text-zinc-400 hover:text-white"
+        >
+          <X size={20} />
+        </Button>
+      </div>
+
+      <div className="space-y-4">
+        {tfCandidates.map((candidate, index) => (
+          <Card key={index} className="bg-zinc-900/70 border-white/10">
+            <CardContent className="p-4">
+              <div className="flex items-start justify-between gap-4 mb-3">
+                <Badge variant="outline" className="border-zinc-700 text-zinc-400">
+                  {candidate.category}
+                </Badge>
+                <span className="text-zinc-600 text-sm font-mono">#{index + 1}</span>
+              </div>
+
+              <p className="text-white font-medium mb-3">{candidate.question_text}</p>
+
+              <div className="pt-3 border-t border-white/10 space-y-1">
+                <p className="text-sm">
+                  <span className="text-zinc-500">Answer: </span>
+                  <span className="text-emerald-400 font-medium">
+                    {candidate.correct_answer}
+                  </span>
+                </p>
+
+                {candidate.fun_fact && (
+                  <p className="text-sm">
+                    <span className="text-zinc-500">Fun Fact: </span>
+                    <span className="text-zinc-300">{candidate.fun_fact}</span>
+                  </p>
+                )}
+              </div>
+
+              <div className="flex gap-2 mt-4">
+                <Button
+                  size="sm"
+                  className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                  onClick={() => handleSaveAndInsertTFCandidate(candidate, index)}
+                >
+                  Save + Insert
+                </Button>
+
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="border-zinc-700 text-zinc-300"
+                  onClick={() => handleDiscardTFCandidate(index)}
+                >
+                  Discard
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </div>
+  </div>
+)}
     </div>
   );
 };
