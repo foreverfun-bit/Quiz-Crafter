@@ -312,21 +312,21 @@ const handleGenerateTFCandidates = async () => {
       }),
     });
 
-    const rawText = await response.text();
+    const raw = await response.text();
 
     let data = {};
     try {
-      data = rawText ? JSON.parse(rawText) : {};
-    } catch (parseError) {
-      console.error("Failed to parse API response:", rawText);
-      throw new Error("Invalid response from generator");
+      data = raw ? JSON.parse(raw) : {};
+    } catch (e) {
+      console.error("Raw generator response:", raw);
+      throw new Error("Generator returned invalid JSON");
     }
 
     if (!response.ok) {
       throw new Error(data.error || "Failed to generate candidates");
     }
 
-    setTfCandidates(data.candidates || []);
+    setTfCandidates(Array.isArray(data.candidates) ? data.candidates : []);
     setShowCandidateDrawer(true);
     toast.success("True/False candidates generated!");
   } catch (error) {
@@ -336,7 +336,7 @@ const handleGenerateTFCandidates = async () => {
     setGeneratingTF(false);
   }
 };
-
+  
 const handleDiscardTFCandidate = (candidateIndex) => {
   setTfCandidates((prev) => {
     const updated = prev.filter((_, i) => i !== candidateIndex);
