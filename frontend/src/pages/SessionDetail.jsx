@@ -4,7 +4,7 @@ import { supabase } from "../lib/supabase";
 import { Card, CardContent, CardHeader } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
-import { ScrollArea } from "../components/ui/scroll-area";
+import { ScrollArea } from "../components/ui/scrhandleSaveAndInsertTFCandidateoll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import {
   CheckCircle,
@@ -236,64 +236,34 @@ const SessionDetail = () => {
 
 const handleSaveAndInsertTFCandidate = async (candidate, candidateIndex) => {
   try {
-    const { data: insertedQuestion, error: insertQuestionError } = await supabase
-      .from("questions")
-      .insert({
-        user_id: (await supabase.auth.getUser()).data.user.id,
-        question_text: candidate.question_text,
-        question_type: "true_false",
-        has_image: false,
-        image_url: null,
-        category: candidate.category,
-        theme: null,
-        correct_answer: candidate.correct_answer,
-        incorrect_answers: null,
-        fun_fact: candidate.fun_fact,
-        difficulty: candidate.difficulty || "medium",
-        source: "ai",
-        status: "saved",
-        notes: null,
-      })
-      .select()
-      .single();
+    const { data: questionId, error } = await supabase.rpc(
+      "save_and_insert_tf_candidate",
+      {
+        p_session_id: id,
+        p_question_text: candidate.question_text,
+        p_category: candidate.category,
+        p_correct_answer: candidate.correct_answer,
+        p_fun_fact: candidate.fun_fact || null,
+        p_difficulty: candidate.difficulty || "medium",
+      }
+    );
 
-    if (insertQuestionError) throw insertQuestionError;
-
-    const tfRound = rounds.find((r) =>
-      (r.round_name || "").toLowerCase().includes("round 1")
-    ) || rounds[0];
-
-    if (!tfRound) throw new Error("No round found for true/false");
-
-    const openSlots = slots
-      .filter((s) => s.session_round_id === tfRound.id && !s.question_id)
-      .sort((a, b) => a.question_order - b.question_order);
-
-    if (openSlots.length === 0) {
-      throw new Error("No open true/false slots available");
-    }
-
-    const nextOpenSlot = openSlots[0];
-
-    const { error: updateSlotError } = await supabase
-      .from("session_questions")
-      .update({ question_id: insertedQuestion.id })
-      .eq("id", nextOpenSlot.id);
-
-    if (updateSlotError) throw updateSlotError;
+    if (error) throw error;
+    if (!questionId) throw new Error("No question was inserted");
 
     setTfCandidates((prev) => {
-  const updated = prev.filter((_, i) => i !== candidateIndex);
-  if (updated.length === 0) {
-    setShowCandidateDrawer(false);
-  }
-  return updated;
-});
+      const updated = prev.filter((_, i) => i !== candidateIndex);
+      if (updated.length === 0) {
+        setShowCandidateDrawer(false);
+      }
+      return updated;
+    });
+
     toast.success("Question saved and inserted!");
-    fetchSessionData();
+    await fetchSessionData();
   } catch (error) {
-    console.error(error);
-    toast.error(error.message || "Failed to save and insert");
+    console.error("Save + Insert error:", error);
+    toast.error(error?.message || "Failed to save and insert");
   }
 };
   
