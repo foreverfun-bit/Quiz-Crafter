@@ -312,14 +312,15 @@ const handleGenerateTFCandidates = async () => {
       }),
     });
 
-    const raw = await response.text();
-
     let data = {};
+
     try {
+      const clonedResponse = response.clone();
+      const raw = await clonedResponse.text();
       data = raw ? JSON.parse(raw) : {};
-    } catch (e) {
-      console.error("Raw generator response:", raw);
-      throw new Error("Generator returned invalid JSON");
+    } catch (parseError) {
+      console.error("Failed to read generator response:", parseError);
+      throw new Error("Generator response could not be read");
     }
 
     if (!response.ok) {
