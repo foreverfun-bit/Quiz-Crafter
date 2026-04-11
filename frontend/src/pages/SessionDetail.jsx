@@ -294,61 +294,66 @@ const SessionDetail = () => {
     });
   };
 
-  const handleSaveToLibrary = async (candidate, candidateIndex) => {
-    setSavingCandidateIndex(candidateIndex);
+ const handleSaveToLibrary = async (candidate, candidateIndex) => {
+  setSavingCandidateIndex(candidateIndex);
 
-    try {
-      if (!session?.user_id) {
-        throw new Error("Session user not found");
-      }
+  try {
+    if (!session?.user_id) {
+      throw new Error("Session user not found");
+    }
 
-      const payload = {
-        user_id: session.user_id,
+    const response = await fetch("/api/save-candidate-to-library", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        sessionUserId: session.user_id,
         category: candidate.category || null,
         question_text: candidate.question_text,
         question_type: candidate.question_type || currentGenerateType,
         has_image: candidate.has_image || false,
-        image_url: candidate.image_url || null,
-        theme: null,
+        image_url: candidate.image_url || "",
         correct_answer: candidate.correct_answer,
-        incorrect_answers:
-          Array.isArray(candidate.incorrect_answers) && candidate.incorrect_answers.length > 0
-            ? candidate.incorrect_answers.join(";")
-            : null,
+        incorrect_answers: candidate.incorrect_answers || [],
         fun_fact: candidate.fun_fact || null,
         difficulty: candidate.difficulty || "medium",
-      };
+      }),
+    });
 
-      const { data, error } = await supabase
-        .from("questions")
-        .insert(payload)
-        .select()
-        .single();
+    const raw = await response.text();
+    const data = raw ? JSON.parse(raw) : {};
 
-      if (error) throw error;
-      if (!data?.id) throw new Error("Question was not saved");
-
-      setQuestionsById((prev) => ({
-        ...prev,
-        [data.id]: data,
-      }));
-
-      setCandidates((prev) => {
-        const updated = prev.filter((_, i) => i !== candidateIndex);
-        if (updated.length === 0) {
-          setShowCandidateDrawer(false);
-        }
-        return updated;
-      });
-
-      toast.success("Saved to library!");
-    } catch (error) {
-      console.error("Save to library error:", error);
-      toast.error(error?.message || "Failed to save to library");
-    } finally {
-      setSavingCandidateIndex(null);
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to save to library");
     }
-  };
+
+    const savedQuestion = data.question;
+    if (!savedQuestion?.id) {
+      throw new Error("Question was not saved");
+    }
+
+    setQuestionsById((prev) => ({
+      ...prev,
+      [savedQuestion.id]: savedQuestion,
+    }));
+
+    setCandidates((prev) => {
+      const updated = prev.filter((_, i) => i !== candidateIndex);
+      if (updated.length === 0) {
+        setShowCandidateDrawer(false);
+      }
+      return updated;
+    });
+
+    toast.success("Saved to library!");
+  } catch (error) {
+    console.error("Save to library error:", error);
+    toast.error(error?.message || "Failed to save to library");
+  } finally {
+    setSavingCandidateIndex(null);
+  }
+};
 
   const handleGoLive = () => {
     toast.info("Live hosting will be wired next.");
