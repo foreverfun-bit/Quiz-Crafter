@@ -39,10 +39,11 @@ const SessionDetail = () => {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("true_false");
   const [deleting, setDeleting] = useState(false);
-  const [generatingTF, setGeneratingTF] = useState(false);
-  const [tfCandidates, setTfCandidates] = useState([]);
+
+  const [generatingCandidates, setGeneratingCandidates] = useState(false);
+  const [currentGenerateType, setCurrentGenerateType] = useState("true_false");
+  const [candidates, setCandidates] = useState([]);
   const [showCandidateDrawer, setShowCandidateDrawer] = useState(false);
-  const [savingCandidateIndex, setSavingCandidateIndex] = useState(null);
 
   useEffect(() => {
     fetchSessionData();
@@ -60,8 +61,13 @@ const SessionDetail = () => {
     return Number.isNaN(d.getTime()) ? "No date" : d.toLocaleDateString();
   };
 
+  const getTypeLabel = (type) => {
+    return questionTypes.find((q) => q.value === type)?.label || type;
+  };
+
   const fetchSessionData = async () => {
     setLoading(true);
+
     try {
       const { data: sessionData, error: sessionError } = await supabase
         .from("sessions")
@@ -235,88 +241,9 @@ const SessionDetail = () => {
     URL.revokeObjectURL(url);
   };
 
-  const handleSaveAndInsertTFCandidate = async (candidate, candidateIndex) => {
-  setSavingCandidateIndex(candidateIndex);
-
-  try {
-    if (!session?.user_id) {
-      throw new Error("Session user not found");
-    }
-
-    const tfRound =
-      rounds.find((r) => (r.round_name || "").toLowerCase().includes("round 1")) ||
-      rounds[0];
-
-    if (!tfRound) throw new Error("No round found for true/false");
-
-    const openSlots = slots
-      .filter((s) => s.session_round_id === tfRound.id && !s.question_id)
-      .sort((a, b) => a.question_order - b.question_order);
-
-    if (openSlots.length === 0) {
-      throw new Error("No open true/false slots available");
-    }
-
-    const nextOpenSlot = openSlots[0];
-
-    const { data: insertedQuestion, error: insertQuestionError } = await supabase
-      .from("questions")
-      .insert({
-        user_id: session.user_id,
-        category: candidate.category,
-        question_text: candidate.question_text,
-        question_type: "true_false",
-        has_image: false,
-        image_url: null,
-        theme: null,
-        correct_answer: candidate.correct_answer,
-        incorrect_answers: null,
-        fun_fact: candidate.fun_fact || null,
-        difficulty: candidate.difficulty || "medium",
-      })
-      .select()
-      .single();
-
-    if (insertQuestionError) throw insertQuestionError;
-    if (!insertedQuestion?.id) throw new Error("Question insert failed");
-
-    const { error: updateSlotError } = await supabase
-      .from("session_questions")
-      .update({ question_id: insertedQuestion.id })
-      .eq("id", nextOpenSlot.id);
-
-    if (updateSlotError) throw updateSlotError;
-
-    setQuestionsById((prev) => ({
-      ...prev,
-      [insertedQuestion.id]: insertedQuestion,
-    }));
-
-    setSlots((prev) =>
-      prev.map((slot) =>
-        slot.id === nextOpenSlot.id
-          ? { ...slot, question_id: insertedQuestion.id }
-          : slot
-      )
-    );
-
-    setTfCandidates((prev) => {
-      const updated = prev.filter((_, i) => i !== candidateIndex);
-      if (updated.length === 0) setShowCandidateDrawer(false);
-      return updated;
-    });
-
-    toast.success("Question saved and inserted!");
-  } catch (error) {
-    console.error("Save + Insert error:", error);
-    toast.error(error?.message || "Failed to save and insert");
-  } finally {
-    setSavingCandidateIndex(null);
-  }
-};
-
-  const handleGenerateTFCandidates = async () => {
-    setGeneratingTF(true);
+  const handleGenerateCandidates = async (type) => {
+    setGeneratingCandidates(true);
+    setCurrentGenerateType(type);
 
     try {
       const response = await fetch("/api/generate-session-candidates", {
@@ -326,7 +253,7 @@ const SessionDetail = () => {
         },
         body: JSON.stringify({
           sessionId: id,
-          questionType: "true_false",
+          questionType: type,
         }),
       });
 
@@ -345,25 +272,29 @@ const SessionDetail = () => {
         throw new Error(data.error || "Failed to generate candidates");
       }
 
-      setTfCandidates(Array.isArray(data.candidates) ? data.candidates : []);
+      setCandidates(Array.isArray(data.candidates) ? data.candidates : []);
       setShowCandidateDrawer(true);
-      toast.success("True/False candidates generated!");
+      toast.success(`${getTypeLabel(type)} candidates generated!`);
     } catch (error) {
       console.error("Generate candidates error:", error);
       toast.error(error?.message || "Failed to generate candidates");
     } finally {
-      setGeneratingTF(false);
+      setGeneratingCandidates(false);
     }
   };
 
-  const handleDiscardTFCandidate = (candidateIndex) => {
-    setTfCandidates((prev) => {
+  const handleDiscardCandidate = (candidateIndex) => {
+    setCandidates((prev) => {
       const updated = prev.filter((_, i) => i !== candidateIndex);
       if (updated.length === 0) {
         setShowCandidateDrawer(false);
       }
       return updated;
     });
+  };
+
+  const handleSaveAndInsertCandidate = () => {
+    toast.info("Save + Insert is temporarily paused while we fix the slot-save flow.");
   };
 
   const handleGoLive = () => {
@@ -483,13 +414,31 @@ const SessionDetail = () => {
         </div>
       </div>
 
-      <div className="mb-4">
+      <div className="mb-4 flex gap-2 flex-wrap">
         <Button
-          onClick={handleGenerateTFCandidates}
-          disabled={generatingTF}
+          onClick={() => handleGenerateCandidates("true_false")}
+          disabled={generatingCandidates}
           className="bg-gradient-to-r from-[#71E0DC] to-[#AEB2EF] text-zinc-900 font-bold hover:opacity-90"
         >
-          {generatingTF ? "Generating..." : "Generate True/False Candidates"}
+          {generatingCandidates && currentGenerateType === "true_false" ? "Generating..." : "Generate T/F"}
+        </Button>
+
+        <Button
+          onClick={() => handleGenerateCandidates("multiple_choice")}
+          disabled={generatingCandidates}
+          variant="outline"
+          className="border-[#AEB2EF]/40 text-[#AEB2EF]"
+        >
+          {generatingCandidates && currentGenerateType === "multiple_choice" ? "Generating..." : "Generate MC"}
+        </Button>
+
+        <Button
+          onClick={() => handleGenerateCandidates("written")}
+          disabled={generatingCandidates}
+          variant="outline"
+          className="border-emerald-400/40 text-emerald-400"
+        >
+          {generatingCandidates && currentGenerateType === "written" ? "Generating..." : "Generate Written"}
         </Button>
       </div>
 
@@ -639,9 +588,11 @@ const SessionDetail = () => {
           <div className="relative w-full max-w-xl h-full bg-zinc-950 border-l border-white/10 shadow-2xl p-6 overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <div>
-                <h2 className="text-white text-xl font-bold">Generated T/F Candidates</h2>
+                <h2 className="text-white text-xl font-bold">
+                  Generated {getTypeLabel(currentGenerateType)} Candidates
+                </h2>
                 <p className="text-zinc-500 text-sm">
-                  Review and insert only the ones you want
+                  Review and keep only the ones you want
                 </p>
               </div>
 
@@ -655,7 +606,7 @@ const SessionDetail = () => {
             </div>
 
             <div className="space-y-4">
-              {tfCandidates.map((candidate, index) => (
+              {candidates.map((candidate, index) => (
                 <Card key={index} className="bg-zinc-900/70 border-white/10">
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between gap-4 mb-3">
@@ -666,6 +617,19 @@ const SessionDetail = () => {
                     </div>
 
                     <p className="text-white font-medium mb-3">{candidate.question_text}</p>
+
+                    {candidate.incorrect_answers?.length > 0 && (
+                      <div className="grid grid-cols-2 gap-2 mb-3">
+                        {candidate.incorrect_answers.map((option, optIndex) => (
+                          <div
+                            key={optIndex}
+                            className="px-3 py-2 rounded-md text-sm bg-zinc-800/50 text-zinc-400"
+                          >
+                            {option}
+                          </div>
+                        ))}
+                      </div>
+                    )}
 
                     <div className="pt-3 border-t border-white/10 space-y-1">
                       <p className="text-sm">
@@ -686,19 +650,17 @@ const SessionDetail = () => {
                     <div className="flex gap-2 mt-4">
                       <Button
                         size="sm"
-                        disabled={savingCandidateIndex === index}
                         className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                        onClick={() => handleSaveAndInsertTFCandidate(candidate, index)}
+                        onClick={handleSaveAndInsertCandidate}
                       >
-                        {savingCandidateIndex === index ? "Saving..." : "Save + Insert"}
+                        Save + Insert
                       </Button>
 
                       <Button
                         size="sm"
                         variant="outline"
-                        disabled={savingCandidateIndex === index}
                         className="border-zinc-700 text-zinc-300"
-                        onClick={() => handleDiscardTFCandidate(index)}
+                        onClick={() => handleDiscardCandidate(index)}
                       >
                         Discard
                       </Button>
@@ -706,6 +668,12 @@ const SessionDetail = () => {
                   </CardContent>
                 </Card>
               ))}
+
+              {candidates.length === 0 && (
+                <div className="text-center py-12">
+                  <p className="text-zinc-500">No candidates available</p>
+                </div>
+              )}
             </div>
           </div>
         </div>
