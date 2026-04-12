@@ -31,6 +31,16 @@ const ImportCSV = () => {
     setPreview(null);
   };
 
+  const readJsonFromResponse = async (response, fallbackMessage) => {
+    try {
+      const raw = await response.clone().text();
+      if (!raw) return {};
+      return JSON.parse(raw);
+    } catch (err) {
+      throw new Error(fallbackMessage);
+    }
+  };
+
   const handleFileChange = async (e) => {
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
@@ -68,15 +78,7 @@ const ImportCSV = () => {
         body: formData,
       });
 
-      const raw = await response.text();
-
-      let data;
-      try {
-        data = raw ? JSON.parse(raw) : {};
-      } catch (err) {
-        console.error("Raw CSV preview response:", raw);
-        throw new Error(raw || "Invalid preview response");
-      }
+      const data = await readJsonFromResponse(response, "Invalid preview response");
 
       if (!response.ok) {
         throw new Error(data.error || "Failed to preview CSV");
@@ -103,15 +105,7 @@ const ImportCSV = () => {
         body: formData,
       });
 
-      const raw = await response.text();
-
-      let data;
-      try {
-        data = raw ? JSON.parse(raw) : {};
-      } catch (err) {
-        console.error("Raw PDF preview response:", raw);
-        throw new Error(raw || "Invalid preview response");
-      }
+      const data = await readJsonFromResponse(response, "Invalid preview response");
 
       if (!response.ok) {
         throw new Error(data.error || "Failed to preview PDF");
@@ -160,15 +154,7 @@ const ImportCSV = () => {
         body: formData,
       });
 
-      const raw = await response.text();
-
-      let data;
-      try {
-        data = raw ? JSON.parse(raw) : {};
-      } catch (err) {
-        console.error("Raw import response:", raw);
-        throw new Error(raw || "Invalid server response");
-      }
+      const data = await readJsonFromResponse(response, "Invalid server response");
 
       if (!response.ok) {
         throw new Error(data.error || "Import failed");
@@ -177,7 +163,9 @@ const ImportCSV = () => {
       setResult(data);
 
       if (data.imported > 0) {
-        toast.success(`Successfully imported ${data.imported} question${data.imported !== 1 ? "s" : ""}!`);
+        toast.success(
+          `Successfully imported ${data.imported} question${data.imported !== 1 ? "s" : ""}!`
+        );
       } else {
         toast.info("No new questions were imported");
       }
