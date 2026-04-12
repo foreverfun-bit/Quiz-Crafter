@@ -39,6 +39,13 @@ const emptyGroupedCandidates = {
   picture: [],
 };
 
+const standardCounts = {
+  true_false: 9,
+  multiple_choice: 9,
+  written: 9,
+  picture: 3,
+};
+
 const Generate = () => {
   const [mode, setMode] = useState("standard");
 
@@ -63,7 +70,7 @@ const Generate = () => {
     setGroupedCandidates(emptyGroupedCandidates);
   };
 
-  const callGenerateRoute = async (questionType) => {
+  const callGenerateRoute = async (questionType, countOverride) => {
     const response = await fetch("/api/generate-session-candidates", {
       method: "POST",
       headers: {
@@ -76,7 +83,7 @@ const Generate = () => {
         theme: mode === "standard" ? theme : mode === "theme" ? roundThemeSubject : theme,
         excludeUsed,
         avoidDuplicates,
-        count: mode === "free_build" ? Number(freeBuildCount) : undefined,
+        count: countOverride,
       }),
     });
 
@@ -109,33 +116,35 @@ const Generate = () => {
       let next = { ...emptyGroupedCandidates };
 
       if (mode === "standard") {
-        const [tf, mc, written] = await Promise.all([
-          callGenerateRoute("true_false"),
-          callGenerateRoute("multiple_choice"),
-          callGenerateRoute("written"),
+        const [tf, mc, written, picture] = await Promise.all([
+          callGenerateRoute("true_false", standardCounts.true_false),
+          callGenerateRoute("multiple_choice", standardCounts.multiple_choice),
+          callGenerateRoute("written", standardCounts.written),
+          callGenerateRoute("picture", standardCounts.picture),
         ]);
 
         next = {
           true_false: tf,
           multiple_choice: mc,
           written,
-          picture: [],
+          picture,
         };
       } else if (mode === "theme") {
-        const [tf, mc, written] = await Promise.all([
-          callGenerateRoute("true_false"),
-          callGenerateRoute("multiple_choice"),
-          callGenerateRoute("written"),
+        const [tf, mc, written, picture] = await Promise.all([
+          callGenerateRoute("true_false", 3),
+          callGenerateRoute("multiple_choice", 3),
+          callGenerateRoute("written", 3),
+          callGenerateRoute("picture", 1),
         ]);
 
         next = {
           true_false: tf,
           multiple_choice: mc,
           written,
-          picture: [],
+          picture,
         };
       } else {
-        const generated = await callGenerateRoute(freeBuildType);
+        const generated = await callGenerateRoute(freeBuildType, Number(freeBuildCount));
 
         next = {
           ...emptyGroupedCandidates,
@@ -190,8 +199,8 @@ const Generate = () => {
         user_id: userId,
         category: candidate.category || null,
         question_text: candidate.question_text,
-        question_type: candidate.question_type || type,
-        has_image: candidate.has_image || false,
+        question_type: candidate.question_type || (type === "picture" ? "written" : type),
+        has_image: candidate.has_image || type === "picture",
         image_url: candidate.image_url || null,
         theme: mode === "theme" ? roundThemeSubject || null : theme || null,
         correct_answer: candidate.correct_answer,
@@ -222,19 +231,8 @@ const Generate = () => {
     }
   };
 
-  const handleSaveSection = async (type) => {
-    const section = groupedCandidates[type];
-    if (!section.length) return;
-
-    try {
-      for (let i = 0; i < section.length; i += 1) {
-        // eslint-disable-next-line no-await-in-loop
-        await handleSaveToLibrary(section[i], type, i);
-      }
-    } catch (error) {
-      console.error(error);
-    }
-  };
+  const getTypeLabel = (type) =>
+    questionTypes.find((q) => q.value === type)?.label || type;
 
   const sectionsToRender = questionTypes.filter((t) => groupedCandidates[t.value]?.length > 0);
 
@@ -277,6 +275,10 @@ const Generate = () => {
                 <span className="text-zinc-500">Fun Fact: </span>
                 <span className="text-zinc-300">{candidate.fun_fact}</span>
               </p>
+            )}
+
+            {type === "picture" && (
+              <p className="text-xs text-amber-300 mt-2">Picture-based question</p>
             )}
           </div>
 
@@ -377,9 +379,9 @@ const Generate = () => {
           </CardTitle>
           <CardDescription className="text-zinc-500">
             {mode === "standard"
-              ? "Creates grouped results for True/False, Multiple Choice, and Written"
+              ? "Generates 9 T/F, 9 MC, 9 Written, and 3 Picture questions"
               : mode === "theme"
-              ? "Generate a themed batch grouped by type"
+              ? "Generates 3 T/F, 3 MC, 3 Written, and 1 Picture question"
               : "Generate a custom batch for one selected question type"}
           </CardDescription>
         </CardHeader>
@@ -409,6 +411,7 @@ const Generate = () => {
                     <SelectItem value="true_false" className="text-white">True/False</SelectItem>
                     <SelectItem value="multiple_choice" className="text-white">Multiple Choice</SelectItem>
                     <SelectItem value="written" className="text-white">Written</SelectItem>
+                    <SelectItem value="picture" className="text-white">Picture</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -527,25 +530,14 @@ const Generate = () => {
                       </div>
                     </div>
 
-                    <div className="flex gap-2">
-                      <Button
-                        variant="outline"
-                        onClick={() => handleSaveSection(type.value)}
-                        className="border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/10"
-                      >
-                        <Save size={16} className="mr-2" />
-                        Save All
-                      </Button>
-
-                      <Button
-                        variant="outline"
-                        onClick={() => handleDiscardSection(type.value)}
-                        className="border-zinc-700 text-zinc-300 hover:bg-zinc-800"
-                      >
-                        <Trash2 size={16} className="mr-2" />
-                        Discard Section
-                      </Button>
-                    </div>
+                    <Button
+                      variant="outline"
+                      onClick={() => handleDiscardSection(type.value)}
+                      className="border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+                    >
+                      <Trash2 size={16} className="mr-2" />
+                      Discard Section
+                    </Button>
                   </div>
                 </CardHeader>
 
