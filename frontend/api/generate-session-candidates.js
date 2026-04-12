@@ -4,17 +4,22 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { sessionId, questionType } = req.body;
+    const { sessionId, questionType, count } = req.body;
 
     if (!sessionId || !questionType) {
       return res.status(400).json({ error: "Missing sessionId or questionType" });
     }
 
+    const safeCount =
+      Number.isInteger(Number(count)) && Number(count) > 0 && Number(count) <= 20
+        ? Number(count)
+        : 5;
+
     const typeConfigs = {
       true_false: {
         label: "True/False",
         prompt: `
-Generate exactly 5 True/False trivia question candidates.
+Generate exactly ${safeCount} True/False trivia question candidates.
 
 Rules:
 - Return valid JSON only.
@@ -49,7 +54,7 @@ Rules:
       multiple_choice: {
         label: "Multiple Choice",
         prompt: `
-Generate exactly 5 Multiple Choice trivia question candidates.
+Generate exactly ${safeCount} Multiple Choice trivia question candidates.
 
 Rules:
 - Return valid JSON only.
@@ -84,7 +89,7 @@ Rules:
       written: {
         label: "Written",
         prompt: `
-Generate exactly 5 Written Answer trivia question candidates.
+Generate exactly ${safeCount} Written Answer trivia question candidates.
 
 Rules:
 - Return valid JSON only.
