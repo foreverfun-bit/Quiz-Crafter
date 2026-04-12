@@ -127,11 +127,22 @@ const ImportCSV = () => {
 
       const endpoint = importType === "csv" ? "/api/import-csv" : "/api/import-pdf";
 
-      const response = await fetch(endpoint, {
-        method: "POST",
-        body: formData,
-      });
+     const response = await fetch(endpoint, {
+  method: "POST",
+  body: formData,
+});
 
+let data;
+
+try {
+  data = await response.json(); // ✅ ONLY read once
+} catch (err) {
+  throw new Error("Invalid server response");
+}
+
+if (!response.ok) {
+  throw new Error(data.error || "Import failed");
+}
       const raw = await response.text();
       const data = raw ? JSON.parse(raw) : {};
 
