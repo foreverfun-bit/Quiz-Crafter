@@ -70,7 +70,7 @@ const handleLogin = async (e) => {
             alt="4EVER Trivia"
             className="w-20 h-20 mx-auto mb-4"
           />
-          <h1 className="text-3xl font-bold gradient-text font-heading">Trivia Forge</h1>
+          <h1 className="text-3xl font-bold gradient-text font-heading">Quiz Crafter</h1>
           <p className="text-zinc-500 mt-2">Your trivia command center</p>
         </div>
 
