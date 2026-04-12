@@ -17,13 +17,38 @@ function readFileFromRequest(req) {
   });
 }
 
-function extractCsvTextFromMultipart(buffer) {
+function extractMultipartParts(buffer) {
   const text = buffer.toString("utf8");
-  const parts = text.split("\r\n\r\n");
-  if (parts.length < 2) return "";
-  const filePart = parts.slice(1).join("\r\n\r\n");
-  const endBoundaryIndex = filePart.lastIndexOf("\r\n------");
-  return endBoundaryIndex >= 0 ? filePart.slice(0, endBoundaryIndex) : filePart;
+  const segments = text.split("\r\n");
+  const boundary = segments[0];
+
+  if (!boundary) {
+    return {};
+  }
+
+  const parts = text.split(boundary).filter(
+    (part) => part && part !== "--\r\n" && part !== "--"
+  );
+
+  const result = {};
+
+  for (const part of parts) {
+    const nameMatch = part.match(/name="([^"]+)"/);
+    if (!nameMatch) continue;
+
+    const fieldName = nameMatch[1];
+    const splitIndex = part.indexOf("\r\n\r\n");
+    if (splitIndex === -1) continue;
+
+    let value = part.slice(splitIndex + 4);
+
+    value = value.replace(/\r\n--$/, "");
+    value = value.replace(/\r\n$/, "");
+
+    result[fieldName] = value;
+  }
+
+  return result;
 }
 
 function getValue(row, ...keys) {
@@ -60,27 +85,22 @@ function cleanOptionPrefix(value) {
 }
 
 function detectCsvFormat(row) {
-  const keys = Object.keys(row || {}).map((k) => k.trim());
-
-  const lowerKeys = keys.map((k) => k.toLowerCase());
+  const keys = Object.keys(row || {}).map((k) => k.trim().toLowerCase());
 
   const isCrowdpurr =
-    lowerKeys.includes("question") &&
-    lowerKeys.includes("category") &&
-    lowerKeys.includes("correctanswer");
-
-  const trivnowSignals = [
-    "option a",
-    "option b",
-    "option c",
-    "option d",
-    "correct answer",
-    "question type",
-  ];
+    keys.includes("question") &&
+    keys.includes("category") &&
+    keys.includes("correctanswer");
 
   const isTrivNow =
-    lowerKeys.includes("question") &&
-    trivnowSignals.some((signal) => lowerKeys.includes(signal));
+    keys.includes("question") &&
+    (
+      keys.includes("option a") ||
+      keys.includes("option b") ||
+      keys.includes("option c") ||
+      keys.includes("option d") ||
+      keys.includes("correct answer")
+    );
 
   if (isCrowdpurr) return "crowdpurr";
   if (isTrivNow) return "trivnow";
@@ -94,13 +114,11 @@ function normalizeCrowdpurrRow(row) {
   const incorrectRaw = getValue(row, "incorrectAnswers", "incorrectanswers");
   const note = getValue(row, "note", "Note");
   const round = getValue(row, "round", "Round");
-  const source = "imported";
 
   if (!questionText || !correctAnswer) return null;
 
   let questionType = "written";
   let incorrectAnswers = null;
-
   const answerLower = correctAnswer.toLowerCase();
 
   if (answerLower === "true" || answerLower === "false") {
@@ -123,13 +141,11 @@ function normalizeCrowdpurrRow(row) {
     question_type: questionType,
     incorrect_answers: incorrectAnswers,
     fun_fact: note || null,
-    venue: null,
-    date_used: null,
     round: round || null,
     has_image: false,
     image_url: null,
     difficulty: "medium",
-    source,
+    source: "imported",
   };
 }
 
@@ -143,20 +159,17 @@ function normalizeTrivNowRow(row) {
     "Answer",
     "answer"
   );
-  const optionA = getValue(row, "Option A", "option a", "A", "a");
-  const optionB = getValue(row, "Option B", "option b", "B", "b");
-  const optionC = getValue(row, "Option C", "option c", "C", "c");
-  const optionD = getValue(row, "Option D", "option d", "D", "d");
+
+  const optionA = getValue(row, "Option A", "option a");
+  const optionB = getValue(row, "Option B", "option b");
+  const optionC = getValue(row, "Option C", "option c");
+  const optionD = getValue(row, "Option D", "option d");
   const funFact = getValue(row, "Fun Fact", "fun fact", "Note", "note");
-  const venue = getValue(row, "Venue", "venue");
-  const dateUsed = getValue(row, "Date Used", "date used", "Date", "date");
-  const source = "imported";
 
   if (!questionText || !correctAnswer) return null;
 
   let questionType = "written";
   let incorrectAnswers = null;
-
   const answerLower = correctAnswer.toLowerCase();
 
   const options = [optionA, optionB, optionC, optionD]
@@ -179,13 +192,11 @@ function normalizeTrivNowRow(row) {
     question_type: questionType,
     incorrect_answers: incorrectAnswers,
     fun_fact: funFact || null,
-    venue: venue || null,
-    date_used: dateUsed || null,
     round: null,
     has_image: false,
     image_url: null,
     difficulty: "medium",
-    source,
+    source: "imported",
   };
 }
 
@@ -201,9 +212,6 @@ function normalizeGenericRow(row) {
     "incorrectanswers"
   );
   const funFact = getValue(row, "Fun Fact", "fun fact", "note", "Note");
-  const venue = getValue(row, "Venue", "venue");
-  const dateUsed = getValue(row, "Date Used", "date used", "Date", "date");
-  const source = "imported";
 
   if (!questionText || !correctAnswer) return null;
 
@@ -231,13 +239,11 @@ function normalizeGenericRow(row) {
     question_type: questionType,
     incorrect_answers: incorrectAnswers,
     fun_fact: funFact || null,
-    venue: venue || null,
-    date_used: dateUsed || null,
     round: null,
     has_image: false,
     image_url: null,
     difficulty: "medium",
-    source,
+    source: "imported",
   };
 }
 
@@ -248,18 +254,25 @@ function normalizeRowByFormat(row, format) {
 }
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
-
   try {
+    if (req.method !== "POST") {
+      return res.status(405).json({ error: "Method not allowed" });
+    }
+
     const supabase = createClient(
       process.env.SUPABASE_URL,
       process.env.SUPABASE_SERVICE_ROLE_KEY
     );
 
     const rawBuffer = await readFileFromRequest(req);
-    const csvText = extractCsvTextFromMultipart(rawBuffer);
+    const parts = extractMultipartParts(rawBuffer);
+
+    const csvText = parts.file || "";
+    const sessionUserId = (parts.sessionUserId || "").trim();
+
+    if (!sessionUserId) {
+      return res.status(400).json({ error: "Missing session user id" });
+    }
 
     if (!csvText.trim()) {
       return res.status(400).json({ error: "No CSV content found" });
@@ -285,20 +298,7 @@ export default async function handler(req, res) {
 
     let imported = 0;
     let skipped = 0;
-    let updated = 0;
-    let sessionsCreated = 0;
     const errors = [];
-
-    const {
-      data: { users },
-      error: userError,
-    } = await supabase.auth.admin.listUsers();
-
-    if (userError || !users?.length) {
-      return res.status(500).json({ error: "Could not determine import user" });
-    }
-
-    const userId = users[0].id;
 
     for (const rawRow of rows) {
       try {
@@ -324,7 +324,7 @@ export default async function handler(req, res) {
         }
 
         const { error: insertError } = await supabase.from("questions").insert({
-          user_id: userId,
+          user_id: sessionUserId,
           category: normalized.category,
           question_text: normalized.question_text,
           correct_answer: normalized.correct_answer,
@@ -348,8 +348,8 @@ export default async function handler(req, res) {
     return res.status(200).json({
       format: detectedFormat,
       imported,
-      updated,
-      sessions_created: sessionsCreated,
+      updated: 0,
+      sessions_created: 0,
       skipped,
       errors,
     });
