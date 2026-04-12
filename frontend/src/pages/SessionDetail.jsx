@@ -362,40 +362,6 @@ const handleSaveToLibrary = async (candidate, candidateIndex) => {
   }
 };
 
-    const raw = await response.text();
-    const data = raw ? JSON.parse(raw) : {};
-
-    if (!response.ok) {
-      throw new Error(data.error || "Failed to save to library");
-    }
-
-    const savedQuestion = data.question;
-    if (!savedQuestion?.id) {
-      throw new Error("Question was not saved");
-    }
-
-    setQuestionsById((prev) => ({
-      ...prev,
-      [savedQuestion.id]: savedQuestion,
-    }));
-
-    setCandidates((prev) => {
-      const updated = prev.filter((_, i) => i !== candidateIndex);
-      if (updated.length === 0) {
-        setShowCandidateDrawer(false);
-      }
-      return updated;
-    });
-
-    toast.success("Saved to library!");
-  } catch (error) {
-    console.error("Save to library error:", error);
-    toast.error(error?.message || "Failed to save to library");
-  } finally {
-    setSavingCandidateIndex(null);
-  }
-};
-
   const handleGoLive = () => {
     toast.info("Live hosting will be wired next.");
   };
