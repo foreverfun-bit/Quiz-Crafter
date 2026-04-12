@@ -1,44 +1,25 @@
-import { useState, useEffect } from "react";
-import { api } from "../App";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
+import { useEffect, useMemo, useState } from "react";
+import { supabase } from "../lib/supabase";
+import { Card, CardContent } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
-import { 
+import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "../components/ui/select";
-import { ScrollArea } from "../components/ui/scroll-area";
 import { Badge } from "../components/ui/badge";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "../components/ui/dialog";
-import { Label } from "../components/ui/label";
-import { Textarea } from "../components/ui/textarea";
-import { 
-  Search, 
-  Heart, 
-  ThumbsDown,
+  Search,
   CheckCircle,
   List,
   MessageSquare,
   Image,
   Loader2,
   Filter,
-  Plus,
-  Pencil,
   Trash2,
-  Bot,
-  Upload,
-  FileText,
-  X
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -46,261 +27,135 @@ const questionTypes = [
   { value: "all", label: "All Types", icon: null },
   { value: "true_false", label: "True/False", icon: CheckCircle, color: "text-[#71E0DC]" },
   { value: "multiple_choice", label: "Multiple Choice", icon: List, color: "text-[#AEB2EF]" },
-  { value: "written", label: "Written Answer", icon: MessageSquare, color: "text-emerald-400" },
-  { value: "picture", label: "Picture Round", icon: Image, color: "text-amber-400" },
-];
-
-const statusOptions = [
-  { value: "all", label: "All Status" },
-  { value: "liked", label: "Liked", color: "text-emerald-400" },
-  { value: "neutral", label: "Neutral", color: "text-zinc-400" },
-  { value: "used", label: "Used (Past)", color: "text-[#71E0DC]" },
-  { value: "disliked", label: "Disliked", color: "text-red-400" },
+  { value: "written", label: "Written", icon: MessageSquare, color: "text-emerald-400" },
+  { value: "picture", label: "Picture", icon: Image, color: "text-amber-400" },
 ];
 
 const sourceOptions = [
   { value: "all", label: "All Sources" },
-  { value: "ai", label: "AI Generated", icon: Bot },
-  { value: "imported", label: "Imported", icon: Upload },
-  { value: "manual", label: "Manual", icon: FileText },
+  { value: "ai", label: "AI Generated" },
+  { value: "imported", label: "Imported" },
+  { value: "manual", label: "Manual" },
+];
+
+const difficultyOptions = [
+  { value: "all", label: "All Difficulty" },
+  { value: "easy", label: "Easy" },
+  { value: "medium", label: "Medium" },
+  { value: "hard", label: "Hard" },
 ];
 
 const Library = () => {
   const [questions, setQuestions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState(null);
+
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
-  const [statusFilter, setStatusFilter] = useState("all");
   const [sourceFilter, setSourceFilter] = useState("all");
-  const [categories, setCategories] = useState([]);
+  const [difficultyFilter, setDifficultyFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
-  
-  // Modal states
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [editingQuestion, setEditingQuestion] = useState(null);
-  const [formData, setFormData] = useState({
-    category: "",
-    question: "",
-    answer: "",
-    question_type: "multiple_choice",
-    options: ["", "", "", ""],
-    fun_fact: "",
-    image_url: "",
-    venue: "",
-    date_used: ""
-  });
-  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     fetchQuestions();
-    fetchCategories();
   }, []);
-
-  useEffect(() => {
-    fetchQuestions();
-  }, [statusFilter]);
 
   const fetchQuestions = async () => {
     setLoading(true);
     try {
-      if (statusFilter === "disliked" || statusFilter === "used") {
-        // Special case to show disliked or used questions
-        const response = await api.get("/questions?include_used=true");
-        const allQuestions = response.data;
-        if (statusFilter === "disliked") {
-          setQuestions(allQuestions.filter(q => q.status === "disliked"));
-        } else {
-          setQuestions(allQuestions.filter(q => q.status === "used"));
-        }
-      } else {
-        const response = await api.get("/questions");
-        setQuestions(response.data);
-      }
+      const { data, error } = await supabase
+        .from("questions")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+
+      setQuestions(data || []);
     } catch (error) {
-      toast.error("Failed to load questions");
+      console.error("Failed to load questions:", error);
+      toast.error(error.message || "Failed to load library");
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchCategories = async () => {
-    try {
-      const response = await api.get("/categories");
-      setCategories(response.data);
-    } catch (error) {
-      console.error("Failed to load categories");
-    }
-  };
-
-  const handleLike = async (questionId) => {
-    try {
-      await api.patch(`/questions/${questionId}/like`);
-      setQuestions(prev => 
-        prev.map(q => q.id === questionId ? { ...q, status: "liked" } : q)
-      );
-      toast.success("Question liked!");
-    } catch (error) {
-      toast.error("Failed to update question");
-    }
-  };
-
-  const handleDislike = async (questionId) => {
-    try {
-      await api.patch(`/questions/${questionId}/dislike`);
-      setQuestions(prev => 
-        prev.map(q => q.id === questionId ? { ...q, status: "disliked" } : q)
-      );
-      toast.success("Question will be hidden from suggestions");
-    } catch (error) {
-      toast.error("Failed to update question");
-    }
-  };
-
-  const handleNeutral = async (questionId) => {
-    try {
-      await api.patch(`/questions/${questionId}/neutral`);
-      setQuestions(prev => 
-        prev.map(q => q.id === questionId ? { ...q, status: "neutral" } : q)
-      );
-      toast.success("Status reset");
-    } catch (error) {
-      toast.error("Failed to update question");
-    }
-  };
-
   const handleDelete = async (questionId) => {
-    if (!confirm("Are you sure you want to delete this question?")) return;
-    
+    if (!window.confirm("Delete this question?")) return;
+
+    setDeletingId(questionId);
     try {
-      await api.delete(`/questions/${questionId}`);
-      setQuestions(prev => prev.filter(q => q.id !== questionId));
+      const { error } = await supabase.from("questions").delete().eq("id", questionId);
+      if (error) throw error;
+
+      setQuestions((prev) => prev.filter((q) => q.id !== questionId));
       toast.success("Question deleted");
     } catch (error) {
-      toast.error("Failed to delete question");
-    }
-  };
-
-  const openEditModal = (question) => {
-    setEditingQuestion(question);
-    setFormData({
-      category: question.category,
-      question: question.question,
-      answer: question.answer,
-      question_type: question.question_type,
-      options: question.options || ["", "", "", ""],
-      fun_fact: question.fun_fact || "",
-      image_url: question.image_url || "",
-      venue: question.venue || "",
-      date_used: question.date_used || ""
-    });
-    setShowAddModal(true);
-  };
-
-  const openAddModal = () => {
-    setEditingQuestion(null);
-    setFormData({
-      category: "",
-      question: "",
-      answer: "",
-      question_type: "multiple_choice",
-      options: ["", "", "", ""],
-      fun_fact: "",
-      image_url: "",
-      venue: "",
-      date_used: ""
-    });
-    setShowAddModal(true);
-  };
-
-  const handleSave = async () => {
-    if (!formData.question.trim() || !formData.answer.trim() || !formData.category.trim()) {
-      toast.error("Please fill in required fields");
-      return;
-    }
-
-    setSaving(true);
-    try {
-      const payload = {
-        ...formData,
-        options: formData.question_type === "multiple_choice" 
-          ? formData.options.filter(o => o.trim())
-          : null,
-        fun_fact: formData.fun_fact || null,
-        image_url: formData.image_url || null,
-        venue: formData.venue || null,
-        date_used: formData.date_used || null
-      };
-
-      if (editingQuestion) {
-        await api.put(`/questions/${editingQuestion.id}`, payload);
-        setQuestions(prev => 
-          prev.map(q => q.id === editingQuestion.id ? { ...q, ...payload } : q)
-        );
-        toast.success("Question updated!");
-      } else {
-        const response = await api.post("/questions", payload);
-        setQuestions(prev => [response.data, ...prev]);
-        toast.success("Question created!");
-      }
-      setShowAddModal(false);
-    } catch (error) {
-      toast.error("Failed to save question");
+      console.error("Delete failed:", error);
+      toast.error(error.message || "Failed to delete question");
     } finally {
-      setSaving(false);
+      setDeletingId(null);
     }
   };
 
-  // Filter questions
-  const filteredQuestions = questions.filter(q => {
-    if (searchQuery && !q.question.toLowerCase().includes(searchQuery.toLowerCase()) &&
-        !q.category.toLowerCase().includes(searchQuery.toLowerCase()) &&
-        !q.answer.toLowerCase().includes(searchQuery.toLowerCase())) {
-      return false;
-    }
-    if (typeFilter !== "all" && q.question_type !== typeFilter) return false;
-    if (statusFilter !== "all" && statusFilter !== "disliked" && statusFilter !== "used" && q.status !== statusFilter) return false;
-    if (sourceFilter !== "all" && q.source !== sourceFilter) return false;
-    if (categoryFilter !== "all" && q.category !== categoryFilter) return false;
-    return true;
-  });
+  const categories = useMemo(() => {
+    return [...new Set(questions.map((q) => q.category).filter(Boolean))].sort((a, b) =>
+      a.localeCompare(b)
+    );
+  }, [questions]);
 
-  const getTypeIcon = (type) => {
-    const typeObj = questionTypes.find(t => t.value === type);
-    return typeObj?.icon || CheckCircle;
+  const filteredQuestions = useMemo(() => {
+    return questions.filter((q) => {
+      const normalizedType = q.has_image ? "picture" : q.question_type;
+
+      const matchesSearch =
+        !searchQuery ||
+        q.question_text?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        q.category?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        q.correct_answer?.toLowerCase().includes(searchQuery.toLowerCase());
+
+      const matchesType = typeFilter === "all" || normalizedType === typeFilter;
+      const matchesSource = sourceFilter === "all" || (q.source || "manual") === sourceFilter;
+      const matchesDifficulty =
+        difficultyFilter === "all" || (q.difficulty || "medium") === difficultyFilter;
+      const matchesCategory = categoryFilter === "all" || q.category === categoryFilter;
+
+      return matchesSearch && matchesType && matchesSource && matchesDifficulty && matchesCategory;
+    });
+  }, [questions, searchQuery, typeFilter, sourceFilter, difficultyFilter, categoryFilter]);
+
+  const getTypeMeta = (question) => {
+    const normalizedType = question.has_image ? "picture" : question.question_type;
+    return (
+      questionTypes.find((t) => t.value === normalizedType) || questionTypes.find((t) => t.value === "written")
+    );
   };
 
-  const getTypeColor = (type) => {
-    const typeObj = questionTypes.find(t => t.value === type);
-    return typeObj?.color || "text-zinc-400";
-  };
+  if (loading) {
+    return (
+      <div className="p-6 lg:p-8 max-w-7xl mx-auto">
+        <div className="flex items-center justify-center py-20">
+          <Loader2 className="h-8 w-8 animate-spin text-zinc-500" />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto animate-fade-in" data-testid="library-page">
-      {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
         <div>
           <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">
             Question <span className="gradient-text">Library</span>
           </h1>
           <p className="text-zinc-500">
-            {filteredQuestions.length} question{filteredQuestions.length !== 1 ? 's' : ''} in your library
+            {filteredQuestions.length} question{filteredQuestions.length !== 1 ? "s" : ""} in your library
           </p>
         </div>
-        <Button
-          onClick={openAddModal}
-          className="gradient-btn"
-          data-testid="add-question-btn"
-        >
-          <Plus className="mr-2" size={18} />
-          Add Question
-        </Button>
       </div>
 
-      {/* Filters */}
       <Card className="glass-card mb-6">
         <CardContent className="p-4">
           <div className="flex flex-col lg:flex-row gap-4">
-            {/* Search */}
             <div className="flex-1 relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
               <Input
@@ -308,61 +163,58 @@ const Library = () => {
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search questions, categories, answers..."
                 className="pl-9 bg-zinc-950/50 border-white/10 text-white"
-                data-testid="search-input"
               />
             </div>
 
-            {/* Type Filter */}
             <Select value={typeFilter} onValueChange={setTypeFilter}>
-              <SelectTrigger className="w-full lg:w-44 bg-zinc-950/50 border-white/10 text-white" data-testid="type-filter">
+              <SelectTrigger className="w-full lg:w-44 bg-zinc-950/50 border-white/10 text-white">
                 <SelectValue placeholder="Question Type" />
               </SelectTrigger>
               <SelectContent className="bg-zinc-900 border-white/10">
                 {questionTypes.map((type) => (
-                  <SelectItem key={type.value} value={type.value} className="text-white hover:bg-zinc-800">
+                  <SelectItem key={type.value} value={type.value} className="text-white">
                     {type.label}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
 
-            {/* Status Filter */}
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-full lg:w-40 bg-zinc-950/50 border-white/10 text-white" data-testid="status-filter">
-                <SelectValue placeholder="Status" />
-              </SelectTrigger>
-              <SelectContent className="bg-zinc-900 border-white/10">
-                {statusOptions.map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value} className="text-white hover:bg-zinc-800">
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            {/* Source Filter */}
             <Select value={sourceFilter} onValueChange={setSourceFilter}>
-              <SelectTrigger className="w-full lg:w-40 bg-zinc-950/50 border-white/10 text-white" data-testid="source-filter">
+              <SelectTrigger className="w-full lg:w-40 bg-zinc-950/50 border-white/10 text-white">
                 <SelectValue placeholder="Source" />
               </SelectTrigger>
               <SelectContent className="bg-zinc-900 border-white/10">
                 {sourceOptions.map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value} className="text-white hover:bg-zinc-800">
+                  <SelectItem key={opt.value} value={opt.value} className="text-white">
                     {opt.label}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
 
-            {/* Category Filter */}
+            <Select value={difficultyFilter} onValueChange={setDifficultyFilter}>
+              <SelectTrigger className="w-full lg:w-40 bg-zinc-950/50 border-white/10 text-white">
+                <SelectValue placeholder="Difficulty" />
+              </SelectTrigger>
+              <SelectContent className="bg-zinc-900 border-white/10">
+                {difficultyOptions.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value} className="text-white">
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
             <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-              <SelectTrigger className="w-full lg:w-44 bg-zinc-950/50 border-white/10 text-white" data-testid="category-filter">
+              <SelectTrigger className="w-full lg:w-44 bg-zinc-950/50 border-white/10 text-white">
                 <SelectValue placeholder="Category" />
               </SelectTrigger>
               <SelectContent className="bg-zinc-900 border-white/10">
-                <SelectItem value="all" className="text-white hover:bg-zinc-800">All Categories</SelectItem>
+                <SelectItem value="all" className="text-white">
+                  All Categories
+                </SelectItem>
                 {categories.map((cat) => (
-                  <SelectItem key={cat} value={cat} className="text-white hover:bg-zinc-800">
+                  <SelectItem key={cat} value={cat} className="text-white">
                     {cat}
                   </SelectItem>
                 ))}
@@ -372,161 +224,107 @@ const Library = () => {
         </CardContent>
       </Card>
 
-      {/* Questions List */}
-      {loading ? (
-        <div className="flex items-center justify-center py-16">
-          <Loader2 className="h-8 w-8 animate-spin text-zinc-500" />
-        </div>
-      ) : filteredQuestions.length === 0 ? (
+      {filteredQuestions.length === 0 ? (
         <Card className="glass-card">
           <CardContent className="py-16 text-center">
             <div className="w-16 h-16 rounded-full bg-zinc-800 flex items-center justify-center mx-auto mb-4">
               <Filter className="text-zinc-600" size={32} />
             </div>
             <p className="text-zinc-500 mb-2">No questions found</p>
-            <p className="text-zinc-600 text-sm">
-              Try adjusting your filters or add a new question
-            </p>
+            <p className="text-zinc-600 text-sm">Try adjusting your filters or generate some questions first</p>
           </CardContent>
         </Card>
       ) : (
         <div className="space-y-4">
           {filteredQuestions.map((question, index) => {
-            const TypeIcon = getTypeIcon(question.question_type);
+            const typeMeta = getTypeMeta(question);
+            const TypeIcon = typeMeta?.icon || CheckCircle;
+
             return (
-              <Card 
+              <Card
                 key={question.id}
                 className="glass-card animate-slide-up"
-                style={{ animationDelay: `${index * 30}ms` }}
-                data-testid={`question-card-${index}`}
+                style={{ animationDelay: `${index * 25}ms` }}
               >
                 <CardContent className="p-6">
                   <div className="flex items-start justify-between gap-4 mb-4">
                     <div className="flex items-center gap-3 flex-wrap">
-                      <Badge className={`${
-                        question.question_type === 'true_false' ? 'badge-true-false' :
-                        question.question_type === 'multiple_choice' ? 'badge-multiple-choice' :
-                        question.question_type === 'written' ? 'badge-written' :
-                        'badge-picture'
-                      }`}>
-                        <TypeIcon size={12} className="mr-1" />
-                        {questionTypes.find(t => t.value === question.question_type)?.label}
+                      <Badge className="bg-zinc-800 text-zinc-200 border border-white/10">
+                        <TypeIcon size={12} className={`mr-1 ${typeMeta?.color || "text-zinc-400"}`} />
+                        {typeMeta?.label || question.question_type}
                       </Badge>
-                      <Badge variant="outline" className="text-zinc-400 border-zinc-700">
-                        {question.category}
+
+                      {question.category && (
+                        <Badge variant="outline" className="text-zinc-400 border-zinc-700">
+                          {question.category}
+                        </Badge>
+                      )}
+
+                      <Badge className="bg-zinc-900 text-zinc-400 border border-white/10">
+                        {question.source || "manual"}
                       </Badge>
-                      <Badge className={`${
-                        question.source === 'ai' ? 'badge-ai' :
-                        question.source === 'imported' ? 'badge-imported' :
-                        'badge-manual'
-                      }`}>
-                        {question.source}
-                      </Badge>
-                      {question.status === 'used' && (
-                        <Badge className="bg-[#71E0DC]/20 text-[#71E0DC] border-[#71E0DC]/30">
-                          Used
+
+                      {question.difficulty && (
+                        <Badge className="bg-zinc-900 text-zinc-400 border border-white/10">
+                          {question.difficulty}
                         </Badge>
                       )}
                     </div>
-                    <div className="flex items-center gap-1">
-                      {question.status !== 'used' && (
-                        <>
-                          <button
-                            onClick={() => question.status === 'liked' ? handleNeutral(question.id) : handleLike(question.id)}
-                            className={`p-2 rounded-lg transition-colors ${
-                              question.status === 'liked'
-                                ? 'bg-emerald-500/20 text-emerald-400'
-                                : 'hover:bg-zinc-800 text-zinc-500 hover:text-emerald-400'
-                            }`}
-                            data-testid={`like-btn-${index}`}
-                          >
-                            <Heart size={18} fill={question.status === 'liked' ? 'currentColor' : 'none'} />
-                          </button>
-                          <button
-                            onClick={() => question.status === 'disliked' ? handleNeutral(question.id) : handleDislike(question.id)}
-                            className={`p-2 rounded-lg transition-colors ${
-                              question.status === 'disliked'
-                                ? 'bg-red-500/20 text-red-400'
-                                : 'hover:bg-zinc-800 text-zinc-500 hover:text-red-400'
-                            }`}
-                            data-testid={`dislike-btn-${index}`}
-                          >
-                            <ThumbsDown size={18} fill={question.status === 'disliked' ? 'currentColor' : 'none'} />
-                          </button>
-                        </>
+
+                    <Button
+                      variant="ghost"
+                      onClick={() => handleDelete(question.id)}
+                      disabled={deletingId === question.id}
+                      className="text-zinc-500 hover:text-red-400 hover:bg-zinc-800"
+                    >
+                      {deletingId === question.id ? (
+                        <Loader2 size={16} className="animate-spin" />
+                      ) : (
+                        <Trash2 size={16} />
                       )}
-                      <button
-                        onClick={() => openEditModal(question)}
-                        className="p-2 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-white transition-colors"
-                        data-testid={`edit-btn-${index}`}
-                      >
-                        <Pencil size={18} />
-                      </button>
-                      <button
-                        onClick={() => handleDelete(question.id)}
-                        className="p-2 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-red-400 transition-colors"
-                        data-testid={`delete-btn-${index}`}
-                      >
-                        <Trash2 size={18} />
-                      </button>
-                    </div>
+                    </Button>
                   </div>
 
-                  <p className="text-white font-medium mb-3">{question.question}</p>
+                  <p className="text-white font-medium mb-3">{question.question_text}</p>
 
-                  {/* Display image for picture questions */}
                   {question.image_url && (
                     <div className="mb-3">
-                      <img 
-                        src={question.image_url.startsWith("/api") 
-                          ? `${process.env.REACT_APP_BACKEND_URL}${question.image_url}` 
-                          : question.image_url}
+                      <img
+                        src={question.image_url}
                         alt="Question"
                         className="w-full max-w-xs rounded-lg border border-white/10"
-                        data-testid={`library-question-image-${index}`}
                       />
                     </div>
                   )}
 
-                  {question.options && question.options.length > 0 && (
+                  {question.incorrect_answers && (
                     <div className="grid grid-cols-2 gap-2 mb-3">
-                      {question.options.map((option, optIndex) => (
-                        <div 
-                          key={optIndex}
-                          className="px-3 py-2 rounded-md text-sm bg-zinc-800/50 text-zinc-400"
-                        >
-                          {option}
-                        </div>
-                      ))}
+                      {question.incorrect_answers
+                        .split(";")
+                        .map((option) => option.trim())
+                        .filter(Boolean)
+                        .map((option, optIndex) => (
+                          <div
+                            key={optIndex}
+                            className="px-3 py-2 rounded-md text-sm bg-zinc-800/50 text-zinc-400"
+                          >
+                            {option}
+                          </div>
+                        ))}
                     </div>
                   )}
 
                   <div className="pt-3 border-t border-white/10 space-y-1">
                     <p className="text-sm">
                       <span className="text-zinc-500">Answer: </span>
-                      <span className="text-emerald-400 font-medium">{question.answer}</span>
+                      <span className="text-emerald-400 font-medium">{question.correct_answer}</span>
                     </p>
+
                     {question.fun_fact && (
                       <p className="text-sm">
                         <span className="text-zinc-500">Fun Fact: </span>
                         <span className="text-zinc-300">{question.fun_fact}</span>
                       </p>
-                    )}
-                    {(question.venue || question.date_used) && (
-                      <div className="flex items-center gap-4 mt-2 pt-2 border-t border-white/5">
-                        {question.venue && (
-                          <p className="text-xs">
-                            <span className="text-zinc-600">Venue: </span>
-                            <span className="text-zinc-400">{question.venue}</span>
-                          </p>
-                        )}
-                        {question.date_used && (
-                          <p className="text-xs">
-                            <span className="text-zinc-600">Date Used: </span>
-                            <span className="text-zinc-400">{question.date_used}</span>
-                          </p>
-                        )}
-                      </div>
                     )}
                   </div>
                 </CardContent>
@@ -535,169 +333,6 @@ const Library = () => {
           })}
         </div>
       )}
-
-      {/* Add/Edit Modal */}
-      <Dialog open={showAddModal} onOpenChange={setShowAddModal}>
-        <DialogContent className="bg-zinc-900 border-white/10 text-white max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>
-              {editingQuestion ? "Edit Question" : "Add New Question"}
-            </DialogTitle>
-            <DialogDescription className="text-zinc-500">
-              {editingQuestion ? "Update the question details" : "Create a new trivia question"}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4 py-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label className="text-zinc-300">Category *</Label>
-                <Input
-                  value={formData.category}
-                  onChange={(e) => setFormData({...formData, category: e.target.value})}
-                  placeholder="e.g., 90s Music"
-                  className="bg-zinc-950/50 border-white/10 text-white"
-                  data-testid="modal-category-input"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label className="text-zinc-300">Question Type *</Label>
-                <Select 
-                  value={formData.question_type} 
-                  onValueChange={(v) => setFormData({...formData, question_type: v})}
-                >
-                  <SelectTrigger className="bg-zinc-950/50 border-white/10 text-white" data-testid="modal-type-select">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="bg-zinc-900 border-white/10">
-                    {questionTypes.filter(t => t.value !== "all").map((type) => (
-                      <SelectItem key={type.value} value={type.value} className="text-white hover:bg-zinc-800">
-                        {type.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-zinc-300">Question *</Label>
-              <Textarea
-                value={formData.question}
-                onChange={(e) => setFormData({...formData, question: e.target.value})}
-                placeholder="Enter your question..."
-                className="bg-zinc-950/50 border-white/10 text-white min-h-[80px]"
-                data-testid="modal-question-input"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-zinc-300">Answer *</Label>
-              <Input
-                value={formData.answer}
-                onChange={(e) => setFormData({...formData, answer: e.target.value})}
-                placeholder="Correct answer"
-                className="bg-zinc-950/50 border-white/10 text-white"
-                data-testid="modal-answer-input"
-              />
-            </div>
-
-            {formData.question_type === "multiple_choice" && (
-              <div className="space-y-2">
-                <Label className="text-zinc-300">Options (for multiple choice)</Label>
-                <div className="grid grid-cols-2 gap-2">
-                  {formData.options.map((opt, idx) => (
-                    <Input
-                      key={idx}
-                      value={opt}
-                      onChange={(e) => {
-                        const newOptions = [...formData.options];
-                        newOptions[idx] = e.target.value;
-                        setFormData({...formData, options: newOptions});
-                      }}
-                      placeholder={`Option ${String.fromCharCode(65 + idx)}`}
-                      className="bg-zinc-950/50 border-white/10 text-white"
-                      data-testid={`modal-option-${idx}`}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="space-y-2">
-              <Label className="text-zinc-300">Fun Fact (optional)</Label>
-              <Textarea
-                value={formData.fun_fact}
-                onChange={(e) => setFormData({...formData, fun_fact: e.target.value})}
-                placeholder="Share an interesting fact about this answer..."
-                className="bg-zinc-950/50 border-white/10 text-white min-h-[60px]"
-                data-testid="modal-funfact-input"
-              />
-            </div>
-
-            {formData.question_type === "picture" && (
-              <div className="space-y-2">
-                <Label className="text-zinc-300">Image URL (for picture questions)</Label>
-                <Input
-                  value={formData.image_url}
-                  onChange={(e) => setFormData({...formData, image_url: e.target.value})}
-                  placeholder="https://example.com/image.jpg"
-                  className="bg-zinc-950/50 border-white/10 text-white"
-                  data-testid="modal-image-input"
-                />
-              </div>
-            )}
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label className="text-zinc-300">Venue (optional)</Label>
-                <Input
-                  value={formData.venue}
-                  onChange={(e) => setFormData({...formData, venue: e.target.value})}
-                  placeholder="e.g., The Pub"
-                  className="bg-zinc-950/50 border-white/10 text-white"
-                  data-testid="modal-venue-input"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label className="text-zinc-300">Date Used (optional)</Label>
-                <Input
-                  value={formData.date_used}
-                  onChange={(e) => setFormData({...formData, date_used: e.target.value})}
-                  placeholder="e.g., 2024-01-15"
-                  className="bg-zinc-950/50 border-white/10 text-white"
-                  data-testid="modal-dateused-input"
-                />
-              </div>
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setShowAddModal(false)}
-              className="border-white/20 text-white hover:bg-zinc-800"
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={handleSave}
-              disabled={saving}
-              className="gradient-btn"
-              data-testid="modal-save-btn"
-            >
-              {saving ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Saving...
-                </>
-              ) : (
-                editingQuestion ? "Update Question" : "Create Question"
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 };
