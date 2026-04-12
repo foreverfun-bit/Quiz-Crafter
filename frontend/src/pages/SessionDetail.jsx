@@ -294,7 +294,7 @@ const SessionDetail = () => {
     });
   };
 
- const handleSaveToLibrary = async (candidate, candidateIndex) => {
+const handleSaveToLibrary = async (candidate, candidateIndex) => {
   setSavingCandidateIndex(candidateIndex);
 
   try {
@@ -320,6 +320,47 @@ const SessionDetail = () => {
         difficulty: candidate.difficulty || "medium",
       }),
     });
+
+    let data = {};
+    try {
+      const clonedResponse = response.clone();
+      const raw = await clonedResponse.text();
+      data = raw ? JSON.parse(raw) : {};
+    } catch (parseError) {
+      console.error("Failed to read save response:", parseError);
+      throw new Error("Save response could not be read");
+    }
+
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to save to library");
+    }
+
+    const savedQuestion = data.question;
+    if (!savedQuestion?.id) {
+      throw new Error("Question was not saved");
+    }
+
+    setQuestionsById((prev) => ({
+      ...prev,
+      [savedQuestion.id]: savedQuestion,
+    }));
+
+    setCandidates((prev) => {
+      const updated = prev.filter((_, i) => i !== candidateIndex);
+      if (updated.length === 0) {
+        setShowCandidateDrawer(false);
+      }
+      return updated;
+    });
+
+    toast.success("Saved to library!");
+  } catch (error) {
+    console.error("Save to library error:", error);
+    toast.error(error?.message || "Failed to save to library");
+  } finally {
+    setSavingCandidateIndex(null);
+  }
+};
 
     const raw = await response.text();
     const data = raw ? JSON.parse(raw) : {};
