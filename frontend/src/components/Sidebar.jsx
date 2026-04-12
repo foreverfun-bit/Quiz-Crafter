@@ -51,7 +51,7 @@ const Sidebar = ({ isOpen, onClose }) => {
                 alt="4EVER Trivia"
                 className="w-10 h-10"
               />
-              <span className="text-xl font-bold gradient-text">Trivia Forge</span>
+              <span className="text-xl font-bold gradient-text">Quiz Crafter</span>
             </div>
             <button 
               onClick={onClose}
