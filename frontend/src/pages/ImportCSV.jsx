@@ -1,5 +1,5 @@
-import { supabase } from "../lib/supabase";
 import { useRef, useState } from "react";
+import { supabase } from "../lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
@@ -68,11 +68,14 @@ const ImportCSV = () => {
         body: formData,
       });
 
+      const raw = await response.text();
+
       let data;
       try {
-        data = await response.json();
+        data = raw ? JSON.parse(raw) : {};
       } catch (err) {
-        throw new Error("Invalid preview response");
+        console.error("Raw CSV preview response:", raw);
+        throw new Error(raw || "Invalid preview response");
       }
 
       if (!response.ok) {
@@ -100,11 +103,14 @@ const ImportCSV = () => {
         body: formData,
       });
 
+      const raw = await response.text();
+
       let data;
       try {
-        data = await response.json();
+        data = raw ? JSON.parse(raw) : {};
       } catch (err) {
-        throw new Error("Invalid preview response");
+        console.error("Raw PDF preview response:", raw);
+        throw new Error(raw || "Invalid preview response");
       }
 
       if (!response.ok) {
@@ -125,67 +131,67 @@ const ImportCSV = () => {
     }
   };
 
- const handleImport = async () => {
-  if (!file) {
-    toast.error("Please select a file first");
-    return;
-  }
-
-  setImporting(true);
-
-  try {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    const userId = session?.user?.id;
-    if (!userId) {
-      throw new Error("You must be signed in");
+  const handleImport = async () => {
+    if (!file) {
+      toast.error("Please select a file first");
+      return;
     }
 
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("sessionUserId", userId);
+    setImporting(true);
 
-    const endpoint = importType === "csv" ? "/api/import-csv" : "/api/import-pdf";
-
-    const response = await fetch(endpoint, {
-      method: "POST",
-      body: formData,
-    });
-
-    const raw = await response.text();
-
-    let data;
     try {
-      data = raw ? JSON.parse(raw) : {};
-    } catch (err) {
-      console.error("Raw import response:", raw);
-      throw new Error(raw || "Invalid server response");
-    }
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
 
-    if (!response.ok) {
-      throw new Error(data.error || "Import failed");
-    }
+      const userId = session?.user?.id;
+      if (!userId) {
+        throw new Error("You must be signed in");
+      }
 
-    setResult(data);
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("sessionUserId", userId);
 
-    if (data.imported > 0) {
-      toast.success(`Successfully imported ${data.imported} question${data.imported !== 1 ? "s" : ""}!`);
-    } else {
-      toast.info("No new questions were imported");
+      const endpoint = importType === "csv" ? "/api/import-csv" : "/api/import-pdf";
+
+      const response = await fetch(endpoint, {
+        method: "POST",
+        body: formData,
+      });
+
+      const raw = await response.text();
+
+      let data;
+      try {
+        data = raw ? JSON.parse(raw) : {};
+      } catch (err) {
+        console.error("Raw import response:", raw);
+        throw new Error(raw || "Invalid server response");
+      }
+
+      if (!response.ok) {
+        throw new Error(data.error || "Import failed");
+      }
+
+      setResult(data);
+
+      if (data.imported > 0) {
+        toast.success(`Successfully imported ${data.imported} question${data.imported !== 1 ? "s" : ""}!`);
+      } else {
+        toast.info("No new questions were imported");
+      }
+    } catch (error) {
+      console.error("Import failed:", error);
+      setResult({
+        error: true,
+        message: error.message || "Import failed",
+      });
+      toast.error(error.message || "Import failed");
+    } finally {
+      setImporting(false);
     }
-  } catch (error) {
-    console.error("Import failed:", error);
-    setResult({
-      error: true,
-      message: error.message || "Import failed",
-    });
-    toast.error(error.message || "Import failed");
-  } finally {
-    setImporting(false);
-  }
-};
+  };
 
   const downloadTemplate = () => {
     const headers =
