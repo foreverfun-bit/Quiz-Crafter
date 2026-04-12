@@ -57,6 +57,7 @@ const ImportCSV = () => {
 
   const handlePreviewCSV = async (selectedFile) => {
     setPreviewing(true);
+
     try {
       const formData = new FormData();
       formData.append("file", selectedFile);
@@ -66,13 +67,12 @@ const ImportCSV = () => {
         body: formData,
       });
 
-let data;
-
-try {
-  data = await response.json();
-} catch (err) {
-  throw new Error("Invalid preview response");
-}
+      let data;
+      try {
+        data = await response.json();
+      } catch (err) {
+        throw new Error("Invalid preview response");
+      }
 
       if (!response.ok) {
         throw new Error(data.error || "Failed to preview CSV");
@@ -89,6 +89,7 @@ try {
 
   const handlePreviewPDF = async (selectedFile) => {
     setPreviewing(true);
+
     try {
       const formData = new FormData();
       formData.append("file", selectedFile);
@@ -98,8 +99,12 @@ try {
         body: formData,
       });
 
-      const raw = await response.text();
-      const data = raw ? JSON.parse(raw) : {};
+      let data;
+      try {
+        data = await response.json();
+      } catch (err) {
+        throw new Error("Invalid preview response");
+      }
 
       if (!response.ok) {
         throw new Error(data.error || "Failed to preview PDF");
@@ -126,30 +131,24 @@ try {
     }
 
     setImporting(true);
+
     try {
       const formData = new FormData();
       formData.append("file", file);
 
       const endpoint = importType === "csv" ? "/api/import-csv" : "/api/import-pdf";
 
-     const response = await fetch(endpoint, {
-  method: "POST",
-  body: formData,
-});
+      const response = await fetch(endpoint, {
+        method: "POST",
+        body: formData,
+      });
 
-let data;
-
-try {
-  data = await response.json(); // ✅ ONLY read once
-} catch (err) {
-  throw new Error("Invalid server response");
-}
-
-if (!response.ok) {
-  throw new Error(data.error || "Import failed");
-}
-      const raw = await response.text();
-      const data = raw ? JSON.parse(raw) : {};
+      let data;
+      try {
+        data = await response.json();
+      } catch (err) {
+        throw new Error("Invalid server response");
+      }
 
       if (!response.ok) {
         throw new Error(data.error || "Import failed");
@@ -442,7 +441,10 @@ if (!response.ok) {
               ) : (
                 <>
                   <p className="text-zinc-300 text-sm mb-3">
-                    Detected approximately <span className="text-[#71E0DC] font-semibold">{preview.detected_questions || 0}</span>{" "}
+                    Detected approximately{" "}
+                    <span className="text-[#71E0DC] font-semibold">
+                      {preview.detected_questions || 0}
+                    </span>{" "}
                     question{preview.detected_questions === 1 ? "" : "s"}
                   </p>
 
@@ -450,7 +452,9 @@ if (!response.ok) {
                     <div className="space-y-3">
                       {preview.preview.map((item, idx) => (
                         <div key={idx} className="p-3 rounded-lg bg-zinc-950/50 border border-white/5">
-                          <p className="text-white text-sm mb-1">{item.question || "Question preview unavailable"}</p>
+                          <p className="text-white text-sm mb-1">
+                            {item.question || "Question preview unavailable"}
+                          </p>
                           <p className="text-zinc-400 text-xs">
                             Answer: <span className="text-emerald-400">{item.answer || "Unknown"}</span>
                           </p>
@@ -516,6 +520,11 @@ if (!response.ok) {
                     <>
                       <p className="text-emerald-400 font-semibold mb-2">Import Complete</p>
                       <ul className="text-sm space-y-1">
+                        {result.format && (
+                          <li className="text-zinc-300">
+                            Format detected: <span className="text-[#71E0DC]">{result.format}</span>
+                          </li>
+                        )}
                         {result.imported > 0 && (
                           <li className="text-zinc-300">
                             <span className="text-emerald-400">{result.imported}</span> new questions imported
