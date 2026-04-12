@@ -18,7 +18,6 @@ import {
   MessageSquare,
   Image,
   Loader2,
-  Save,
   Trash2,
   Layers,
   Wand2,
@@ -70,7 +69,7 @@ const Generate = () => {
     setGroupedCandidates(emptyGroupedCandidates);
   };
 
-  const callGenerateRoute = async (questionType, countOverride) => {
+  const callGenerateRoute = async ({ questionType, count, themeValue, excludeCategories = [] }) => {
     const response = await fetch("/api/generate-session-candidates", {
       method: "POST",
       headers: {
@@ -80,10 +79,11 @@ const Generate = () => {
         sessionId: `generate-${mode}`,
         questionType,
         difficulty,
-        theme: mode === "standard" ? theme : mode === "theme" ? roundThemeSubject : theme,
+        theme: themeValue,
         excludeUsed,
         avoidDuplicates,
-        count: countOverride,
+        excludeCategories,
+        count,
       }),
     });
 
@@ -95,6 +95,28 @@ const Generate = () => {
     }
 
     return Array.isArray(data.candidates) ? data.candidates : [];
+  };
+
+  const generateUniqueStandardSection = async (questionType, count) => {
+    const results = [];
+    const usedCategories = [];
+
+    for (let i = 0; i < count; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const batch = await callGenerateRoute({
+        questionType,
+        count: 1,
+        themeValue: theme || "",
+        excludeCategories: usedCategories,
+      });
+
+      if (batch[0]) {
+        results.push(batch[0]);
+        if (batch[0].category) usedCategories.push(batch[0].category);
+      }
+    }
+
+    return results;
   };
 
   const handleGenerate = async () => {
@@ -117,10 +139,10 @@ const Generate = () => {
 
       if (mode === "standard") {
         const [tf, mc, written, picture] = await Promise.all([
-          callGenerateRoute("true_false", standardCounts.true_false),
-          callGenerateRoute("multiple_choice", standardCounts.multiple_choice),
-          callGenerateRoute("written", standardCounts.written),
-          callGenerateRoute("picture", standardCounts.picture),
+          generateUniqueStandardSection("true_false", standardCounts.true_false),
+          generateUniqueStandardSection("multiple_choice", standardCounts.multiple_choice),
+          generateUniqueStandardSection("written", standardCounts.written),
+          generateUniqueStandardSection("picture", standardCounts.picture),
         ]);
 
         next = {
@@ -131,10 +153,26 @@ const Generate = () => {
         };
       } else if (mode === "theme") {
         const [tf, mc, written, picture] = await Promise.all([
-          callGenerateRoute("true_false", 3),
-          callGenerateRoute("multiple_choice", 3),
-          callGenerateRoute("written", 3),
-          callGenerateRoute("picture", 1),
+          callGenerateRoute({
+            questionType: "true_false",
+            count: 3,
+            themeValue: roundThemeSubject,
+          }),
+          callGenerateRoute({
+            questionType: "multiple_choice",
+            count: 3,
+            themeValue: roundThemeSubject,
+          }),
+          callGenerateRoute({
+            questionType: "written",
+            count: 3,
+            themeValue: roundThemeSubject,
+          }),
+          callGenerateRoute({
+            questionType: "picture",
+            count: 1,
+            themeValue: roundThemeSubject,
+          }),
         ]);
 
         next = {
@@ -144,7 +182,11 @@ const Generate = () => {
           picture,
         };
       } else {
-        const generated = await callGenerateRoute(freeBuildType, Number(freeBuildCount));
+        const generated = await callGenerateRoute({
+          questionType: freeBuildType,
+          count: Number(freeBuildCount),
+          themeValue: theme || "",
+        });
 
         next = {
           ...emptyGroupedCandidates,
@@ -181,6 +223,15 @@ const Generate = () => {
     toast.success("Candidates cleared");
   };
 
+  const handleUpdateCandidateCategory = (type, index, value) => {
+    setGroupedCandidates((prev) => ({
+      ...prev,
+      [type]: prev[type].map((candidate, i) =>
+        i === index ? { ...candidate, category: value } : candidate
+      ),
+    }));
+  };
+
   const handleSaveToLibrary = async (candidate, type, index) => {
     const key = `${type}-${index}`;
     setSavingKey(key);
@@ -214,7 +265,6 @@ const Generate = () => {
       };
 
       const { error } = await supabase.from("questions").insert(payload);
-
       if (error) throw error;
 
       setGroupedCandidates((prev) => ({
@@ -231,9 +281,6 @@ const Generate = () => {
     }
   };
 
-  const getTypeLabel = (type) =>
-    questionTypes.find((q) => q.value === type)?.label || type;
-
   const sectionsToRender = questionTypes.filter((t) => groupedCandidates[t.value]?.length > 0);
 
   const renderQuestionCard = (candidate, type, index) => {
@@ -243,9 +290,12 @@ const Generate = () => {
       <Card key={saveId} className="bg-zinc-900/70 border-white/10">
         <CardContent className="p-4">
           <div className="flex items-start justify-between gap-4 mb-3">
-            <Badge variant="outline" className="border-zinc-700 text-zinc-400">
-              {candidate.category || "Uncategorized"}
-            </Badge>
+            <Input
+              value={candidate.category || ""}
+              onChange={(e) => handleUpdateCandidateCategory(type, index, e.target.value)}
+              placeholder="Category"
+              className="max-w-xs bg-zinc-950/50 border-white/10 text-white"
+            />
             <span className="text-zinc-600 text-sm font-mono">#{index + 1}</span>
           </div>
 
@@ -379,9 +429,9 @@ const Generate = () => {
           </CardTitle>
           <CardDescription className="text-zinc-500">
             {mode === "standard"
-              ? "Generates 9 T/F, 9 MC, 9 Written, and 3 Picture questions"
+              ? "Generates unique-category questions for each item"
               : mode === "theme"
-              ? "Generates 3 T/F, 3 MC, 3 Written, and 1 Picture question"
+              ? "Generates a themed batch grouped by type"
               : "Generate a custom batch for one selected question type"}
           </CardDescription>
         </CardHeader>
