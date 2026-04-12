@@ -71,7 +71,7 @@ const handleLogin = async (e) => {
             className="w-20 h-20 mx-auto mb-4"
           />
           <h1 className="text-3xl font-bold gradient-text font-heading">Quiz Crafter</h1>
-          <p className="text-zinc-500 mt-2">Your trivia command center</p>
+          <p className="text-zinc-500 mt-2">Craft unforgettable trivia experiences</p>
         </div>
 
         <Card className="bg-zinc-900/50 border-white/10 backdrop-blur-sm">
