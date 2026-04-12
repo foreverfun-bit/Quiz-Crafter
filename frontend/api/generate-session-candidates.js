@@ -4,7 +4,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { sessionId, questionType, count } = req.body;
+    const { sessionId, questionType, count, theme, excludeCategories } = req.body;
 
     if (!sessionId || !questionType) {
       return res.status(400).json({ error: "Missing sessionId or questionType" });
@@ -14,6 +14,15 @@ export default async function handler(req, res) {
       Number.isInteger(Number(count)) && Number(count) > 0 && Number(count) <= 20
         ? Number(count)
         : 5;
+
+    const excludedCategoryText =
+      Array.isArray(excludeCategories) && excludeCategories.length > 0
+        ? `Do not use any of these categories: ${excludeCategories.join(", ")}.`
+        : "";
+
+    const themeText = theme?.trim()
+      ? `Theme guidance: ${theme.trim()}.`
+      : "";
 
     const typeConfigs = {
       true_false: {
@@ -46,8 +55,11 @@ Rules:
 - image_url must be ""
 - difficulty should be "medium"
 - categories should be broad pub trivia categories
+- every candidate should aim for a distinct category when possible
 - fun_fact should be one short sentence
 - avoid obscure or badly worded questions
+${themeText}
+${excludedCategoryText}
         `,
       },
 
@@ -81,8 +93,11 @@ Rules:
 - image_url must be ""
 - difficulty should be "medium"
 - categories should be broad pub trivia categories
+- every candidate should aim for a distinct category when possible
 - fun_fact should be one short sentence
 - avoid obscure or badly worded questions
+${themeText}
+${excludedCategoryText}
         `,
       },
 
@@ -115,8 +130,11 @@ Rules:
 - image_url must be ""
 - difficulty should be "medium"
 - categories should be broad pub trivia categories
+- every candidate should aim for a distinct category when possible
 - fun_fact should be one short sentence
 - avoid obscure or badly worded questions
+${themeText}
+${excludedCategoryText}
         `,
       },
 
@@ -151,9 +169,11 @@ Rules:
 - correct_answer should be short and clear
 - difficulty should be "medium"
 - categories should be broad pub trivia categories
+- every candidate should aim for a distinct category when possible
 - fun_fact should be one short sentence
 - the question should make sense with an image
-- do not include markdown
+${themeText}
+${excludedCategoryText}
         `,
       },
     };
