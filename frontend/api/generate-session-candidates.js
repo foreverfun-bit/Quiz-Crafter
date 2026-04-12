@@ -119,6 +119,43 @@ Rules:
 - avoid obscure or badly worded questions
         `,
       },
+
+      picture: {
+        label: "Picture",
+        prompt: `
+Generate exactly ${safeCount} Picture-Based trivia question candidates.
+
+Rules:
+- Return valid JSON only.
+- Use this exact shape:
+{
+  "candidates": [
+    {
+      "category": "Movies",
+      "question_text": "Name this movie character from the image.",
+      "correct_answer": "Indiana Jones",
+      "incorrect_answers": [],
+      "fun_fact": "Indiana Jones first appeared in Raiders of the Lost Ark in 1981.",
+      "difficulty": "medium",
+      "question_type": "written",
+      "has_image": true,
+      "image_url": ""
+    }
+  ]
+}
+- these are picture-based questions
+- question_type must be "written"
+- has_image must be true
+- image_url must be ""
+- incorrect_answers must be []
+- correct_answer should be short and clear
+- difficulty should be "medium"
+- categories should be broad pub trivia categories
+- fun_fact should be one short sentence
+- the question should make sense with an image
+- do not include markdown
+        `,
+      },
     };
 
     const config = typeConfigs[questionType];
