@@ -66,8 +66,13 @@ const ImportCSV = () => {
         body: formData,
       });
 
-      const raw = await response.text();
-      const data = raw ? JSON.parse(raw) : {};
+let data;
+
+try {
+  data = await response.json();
+} catch (err) {
+  throw new Error("Invalid preview response");
+}
 
       if (!response.ok) {
         throw new Error(data.error || "Failed to preview CSV");
