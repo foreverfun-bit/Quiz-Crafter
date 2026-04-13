@@ -200,8 +200,8 @@ module.exports = async function handler(req, res) {
 
         imported += 1;
       } catch (err) {
-        console.error("ROW ERROR:", err);
-        errors.push(err.message || "Row import failed");
+  console.error("ROW ERROR:", err);
+  errors.push(`ROW ERROR: ${err.message || "Row import failed"}`);
       }
     }
 
@@ -214,9 +214,9 @@ module.exports = async function handler(req, res) {
       errors,
     });
   } catch (error) {
-    console.error("import-crowdpurr error:", error);
-    return res.status(500).json({
-      error: error.message || "Failed to import Crowdpurr CSV",
-    });
-  }
+  console.error("import-crowdpurr error:", error);
+  return res.status(500).json({
+    error: `import-crowdpurr error: ${error.message || "Failed to import Crowdpurr CSV"}`,
+  });
+}
 };
