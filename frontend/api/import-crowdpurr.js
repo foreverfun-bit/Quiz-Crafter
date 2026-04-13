@@ -1,7 +1,7 @@
-import Papa from "papaparse";
-import { createClient } from "@supabase/supabase-js";
+const Papa = require("papaparse");
+const { createClient } = require("@supabase/supabase-js");
 
-export const config = {
+exports.config = {
   api: {
     bodyParser: false,
   },
@@ -61,12 +61,22 @@ function cleanOptionPrefix(value) {
     .trim();
 }
 
+function getRowValue(row, key) {
+  if (row[key] !== undefined && row[key] !== null) return row[key];
+
+  const lowerKey = key.toLowerCase();
+  const matchedKey = Object.keys(row).find((k) => String(k).toLowerCase() === lowerKey);
+  if (matchedKey) return row[matchedKey];
+
+  return "";
+}
+
 function normalizeCrowdpurrRow(row) {
-  const questionText = String(row.question || "").trim();
-  const category = String(row.category || "Imported").trim() || "Imported";
-  const correctAnswer = String(row.correctAnswer || "").trim();
-  const incorrectRaw = String(row.incorrectAnswers || "").trim();
-  const note = String(row.note || "").trim();
+  const questionText = String(getRowValue(row, "question") || "").trim();
+  const category = String(getRowValue(row, "category") || "Imported").trim() || "Imported";
+  const correctAnswer = String(getRowValue(row, "correctAnswer") || "").trim();
+  const incorrectRaw = String(getRowValue(row, "incorrectAnswers") || "").trim();
+  const note = String(getRowValue(row, "note") || "").trim();
 
   if (!questionText || !correctAnswer) return null;
 
@@ -102,7 +112,7 @@ function normalizeCrowdpurrRow(row) {
   };
 }
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   try {
     if (req.method !== "POST") {
       return res.status(405).json({ error: "Method not allowed" });
@@ -130,11 +140,16 @@ export default async function handler(req, res) {
     const parsed = Papa.parse(csvText, {
       header: true,
       skipEmptyLines: true,
+      transformHeader: (header) => String(header || "").trim(),
     });
 
-    if (parsed.errors?.length) {
+    const nonFatalDuplicateWarnings = (parsed.errors || []).filter(
+      (err) => !String(err.message || "").includes("Duplicate headers found and renamed")
+    );
+
+    if (nonFatalDuplicateWarnings.length) {
       return res.status(400).json({
-        error: parsed.errors[0].message || "Failed to parse CSV",
+        error: nonFatalDuplicateWarnings[0].message || "Failed to parse CSV",
       });
     }
 
@@ -185,14 +200,13 @@ export default async function handler(req, res) {
 
         imported += 1;
       } catch (err) {
-  console.error("ROW ERROR:", err);
-  errors.push(err.message || "Row import failed");
-}
+        console.error("ROW ERROR:", err);
+        errors.push(err.message || "Row import failed");
       }
     }
 
-console.log("FINAL RESULT:", { imported, skipped, errors });
-  
+    console.log("FINAL RESULT:", { imported, skipped, errors });
+
     return res.status(200).json({
       format: "crowdpurr",
       imported,
@@ -205,4 +219,4 @@ console.log("FINAL RESULT:", { imported, skipped, errors });
       error: error.message || "Failed to import Crowdpurr CSV",
     });
   }
-}
+};
