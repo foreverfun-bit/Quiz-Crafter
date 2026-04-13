@@ -185,7 +185,9 @@ export default async function handler(req, res) {
 
         imported += 1;
       } catch (err) {
-        errors.push(err.message || "Row import failed");
+  console.error("ROW ERROR:", err);
+  errors.push(err.message || "Row import failed");
+}
       }
     }
 
