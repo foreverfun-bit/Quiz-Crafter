@@ -1,6 +1,6 @@
-import Papa from "papaparse";
+const Papa = require("papaparse");
 
-export const config = {
+exports.config = {
   api: {
     bodyParser: false,
   },
@@ -55,7 +55,7 @@ function isCrowdpurr(fields) {
   );
 }
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   try {
     if (req.method !== "POST") {
       return res.status(405).json({ error: "Method not allowed" });
@@ -72,18 +72,24 @@ export default async function handler(req, res) {
     const parsed = Papa.parse(csvText, {
       header: true,
       skipEmptyLines: true,
+      transformHeader: (header) => String(header || "").trim(),
     });
 
-    if (parsed.errors?.length) {
+    const nonFatalDuplicateWarnings = (parsed.errors || []).filter(
+      (err) => !String(err.message || "").includes("Duplicate headers found and renamed")
+    );
+
+    if (nonFatalDuplicateWarnings.length) {
       return res.status(400).json({
-        error: parsed.errors[0].message || "Failed to parse CSV",
+        error: nonFatalDuplicateWarnings[0].message || "Failed to parse CSV",
       });
     }
 
     const fields = parsed.meta.fields || [];
+
     if (!isCrowdpurr(fields)) {
       return res.status(400).json({
-        error: "This clean importer currently supports Crowdpurr CSV only",
+        error: "This importer currently supports Crowdpurr CSV only",
       });
     }
 
@@ -92,6 +98,9 @@ export default async function handler(req, res) {
       columns: fields,
       row_count: (parsed.data || []).length,
       preview: (parsed.data || []).slice(0, 5),
+      warnings: (parsed.errors || [])
+        .map((e) => e.message)
+        .filter((msg) => String(msg).includes("Duplicate headers found and renamed")),
     });
   } catch (error) {
     console.error("import-preview-crowdpurr error:", error);
@@ -99,4 +108,4 @@ export default async function handler(req, res) {
       error: error.message || "Failed to preview Crowdpurr CSV",
     });
   }
-}
+};
