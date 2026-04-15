@@ -1,7 +1,7 @@
-const Papa = require("papaparse");
-const { createClient } = require("@supabase/supabase-js");
+import Papa from "papaparse";
+import { createClient } from "@supabase/supabase-js";
 
-exports.config = {
+export const config = {
   api: {
     bodyParser: false,
   },
@@ -112,17 +112,17 @@ function normalizeCrowdpurrRow(row) {
   };
 }
 
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   try {
     if (req.method !== "POST") {
       return res.status(405).json({ error: "Method not allowed" });
     }
 
-console.log("ENV CHECK:", {
-      hasSupabaseUrl: !!process.env.SUPABASE_URL,
-      hasServiceRoleKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+    console.log("ENV CHECK:", {
+      url: process.env.SUPABASE_URL,
+      hasKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
     });
-    
+
     const supabase = createClient(
       process.env.SUPABASE_URL,
       process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -145,18 +145,7 @@ console.log("ENV CHECK:", {
     const parsed = Papa.parse(csvText, {
       header: true,
       skipEmptyLines: true,
-      transformHeader: (header) => String(header || "").trim(),
     });
-
-    const nonFatalDuplicateWarnings = (parsed.errors || []).filter(
-      (err) => !String(err.message || "").includes("Duplicate headers found and renamed")
-    );
-
-    if (nonFatalDuplicateWarnings.length) {
-      return res.status(400).json({
-        error: nonFatalDuplicateWarnings[0].message || "Failed to parse CSV",
-      });
-    }
 
     const rows = parsed.data || [];
 
@@ -168,60 +157,33 @@ console.log("ENV CHECK:", {
       try {
         const normalized = normalizeCrowdpurrRow(rawRow);
 
-        if (!normalized?.question_text || !normalized?.correct_answer) {
-          skipped += 1;
+        if (!normalized) {
+          skipped++;
           continue;
         }
 
-        const { data: existing, error: lookupError } = await supabase
-          .from("questions")
-          .select("id")
-          .eq("question_text", normalized.question_text)
-          .limit(1)
-          .maybeSingle();
-
-        if (lookupError) throw lookupError;
-
-        if (existing?.id) {
-          skipped += 1;
-          continue;
-        }
-
-        const { error: insertError } = await supabase.from("questions").insert({
+        const { error } = await supabase.from("questions").insert({
           user_id: sessionUserId,
-          category: normalized.category,
-          question_text: normalized.question_text,
-          correct_answer: normalized.correct_answer,
-          question_type: normalized.question_type,
-          incorrect_answers: normalized.incorrect_answers,
-          fun_fact: normalized.fun_fact,
-          has_image: normalized.has_image,
-          image_url: normalized.image_url,
-          difficulty: normalized.difficulty,
-          source: normalized.source,
+          ...normalized,
         });
 
-        if (insertError) throw insertError;
+        if (error) throw error;
 
-        imported += 1;
+        imported++;
       } catch (err) {
-  console.error("ROW ERROR:", err);
-  errors.push(`ROW ERROR: ${err.message || "Row import failed"}`);
+        errors.push(err.message);
       }
     }
 
-    console.log("FINAL RESULT:", { imported, skipped, errors });
-
     return res.status(200).json({
-      format: "crowdpurr",
       imported,
       skipped,
       errors,
     });
   } catch (error) {
-  console.error("import-crowdpurr error:", error);
-  return res.status(500).json({
-    error: `import-crowdpurr error: ${error.message || "Failed to import Crowdpurr CSV"}`,
-  });
+    console.error("IMPORT ERROR:", error);
+    return res.status(500).json({
+      error: error.message,
+    });
+  }
 }
-};
