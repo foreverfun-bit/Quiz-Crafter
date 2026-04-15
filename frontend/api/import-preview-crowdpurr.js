@@ -75,13 +75,14 @@ module.exports = async function handler(req, res) {
       transformHeader: (header) => String(header || "").trim(),
     });
 
-    const nonFatalDuplicateWarnings = (parsed.errors || []).filter(
-      (err) => !String(err.message || "").includes("Duplicate headers found and renamed")
+    const actualErrors = (parsed.errors || []).filter(
+      (err) =>
+        !String(err.message || "").includes("Duplicate headers found and renamed")
     );
 
-    if (nonFatalDuplicateWarnings.length) {
+    if (actualErrors.length > 0) {
       return res.status(400).json({
-        error: nonFatalDuplicateWarnings[0].message || "Failed to parse CSV",
+        error: actualErrors[0].message || "Failed to parse CSV",
       });
     }
 
@@ -100,7 +101,9 @@ module.exports = async function handler(req, res) {
       preview: (parsed.data || []).slice(0, 5),
       warnings: (parsed.errors || [])
         .map((e) => e.message)
-        .filter((msg) => String(msg).includes("Duplicate headers found and renamed")),
+        .filter((msg) =>
+          String(msg).includes("Duplicate headers found and renamed")
+        ),
     });
   } catch (error) {
     console.error("import-preview-crowdpurr error:", error);
