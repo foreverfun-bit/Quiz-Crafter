@@ -1,7 +1,7 @@
-import Papa from "papaparse";
-import { createClient } from "@supabase/supabase-js";
+const Papa = require("papaparse");
+const { createClient } = require("@supabase/supabase-js");
 
-export const config = {
+exports.config = {
   api: {
     bodyParser: false,
   },
@@ -112,21 +112,37 @@ function normalizeCrowdpurrRow(row) {
   };
 }
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   try {
     if (req.method !== "POST") {
       return res.status(405).json({ error: "Method not allowed" });
     }
 
+    const supabaseUrl =
+      process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+
+    const serviceRoleKey =
+      process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+
     console.log("ENV CHECK:", {
-      url: process.env.SUPABASE_URL,
-      hasKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+      hasSupabaseUrl: !!supabaseUrl,
+      hasServiceRoleKey: !!serviceRoleKey,
+      usingPublicUrlFallback: !process.env.SUPABASE_URL && !!process.env.NEXT_PUBLIC_SUPABASE_URL,
     });
 
-    const supabase = createClient(
-      process.env.SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_ROLE_KEY
-    );
+    if (!supabaseUrl) {
+      return res.status(500).json({
+        error: "Missing SUPABASE_URL and NEXT_PUBLIC_SUPABASE_URL",
+      });
+    }
+
+    if (!serviceRoleKey) {
+      return res.status(500).json({
+        error: "Missing SUPABASE_SERVICE_ROLE_KEY",
+      });
+    }
+
+    const supabase = createClient(supabaseUrl, serviceRoleKey);
 
     const rawBuffer = await readFileFromRequest(req);
     const parts = extractMultipartParts(rawBuffer);
@@ -145,7 +161,19 @@ export default async function handler(req, res) {
     const parsed = Papa.parse(csvText, {
       header: true,
       skipEmptyLines: true,
+      transformHeader: (header) => String(header || "").trim(),
     });
+
+    const realErrors = (parsed.errors || []).filter((err) => {
+      const msg = String(err.message || "");
+      return !msg.includes("Duplicate headers found and renamed");
+    });
+
+    if (realErrors.length > 0) {
+      return res.status(400).json({
+        error: realErrors[0].message || "Failed to parse CSV",
+      });
+    }
 
     const rows = parsed.data || [];
 
@@ -158,24 +186,51 @@ export default async function handler(req, res) {
         const normalized = normalizeCrowdpurrRow(rawRow);
 
         if (!normalized) {
-          skipped++;
+          skipped += 1;
           continue;
         }
 
-        const { error } = await supabase.from("questions").insert({
+        const { data: existing, error: lookupError } = await supabase
+          .from("questions")
+          .select("id")
+          .eq("question_text", normalized.question_text)
+          .limit(1)
+          .maybeSingle();
+
+        if (lookupError) throw lookupError;
+
+        if (existing?.id) {
+          skipped += 1;
+          continue;
+        }
+
+        const { error: insertError } = await supabase.from("questions").insert({
           user_id: sessionUserId,
-          ...normalized,
+          category: normalized.category,
+          question_text: normalized.question_text,
+          correct_answer: normalized.correct_answer,
+          question_type: normalized.question_type,
+          incorrect_answers: normalized.incorrect_answers,
+          fun_fact: normalized.fun_fact,
+          has_image: normalized.has_image,
+          image_url: normalized.image_url,
+          difficulty: normalized.difficulty,
+          source: normalized.source,
         });
 
-        if (error) throw error;
+        if (insertError) throw insertError;
 
-        imported++;
+        imported += 1;
       } catch (err) {
-        errors.push(err.message);
+        console.error("ROW ERROR:", err);
+        errors.push(err.message || "Row import failed");
       }
     }
 
+    console.log("FINAL RESULT:", { imported, skipped, errorsCount: errors.length });
+
     return res.status(200).json({
+      format: "crowdpurr",
       imported,
       skipped,
       errors,
@@ -183,7 +238,7 @@ export default async function handler(req, res) {
   } catch (error) {
     console.error("IMPORT ERROR:", error);
     return res.status(500).json({
-      error: error.message,
+      error: error.message || "Failed to import Crowdpurr CSV",
     });
   }
-}
+};
