@@ -75,14 +75,16 @@ module.exports = async function handler(req, res) {
       transformHeader: (header) => String(header || "").trim(),
     });
 
-    const actualErrors = (parsed.errors || []).filter(
-      (err) =>
-        !String(err.message || "").includes("Duplicate headers found and renamed")
-    );
+    // Ignore duplicate-header warnings completely.
+    const realErrors = (parsed.errors || []).filter((err) => {
+      const msg = String(err.message || "");
+      return !msg.includes("Duplicate headers found and renamed");
+    });
 
-    if (actualErrors.length > 0) {
+    if (realErrors.length > 0) {
+      console.error("PREVIEW REAL ERRORS:", realErrors);
       return res.status(400).json({
-        error: actualErrors[0].message || "Failed to parse CSV",
+        error: realErrors[0].message || "Failed to parse CSV",
       });
     }
 
