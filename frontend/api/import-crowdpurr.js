@@ -196,9 +196,10 @@ module.exports = async function handler(req, res) {
         const normalized = normalizeCrowdpurrRow(rawRow);
 
         if (!normalized) {
-          skipped += 1;
-          continue;
-        }
+  console.log("SKIPPED (invalid row):", rawRow);
+  skipped += 1;
+  continue;
+}
 
         const { data: existing, error: lookupError } = await supabase
           .from("questions")
@@ -210,9 +211,10 @@ module.exports = async function handler(req, res) {
         if (lookupError) throw lookupError;
 
         if (existing?.id) {
-          skipped += 1;
-          continue;
-        }
+  console.log("SKIPPED (duplicate):", normalized.question_text);
+  skipped += 1;
+  continue;
+}
 
         const { error: insertError } = await supabase.from("questions").insert({
           user_id: sessionUserId,
