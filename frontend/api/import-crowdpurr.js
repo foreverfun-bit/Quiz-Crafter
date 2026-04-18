@@ -46,7 +46,7 @@ function extractMultipartParts(buffer) {
   return result;
 }
 
-function normalizeHeader(header, index, seen) {
+function normalizeHeader(header, seen) {
   const cleaned = String(header || "").trim();
   const key = cleaned.toLowerCase();
 
@@ -55,20 +55,23 @@ function normalizeHeader(header, index, seen) {
     return cleaned;
   }
 
-  const nextCount = seen[key];
+  const suffix = seen[key];
   seen[key] += 1;
-  return `${cleaned}_${nextCount}`;
+  return `${cleaned}_${suffix}`;
 }
 
-function getRowValue(row, key) {
-  const target = String(key).toLowerCase();
-
-  for (const existingKey of Object.keys(row)) {
-    if (String(existingKey).toLowerCase() === target) {
-      return row[existingKey];
+function getRowValue(row, possibleKeys) {
+  for (const wanted of possibleKeys) {
+    const wantedLower = String(wanted).toLowerCase();
+    for (const existingKey of Object.keys(row)) {
+      if (String(existingKey).toLowerCase() === wantedLower) {
+        const value = row[existingKey];
+        if (value !== undefined && value !== null && String(value).trim() !== "") {
+          return String(value).trim();
+        }
+      }
     }
   }
-
   return "";
 }
 
@@ -87,52 +90,55 @@ function cleanOptionPrefix(value) {
 }
 
 function normalizeCrowdpurrRow(row) {
-  const questionText = String(
-    getRowValue(row, "question") ||
-    getRowValue(row, "Question") ||
-    ""
-  ).trim();
+  const questionText = getRowValue(row, [
+    "question",
+    "Question",
+    "prompt",
+    "Prompt",
+  ]);
 
-  const category = String(
-    getRowValue(row, "category") ||
-    getRowValue(row, "Category") ||
-    "Imported"
-  ).trim() || "Imported";
+  const category = getRowValue(row, [
+    "category",
+    "Category",
+    "round",
+    "Round",
+  ]) || "Imported";
 
-  const correctAnswer = String(
-    getRowValue(row, "correctAnswer") ||
-    getRowValue(row, "Correct Answer") ||
-    getRowValue(row, "correct_answer") ||
-    getRowValue(row, "Answer") ||
-    getRowValue(row, "answer") ||
-    ""
-  ).trim();
+  const correctAnswer = getRowValue(row, [
+    "correctAnswer",
+    "Correct Answer",
+    "correct_answer",
+    "answer",
+    "Answer",
+  ]);
 
-  const incorrectRaw =
-    String(
-      getRowValue(row, "incorrectAnswers") ||
-      getRowValue(row, "incorrect_answers") ||
-      ""
-    ).trim() ||
-    [
-      getRowValue(row, "Answer 2"),
-      getRowValue(row, "Answer 3"),
-      getRowValue(row, "Answer 4"),
-      getRowValue(row, "Option A"),
-      getRowValue(row, "Option B"),
-      getRowValue(row, "Option C"),
-      getRowValue(row, "Option D"),
-    ]
-      .filter(Boolean)
-      .join(";");
+  const note = getRowValue(row, [
+    "note",
+    "Note",
+    "fun_fact",
+    "Fun Fact",
+    "explanation",
+    "Explanation",
+  ]);
 
-  const note = String(
-    getRowValue(row, "note") ||
-    getRowValue(row, "Note") ||
-    getRowValue(row, "fun_fact") ||
-    getRowValue(row, "Fun Fact") ||
-    ""
-  ).trim();
+  const incorrectJoined = getRowValue(row, [
+    "incorrectAnswers",
+    "incorrect_answers",
+  ]);
+
+  const fallbackIncorrect = [
+    getRowValue(row, ["Answer 2"]),
+    getRowValue(row, ["Answer 3"]),
+    getRowValue(row, ["Answer 4"]),
+    getRowValue(row, ["Option A"]),
+    getRowValue(row, ["Option B"]),
+    getRowValue(row, ["Option C"]),
+    getRowValue(row, ["Option D"]),
+  ]
+    .filter(Boolean)
+    .join(";");
+
+  const incorrectRaw = incorrectJoined || fallbackIncorrect;
 
   console.log("ROW MAPPING CHECK:", {
     keys: Object.keys(row),
@@ -141,7 +147,9 @@ function normalizeCrowdpurrRow(row) {
     category,
   });
 
-  if (!questionText || !correctAnswer) return null;
+  if (!questionText || !correctAnswer) {
+    return null;
+  }
 
   let questionType = "written";
   let incorrectAnswers = null;
@@ -183,19 +191,14 @@ module.exports = async function handler(req, res) {
 
     const supabaseUrl =
       process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-
     const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
     if (!supabaseUrl) {
-      return res.status(500).json({
-        error: "Missing SUPABASE_URL and NEXT_PUBLIC_SUPABASE_URL",
-      });
+      return res.status(500).json({ error: "Missing SUPABASE_URL" });
     }
 
     if (!serviceRoleKey) {
-      return res.status(500).json({
-        error: "Missing SUPABASE_SERVICE_ROLE_KEY",
-      });
+      return res.status(500).json({ error: "Missing SUPABASE_SERVICE_ROLE_KEY" });
     }
 
     const supabase = createClient(supabaseUrl, serviceRoleKey);
@@ -214,14 +217,14 @@ module.exports = async function handler(req, res) {
       return res.status(400).json({ error: "No CSV content found" });
     }
 
-    const seenHeaders = {};
-
+    const seen = {};
     const parsed = Papa.parse(csvText, {
       header: true,
       skipEmptyLines: true,
-      transformHeader: (header, index) => normalizeHeader(header, index, seenHeaders),
+      transformHeader: (header) => normalizeHeader(header, seen),
     });
 
+    // Ignore duplicate-header warnings here too.
     const realErrors = (parsed.errors || []).filter((err) => {
       const msg = String(err.message || "");
       return !msg.includes("Duplicate headers found and renamed");
@@ -233,7 +236,7 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    const rows = parsed.data || [];
+    const rows = Array.isArray(parsed.data) ? parsed.data : [];
 
     let imported = 0;
     let skipped = 0;
@@ -286,8 +289,6 @@ module.exports = async function handler(req, res) {
         errors.push(err.message || "Row import failed");
       }
     }
-
-    console.log("FINAL RESULT:", { imported, skipped, errors });
 
     return res.status(200).json({
       format: "crowdpurr",
