@@ -87,11 +87,59 @@ function cleanOptionPrefix(value) {
 }
 
 function normalizeCrowdpurrRow(row) {
-  const questionText = String(getRowValue(row, "question") || "").trim();
-  const category = String(getRowValue(row, "category") || "Imported").trim() || "Imported";
-  const correctAnswer = String(getRowValue(row, "correctAnswer") || "").trim();
-  const incorrectRaw = String(getRowValue(row, "incorrectAnswers") || "").trim();
-  const note = String(getRowValue(row, "note") || "").trim();
+  const questionText = String(
+    getRowValue(row, "question") ||
+    getRowValue(row, "Question") ||
+    ""
+  ).trim();
+
+  const category = String(
+    getRowValue(row, "category") ||
+    getRowValue(row, "Category") ||
+    "Imported"
+  ).trim() || "Imported";
+
+  const correctAnswer = String(
+    getRowValue(row, "correctAnswer") ||
+    getRowValue(row, "Correct Answer") ||
+    getRowValue(row, "correct_answer") ||
+    getRowValue(row, "Answer") ||
+    getRowValue(row, "answer") ||
+    ""
+  ).trim();
+
+  const incorrectRaw =
+    String(
+      getRowValue(row, "incorrectAnswers") ||
+      getRowValue(row, "incorrect_answers") ||
+      ""
+    ).trim() ||
+    [
+      getRowValue(row, "Answer 2"),
+      getRowValue(row, "Answer 3"),
+      getRowValue(row, "Answer 4"),
+      getRowValue(row, "Option A"),
+      getRowValue(row, "Option B"),
+      getRowValue(row, "Option C"),
+      getRowValue(row, "Option D"),
+    ]
+      .filter(Boolean)
+      .join(";");
+
+  const note = String(
+    getRowValue(row, "note") ||
+    getRowValue(row, "Note") ||
+    getRowValue(row, "fun_fact") ||
+    getRowValue(row, "Fun Fact") ||
+    ""
+  ).trim();
+
+  console.log("ROW MAPPING CHECK:", {
+    keys: Object.keys(row),
+    questionText,
+    correctAnswer,
+    category,
+  });
 
   if (!questionText || !correctAnswer) return null;
 
@@ -196,10 +244,10 @@ module.exports = async function handler(req, res) {
         const normalized = normalizeCrowdpurrRow(rawRow);
 
         if (!normalized) {
-  console.log("SKIPPED (invalid row):", rawRow);
-  skipped += 1;
-  continue;
-}
+          console.log("SKIPPED (invalid row):", rawRow);
+          skipped += 1;
+          continue;
+        }
 
         const { data: existing, error: lookupError } = await supabase
           .from("questions")
@@ -211,10 +259,10 @@ module.exports = async function handler(req, res) {
         if (lookupError) throw lookupError;
 
         if (existing?.id) {
-  console.log("SKIPPED (duplicate):", normalized.question_text);
-  skipped += 1;
-  continue;
-}
+          console.log("SKIPPED (duplicate):", normalized.question_text);
+          skipped += 1;
+          continue;
+        }
 
         const { error: insertError } = await supabase.from("questions").insert({
           user_id: sessionUserId,
@@ -238,6 +286,8 @@ module.exports = async function handler(req, res) {
         errors.push(err.message || "Row import failed");
       }
     }
+
+    console.log("FINAL RESULT:", { imported, skipped, errors });
 
     return res.status(200).json({
       format: "crowdpurr",
