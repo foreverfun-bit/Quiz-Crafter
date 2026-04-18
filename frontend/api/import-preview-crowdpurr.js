@@ -45,7 +45,7 @@ function extractMultipartParts(buffer) {
   return result;
 }
 
-function normalizeHeader(header, index, seen) {
+function normalizeHeader(header, seen) {
   const cleaned = String(header || "").trim();
   const key = cleaned.toLowerCase();
 
@@ -54,18 +54,9 @@ function normalizeHeader(header, index, seen) {
     return cleaned;
   }
 
-  const nextCount = seen[key];
+  const suffix = seen[key];
   seen[key] += 1;
-  return `${cleaned}_${nextCount}`;
-}
-
-function isCrowdpurr(fields) {
-  const keys = (fields || []).map((f) => String(f).trim().toLowerCase());
-  return (
-    keys.includes("question") &&
-    keys.includes("category") &&
-    keys.includes("correctanswer")
-  );
+  return `${cleaned}_${suffix}`;
 }
 
 module.exports = async function handler(req, res) {
@@ -82,39 +73,24 @@ module.exports = async function handler(req, res) {
       return res.status(400).json({ error: "No CSV content found" });
     }
 
-    const seenHeaders = {};
-
+    const seen = {};
     const parsed = Papa.parse(csvText, {
       header: true,
       skipEmptyLines: true,
-      transformHeader: (header, index) => normalizeHeader(header, index, seenHeaders),
+      transformHeader: (header) => normalizeHeader(header, seen),
     });
 
-    const realErrors = (parsed.errors || []).filter((err) => {
-      const msg = String(err.message || "");
-      return !msg.includes("Duplicate headers found and renamed");
-    });
-
-    if (realErrors.length > 0) {
-      console.error("PREVIEW REAL ERRORS:", realErrors);
-      return res.status(400).json({
-        error: realErrors[0].message || "Failed to parse CSV",
-      });
-    }
-
-    const fields = parsed.meta.fields || [];
-
-    if (!isCrowdpurr(fields)) {
-      return res.status(400).json({
-        error: "This importer currently supports Crowdpurr CSV only",
-      });
-    }
+    // Never fail preview just because Papa reported duplicate header warnings.
+    const previewRows = Array.isArray(parsed.data) ? parsed.data.slice(0, 5) : [];
+    const fields = parsed.meta?.fields || [];
+    const warnings = (parsed.errors || []).map((e) => e.message);
 
     return res.status(200).json({
       format: "crowdpurr",
       columns: fields,
-      row_count: (parsed.data || []).length,
-      preview: (parsed.data || []).slice(0, 5),
+      row_count: Array.isArray(parsed.data) ? parsed.data.length : 0,
+      preview: previewRows,
+      warnings,
     });
   } catch (error) {
     console.error("import-preview-crowdpurr error:", error);
