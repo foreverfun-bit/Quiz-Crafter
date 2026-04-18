@@ -17,8 +17,7 @@ function readFileFromRequest(req) {
 
 function extractMultipartParts(buffer) {
   const text = buffer.toString("utf8");
-  const segments = text.split("\r\n");
-  const boundary = segments[0];
+  const boundary = text.split("\r\n")[0];
 
   if (!boundary) return {};
 
@@ -46,6 +45,20 @@ function extractMultipartParts(buffer) {
   return result;
 }
 
+function normalizeHeader(header, index, seen) {
+  const cleaned = String(header || "").trim();
+  const key = cleaned.toLowerCase();
+
+  if (!seen[key]) {
+    seen[key] = 1;
+    return cleaned;
+  }
+
+  const nextCount = seen[key];
+  seen[key] += 1;
+  return `${cleaned}_${nextCount}`;
+}
+
 function isCrowdpurr(fields) {
   const keys = (fields || []).map((f) => String(f).trim().toLowerCase());
   return (
@@ -69,13 +82,14 @@ module.exports = async function handler(req, res) {
       return res.status(400).json({ error: "No CSV content found" });
     }
 
+    const seenHeaders = {};
+
     const parsed = Papa.parse(csvText, {
       header: true,
       skipEmptyLines: true,
-      transformHeader: (header) => String(header || "").trim(),
+      transformHeader: (header, index) => normalizeHeader(header, index, seenHeaders),
     });
 
-    // Ignore duplicate-header warnings completely.
     const realErrors = (parsed.errors || []).filter((err) => {
       const msg = String(err.message || "");
       return !msg.includes("Duplicate headers found and renamed");
@@ -101,11 +115,6 @@ module.exports = async function handler(req, res) {
       columns: fields,
       row_count: (parsed.data || []).length,
       preview: (parsed.data || []).slice(0, 5),
-      warnings: (parsed.errors || [])
-        .map((e) => e.message)
-        .filter((msg) =>
-          String(msg).includes("Duplicate headers found and renamed")
-        ),
     });
   } catch (error) {
     console.error("import-preview-crowdpurr error:", error);
