@@ -18,8 +18,7 @@ function readFileFromRequest(req) {
 
 function extractMultipartParts(buffer) {
   const text = buffer.toString("utf8");
-  const segments = text.split("\r\n");
-  const boundary = segments[0];
+  const boundary = text.split("\r\n")[0];
 
   if (!boundary) return {};
 
@@ -47,6 +46,32 @@ function extractMultipartParts(buffer) {
   return result;
 }
 
+function normalizeHeader(header, index, seen) {
+  const cleaned = String(header || "").trim();
+  const key = cleaned.toLowerCase();
+
+  if (!seen[key]) {
+    seen[key] = 1;
+    return cleaned;
+  }
+
+  const nextCount = seen[key];
+  seen[key] += 1;
+  return `${cleaned}_${nextCount}`;
+}
+
+function getRowValue(row, key) {
+  const target = String(key).toLowerCase();
+
+  for (const existingKey of Object.keys(row)) {
+    if (String(existingKey).toLowerCase() === target) {
+      return row[existingKey];
+    }
+  }
+
+  return "";
+}
+
 function splitOptions(value) {
   if (!value) return [];
   if (value.includes(";")) return value.split(";").map((s) => s.trim()).filter(Boolean);
@@ -59,16 +84,6 @@ function cleanOptionPrefix(value) {
   return String(value)
     .replace(/^[A-Da-d][\).\:\-\s]+/, "")
     .trim();
-}
-
-function getRowValue(row, key) {
-  if (row[key] !== undefined && row[key] !== null) return row[key];
-
-  const lowerKey = key.toLowerCase();
-  const matchedKey = Object.keys(row).find((k) => String(k).toLowerCase() === lowerKey);
-  if (matchedKey) return row[matchedKey];
-
-  return "";
 }
 
 function normalizeCrowdpurrRow(row) {
@@ -121,14 +136,7 @@ module.exports = async function handler(req, res) {
     const supabaseUrl =
       process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 
-    const serviceRoleKey =
-      process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-
-    console.log("ENV CHECK:", {
-      hasSupabaseUrl: !!supabaseUrl,
-      hasServiceRoleKey: !!serviceRoleKey,
-      usingPublicUrlFallback: !process.env.SUPABASE_URL && !!process.env.NEXT_PUBLIC_SUPABASE_URL,
-    });
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
     if (!supabaseUrl) {
       return res.status(500).json({
@@ -158,10 +166,12 @@ module.exports = async function handler(req, res) {
       return res.status(400).json({ error: "No CSV content found" });
     }
 
+    const seenHeaders = {};
+
     const parsed = Papa.parse(csvText, {
       header: true,
       skipEmptyLines: true,
-      transformHeader: (header) => String(header || "").trim(),
+      transformHeader: (header, index) => normalizeHeader(header, index, seenHeaders),
     });
 
     const realErrors = (parsed.errors || []).filter((err) => {
@@ -226,8 +236,6 @@ module.exports = async function handler(req, res) {
         errors.push(err.message || "Row import failed");
       }
     }
-
-    console.log("FINAL RESULT:", { imported, skipped, errorsCount: errors.length });
 
     return res.status(200).json({
       format: "crowdpurr",
