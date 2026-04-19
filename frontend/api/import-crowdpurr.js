@@ -63,6 +63,7 @@ function normalizeHeader(header, seen) {
 function getRowValue(row, possibleKeys) {
   for (const wanted of possibleKeys) {
     const wantedLower = String(wanted).toLowerCase();
+
     for (const existingKey of Object.keys(row)) {
       if (String(existingKey).toLowerCase() === wantedLower) {
         const value = row[existingKey];
@@ -72,6 +73,7 @@ function getRowValue(row, possibleKeys) {
       }
     }
   }
+
   return "";
 }
 
@@ -89,7 +91,91 @@ function cleanOptionPrefix(value) {
     .trim();
 }
 
-function normalizeCrowdpurrRow(row) {
+function buildQuestionObject({
+  questionText,
+  category,
+  correctAnswer,
+  incorrectRaw,
+  note,
+}) {
+  if (!questionText || !correctAnswer) return null;
+
+  let questionType = "written";
+  let incorrectAnswers = null;
+
+  const answerLower = String(correctAnswer).toLowerCase();
+
+  if (answerLower === "true" || answerLower === "false") {
+    questionType = "true_false";
+    incorrectAnswers = answerLower === "true" ? "False" : "True";
+  } else if (incorrectRaw) {
+    questionType = "multiple_choice";
+    const options = splitOptions(incorrectRaw)
+      .map(cleanOptionPrefix)
+      .filter(Boolean)
+      .filter((opt) => opt.toLowerCase() !== answerLower);
+
+    incorrectAnswers = options.length ? options.join(";") : null;
+  }
+
+  return {
+    category: category || "Imported",
+    question_text: questionText,
+    correct_answer: correctAnswer,
+    question_type: questionType,
+    incorrect_answers: incorrectAnswers,
+    fun_fact: note || null,
+    has_image: false,
+    image_url: null,
+    difficulty: "medium",
+    source: "imported",
+  };
+}
+
+function parseWideRow(row) {
+  const results = [];
+
+  for (let i = 1; i <= 50; i += 1) {
+    const questionText = getRowValue(row, [`Question_${i}`, `Question ${i}`]);
+    const category = getRowValue(row, [`Category_${i}`, `Category ${i}`]) || "Imported";
+    const correctAnswer = getRowValue(row, [
+      `Answer_${i}`,
+      `Answer ${i}`,
+      `Correct Answer_${i}`,
+      `Correct Answer ${i}`,
+    ]);
+    const note = getRowValue(row, [`Fun Fact_${i}`, `Fun Fact ${i}`, `Note_${i}`, `Note ${i}`]);
+
+    const incorrectRaw = [
+      getRowValue(row, [`Incorrect Answers_${i}`, `Incorrect Answers ${i}`]),
+      getRowValue(row, [`Answer 2_${i}`, `Answer 2 ${i}`]),
+      getRowValue(row, [`Answer 3_${i}`, `Answer 3 ${i}`]),
+      getRowValue(row, [`Answer 4_${i}`, `Answer 4 ${i}`]),
+      getRowValue(row, [`Option A_${i}`, `Option A ${i}`]),
+      getRowValue(row, [`Option B_${i}`, `Option B ${i}`]),
+      getRowValue(row, [`Option C_${i}`, `Option C ${i}`]),
+      getRowValue(row, [`Option D_${i}`, `Option D ${i}`]),
+    ]
+      .filter(Boolean)
+      .join(";");
+
+    const question = buildQuestionObject({
+      questionText,
+      category,
+      correctAnswer,
+      incorrectRaw,
+      note,
+    });
+
+    if (question) {
+      results.push(question);
+    }
+  }
+
+  return results;
+}
+
+function parseStandardRow(row) {
   const questionText = getRowValue(row, [
     "question",
     "Question",
@@ -121,66 +207,49 @@ function normalizeCrowdpurrRow(row) {
     "Explanation",
   ]);
 
-  const incorrectJoined = getRowValue(row, [
-    "incorrectAnswers",
-    "incorrect_answers",
-  ]);
+  const incorrectRaw =
+    getRowValue(row, ["incorrectAnswers", "incorrect_answers"]) ||
+    [
+      getRowValue(row, ["Answer 2"]),
+      getRowValue(row, ["Answer 3"]),
+      getRowValue(row, ["Answer 4"]),
+      getRowValue(row, ["Option A"]),
+      getRowValue(row, ["Option B"]),
+      getRowValue(row, ["Option C"]),
+      getRowValue(row, ["Option D"]),
+    ]
+      .filter(Boolean)
+      .join(";");
 
-  const fallbackIncorrect = [
-    getRowValue(row, ["Answer 2"]),
-    getRowValue(row, ["Answer 3"]),
-    getRowValue(row, ["Answer 4"]),
-    getRowValue(row, ["Option A"]),
-    getRowValue(row, ["Option B"]),
-    getRowValue(row, ["Option C"]),
-    getRowValue(row, ["Option D"]),
-  ]
-    .filter(Boolean)
-    .join(";");
-
-  const incorrectRaw = incorrectJoined || fallbackIncorrect;
-
-  console.log("ROW MAPPING CHECK:", {
-    keys: Object.keys(row),
+  const question = buildQuestionObject({
     questionText,
-    correctAnswer,
     category,
+    correctAnswer,
+    incorrectRaw,
+    note,
   });
 
-  if (!questionText || !correctAnswer) {
-    return null;
-  }
+  return question ? [question] : [];
+}
 
-  let questionType = "written";
-  let incorrectAnswers = null;
+function expandCrowdpurrRow(row) {
+  const keys = Object.keys(row).map((k) => String(k).toLowerCase());
+  const hasWideFormat = keys.some(
+    (k) =>
+      /^question[_ ]\d+$/.test(k) ||
+      /^answer[_ ]\d+$/.test(k) ||
+      /^category[_ ]\d+$/.test(k)
+  );
 
-  const answerLower = correctAnswer.toLowerCase();
+  const questions = hasWideFormat ? parseWideRow(row) : parseStandardRow(row);
 
-  if (answerLower === "true" || answerLower === "false") {
-    questionType = "true_false";
-    incorrectAnswers = answerLower === "true" ? "False" : "True";
-  } else if (incorrectRaw) {
-    questionType = "multiple_choice";
-    const options = splitOptions(incorrectRaw)
-      .map(cleanOptionPrefix)
-      .filter(Boolean)
-      .filter((opt) => opt.toLowerCase() !== answerLower);
+  console.log("ROW EXPANSION CHECK:", {
+    keys: Object.keys(row),
+    hasWideFormat,
+    extractedQuestions: questions.length,
+  });
 
-    incorrectAnswers = options.length ? options.join(";") : null;
-  }
-
-  return {
-    category,
-    question_text: questionText,
-    correct_answer: correctAnswer,
-    question_type: questionType,
-    incorrect_answers: incorrectAnswers,
-    fun_fact: note || null,
-    has_image: false,
-    image_url: null,
-    difficulty: "medium",
-    source: "imported",
-  };
+  return questions;
 }
 
 module.exports = async function handler(req, res) {
@@ -224,7 +293,6 @@ module.exports = async function handler(req, res) {
       transformHeader: (header) => normalizeHeader(header, seen),
     });
 
-    // Ignore duplicate-header warnings here too.
     const realErrors = (parsed.errors || []).filter((err) => {
       const msg = String(err.message || "");
       return !msg.includes("Duplicate headers found and renamed");
@@ -244,46 +312,48 @@ module.exports = async function handler(req, res) {
 
     for (const rawRow of rows) {
       try {
-        const normalized = normalizeCrowdpurrRow(rawRow);
+        const expandedQuestions = expandCrowdpurrRow(rawRow);
 
-        if (!normalized) {
-          console.log("SKIPPED (invalid row):", rawRow);
+        if (!expandedQuestions.length) {
+          console.log("SKIPPED (no usable questions in row):", rawRow);
           skipped += 1;
           continue;
         }
 
-        const { data: existing, error: lookupError } = await supabase
-          .from("questions")
-          .select("id")
-          .eq("question_text", normalized.question_text)
-          .limit(1)
-          .maybeSingle();
+        for (const normalized of expandedQuestions) {
+          const { data: existing, error: lookupError } = await supabase
+            .from("questions")
+            .select("id")
+            .eq("question_text", normalized.question_text)
+            .limit(1)
+            .maybeSingle();
 
-        if (lookupError) throw lookupError;
+          if (lookupError) throw lookupError;
 
-        if (existing?.id) {
-          console.log("SKIPPED (duplicate):", normalized.question_text);
-          skipped += 1;
-          continue;
+          if (existing?.id) {
+            console.log("SKIPPED (duplicate):", normalized.question_text);
+            skipped += 1;
+            continue;
+          }
+
+          const { error: insertError } = await supabase.from("questions").insert({
+            user_id: sessionUserId,
+            category: normalized.category,
+            question_text: normalized.question_text,
+            correct_answer: normalized.correct_answer,
+            question_type: normalized.question_type,
+            incorrect_answers: normalized.incorrect_answers,
+            fun_fact: normalized.fun_fact,
+            has_image: normalized.has_image,
+            image_url: normalized.image_url,
+            difficulty: normalized.difficulty,
+            source: normalized.source,
+          });
+
+          if (insertError) throw insertError;
+
+          imported += 1;
         }
-
-        const { error: insertError } = await supabase.from("questions").insert({
-          user_id: sessionUserId,
-          category: normalized.category,
-          question_text: normalized.question_text,
-          correct_answer: normalized.correct_answer,
-          question_type: normalized.question_type,
-          incorrect_answers: normalized.incorrect_answers,
-          fun_fact: normalized.fun_fact,
-          has_image: normalized.has_image,
-          image_url: normalized.image_url,
-          difficulty: normalized.difficulty,
-          source: normalized.source,
-        });
-
-        if (insertError) throw insertError;
-
-        imported += 1;
       } catch (err) {
         console.error("ROW ERROR:", err);
         errors.push(err.message || "Row import failed");
