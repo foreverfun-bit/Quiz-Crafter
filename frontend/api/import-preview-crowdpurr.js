@@ -6,7 +6,7 @@ exports.config = {
   },
 };
 
-function readFileFromRequest(req) {
+function readFile(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     req.on("data", (chunk) => chunks.push(chunk));
@@ -15,87 +15,93 @@ function readFileFromRequest(req) {
   });
 }
 
-function extractMultipartParts(buffer) {
+function extractFile(buffer) {
   const text = buffer.toString("utf8");
   const boundary = text.split("\r\n")[0];
 
-  if (!boundary) return {};
+  if (!boundary) return "";
 
-  const parts = text
-    .split(boundary)
-    .filter((part) => part && part !== "--\r\n" && part !== "--");
-
-  const result = {};
+  const parts = text.split(boundary);
 
   for (const part of parts) {
-    const nameMatch = part.match(/name="([^"]+)"/);
-    if (!nameMatch) continue;
+    if (part.includes('name="file"')) {
+      const start = part.indexOf("\r\n\r\n");
+      if (start === -1) continue;
 
-    const fieldName = nameMatch[1];
-    const splitIndex = part.indexOf("\r\n\r\n");
-    if (splitIndex === -1) continue;
-
-    let value = part.slice(splitIndex + 4);
-    value = value.replace(/\r\n--$/, "");
-    value = value.replace(/\r\n$/, "");
-
-    result[fieldName] = value;
+      return part
+        .slice(start + 4)
+        .replace(/\r\n--$/, "")
+        .trim();
+    }
   }
 
-  return result;
+  return "";
 }
 
-function normalizeHeader(header, seen) {
-  const cleaned = String(header || "").trim();
-  const key = cleaned.toLowerCase();
+// 🔥 THIS is the fix
+function expandRow(row) {
+  const questions = [];
 
-  if (!seen[key]) {
-    seen[key] = 1;
-    return cleaned;
+  for (let i = 1; i <= 50; i++) {
+    const q = row[`Question_${i}`];
+    const a = row[`Answer_${i}`];
+    const c = row[`Category_${i}`];
+    const note = row[`Fun Fact_${i}`];
+
+    if (!q || !a) continue;
+
+    questions.push({
+      question: q,
+      category: c || "Imported",
+      correctAnswer: a,
+      incorrectAnswers: null,
+      note: note || "",
+    });
   }
 
-  const suffix = seen[key];
-  seen[key] += 1;
-  return `${cleaned}_${suffix}`;
+  return questions;
 }
 
 module.exports = async function handler(req, res) {
   try {
-    if (req.method !== "POST") {
-      return res.status(405).json({ error: "Method not allowed" });
+    const buffer = await readFile(req);
+    const csvText = extractFile(buffer);
+
+    if (!csvText) {
+      return res.status(400).json({ error: "No file found" });
     }
 
-    const rawBuffer = await readFileFromRequest(req);
-    const parts = extractMultipartParts(rawBuffer);
-    const csvText = parts.file || "";
-
-    if (!csvText.trim()) {
-      return res.status(400).json({ error: "No CSV content found" });
-    }
-
-    const seen = {};
     const parsed = Papa.parse(csvText, {
       header: true,
       skipEmptyLines: true,
-      transformHeader: (header) => normalizeHeader(header, seen),
     });
 
-    // Never fail preview just because Papa reported duplicate header warnings.
-    const previewRows = Array.isArray(parsed.data) ? parsed.data.slice(0, 5) : [];
-    const fields = parsed.meta?.fields || [];
-    const warnings = (parsed.errors || []).map((e) => e.message);
+    const rows = parsed.data || [];
+
+    let allQuestions = [];
+
+    for (const row of rows) {
+      const expanded = expandRow(row);
+      allQuestions.push(...expanded);
+    }
+
+    if (!allQuestions.length) {
+      return res.status(400).json({
+        error: "No questions detected (format mismatch)",
+      });
+    }
 
     return res.status(200).json({
       format: "crowdpurr",
-      columns: fields,
-      row_count: Array.isArray(parsed.data) ? parsed.data.length : 0,
-      preview: previewRows,
-      warnings,
+      row_count: allQuestions.length,
+      columns: Object.keys(rows[0] || {}),
+      preview: allQuestions.slice(0, 5),
     });
-  } catch (error) {
-    console.error("import-preview-crowdpurr error:", error);
+
+  } catch (err) {
+    console.error("PREVIEW ERROR:", err);
     return res.status(500).json({
-      error: error.message || "Failed to preview Crowdpurr CSV",
+      error: "Failed to preview Crowdpurr CSV",
     });
   }
 };
