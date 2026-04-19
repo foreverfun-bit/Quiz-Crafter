@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { Card, CardContent } from "../components/ui/card";
@@ -8,17 +8,16 @@ import { Badge } from "../components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 import {
   Calendar,
-  Search,
-  Trash2,
   Eye,
-  PlusCircle,
+  Trash2,
   FileText,
+  Search,
+  PlusCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 
 const PastSessions = () => {
   const navigate = useNavigate();
-
   const [allSessions, setAllSessions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -29,9 +28,9 @@ const PastSessions = () => {
   }, []);
 
   const fetchSessions = async () => {
-    setLoading(true);
-
     try {
+      setLoading(true);
+
       const {
         data: { session },
       } = await supabase.auth.getSession();
@@ -39,7 +38,7 @@ const PastSessions = () => {
       const userId = session?.user?.id;
       if (!userId) {
         toast.error("You must be signed in");
-        setLoading(false);
+        setAllSessions([]);
         return;
       }
 
@@ -63,8 +62,7 @@ const PastSessions = () => {
   const handleDelete = async (sessionId, e) => {
     e.stopPropagation();
 
-    const confirmed = window.confirm("Are you sure you want to delete this session?");
-    if (!confirmed) return;
+    if (!window.confirm("Are you sure you want to delete this session?")) return;
 
     try {
       const { error } = await supabase
@@ -77,15 +75,12 @@ const PastSessions = () => {
       setAllSessions((prev) => prev.filter((s) => s.id !== sessionId));
       toast.success("Session deleted");
     } catch (error) {
-      console.error("Delete failed:", error);
+      console.error("Delete session error:", error);
       toast.error("Failed to delete session");
     }
   };
 
-  const safeArray = (value) => {
-    if (Array.isArray(value)) return value;
-    return [];
-  };
+  const safeArray = (value) => (Array.isArray(value) ? value : []);
 
   const getTotalQuestions = (session) => {
     return (
@@ -113,10 +108,10 @@ const PastSessions = () => {
 
       if (!searchQuery.trim()) return true;
 
-      const q = searchQuery.toLowerCase();
+      const query = searchQuery.toLowerCase();
       return (
-        String(session.name || "").toLowerCase().includes(q) ||
-        String(session.venue || "").toLowerCase().includes(q)
+        String(session.name || "").toLowerCase().includes(query) ||
+        String(session.venue || "").toLowerCase().includes(query)
       );
     });
   }, [allSessions, activeTab, searchQuery]);
@@ -124,7 +119,7 @@ const PastSessions = () => {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="spinner" />
+        <div className="spinner"></div>
       </div>
     );
   }
@@ -137,7 +132,7 @@ const PastSessions = () => {
             <span className="gradient-text">Past Sessions</span>
           </h1>
           <p className="text-zinc-500">
-            View and manage your saved trivia sessions
+            All your built and imported sessions
           </p>
         </div>
 
@@ -190,7 +185,7 @@ const PastSessions = () => {
             </div>
             <p className="text-zinc-500 mb-2">No sessions yet</p>
             <p className="text-zinc-600 text-sm mb-6">
-              Build a session first. Imported questions will not show here until you also create session records.
+              Build a new session or import a CSV to create one
             </p>
             <div className="flex gap-4 justify-center">
               <Button onClick={() => navigate("/build")} className="gradient-btn">
