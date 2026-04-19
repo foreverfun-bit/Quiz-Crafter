@@ -1,27 +1,24 @@
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "../App";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { supabase } from "../lib/supabase";
+import { Card, CardContent } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Badge } from "../components/ui/badge";
-import { ScrollArea } from "../components/ui/scroll-area";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
-import { 
+import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
+import {
   Calendar,
-  MapPin,
-  Loader2,
-  Eye,
-  Trash2,
-  FileText,
   Search,
-  Download,
-  PlusCircle
+  Trash2,
+  Eye,
+  PlusCircle,
+  FileText,
 } from "lucide-react";
 import { toast } from "sonner";
 
 const PastSessions = () => {
   const navigate = useNavigate();
+
   const [allSessions, setAllSessions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -32,11 +29,31 @@ const PastSessions = () => {
   }, []);
 
   const fetchSessions = async () => {
+    setLoading(true);
+
     try {
-      // Fetch all sessions (both built and imported)
-      const response = await api.get("/sessions");
-      setAllSessions(response.data);
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      const userId = session?.user?.id;
+      if (!userId) {
+        toast.error("You must be signed in");
+        setLoading(false);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("sessions")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+
+      setAllSessions(data || []);
     } catch (error) {
+      console.error("Failed to load sessions:", error);
       toast.error("Failed to load sessions");
     } finally {
       setLoading(false);
@@ -45,85 +62,85 @@ const PastSessions = () => {
 
   const handleDelete = async (sessionId, e) => {
     e.stopPropagation();
-    if (!confirm("Are you sure you want to delete this session?")) return;
-    
+
+    const confirmed = window.confirm("Are you sure you want to delete this session?");
+    if (!confirmed) return;
+
     try {
-      await api.delete(`/sessions/${sessionId}`);
-      setAllSessions(prev => prev.filter(s => s.id !== sessionId));
+      const { error } = await supabase
+        .from("sessions")
+        .delete()
+        .eq("id", sessionId);
+
+      if (error) throw error;
+
+      setAllSessions((prev) => prev.filter((s) => s.id !== sessionId));
       toast.success("Session deleted");
     } catch (error) {
+      console.error("Delete failed:", error);
       toast.error("Failed to delete session");
     }
   };
 
-  const handleExport = async (session, e) => {
-    e.stopPropagation();
-    try {
-      const token = localStorage.getItem("token");
-      const res = await fetch(
-        `${process.env.REACT_APP_BACKEND_URL}/api/sessions/${session.id}/download-csv?token=${encodeURIComponent(token)}`
-      );
-      if (!res.ok) throw new Error("Export failed");
-      const blob = await res.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = blobUrl;
-      a.download = `trivia-${session.name.replace(/[^a-z0-9]/gi, "-").toLowerCase()}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(blobUrl);
-    } catch (error) {
-      console.error("Export error:", error);
-      toast.error("Failed to export session");
-    }
+  const safeArray = (value) => {
+    if (Array.isArray(value)) return value;
+    return [];
   };
 
   const getTotalQuestions = (session) => {
     return (
-      (session.true_false_questions?.length || 0) +
-      (session.multiple_choice_questions?.length || 0) +
-      (session.written_questions?.length || 0) +
-      (session.picture_questions?.length || 0)
+      safeArray(session.true_false_questions).length +
+      safeArray(session.multiple_choice_questions).length +
+      safeArray(session.written_questions).length +
+      safeArray(session.picture_questions).length
     );
   };
 
-  // Filter sessions
-  const filteredSessions = allSessions.filter(session => {
-    // Filter by tab
-    if (activeTab === "built" && session.is_past) return false;
-    if (activeTab === "imported" && !session.is_past) return false;
-    
-    // Filter by search
-    if (searchQuery.trim()) {
-      return session.name.toLowerCase().includes(searchQuery.toLowerCase());
-    }
-    return true;
-  });
+  const builtCount = useMemo(
+    () => allSessions.filter((s) => !s.is_past).length,
+    [allSessions]
+  );
 
-  const builtCount = allSessions.filter(s => !s.is_past).length;
-  const importedCount = allSessions.filter(s => s.is_past).length;
+  const importedCount = useMemo(
+    () => allSessions.filter((s) => !!s.is_past).length,
+    [allSessions]
+  );
+
+  const filteredSessions = useMemo(() => {
+    return allSessions.filter((session) => {
+      if (activeTab === "built" && session.is_past) return false;
+      if (activeTab === "imported" && !session.is_past) return false;
+
+      if (!searchQuery.trim()) return true;
+
+      const q = searchQuery.toLowerCase();
+      return (
+        String(session.name || "").toLowerCase().includes(q) ||
+        String(session.venue || "").toLowerCase().includes(q)
+      );
+    });
+  }, [allSessions, activeTab, searchQuery]);
 
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="spinner"></div>
+        <div className="spinner" />
       </div>
     );
   }
 
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto animate-fade-in" data-testid="past-sessions-page">
-      {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div>
           <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">
-            <span className="gradient-text">Sessions</span>
+            <span className="gradient-text">Past Sessions</span>
           </h1>
           <p className="text-zinc-500">
-            All your trivia sessions - built and imported
+            View and manage your saved trivia sessions
           </p>
         </div>
+
         <Button
           onClick={() => navigate("/build")}
           className="gradient-btn"
@@ -134,7 +151,6 @@ const PastSessions = () => {
         </Button>
       </div>
 
-      {/* Tabs & Search */}
       <Card className="glass-card mb-6">
         <CardContent className="p-4">
           <div className="flex flex-col md:flex-row gap-4 items-center">
@@ -151,6 +167,7 @@ const PastSessions = () => {
                 </TabsTrigger>
               </TabsList>
             </Tabs>
+
             <div className="flex-1 relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
               <Input
@@ -165,7 +182,6 @@ const PastSessions = () => {
         </CardContent>
       </Card>
 
-      {/* Sessions Grid */}
       {allSessions.length === 0 ? (
         <Card className="glass-card">
           <CardContent className="py-16 text-center">
@@ -174,13 +190,10 @@ const PastSessions = () => {
             </div>
             <p className="text-zinc-500 mb-2">No sessions yet</p>
             <p className="text-zinc-600 text-sm mb-6">
-              Build a new session or import questions from CSV
+              Build a session first. Imported questions will not show here until you also create session records.
             </p>
             <div className="flex gap-4 justify-center">
-              <Button
-                onClick={() => navigate("/build")}
-                className="gradient-btn"
-              >
+              <Button onClick={() => navigate("/build")} className="gradient-btn">
                 Build Session
               </Button>
               <Button
@@ -208,7 +221,7 @@ const PastSessions = () => {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filteredSessions.map((session, index) => (
-            <Card 
+            <Card
               key={session.id}
               className="glass-card cursor-pointer transition-all hover:scale-[1.02]"
               onClick={() => navigate(`/session/${session.id}`)}
@@ -218,15 +231,20 @@ const PastSessions = () => {
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex-1">
                     <h3 className="text-white font-semibold mb-2 line-clamp-2">
-                      {session.name}
+                      {session.name || "Untitled Session"}
                     </h3>
+
                     <div className="flex flex-wrap gap-2">
-                      <Badge className={session.is_past 
-                        ? "bg-[#AEB2EF]/20 text-[#AEB2EF] border-[#AEB2EF]/30"
-                        : "bg-[#71E0DC]/20 text-[#71E0DC] border-[#71E0DC]/30"
-                      }>
+                      <Badge
+                        className={
+                          session.is_past
+                            ? "bg-[#AEB2EF]/20 text-[#AEB2EF] border-[#AEB2EF]/30"
+                            : "bg-[#71E0DC]/20 text-[#71E0DC] border-[#71E0DC]/30"
+                        }
+                      >
                         {session.is_past ? "Imported" : "Built"}
                       </Badge>
+
                       <Badge className="bg-zinc-800 text-zinc-300">
                         <FileText size={12} className="mr-1" />
                         {getTotalQuestions(session)} questions
@@ -238,33 +256,27 @@ const PastSessions = () => {
                 <div className="space-y-2 text-sm">
                   <div className="flex items-center gap-4">
                     <span className="text-zinc-500">T/F:</span>
-                    <span className="text-white">{session.true_false_questions?.length || 0}</span>
+                    <span className="text-white">{safeArray(session.true_false_questions).length}</span>
                     <span className="text-zinc-500">MC:</span>
-                    <span className="text-white">{session.multiple_choice_questions?.length || 0}</span>
+                    <span className="text-white">{safeArray(session.multiple_choice_questions).length}</span>
                   </div>
+
                   <div className="flex items-center gap-4">
                     <span className="text-zinc-500">Written:</span>
-                    <span className="text-white">{session.written_questions?.length || 0}</span>
+                    <span className="text-white">{safeArray(session.written_questions).length}</span>
                     <span className="text-zinc-500">Picture:</span>
-                    <span className="text-white">{session.picture_questions?.length || 0}</span>
+                    <span className="text-white">{safeArray(session.picture_questions).length}</span>
                   </div>
                 </div>
 
                 <div className="mt-4 pt-4 border-t border-white/10 flex items-center justify-between">
                   <span className="text-zinc-600 text-xs">
-                    {new Date(session.created_at).toLocaleDateString()}
+                    {session.created_at
+                      ? new Date(session.created_at).toLocaleDateString()
+                      : "No date"}
                   </span>
+
                   <div className="flex gap-1">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-[#71E0DC] hover:text-[#71E0DC] hover:bg-[#71E0DC]/10 px-2"
-                      onClick={(e) => handleExport(session, e)}
-                      data-testid={`export-session-${index}`}
-                      title="Export"
-                    >
-                      <Download size={14} />
-                    </Button>
                     <Button
                       variant="ghost"
                       size="sm"
@@ -275,6 +287,7 @@ const PastSessions = () => {
                     >
                       <Trash2 size={14} />
                     </Button>
+
                     <Button
                       variant="ghost"
                       size="sm"
