@@ -86,25 +86,27 @@ function normalizeCrowdpurrRow(row) {
   const questionText = getValue(row, ["Question"]);
   const questionTypeRaw = getValue(row, ["Question Type"]).toLowerCase();
   const note = cleanHtml(getValue(row, ["Question Note"]));
-  const categoryOrRound = getValue(row, ["Correct Answer"]);
-  const additionalAnswers = getValue(row, ["Additional Answers"]);
+  const correctAnswerRaw = getValue(row, ["Correct Answer(s)"]);
+  const additionalAnswersRaw = getValue(row, ["Additional Answers"]);
 
   if (!questionText) return null;
 
-  // Skip round/category header rows like "Round 1 Category"
   if (questionTypeRaw === "reorder") {
     return null;
   }
 
   let questionType = "written";
-  let correctAnswer = categoryOrRound;
+  let correctAnswer = correctAnswerRaw;
   let incorrectAnswers = null;
-  let category = "Round Import";
+  let category = "Imported";
 
   if (questionTypeRaw === "multiplechoice") {
     questionType = "multiple_choice";
 
-    const allAnswers = [categoryOrRound, ...splitOptions(additionalAnswers)].filter(Boolean);
+    const allAnswers = [
+      correctAnswerRaw,
+      ...splitOptions(additionalAnswersRaw),
+    ].filter(Boolean);
 
     if (allAnswers.length > 0) {
       correctAnswer = allAnswers[0];
@@ -112,7 +114,7 @@ function normalizeCrowdpurrRow(row) {
     }
   } else if (questionTypeRaw === "text") {
     questionType = "written";
-    correctAnswer = categoryOrRound;
+    correctAnswer = correctAnswerRaw;
   }
 
   const answerLower = String(correctAnswer || "").toLowerCase();
@@ -220,20 +222,19 @@ module.exports = async function handler(req, res) {
         }
 
         const insertPayload = {
-  user_id: sessionUserId,
-  question_text: normalized.question_text,
-  correct_answer: normalized.correct_answer,
-};
+          user_id: sessionUserId,
+          question_text: normalized.question_text,
+          correct_answer: normalized.correct_answer,
+        };
 
-// Only add optional fields if they exist
-if (normalized.category) insertPayload.category = normalized.category;
-if (normalized.question_type) insertPayload.question_type = normalized.question_type;
-if (normalized.incorrect_answers) insertPayload.incorrect_answers = normalized.incorrect_answers;
-if (normalized.fun_fact) insertPayload.fun_fact = normalized.fun_fact;
+        if (normalized.category) insertPayload.category = normalized.category;
+        if (normalized.question_type) insertPayload.question_type = normalized.question_type;
+        if (normalized.incorrect_answers) insertPayload.incorrect_answers = normalized.incorrect_answers;
+        if (normalized.fun_fact) insertPayload.fun_fact = normalized.fun_fact;
 
-const { error: insertError } = await supabase
-  .from("questions")
-  .insert(insertPayload);
+        const { error: insertError } = await supabase
+          .from("questions")
+          .insert(insertPayload);
 
         if (insertError) throw insertError;
 
@@ -246,9 +247,13 @@ const { error: insertError } = await supabase
 
     const grouped = splitByType(normalizedQuestions);
 
-    const { data: sessionData, error: sessionError } = await supabase
-      .from("sessions")
-      .insert({
+    let sessionsCreated = 0;
+    let sessionId = null;
+    let sessionName = null;
+    let sessionErrorMessage = null;
+
+    try {
+      const sessionPayload = {
         user_id: sessionUserId,
         name: buildSessionName(originalFilename),
         is_past: true,
@@ -256,17 +261,23 @@ const { error: insertError } = await supabase
         multiple_choice_questions: grouped.multiple_choice_questions,
         written_questions: grouped.written_questions,
         picture_questions: grouped.picture_questions,
-      })
-      .select()
-      .single();
+      };
 
-    if (sessionError) {
-      return res.status(500).json({
-        error: sessionError.message || "Questions imported, but failed to create past session",
-        imported,
-        skipped,
-        errors,
-      });
+      const { data: sessionData, error: sessionError } = await supabase
+        .from("sessions")
+        .insert(sessionPayload)
+        .select()
+        .single();
+
+      if (sessionError) {
+        sessionErrorMessage = sessionError.message || "Failed to create past session";
+      } else {
+        sessionsCreated = 1;
+        sessionId = sessionData.id;
+        sessionName = sessionData.name;
+      }
+    } catch (err) {
+      sessionErrorMessage = err.message || "Failed to create past session";
     }
 
     return res.status(200).json({
@@ -274,9 +285,10 @@ const { error: insertError } = await supabase
       imported,
       skipped,
       errors,
-      sessions_created: 1,
-      session_id: sessionData.id,
-      session_name: sessionData.name,
+      sessions_created: sessionsCreated,
+      session_id: sessionId,
+      session_name: sessionName,
+      session_error: sessionErrorMessage,
       total_session_questions: normalizedQuestions.length,
     });
   } catch (error) {
