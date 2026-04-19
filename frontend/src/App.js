@@ -1,8 +1,7 @@
 import { supabase } from "./lib/supabase";
 import { useState, useEffect, createContext, useContext } from "react";
 import "@/App.css";
-import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
-import axios from "axios";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Toaster, toast } from "sonner";
 
 // Pages
@@ -25,38 +24,10 @@ import GameHistoryDetail from "./pages/GameHistory";
 // Components
 import Sidebar from "./components/Sidebar";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-export const API = `${BACKEND_URL}/api`;
-
 // Auth Context
 const AuthContext = createContext(null);
 
 export const useAuth = () => useContext(AuthContext);
-
-// API instance with auth
-export const api = axios.create({
-  baseURL: API,
-});
-
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("token");
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
-
-api.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      localStorage.removeItem("token");
-      localStorage.removeItem("user");
-      window.location.href = "/login";
-    }
-    return Promise.reject(error);
-  }
-);
 
 // Protected Route Component
 const ProtectedRoute = ({ children }) => {
@@ -92,7 +63,17 @@ const AppLayout = ({ children }) => {
             className="p-2 rounded-lg bg-zinc-900 border border-white/10 text-white"
             data-testid="mobile-menu-btn"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
               <line x1="3" y1="12" x2="21" y2="12"></line>
               <line x1="3" y1="6" x2="21" y2="6"></line>
               <line x1="3" y1="18" x2="21" y2="18"></line>
@@ -109,106 +90,69 @@ function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
- useEffect(() => {
-  const initAuth = async () => {
+  useEffect(() => {
+    const initAuth = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (session?.user) {
+        setUser({
+          id: session.user.id,
+          email: session.user.email,
+          name:
+            session.user.user_metadata?.name ||
+            session.user.user_metadata?.full_name ||
+            session.user.email,
+        });
+      } else {
+        setUser(null);
+      }
+
+      setLoading(false);
+    };
+
+    initAuth();
+
     const {
-      data: { session },
-    } = await supabase.auth.getSession();
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        setUser({
+          id: session.user.id,
+          email: session.user.email,
+          name:
+            session.user.user_metadata?.name ||
+            session.user.user_metadata?.full_name ||
+            session.user.email,
+        });
+      } else {
+        setUser(null);
+      }
+    });
 
-    if (session?.user) {
-      setUser({
-        id: session.user.id,
-        email: session.user.email,
-        name:
-          session.user.user_metadata?.name ||
-          session.user.user_metadata?.full_name ||
-          session.user.email,
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const login = async (email, password) => {
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
       });
-    } else {
-      setUser(null);
-    }
 
-    setLoading(false);
-  };
+      if (error) {
+        toast.error(error.message || "Login failed");
+        return { success: false, error: error.message };
+      }
 
-  initAuth();
+      if (!data.session?.user) {
+        toast.error("Login failed");
+        return { success: false, error: "No active session returned" };
+      }
 
-  const {
-    data: { subscription },
-  } = supabase.auth.onAuthStateChange((_event, session) => {
-    if (session?.user) {
-      setUser({
-        id: session.user.id,
-        email: session.user.email,
-        name:
-          session.user.user_metadata?.name ||
-          session.user.user_metadata?.full_name ||
-          session.user.email,
-      });
-    } else {
-      setUser(null);
-    }
-  });
-
-  return () => subscription.unsubscribe();
-}, []);
-
-const login = async (email, password) => {
-  try {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (error) {
-      toast.error(error.message || "Login failed");
-      return { success: false, error: error.message };
-    }
-
-    if (!data.session?.user) {
-      toast.error("Login failed");
-      return { success: false, error: "No active session returned" };
-    }
-
-    const supaUser = data.session.user;
-
-    setUser({
-      id: supaUser.id,
-      email: supaUser.email,
-      name:
-        supaUser.user_metadata?.name ||
-        supaUser.user_metadata?.full_name ||
-        supaUser.email,
-    });
-
-    toast.success("Welcome back!");
-    return { success: true };
-  } catch (error) {
-    toast.error("Login failed");
-    return { success: false, error: "Login failed" };
-  }
-};
-
-const register = async (email, password, name) => {
-  try {
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          name,
-          full_name: name,
-        },
-      },
-    });
-
-    if (error) {
-      toast.error(error.message || "Registration failed");
-      return { success: false, error: error.message };
-    }
-
-    if (data.session?.user) {
       const supaUser = data.session.user;
+
       setUser({
         id: supaUser.id,
         email: supaUser.email,
@@ -218,41 +162,80 @@ const register = async (email, password, name) => {
           supaUser.email,
       });
 
-      toast.success("Account created successfully!");
+      toast.success("Welcome back!");
       return { success: true };
+    } catch (error) {
+      toast.error("Login failed");
+      return { success: false, error: "Login failed" };
     }
+  };
 
-    toast.success("Account created. Please check your email to confirm your account.");
-    return { success: true, needsEmailConfirmation: true };
-  } catch (error) {
-    toast.error("Registration failed");
-    return { success: false, error: "Registration failed" };
-  }
-};
+  const register = async (email, password, name) => {
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            name,
+            full_name: name,
+          },
+        },
+      });
 
-const logout = async () => {
-  await supabase.auth.signOut();
-  setUser(null);
-  toast.success("Logged out successfully");
-};
+      if (error) {
+        toast.error(error.message || "Registration failed");
+        return { success: false, error: error.message };
+      }
+
+      if (data.session?.user) {
+        const supaUser = data.session.user;
+
+        setUser({
+          id: supaUser.id,
+          email: supaUser.email,
+          name:
+            supaUser.user_metadata?.name ||
+            supaUser.user_metadata?.full_name ||
+            supaUser.email,
+        });
+
+        toast.success("Account created successfully!");
+        return { success: true };
+      }
+
+      toast.success("Account created. Please check your email to confirm your account.");
+      return { success: true, needsEmailConfirmation: true };
+    } catch (error) {
+      toast.error("Registration failed");
+      return { success: false, error: "Registration failed" };
+    }
+  };
+
+  const logout = async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+    toast.success("Logged out successfully");
+  };
 
   return (
     <AuthContext.Provider value={{ user, login, register, logout, loading }}>
       <div className="App min-h-screen bg-[#09090B]">
         <BrowserRouter>
-          <Toaster 
-            position="top-right" 
+          <Toaster
+            position="top-right"
             theme="dark"
             toastOptions={{
               style: {
-                background: '#18181B',
-                border: '1px solid rgba(255,255,255,0.1)',
-                color: '#FAFAFA'
-              }
+                background: "#18181B",
+                border: "1px solid rgba(255,255,255,0.1)",
+                color: "#FAFAFA",
+              },
             }}
           />
           <Routes>
             <Route path="/login" element={<Login />} />
+
             <Route
               path="/"
               element={
@@ -263,6 +246,7 @@ const logout = async () => {
                 </ProtectedRoute>
               }
             />
+
             <Route
               path="/generate"
               element={
@@ -273,6 +257,7 @@ const logout = async () => {
                 </ProtectedRoute>
               }
             />
+
             <Route
               path="/library"
               element={
@@ -283,6 +268,7 @@ const logout = async () => {
                 </ProtectedRoute>
               }
             />
+
             <Route
               path="/build"
               element={
@@ -293,6 +279,7 @@ const logout = async () => {
                 </ProtectedRoute>
               }
             />
+
             <Route
               path="/past-sessions"
               element={
@@ -303,6 +290,7 @@ const logout = async () => {
                 </ProtectedRoute>
               }
             />
+
             <Route
               path="/import"
               element={
@@ -313,6 +301,7 @@ const logout = async () => {
                 </ProtectedRoute>
               }
             />
+
             <Route
               path="/session/:id"
               element={
@@ -323,6 +312,7 @@ const logout = async () => {
                 </ProtectedRoute>
               }
             />
+
             <Route
               path="/categories"
               element={
@@ -333,10 +323,11 @@ const logout = async () => {
                 </ProtectedRoute>
               }
             />
-            {/* Live Game Routes (no sidebar) */}
+
             <Route path="/join" element={<JoinGame />} />
             <Route path="/play/:gameId" element={<PlayerView />} />
             <Route path="/present/:code" element={<PresentView />} />
+
             <Route
               path="/host/:gameId"
               element={
@@ -345,6 +336,7 @@ const logout = async () => {
                 </ProtectedRoute>
               }
             />
+
             <Route
               path="/game-history"
               element={
@@ -355,6 +347,7 @@ const logout = async () => {
                 </ProtectedRoute>
               }
             />
+
             <Route
               path="/game-history/:historyId"
               element={
@@ -365,6 +358,7 @@ const logout = async () => {
                 </ProtectedRoute>
               }
             />
+
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
