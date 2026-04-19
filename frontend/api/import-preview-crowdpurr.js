@@ -6,7 +6,7 @@ exports.config = {
   },
 };
 
-function readFile(req) {
+function readFileFromRequest(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     req.on("data", (chunk) => chunks.push(chunk));
@@ -15,93 +15,105 @@ function readFile(req) {
   });
 }
 
-function extractFile(buffer) {
+function extractMultipartParts(buffer) {
   const text = buffer.toString("utf8");
   const boundary = text.split("\r\n")[0];
 
-  if (!boundary) return "";
+  if (!boundary) return {};
 
-  const parts = text.split(boundary);
+  const parts = text
+    .split(boundary)
+    .filter((part) => part && part !== "--\r\n" && part !== "--");
+
+  const result = {};
 
   for (const part of parts) {
-    if (part.includes('name="file"')) {
-      const start = part.indexOf("\r\n\r\n");
-      if (start === -1) continue;
+    const nameMatch = part.match(/name="([^"]+)"/);
+    if (!nameMatch) continue;
 
-      return part
-        .slice(start + 4)
-        .replace(/\r\n--$/, "")
-        .trim();
-    }
+    const fieldName = nameMatch[1];
+    const splitIndex = part.indexOf("\r\n\r\n");
+    if (splitIndex === -1) continue;
+
+    let value = part.slice(splitIndex + 4);
+    value = value.replace(/\r\n--$/, "");
+    value = value.replace(/\r\n$/, "");
+
+    result[fieldName] = value;
   }
 
+  return result;
+}
+
+function getValue(row, possibleKeys) {
+  for (const wanted of possibleKeys) {
+    const wantedLower = String(wanted).toLowerCase();
+
+    for (const existingKey of Object.keys(row)) {
+      if (String(existingKey).toLowerCase() === wantedLower) {
+        const value = row[existingKey];
+        if (value !== undefined && value !== null && String(value).trim() !== "") {
+          return String(value).trim();
+        }
+      }
+    }
+  }
   return "";
 }
 
-// 🔥 THIS is the fix
-function expandRow(row) {
-  const questions = [];
+function normalizePreviewRow(row) {
+  const question = getValue(row, ["Question"]);
+  const category = getValue(row, ["Correct Answer"]);
+  const correctAnswer = getValue(row, ["Additional Answers"]);
+  const incorrectAnswers = "";
 
-  for (let i = 1; i <= 50; i++) {
-    const q = row[`Question_${i}`];
-    const a = row[`Answer_${i}`];
-    const c = row[`Category_${i}`];
-    const note = row[`Fun Fact_${i}`];
-
-    if (!q || !a) continue;
-
-    questions.push({
-      question: q,
-      category: c || "Imported",
-      correctAnswer: a,
-      incorrectAnswers: null,
-      note: note || "",
-    });
-  }
-
-  return questions;
+  return {
+    question,
+    category,
+    correctAnswer,
+    incorrectAnswers,
+  };
 }
 
 module.exports = async function handler(req, res) {
   try {
-    const buffer = await readFile(req);
-    const csvText = extractFile(buffer);
+    if (req.method !== "POST") {
+      return res.status(405).json({ error: "Method not allowed" });
+    }
 
-    if (!csvText) {
-      return res.status(400).json({ error: "No file found" });
+    const rawBuffer = await readFileFromRequest(req);
+    const parts = extractMultipartParts(rawBuffer);
+    const csvText = parts.file || "";
+
+    if (!csvText.trim()) {
+      return res.status(400).json({ error: "No CSV content found" });
     }
 
     const parsed = Papa.parse(csvText, {
       header: true,
       skipEmptyLines: true,
+      transformHeader: (header) => String(header || "").trim(),
     });
 
-    const rows = parsed.data || [];
+    const rows = Array.isArray(parsed.data) ? parsed.data : [];
 
-    let allQuestions = [];
-
-    for (const row of rows) {
-      const expanded = expandRow(row);
-      allQuestions.push(...expanded);
-    }
-
-    if (!allQuestions.length) {
-      return res.status(400).json({
-        error: "No questions detected (format mismatch)",
-      });
-    }
+    const usableRows = rows.filter((row) => {
+      const question = getValue(row, ["Question"]);
+      const questionType = getValue(row, ["Question Type"]);
+      return question && questionType !== "reorder";
+    });
 
     return res.status(200).json({
       format: "crowdpurr",
-      row_count: allQuestions.length,
-      columns: Object.keys(rows[0] || {}),
-      preview: allQuestions.slice(0, 5),
+      columns: parsed.meta?.fields || [],
+      row_count: usableRows.length,
+      preview: usableRows.slice(0, 5).map(normalizePreviewRow),
+      warnings: (parsed.errors || []).map((e) => e.message),
     });
-
-  } catch (err) {
-    console.error("PREVIEW ERROR:", err);
+  } catch (error) {
+    console.error("import-preview-crowdpurr error:", error);
     return res.status(500).json({
-      error: "Failed to preview Crowdpurr CSV",
+      error: error.message || "Failed to preview Crowdpurr CSV",
     });
   }
 };
