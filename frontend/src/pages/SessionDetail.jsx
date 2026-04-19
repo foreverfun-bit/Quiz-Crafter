@@ -6,6 +6,7 @@ import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
+import { Input } from "../components/ui/input";
 import {
   CheckCircle,
   List,
@@ -18,6 +19,9 @@ import {
   Download,
   Radio,
   X,
+  Pencil,
+  Save,
+  Plus,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -27,6 +31,54 @@ const questionTypes = [
   { value: "written", label: "Written", icon: MessageSquare, color: "text-emerald-400" },
   { value: "picture", label: "Picture", icon: Image, color: "text-amber-400" },
 ];
+
+const emptyQuestionForType = (type) => {
+  if (type === "true_false") {
+    return {
+      category: "Imported",
+      question_text: "",
+      correct_answer: "True",
+      question_type: "true_false",
+      incorrect_answers: "False",
+      fun_fact: "",
+      image_url: "",
+    };
+  }
+
+  if (type === "multiple_choice") {
+    return {
+      category: "Imported",
+      question_text: "",
+      correct_answer: "",
+      question_type: "multiple_choice",
+      incorrect_answers: "",
+      fun_fact: "",
+      image_url: "",
+    };
+  }
+
+  if (type === "picture") {
+    return {
+      category: "Imported",
+      question_text: "",
+      correct_answer: "",
+      question_type: "picture",
+      incorrect_answers: "",
+      fun_fact: "",
+      image_url: "",
+    };
+  }
+
+  return {
+    category: "Imported",
+    question_text: "",
+    correct_answer: "",
+    question_type: "written",
+    incorrect_answers: "",
+    fun_fact: "",
+    image_url: "",
+  };
+};
 
 const SessionDetail = () => {
   const { id } = useParams();
@@ -46,13 +98,26 @@ const SessionDetail = () => {
   const [showCandidateDrawer, setShowCandidateDrawer] = useState(false);
   const [savingCandidateIndex, setSavingCandidateIndex] = useState(null);
 
+  const [isEditingImported, setIsEditingImported] = useState(false);
+  const [savingImported, setSavingImported] = useState(false);
+  const [editableSessionName, setEditableSessionName] = useState("");
+  const [editableQuestions, setEditableQuestions] = useState({
+    true_false_questions: [],
+    multiple_choice_questions: [],
+    written_questions: [],
+    picture_questions: [],
+  });
+
   useEffect(() => {
     fetchSessionData();
   }, [id]);
 
+  const isImportedSession = !!session?.is_past;
+
   const normalizeType = (q) => {
     if (!q) return null;
-    if (q.image_url) return "picture";
+    if (q.question_type === "picture") return "picture";
+    if (q.image_url && !q.question_type) return "picture";
     return q.question_type || "written";
   };
 
@@ -66,6 +131,23 @@ const SessionDetail = () => {
     return questionTypes.find((q) => q.value === type)?.label || type;
   };
 
+  const normalizeImportedArrays = (sessionData) => {
+    return {
+      true_false_questions: Array.isArray(sessionData?.true_false_questions)
+        ? sessionData.true_false_questions
+        : [],
+      multiple_choice_questions: Array.isArray(sessionData?.multiple_choice_questions)
+        ? sessionData.multiple_choice_questions
+        : [],
+      written_questions: Array.isArray(sessionData?.written_questions)
+        ? sessionData.written_questions
+        : [],
+      picture_questions: Array.isArray(sessionData?.picture_questions)
+        ? sessionData.picture_questions
+        : [],
+    };
+  };
+
   const fetchSessionData = async () => {
     setLoading(true);
 
@@ -77,6 +159,10 @@ const SessionDetail = () => {
         .single();
 
       if (sessionError) throw sessionError;
+
+      const importedArrays = normalizeImportedArrays(sessionData);
+      setEditableSessionName(sessionData.name || sessionData.session_name || "Untitled Session");
+      setEditableQuestions(importedArrays);
 
       const { data: roundData, error: roundsError } = await supabase
         .from("session_rounds")
@@ -121,11 +207,22 @@ const SessionDetail = () => {
       setSlots(slotData);
       setQuestionsById(questionMap);
 
-      const firstFilledType =
-        slotData
-          .map((s) => questionMap[s.question_id])
-          .map((q) => normalizeType(q))
-          .find(Boolean) || "true_false";
+      let firstFilledType = "true_false";
+
+      if (sessionData.is_past) {
+        firstFilledType =
+          (importedArrays.true_false_questions.length > 0 && "true_false") ||
+          (importedArrays.multiple_choice_questions.length > 0 && "multiple_choice") ||
+          (importedArrays.written_questions.length > 0 && "written") ||
+          (importedArrays.picture_questions.length > 0 && "picture") ||
+          "true_false";
+      } else {
+        firstFilledType =
+          slotData
+            .map((s) => questionMap[s.question_id])
+            .map((q) => normalizeType(q))
+            .find(Boolean) || "true_false";
+      }
 
       setActiveTab(firstFilledType);
     } catch (error) {
@@ -157,10 +254,29 @@ const SessionDetail = () => {
   const copyToClipboard = async () => {
     if (!session) return;
 
-    let text = `TRIVIA SESSION: ${session.name || "Untitled Session"}\n`;
+    const currentName = isImportedSession
+      ? editableSessionName || session.name || session.session_name || "Untitled Session"
+      : session.name || "Untitled Session";
+
+    let text = `TRIVIA SESSION: ${currentName}\n`;
     text += `Created: ${safeDate(session.created_at)}\n\n`;
 
-    if (rounds.length > 0 && slots.length > 0) {
+    if (isImportedSession) {
+      const grouped = [
+        ...editableQuestions.true_false_questions,
+        ...editableQuestions.multiple_choice_questions,
+        ...editableQuestions.written_questions,
+        ...editableQuestions.picture_questions,
+      ];
+
+      grouped.forEach((q, index) => {
+        text += `${index + 1}. [${q.category || "Uncategorized"}]\n`;
+        text += `   Q: ${q.question_text}\n`;
+        text += `   A: ${q.correct_answer}\n`;
+        if (q.fun_fact) text += `   Fun Fact: ${q.fun_fact}\n`;
+        text += "\n";
+      });
+    } else {
       rounds.forEach((round) => {
         text += `=== ${round.round_name || `Round ${round.round_order}`} ===\n\n`;
 
@@ -182,21 +298,6 @@ const SessionDetail = () => {
           text += "\n";
         });
       });
-    } else {
-      const grouped = [
-        ...(session.true_false_questions || []),
-        ...(session.multiple_choice_questions || []),
-        ...(session.written_questions || []),
-        ...(session.picture_questions || []),
-      ];
-
-      grouped.forEach((q, index) => {
-        text += `${index + 1}. [${q.category || "Uncategorized"}]\n`;
-        text += `   Q: ${q.question_text}\n`;
-        text += `   A: ${q.correct_answer}\n`;
-        if (q.fun_fact) text += `   Fun Fact: ${q.fun_fact}\n`;
-        text += "\n";
-      });
     }
 
     await navigator.clipboard.writeText(text);
@@ -206,7 +307,28 @@ const SessionDetail = () => {
   const handleExportCSV = async () => {
     const rows = [];
 
-    if (rounds.length > 0 && slots.length > 0) {
+    if (isImportedSession) {
+      const grouped = [
+        ...editableQuestions.true_false_questions.map((q, i) => ({ ...q, round: "Imported", order: i + 1 })),
+        ...editableQuestions.multiple_choice_questions.map((q, i) => ({ ...q, round: "Imported", order: i + 1 })),
+        ...editableQuestions.written_questions.map((q, i) => ({ ...q, round: "Imported", order: i + 1 })),
+        ...editableQuestions.picture_questions.map((q, i) => ({ ...q, round: "Imported", order: i + 1 })),
+      ];
+
+      grouped.forEach((q) => {
+        rows.push({
+          round: q.round,
+          order: q.order,
+          type: normalizeType(q),
+          category: q.category || "",
+          question: q.question_text || "",
+          correct_answer: q.correct_answer || "",
+          incorrect_answers: q.incorrect_answers || "",
+          fun_fact: q.fun_fact || "",
+          image_url: q.image_url || "",
+        });
+      });
+    } else {
       rounds.forEach((round) => {
         const roundSlots = slots
           .filter((s) => s.session_round_id === round.id)
@@ -225,27 +347,6 @@ const SessionDetail = () => {
             fun_fact: q?.fun_fact || "",
             image_url: q?.image_url || "",
           });
-        });
-      });
-    } else {
-      const grouped = [
-        ...(session.true_false_questions || []).map((q, i) => ({ ...q, round: "Imported", order: i + 1 })),
-        ...(session.multiple_choice_questions || []).map((q, i) => ({ ...q, round: "Imported", order: i + 1 })),
-        ...(session.written_questions || []).map((q, i) => ({ ...q, round: "Imported", order: i + 1 })),
-        ...(session.picture_questions || []).map((q, i) => ({ ...q, round: "Imported", order: i + 1 })),
-      ];
-
-      grouped.forEach((q) => {
-        rows.push({
-          round: q.round,
-          order: q.order,
-          type: normalizeType(q),
-          category: q.category || "",
-          question: q.question_text || "",
-          correct_answer: q.correct_answer || "",
-          incorrect_answers: q.incorrect_answers || "",
-          fun_fact: q.fun_fact || "",
-          image_url: q.image_url || "",
         });
       });
     }
@@ -275,7 +376,9 @@ const SessionDetail = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${(session?.name || "session").replace(/[^a-z0-9]/gi, "-").toLowerCase()}.csv`;
+    a.download = `${(isImportedSession ? editableSessionName : session?.name || "session")
+      .replace(/[^a-z0-9]/gi, "-")
+      .toLowerCase()}.csv`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -388,25 +491,20 @@ const SessionDetail = () => {
     toast.info("Live hosting will be wired next.");
   };
 
-  const getImportedQuestionsForType = (type) => {
-    if (!session) return [];
-
-    const map = {
-      true_false: session.true_false_questions || [],
-      multiple_choice: session.multiple_choice_questions || [],
-      written: session.written_questions || [],
-      picture: session.picture_questions || [],
-    };
-
-    return map[type] || [];
-  };
-
   const getQuestionsForType = (type) => {
-    if (rounds.length === 0 || slots.length === 0) {
-      return getImportedQuestionsForType(type).map((question, index) => ({
+    if (isImportedSession) {
+      const map = {
+        true_false: editableQuestions.true_false_questions,
+        multiple_choice: editableQuestions.multiple_choice_questions,
+        written: editableQuestions.written_questions,
+        picture: editableQuestions.picture_questions,
+      };
+
+      return (map[type] || []).map((question, index) => ({
         slot: { id: `imported-${type}-${index}`, question_order: index + 1 },
         round: { round_name: "Imported Session", round_order: 1 },
         question,
+        importedIndex: index,
       }));
     }
 
@@ -434,6 +532,164 @@ const SessionDetail = () => {
   }, {});
 
   const totalQuestions = Object.values(counts).reduce((sum, n) => sum + n, 0);
+
+  const updateImportedQuestionField = (type, index, field, value) => {
+    setEditableQuestions((prev) => {
+      const updated = [...prev[`${type}_questions`]];
+      updated[index] = {
+        ...updated[index],
+        [field]: value,
+      };
+
+      if (field === "correct_answer" && type === "true_false") {
+        updated[index].incorrect_answers = value === "True" ? "False" : "True";
+      }
+
+      if (field === "question_type") {
+        updated[index].question_type = value;
+      }
+
+      return {
+        ...prev,
+        [`${type}_questions`]: updated,
+      };
+    });
+  };
+
+  const removeImportedQuestion = (type, index) => {
+    setEditableQuestions((prev) => ({
+      ...prev,
+      [`${type}_questions`]: prev[`${type}_questions`].filter((_, i) => i !== index),
+    }));
+  };
+
+  const addImportedQuestion = (type) => {
+    setEditableQuestions((prev) => ({
+      ...prev,
+      [`${type}_questions`]: [
+        ...prev[`${type}_questions`],
+        emptyQuestionForType(type),
+      ],
+    }));
+  };
+
+  const moveImportedQuestionToType = (fromType, index, toType) => {
+    if (fromType === toType) return;
+
+    setEditableQuestions((prev) => {
+      const source = [...prev[`${fromType}_questions`]];
+      const target = [...prev[`${toType}_questions`]];
+      const moved = { ...source[index] };
+
+      source.splice(index, 1);
+      moved.question_type = toType;
+
+      if (toType === "true_false") {
+        moved.correct_answer =
+          moved.correct_answer === "False" ? "False" : "True";
+        moved.incorrect_answers =
+          moved.correct_answer === "True" ? "False" : "True";
+        moved.image_url = "";
+      } else if (toType === "written") {
+        moved.incorrect_answers = "";
+        moved.image_url = "";
+      } else if (toType === "multiple_choice") {
+        moved.incorrect_answers = moved.incorrect_answers || "";
+        moved.image_url = "";
+      } else if (toType === "picture") {
+        moved.incorrect_answers = moved.incorrect_answers || "";
+      }
+
+      target.push(moved);
+
+      return {
+        ...prev,
+        [`${fromType}_questions`]: source,
+        [`${toType}_questions`]: target,
+      };
+    });
+  };
+
+  const handleCancelImportedEdits = () => {
+    setEditableSessionName(session.name || session.session_name || "Untitled Session");
+    setEditableQuestions(normalizeImportedArrays(session));
+    setIsEditingImported(false);
+  };
+
+  const handleSaveImportedSession = async () => {
+    setSavingImported(true);
+
+    try {
+      const cleaned = {
+        true_false_questions: editableQuestions.true_false_questions.map((q) => ({
+          category: q.category || "Imported",
+          question_text: q.question_text || "",
+          correct_answer: q.correct_answer || "True",
+          question_type: "true_false",
+          incorrect_answers: "False",
+          fun_fact: q.fun_fact || "",
+          image_url: "",
+        })),
+        multiple_choice_questions: editableQuestions.multiple_choice_questions.map((q) => ({
+          category: q.category || "Imported",
+          question_text: q.question_text || "",
+          correct_answer: q.correct_answer || "",
+          question_type: "multiple_choice",
+          incorrect_answers: q.incorrect_answers || "",
+          fun_fact: q.fun_fact || "",
+          image_url: "",
+        })),
+        written_questions: editableQuestions.written_questions.map((q) => ({
+          category: q.category || "Imported",
+          question_text: q.question_text || "",
+          correct_answer: q.correct_answer || "",
+          question_type: "written",
+          incorrect_answers: "",
+          fun_fact: q.fun_fact || "",
+          image_url: "",
+        })),
+        picture_questions: editableQuestions.picture_questions.map((q) => ({
+          category: q.category || "Imported",
+          question_text: q.question_text || "",
+          correct_answer: q.correct_answer || "",
+          question_type: "picture",
+          incorrect_answers: q.incorrect_answers || "",
+          fun_fact: q.fun_fact || "",
+          image_url: q.image_url || "",
+        })),
+      };
+
+      const { error } = await supabase
+        .from("sessions")
+        .update({
+          name: editableSessionName || "Imported Session",
+          session_name: editableSessionName || "Imported Session",
+          true_false_questions: cleaned.true_false_questions,
+          multiple_choice_questions: cleaned.multiple_choice_questions,
+          written_questions: cleaned.written_questions,
+          picture_questions: cleaned.picture_questions,
+        })
+        .eq("id", id);
+
+      if (error) throw error;
+
+      setSession((prev) => ({
+        ...prev,
+        name: editableSessionName || "Imported Session",
+        session_name: editableSessionName || "Imported Session",
+        ...cleaned,
+      }));
+
+      setEditableQuestions(cleaned);
+      setIsEditingImported(false);
+      toast.success("Session updated!");
+    } catch (error) {
+      console.error("Save imported session error:", error);
+      toast.error(error.message || "Failed to save session");
+    } finally {
+      setSavingImported(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -463,17 +719,62 @@ const SessionDetail = () => {
           >
             <ArrowLeft size={20} />
           </Button>
-          <div>
-            <h1 className="text-2xl md:text-3xl font-bold text-white">
-              {session.name || "Untitled Session"}
-            </h1>
+          <div className="min-w-0">
+            {isImportedSession && isEditingImported ? (
+              <Input
+                value={editableSessionName}
+                onChange={(e) => setEditableSessionName(e.target.value)}
+                className="bg-zinc-950/50 border-white/10 text-white text-2xl md:text-3xl font-bold h-12"
+              />
+            ) : (
+              <h1 className="text-2xl md:text-3xl font-bold text-white">
+                {editableSessionName || session.name || session.session_name || "Untitled Session"}
+              </h1>
+            )}
             <p className="text-zinc-500 text-sm">
               {totalQuestions} questions · Created {safeDate(session.created_at)}
             </p>
           </div>
         </div>
 
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          {isImportedSession && !isEditingImported && (
+            <Button
+              variant="outline"
+              onClick={() => setIsEditingImported(true)}
+              className="border-[#AEB2EF]/40 text-[#AEB2EF]"
+            >
+              <Pencil className="mr-2" size={16} />
+              Edit Session
+            </Button>
+          )}
+
+          {isImportedSession && isEditingImported && (
+            <>
+              <Button
+                onClick={handleSaveImportedSession}
+                disabled={savingImported}
+                className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+              >
+                {savingImported ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Save className="mr-2" size={16} />
+                )}
+                Save Changes
+              </Button>
+
+              <Button
+                variant="outline"
+                onClick={handleCancelImportedEdits}
+                disabled={savingImported}
+                className="border-zinc-700 text-zinc-300"
+              >
+                Cancel
+              </Button>
+            </>
+          )}
+
           <Button
             onClick={handleGoLive}
             className="bg-gradient-to-r from-[#71E0DC] to-[#AEB2EF] text-zinc-900 font-bold hover:opacity-90"
@@ -605,10 +906,31 @@ const SessionDetail = () => {
                     {entries.length === 0 ? (
                       <div className="text-center py-12">
                         <p className="text-zinc-500">No {type.label.toLowerCase()} questions in this session</p>
+                        {isImportedSession && isEditingImported && (
+                          <Button
+                            className="mt-4 gradient-btn"
+                            onClick={() => addImportedQuestion(type.value)}
+                          >
+                            <Plus className="mr-2" size={16} />
+                            Add {type.label}
+                          </Button>
+                        )}
                       </div>
                     ) : (
                       <div className="space-y-4 pr-4">
-                        {entries.map(({ question, round, slot }, index) => (
+                        {isImportedSession && isEditingImported && (
+                          <div className="flex justify-end">
+                            <Button
+                              className="gradient-btn"
+                              onClick={() => addImportedQuestion(type.value)}
+                            >
+                              <Plus className="mr-2" size={16} />
+                              Add {type.label}
+                            </Button>
+                          </div>
+                        )}
+
+                        {entries.map(({ question, round, slot, importedIndex }, index) => (
                           <Card
                             key={`${slot.id}-${index}`}
                             className="bg-zinc-900/50 border-white/10"
@@ -617,62 +939,175 @@ const SessionDetail = () => {
                             <CardContent className="p-4">
                               <div className="flex items-start justify-between gap-4 mb-3">
                                 <div className="flex items-center gap-2 flex-wrap">
-                                  <Badge variant="outline" className="border-zinc-700 text-zinc-400">
-                                    {question.category || "Uncategorized"}
-                                  </Badge>
-                                  <Badge variant="outline" className="border-zinc-700 text-zinc-500">
-                                    {round?.round_name || `Round ${round?.round_order || ""}`}
-                                  </Badge>
+                                  {isImportedSession && isEditingImported ? (
+                                    <>
+                                      <Input
+                                        value={question.category || ""}
+                                        onChange={(e) =>
+                                          updateImportedQuestionField(type.value, importedIndex, "category", e.target.value)
+                                        }
+                                        placeholder="Category"
+                                        className="w-40 bg-zinc-950/50 border-white/10 text-white"
+                                      />
+
+                                      <select
+                                        value={normalizeType(question)}
+                                        onChange={(e) =>
+                                          moveImportedQuestionToType(type.value, importedIndex, e.target.value)
+                                        }
+                                        className="h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3"
+                                      >
+                                        {questionTypes.map((qt) => (
+                                          <option key={qt.value} value={qt.value}>
+                                            {qt.label}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Badge variant="outline" className="border-zinc-700 text-zinc-400">
+                                        {question.category || "Uncategorized"}
+                                      </Badge>
+                                      <Badge variant="outline" className="border-zinc-700 text-zinc-500">
+                                        {round?.round_name || `Round ${round?.round_order || ""}`}
+                                      </Badge>
+                                    </>
+                                  )}
                                 </div>
-                                <span className="text-zinc-600 text-sm font-mono">
-                                  #{slot.question_order}
-                                </span>
+
+                                <div className="flex items-center gap-2">
+                                  <span className="text-zinc-600 text-sm font-mono">
+                                    #{slot.question_order}
+                                  </span>
+
+                                  {isImportedSession && isEditingImported && (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="text-red-400 hover:bg-red-500/10"
+                                      onClick={() => removeImportedQuestion(type.value, importedIndex)}
+                                    >
+                                      <Trash2 size={14} />
+                                    </Button>
+                                  )}
+                                </div>
                               </div>
 
-                              <p className="text-white font-medium mb-3">{question.question_text}</p>
+                              {isImportedSession && isEditingImported ? (
+                                <div className="space-y-3">
+                                  <textarea
+                                    value={question.question_text || ""}
+                                    onChange={(e) =>
+                                      updateImportedQuestionField(type.value, importedIndex, "question_text", e.target.value)
+                                    }
+                                    placeholder="Question text"
+                                    className="w-full min-h-[90px] rounded-md bg-zinc-950/50 border border-white/10 text-white p-3"
+                                  />
 
-                              {question.image_url && (
-                                <div className="mb-3">
-                                  <img
-                                    src={question.image_url}
-                                    alt="Question"
-                                    className="w-full max-w-sm rounded-lg border border-white/10"
-                                    data-testid={`session-question-image-${type.value}-${index}`}
+                                  {type.value === "true_false" ? (
+                                    <select
+                                      value={question.correct_answer || "True"}
+                                      onChange={(e) =>
+                                        updateImportedQuestionField(type.value, importedIndex, "correct_answer", e.target.value)
+                                      }
+                                      className="h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3"
+                                    >
+                                      <option value="True">True</option>
+                                      <option value="False">False</option>
+                                    </select>
+                                  ) : (
+                                    <>
+                                      <Input
+                                        value={question.correct_answer || ""}
+                                        onChange={(e) =>
+                                          updateImportedQuestionField(type.value, importedIndex, "correct_answer", e.target.value)
+                                        }
+                                        placeholder="Correct answer"
+                                        className="bg-zinc-950/50 border-white/10 text-white"
+                                      />
+
+                                      {(type.value === "multiple_choice" || type.value === "picture") && (
+                                        <Input
+                                          value={question.incorrect_answers || ""}
+                                          onChange={(e) =>
+                                            updateImportedQuestionField(type.value, importedIndex, "incorrect_answers", e.target.value)
+                                          }
+                                          placeholder="Incorrect answers separated by semicolons"
+                                          className="bg-zinc-950/50 border-white/10 text-white"
+                                        />
+                                      )}
+
+                                      {type.value === "picture" && (
+                                        <Input
+                                          value={question.image_url || ""}
+                                          onChange={(e) =>
+                                            updateImportedQuestionField(type.value, importedIndex, "image_url", e.target.value)
+                                          }
+                                          placeholder="Image URL"
+                                          className="bg-zinc-950/50 border-white/10 text-white"
+                                        />
+                                      )}
+                                    </>
+                                  )}
+
+                                  <textarea
+                                    value={question.fun_fact || ""}
+                                    onChange={(e) =>
+                                      updateImportedQuestionField(type.value, importedIndex, "fun_fact", e.target.value)
+                                    }
+                                    placeholder="Fun fact"
+                                    className="w-full min-h-[80px] rounded-md bg-zinc-950/50 border border-white/10 text-white p-3"
                                   />
                                 </div>
-                              )}
+                              ) : (
+                                <>
+                                  <p className="text-white font-medium mb-3">{question.question_text}</p>
 
-                              {question.incorrect_answers && (
-                                <div className="grid grid-cols-2 gap-2 mb-3">
-                                  {String(question.incorrect_answers)
-                                    .split(";")
-                                    .map((option) => option.trim())
-                                    .filter(Boolean)
-                                    .map((option, optIndex) => (
-                                      <div
-                                        key={optIndex}
-                                        className="px-3 py-2 rounded-md text-sm bg-zinc-800/50 text-zinc-400"
-                                      >
-                                        {option}
-                                      </div>
-                                    ))}
-                                </div>
-                              )}
+                                  {question.image_url && (
+                                    <div className="mb-3">
+                                      <img
+                                        src={question.image_url}
+                                        alt="Question"
+                                        className="w-full max-w-sm rounded-lg border border-white/10"
+                                        data-testid={`session-question-image-${type.value}-${index}`}
+                                      />
+                                    </div>
+                                  )}
 
-                              <div className="pt-3 border-t border-white/10 space-y-1">
-                                <p className="text-sm">
-                                  <span className="text-zinc-500">Answer: </span>
-                                  <span className="text-emerald-400 font-medium">
-                                    {question.correct_answer}
-                                  </span>
-                                </p>
-                                {question.fun_fact && (
-                                  <p className="text-sm">
-                                    <span className="text-zinc-500">Fun Fact: </span>
-                                    <span className="text-zinc-300">{question.fun_fact}</span>
-                                  </p>
-                                )}
-                              </div>
+                                  {question.incorrect_answers && (
+                                    <div className="grid grid-cols-2 gap-2 mb-3">
+                                      {String(question.incorrect_answers)
+                                        .split(";")
+                                        .map((option) => option.trim())
+                                        .filter(Boolean)
+                                        .map((option, optIndex) => (
+                                          <div
+                                            key={optIndex}
+                                            className="px-3 py-2 rounded-md text-sm bg-zinc-800/50 text-zinc-400"
+                                          >
+                                            {option}
+                                          </div>
+                                        ))}
+                                    </div>
+                                  )}
+
+                                  <div className="pt-3 border-t border-white/10 space-y-1">
+                                    <p className="text-sm">
+                                      <span className="text-zinc-500">Answer: </span>
+                                      <span className="text-emerald-400 font-medium">
+                                        {question.correct_answer}
+                                      </span>
+                                    </p>
+                                    {question.fun_fact && (
+                                      <p className="text-sm">
+                                        <span className="text-zinc-500">Fun Fact: </span>
+                                        <span className="text-zinc-300">{question.fun_fact}</span>
+                                      </p>
+                                    )}
+                                  </div>
+                                </>
+                              )}
                             </CardContent>
                           </Card>
                         ))}
