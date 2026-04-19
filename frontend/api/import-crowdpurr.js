@@ -90,10 +90,33 @@ function normalizeCrowdpurrRow(row) {
   const additionalAnswersRaw = getValue(row, ["Additional Answers"]);
 
   if (!questionText) return null;
+  if (questionTypeRaw === "reorder") return null;
 
-  if (questionTypeRaw === "reorder") {
-    return null;
-  }
+  // Crowdpurr sometimes spills extra answers into unnamed columns
+  const knownKeys = new Set([
+    "Question",
+    "Question Type",
+    "Question Points (Leave Blank For Polls)",
+    "Question Time",
+    "Question Image URL",
+    "Question Note",
+    "Question Link",
+    "Correct Answer(s)",
+    "Additional Answers",
+  ].map((k) => k.toLowerCase()));
+
+  const overflowAnswers = Object.entries(row)
+    .filter(([key, value]) => {
+      if (!key) return false;
+      if (knownKeys.has(String(key).toLowerCase())) return false;
+      return value !== undefined && value !== null && String(value).trim() !== "";
+    })
+    .map(([, value]) => String(value).trim());
+
+  const allExtraAnswers = [
+    ...splitOptions(additionalAnswersRaw),
+    ...overflowAnswers,
+  ].filter(Boolean);
 
   let questionType = "written";
   let correctAnswer = correctAnswerRaw;
@@ -102,16 +125,7 @@ function normalizeCrowdpurrRow(row) {
 
   if (questionTypeRaw === "multiplechoice") {
     questionType = "multiple_choice";
-
-    const allAnswers = [
-      correctAnswerRaw,
-      ...splitOptions(additionalAnswersRaw),
-    ].filter(Boolean);
-
-    if (allAnswers.length > 0) {
-      correctAnswer = allAnswers[0];
-      incorrectAnswers = allAnswers.slice(1).join(";");
-    }
+    incorrectAnswers = allExtraAnswers.length ? allExtraAnswers.join(";") : null;
   } else if (questionTypeRaw === "text") {
     questionType = "written";
     correctAnswer = correctAnswerRaw;
