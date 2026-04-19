@@ -61,17 +61,85 @@ function getValue(row, possibleKeys) {
   return "";
 }
 
-function normalizePreviewRow(row) {
-  const question = getValue(row, ["Question"]);
-  const category = getValue(row, ["Correct Answer"]);
-  const correctAnswer = getValue(row, ["Additional Answers"]);
-  const incorrectAnswers = "";
+function splitOptions(value) {
+  if (!value) return [];
+  if (value.includes(";")) return value.split(";").map((s) => s.trim()).filter(Boolean);
+  if (value.includes("|")) return value.split("|").map((s) => s.trim()).filter(Boolean);
+  if (value.includes(",")) return value.split(",").map((s) => s.trim()).filter(Boolean);
+  return [value.trim()].filter(Boolean);
+}
+
+function cleanHtml(value) {
+  return String(value || "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeCrowdpurrPreviewRow(row) {
+  const questionText = getValue(row, ["Question"]);
+  const questionTypeRaw = getValue(row, ["Question Type"]).toLowerCase();
+  const note = cleanHtml(getValue(row, ["Question Note"]));
+  const correctAnswerRaw = getValue(row, ["Correct Answer(s)"]);
+  const additionalAnswersRaw = getValue(row, ["Additional Answers"]);
+
+  if (!questionText) return null;
+  if (questionTypeRaw === "reorder") return null;
+
+  const knownKeys = new Set(
+    [
+      "Question",
+      "Question Type",
+      "Question Points (Leave Blank For Polls)",
+      "Question Time",
+      "Question Image URL",
+      "Question Note",
+      "Question Link",
+      "Correct Answer(s)",
+      "Additional Answers",
+    ].map((k) => k.toLowerCase())
+  );
+
+  const overflowAnswers = Object.entries(row)
+    .filter(([key, value]) => {
+      if (!key) return false;
+      if (knownKeys.has(String(key).toLowerCase())) return false;
+      return value !== undefined && value !== null && String(value).trim() !== "";
+    })
+    .map(([, value]) => String(value).trim());
+
+  const allExtraAnswers = [
+    ...splitOptions(additionalAnswersRaw),
+    ...overflowAnswers,
+  ].filter(Boolean);
+
+  let questionType = "written";
+  let correctAnswer = correctAnswerRaw;
+  let incorrectAnswers = "";
+  let category = "Imported";
+
+  if (questionTypeRaw === "multiplechoice") {
+    questionType = "multiple_choice";
+    incorrectAnswers = allExtraAnswers.join("; ");
+  } else if (questionTypeRaw === "text") {
+    questionType = "written";
+  }
+
+  const answerLower = String(correctAnswer || "").toLowerCase();
+  if (answerLower === "true" || answerLower === "false") {
+    questionType = "true_false";
+    incorrectAnswers = answerLower === "true" ? "False" : "True";
+  }
+
+  if (!correctAnswer) return null;
 
   return {
-    question,
+    question: questionText,
     category,
     correctAnswer,
     incorrectAnswers,
+    questionType,
+    note,
   };
 }
 
@@ -96,18 +164,15 @@ module.exports = async function handler(req, res) {
     });
 
     const rows = Array.isArray(parsed.data) ? parsed.data : [];
-
-    const usableRows = rows.filter((row) => {
-      const question = getValue(row, ["Question"]);
-      const questionType = getValue(row, ["Question Type"]);
-      return question && questionType !== "reorder";
-    });
+    const previewRows = rows
+      .map(normalizeCrowdpurrPreviewRow)
+      .filter(Boolean);
 
     return res.status(200).json({
       format: "crowdpurr",
       columns: parsed.meta?.fields || [],
-      row_count: usableRows.length,
-      preview: usableRows.slice(0, 5).map(normalizePreviewRow),
+      row_count: previewRows.length,
+      preview: previewRows.slice(0, 5),
       warnings: (parsed.errors || []).map((e) => e.message),
     });
   } catch (error) {
