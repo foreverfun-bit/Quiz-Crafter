@@ -24,6 +24,21 @@ import GameHistoryDetail from "./pages/GameHistory";
 // Components
 import Sidebar from "./components/Sidebar";
 
+export const api = {
+  get: async () => {
+    throw new Error("Legacy api client removed. This page must be migrated to Supabase.");
+  },
+  post: async () => {
+    throw new Error("Legacy api client removed. This page must be migrated to Supabase.");
+  },
+  delete: async () => {
+    throw new Error("Legacy api client removed. This page must be migrated to Supabase.");
+  },
+  put: async () => {
+    throw new Error("Legacy api client removed. This page must be migrated to Supabase.");
+  },
+};
+
 // Auth Context
 const AuthContext = createContext(null);
 
