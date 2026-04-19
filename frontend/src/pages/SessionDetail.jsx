@@ -52,8 +52,8 @@ const SessionDetail = () => {
 
   const normalizeType = (q) => {
     if (!q) return null;
-    if (q.has_image) return "picture";
-    return q.question_type;
+    if (q.image_url) return "picture";
+    return q.question_type || "written";
   };
 
   const safeDate = (value) => {
@@ -84,7 +84,9 @@ const SessionDetail = () => {
         .eq("session_id", id)
         .order("round_order", { ascending: true });
 
-      if (roundsError) throw roundsError;
+      if (roundsError && roundsError.code !== "PGRST116") {
+        throw roundsError;
+      }
 
       const roundIds = (roundData || []).map((r) => r.id);
 
@@ -129,7 +131,7 @@ const SessionDetail = () => {
     } catch (error) {
       console.error("Failed to load session:", error);
       toast.error(error.message || "Failed to load session");
-      navigate("/");
+      navigate("/past-sessions");
     } finally {
       setLoading(false);
     }
@@ -143,7 +145,7 @@ const SessionDetail = () => {
       const { error } = await supabase.from("sessions").delete().eq("id", id);
       if (error) throw error;
       toast.success("Session deleted");
-      navigate("/");
+      navigate("/past-sessions");
     } catch (error) {
       console.error(error);
       toast.error(error.message || "Failed to delete session");
@@ -155,30 +157,47 @@ const SessionDetail = () => {
   const copyToClipboard = async () => {
     if (!session) return;
 
-    let text = `TRIVIA SESSION: ${session.title || session.session_name || "Untitled Session"}\n`;
+    let text = `TRIVIA SESSION: ${session.name || "Untitled Session"}\n`;
     text += `Created: ${safeDate(session.created_at)}\n\n`;
 
-    rounds.forEach((round) => {
-      text += `=== ${round.round_name || `Round ${round.round_order}`} ===\n\n`;
+    if (rounds.length > 0 && slots.length > 0) {
+      rounds.forEach((round) => {
+        text += `=== ${round.round_name || `Round ${round.round_order}`} ===\n\n`;
 
-      const roundSlots = slots
-        .filter((s) => s.session_round_id === round.id)
-        .sort((a, b) => a.question_order - b.question_order);
+        const roundSlots = slots
+          .filter((s) => s.session_round_id === round.id)
+          .sort((a, b) => a.question_order - b.question_order);
 
-      roundSlots.forEach((slot, index) => {
-        const q = questionsById[slot.question_id];
-        if (!q) {
-          text += `${index + 1}. [Empty Slot]\n\n`;
-          return;
-        }
+        roundSlots.forEach((slot, index) => {
+          const q = questionsById[slot.question_id];
+          if (!q) {
+            text += `${index + 1}. [Empty Slot]\n\n`;
+            return;
+          }
 
+          text += `${index + 1}. [${q.category || "Uncategorized"}]\n`;
+          text += `   Q: ${q.question_text}\n`;
+          text += `   A: ${q.correct_answer}\n`;
+          if (q.fun_fact) text += `   Fun Fact: ${q.fun_fact}\n`;
+          text += "\n";
+        });
+      });
+    } else {
+      const grouped = [
+        ...(session.true_false_questions || []),
+        ...(session.multiple_choice_questions || []),
+        ...(session.written_questions || []),
+        ...(session.picture_questions || []),
+      ];
+
+      grouped.forEach((q, index) => {
         text += `${index + 1}. [${q.category || "Uncategorized"}]\n`;
         text += `   Q: ${q.question_text}\n`;
         text += `   A: ${q.correct_answer}\n`;
         if (q.fun_fact) text += `   Fun Fact: ${q.fun_fact}\n`;
         text += "\n";
       });
-    });
+    }
 
     await navigator.clipboard.writeText(text);
     toast.success("Session copied to clipboard!");
@@ -187,26 +206,49 @@ const SessionDetail = () => {
   const handleExportCSV = async () => {
     const rows = [];
 
-    rounds.forEach((round) => {
-      const roundSlots = slots
-        .filter((s) => s.session_round_id === round.id)
-        .sort((a, b) => a.question_order - b.question_order);
+    if (rounds.length > 0 && slots.length > 0) {
+      rounds.forEach((round) => {
+        const roundSlots = slots
+          .filter((s) => s.session_round_id === round.id)
+          .sort((a, b) => a.question_order - b.question_order);
 
-      roundSlots.forEach((slot) => {
-        const q = questionsById[slot.question_id];
-        rows.push({
-          round: round.round_name || `Round ${round.round_order}`,
-          order: slot.question_order,
-          type: q ? normalizeType(q) : "",
-          category: q?.category || "",
-          question: q?.question_text || "",
-          correct_answer: q?.correct_answer || "",
-          incorrect_answers: q?.incorrect_answers || "",
-          fun_fact: q?.fun_fact || "",
-          image_url: q?.image_url || "",
+        roundSlots.forEach((slot) => {
+          const q = questionsById[slot.question_id];
+          rows.push({
+            round: round.round_name || `Round ${round.round_order}`,
+            order: slot.question_order,
+            type: q ? normalizeType(q) : "",
+            category: q?.category || "",
+            question: q?.question_text || "",
+            correct_answer: q?.correct_answer || "",
+            incorrect_answers: q?.incorrect_answers || "",
+            fun_fact: q?.fun_fact || "",
+            image_url: q?.image_url || "",
+          });
         });
       });
-    });
+    } else {
+      const grouped = [
+        ...(session.true_false_questions || []).map((q, i) => ({ ...q, round: "Imported", order: i + 1 })),
+        ...(session.multiple_choice_questions || []).map((q, i) => ({ ...q, round: "Imported", order: i + 1 })),
+        ...(session.written_questions || []).map((q, i) => ({ ...q, round: "Imported", order: i + 1 })),
+        ...(session.picture_questions || []).map((q, i) => ({ ...q, round: "Imported", order: i + 1 })),
+      ];
+
+      grouped.forEach((q) => {
+        rows.push({
+          round: q.round,
+          order: q.order,
+          type: normalizeType(q),
+          category: q.category || "",
+          question: q.question_text || "",
+          correct_answer: q.correct_answer || "",
+          incorrect_answers: q.incorrect_answers || "",
+          fun_fact: q.fun_fact || "",
+          image_url: q.image_url || "",
+        });
+      });
+    }
 
     const header = [
       "round",
@@ -233,9 +275,7 @@ const SessionDetail = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${(session?.title || session?.session_name || "session")
-      .replace(/[^a-z0-9]/gi, "-")
-      .toLowerCase()}.csv`;
+    a.download = `${(session?.name || "session").replace(/[^a-z0-9]/gi, "-").toLowerCase()}.csv`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -258,16 +298,8 @@ const SessionDetail = () => {
         }),
       });
 
-      let data = {};
-
-      try {
-        const clonedResponse = response.clone();
-        const raw = await clonedResponse.text();
-        data = raw ? JSON.parse(raw) : {};
-      } catch (parseError) {
-        console.error("Failed to read generator response:", parseError);
-        throw new Error("Generator response could not be read");
-      }
+      const raw = await response.text();
+      const data = raw ? JSON.parse(raw) : {};
 
       if (!response.ok) {
         throw new Error(data.error || "Failed to generate candidates");
@@ -294,79 +326,90 @@ const SessionDetail = () => {
     });
   };
 
-const handleSaveToLibrary = async (candidate, candidateIndex) => {
-  setSavingCandidateIndex(candidateIndex);
+  const handleSaveToLibrary = async (candidate, candidateIndex) => {
+    setSavingCandidateIndex(candidateIndex);
 
-  try {
-    if (!session?.user_id) {
-      throw new Error("Session user not found");
-    }
-
-    const response = await fetch("/api/save-candidate-to-library", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        sessionUserId: session.user_id,
-        category: candidate.category || null,
-        question_text: candidate.question_text,
-        question_type: candidate.question_type || currentGenerateType,
-        has_image: candidate.has_image || false,
-        image_url: candidate.image_url || "",
-        correct_answer: candidate.correct_answer,
-        incorrect_answers: candidate.incorrect_answers || [],
-        fun_fact: candidate.fun_fact || null,
-        difficulty: candidate.difficulty || "medium",
-      }),
-    });
-
-    let data = {};
     try {
-      const clonedResponse = response.clone();
-      const raw = await clonedResponse.text();
-      data = raw ? JSON.parse(raw) : {};
-    } catch (parseError) {
-      console.error("Failed to read save response:", parseError);
-      throw new Error("Save response could not be read");
-    }
-
-    if (!response.ok) {
-      throw new Error(data.error || "Failed to save to library");
-    }
-
-    const savedQuestion = data.question;
-    if (!savedQuestion?.id) {
-      throw new Error("Question was not saved");
-    }
-
-    setQuestionsById((prev) => ({
-      ...prev,
-      [savedQuestion.id]: savedQuestion,
-    }));
-
-    setCandidates((prev) => {
-      const updated = prev.filter((_, i) => i !== candidateIndex);
-      if (updated.length === 0) {
-        setShowCandidateDrawer(false);
+      if (!session?.user_id) {
+        throw new Error("Session user not found");
       }
-      return updated;
-    });
 
-    toast.success("Saved to library!");
-  } catch (error) {
-    console.error("Save to library error:", error);
-    toast.error(error?.message || "Failed to save to library");
-  } finally {
-    setSavingCandidateIndex(null);
-  }
-};
+      const response = await fetch("/api/save-candidate-to-library", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          sessionUserId: session.user_id,
+          category: candidate.category || null,
+          question_text: candidate.question_text,
+          question_type: candidate.question_type || currentGenerateType,
+          correct_answer: candidate.correct_answer,
+          incorrect_answers: candidate.incorrect_answers || [],
+          fun_fact: candidate.fun_fact || null,
+        }),
+      });
+
+      const raw = await response.text();
+      const data = raw ? JSON.parse(raw) : {};
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to save to library");
+      }
+
+      const savedQuestion = data.question;
+      if (!savedQuestion?.id) {
+        throw new Error("Question was not saved");
+      }
+
+      setQuestionsById((prev) => ({
+        ...prev,
+        [savedQuestion.id]: savedQuestion,
+      }));
+
+      setCandidates((prev) => {
+        const updated = prev.filter((_, i) => i !== candidateIndex);
+        if (updated.length === 0) {
+          setShowCandidateDrawer(false);
+        }
+        return updated;
+      });
+
+      toast.success("Saved to library!");
+    } catch (error) {
+      console.error("Save to library error:", error);
+      toast.error(error?.message || "Failed to save to library");
+    } finally {
+      setSavingCandidateIndex(null);
+    }
+  };
 
   const handleGoLive = () => {
     toast.info("Live hosting will be wired next.");
   };
 
+  const getImportedQuestionsForType = (type) => {
+    if (!session) return [];
+
+    const map = {
+      true_false: session.true_false_questions || [],
+      multiple_choice: session.multiple_choice_questions || [],
+      written: session.written_questions || [],
+      picture: session.picture_questions || [],
+    };
+
+    return map[type] || [];
+  };
+
   const getQuestionsForType = (type) => {
+    if (rounds.length === 0 || slots.length === 0) {
+      return getImportedQuestionsForType(type).map((question, index) => ({
+        slot: { id: `imported-${type}-${index}`, question_order: index + 1 },
+        round: { round_name: "Imported Session", round_order: 1 },
+        question,
+      }));
+    }
+
     return slots
       .map((slot) => ({
         slot,
@@ -414,7 +457,7 @@ const handleSaveToLibrary = async (candidate, candidateIndex) => {
         <div className="flex items-center gap-4">
           <Button
             variant="ghost"
-            onClick={() => navigate("/")}
+            onClick={() => navigate("/past-sessions")}
             className="text-zinc-400 hover:text-white"
             data-testid="back-btn"
           >
@@ -422,7 +465,7 @@ const handleSaveToLibrary = async (candidate, candidateIndex) => {
           </Button>
           <div>
             <h1 className="text-2xl md:text-3xl font-bold text-white">
-              {session.title || session.session_name || "Untitled Session"}
+              {session.name || "Untitled Session"}
             </h1>
             <p className="text-zinc-500 text-sm">
               {totalQuestions} questions · Created {safeDate(session.created_at)}
@@ -567,7 +610,7 @@ const handleSaveToLibrary = async (candidate, candidateIndex) => {
                       <div className="space-y-4 pr-4">
                         {entries.map(({ question, round, slot }, index) => (
                           <Card
-                            key={`${slot.id}-${question.id}`}
+                            key={`${slot.id}-${index}`}
                             className="bg-zinc-900/50 border-white/10"
                             data-testid={`session-question-${type.value}-${index}`}
                           >
@@ -601,7 +644,7 @@ const handleSaveToLibrary = async (candidate, candidateIndex) => {
 
                               {question.incorrect_answers && (
                                 <div className="grid grid-cols-2 gap-2 mb-3">
-                                  {question.incorrect_answers
+                                  {String(question.incorrect_answers)
                                     .split(";")
                                     .map((option) => option.trim())
                                     .filter(Boolean)
