@@ -41,6 +41,11 @@ function extractMultipartParts(buffer) {
     value = value.replace(/\r\n$/, "");
 
     result[fieldName] = value;
+
+    const filenameMatch = part.match(/filename="([^"]+)"/);
+    if (filenameMatch) {
+      result._filename = filenameMatch[1];
+    }
   }
 
   return result;
@@ -125,10 +130,6 @@ function buildQuestionObject({
     question_type: questionType,
     incorrect_answers: incorrectAnswers,
     fun_fact: note || null,
-    has_image: false,
-    image_url: null,
-    difficulty: "medium",
-    source: "imported",
   };
 }
 
@@ -241,15 +242,39 @@ function expandCrowdpurrRow(row) {
       /^category[_ ]\d+$/.test(k)
   );
 
-  const questions = hasWideFormat ? parseWideRow(row) : parseStandardRow(row);
+  return hasWideFormat ? parseWideRow(row) : parseStandardRow(row);
+}
 
-  console.log("ROW EXPANSION CHECK:", {
-    keys: Object.keys(row),
-    hasWideFormat,
-    extractedQuestions: questions.length,
-  });
+function dedupeQuestions(questions) {
+  const seen = new Set();
+  const result = [];
 
-  return questions;
+  for (const q of questions) {
+    const key = `${q.question_text}|||${q.correct_answer}`.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(q);
+  }
+
+  return result;
+}
+
+function splitByType(questions) {
+  return {
+    true_false_questions: questions.filter((q) => q.question_type === "true_false"),
+    multiple_choice_questions: questions.filter((q) => q.question_type === "multiple_choice"),
+    written_questions: questions.filter((q) => q.question_type === "written"),
+    picture_questions: [],
+  };
+}
+
+function buildSessionName(filename) {
+  if (!filename) return `Imported Session ${new Date().toLocaleDateString()}`;
+
+  return filename
+    .replace(/\.csv$/i, "")
+    .replace(/[_-]+/g, " ")
+    .trim();
 }
 
 module.exports = async function handler(req, res) {
@@ -277,6 +302,7 @@ module.exports = async function handler(req, res) {
 
     const csvText = parts.file || "";
     const sessionUserId = String(parts.sessionUserId || "").trim();
+    const originalFilename = parts._filename || "";
 
     if (!sessionUserId) {
       return res.status(400).json({ error: "Missing session user id" });
@@ -306,58 +332,84 @@ module.exports = async function handler(req, res) {
 
     const rows = Array.isArray(parsed.data) ? parsed.data : [];
 
+    let allQuestions = [];
+    for (const rawRow of rows) {
+      const expandedQuestions = expandCrowdpurrRow(rawRow);
+      allQuestions.push(...expandedQuestions);
+    }
+
+    allQuestions = dedupeQuestions(allQuestions);
+
+    if (!allQuestions.length) {
+      return res.status(400).json({
+        error: "No valid questions found in CSV",
+      });
+    }
+
     let imported = 0;
     let skipped = 0;
     const errors = [];
 
-    for (const rawRow of rows) {
+    for (const normalized of allQuestions) {
       try {
-        const expandedQuestions = expandCrowdpurrRow(rawRow);
+        const { data: existing, error: lookupError } = await supabase
+          .from("questions")
+          .select("id")
+          .eq("question_text", normalized.question_text)
+          .limit(1)
+          .maybeSingle();
 
-        if (!expandedQuestions.length) {
-          console.log("SKIPPED (no usable questions in row):", rawRow);
+        if (lookupError) throw lookupError;
+
+        if (existing?.id) {
           skipped += 1;
           continue;
         }
 
-        for (const normalized of expandedQuestions) {
-          const { data: existing, error: lookupError } = await supabase
-            .from("questions")
-            .select("id")
-            .eq("question_text", normalized.question_text)
-            .limit(1)
-            .maybeSingle();
+        const { error: insertError } = await supabase.from("questions").insert({
+          user_id: sessionUserId,
+          category: normalized.category,
+          question_text: normalized.question_text,
+          correct_answer: normalized.correct_answer,
+          question_type: normalized.question_type,
+          incorrect_answers: normalized.incorrect_answers,
+          fun_fact: normalized.fun_fact,
+        });
 
-          if (lookupError) throw lookupError;
+        if (insertError) throw insertError;
 
-          if (existing?.id) {
-            console.log("SKIPPED (duplicate):", normalized.question_text);
-            skipped += 1;
-            continue;
-          }
-
-          const { error: insertError } = await supabase.from("questions").insert({
-            user_id: sessionUserId,
-            category: normalized.category,
-            question_text: normalized.question_text,
-            correct_answer: normalized.correct_answer,
-            question_type: normalized.question_type,
-            incorrect_answers: normalized.incorrect_answers,
-            fun_fact: normalized.fun_fact,
-            has_image: normalized.has_image,
-            image_url: normalized.image_url,
-            difficulty: normalized.difficulty,
-            source: normalized.source,
-          });
-
-          if (insertError) throw insertError;
-
-          imported += 1;
-        }
+        imported += 1;
       } catch (err) {
-        console.error("ROW ERROR:", err);
-        errors.push(err.message || "Row import failed");
+        console.error("QUESTION IMPORT ERROR:", err);
+        errors.push(err.message || "Question import failed");
       }
+    }
+
+    const grouped = splitByType(allQuestions);
+
+    const sessionPayload = {
+      user_id: sessionUserId,
+      name: buildSessionName(originalFilename),
+      is_past: true,
+      true_false_questions: grouped.true_false_questions,
+      multiple_choice_questions: grouped.multiple_choice_questions,
+      written_questions: grouped.written_questions,
+      picture_questions: grouped.picture_questions,
+    };
+
+    const { data: sessionData, error: sessionError } = await supabase
+      .from("sessions")
+      .insert(sessionPayload)
+      .select()
+      .single();
+
+    if (sessionError) {
+      return res.status(500).json({
+        error: sessionError.message || "Questions imported, but failed to create past session",
+        imported,
+        skipped,
+        errors,
+      });
     }
 
     return res.status(200).json({
@@ -365,6 +417,10 @@ module.exports = async function handler(req, res) {
       imported,
       skipped,
       errors,
+      sessions_created: 1,
+      session_id: sessionData.id,
+      session_name: sessionData.name,
+      total_session_questions: allQuestions.length,
     });
   } catch (error) {
     console.error("IMPORT ERROR:", error);
