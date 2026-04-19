@@ -51,21 +51,7 @@ function extractMultipartParts(buffer) {
   return result;
 }
 
-function normalizeHeader(header, seen) {
-  const cleaned = String(header || "").trim();
-  const key = cleaned.toLowerCase();
-
-  if (!seen[key]) {
-    seen[key] = 1;
-    return cleaned;
-  }
-
-  const suffix = seen[key];
-  seen[key] += 1;
-  return `${cleaned}_${suffix}`;
-}
-
-function getRowValue(row, possibleKeys) {
+function getValue(row, possibleKeys) {
   for (const wanted of possibleKeys) {
     const wantedLower = String(wanted).toLowerCase();
 
@@ -78,7 +64,6 @@ function getRowValue(row, possibleKeys) {
       }
     }
   }
-
   return "";
 }
 
@@ -90,173 +75,62 @@ function splitOptions(value) {
   return [value.trim()].filter(Boolean);
 }
 
-function cleanOptionPrefix(value) {
-  return String(value)
-    .replace(/^[A-Da-d][\).\:\-\s]+/, "")
+function cleanHtml(value) {
+  return String(value || "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
-function buildQuestionObject({
-  questionText,
-  category,
-  correctAnswer,
-  incorrectRaw,
-  note,
-}) {
-  if (!questionText || !correctAnswer) return null;
+function normalizeCrowdpurrRow(row) {
+  const questionText = getValue(row, ["Question"]);
+  const questionTypeRaw = getValue(row, ["Question Type"]).toLowerCase();
+  const note = cleanHtml(getValue(row, ["Question Note"]));
+  const categoryOrRound = getValue(row, ["Correct Answer"]);
+  const additionalAnswers = getValue(row, ["Additional Answers"]);
+
+  if (!questionText) return null;
+
+  // Skip round/category header rows like "Round 1 Category"
+  if (questionTypeRaw === "reorder") {
+    return null;
+  }
 
   let questionType = "written";
+  let correctAnswer = categoryOrRound;
   let incorrectAnswers = null;
+  let category = "Imported";
 
-  const answerLower = String(correctAnswer).toLowerCase();
+  if (questionTypeRaw === "multiplechoice") {
+    questionType = "multiple_choice";
 
+    const allAnswers = [categoryOrRound, ...splitOptions(additionalAnswers)].filter(Boolean);
+
+    if (allAnswers.length > 0) {
+      correctAnswer = allAnswers[0];
+      incorrectAnswers = allAnswers.slice(1).join(";");
+    }
+  } else if (questionTypeRaw === "text") {
+    questionType = "written";
+    correctAnswer = categoryOrRound;
+  }
+
+  const answerLower = String(correctAnswer || "").toLowerCase();
   if (answerLower === "true" || answerLower === "false") {
     questionType = "true_false";
     incorrectAnswers = answerLower === "true" ? "False" : "True";
-  } else if (incorrectRaw) {
-    questionType = "multiple_choice";
-    const options = splitOptions(incorrectRaw)
-      .map(cleanOptionPrefix)
-      .filter(Boolean)
-      .filter((opt) => opt.toLowerCase() !== answerLower);
-
-    incorrectAnswers = options.length ? options.join(";") : null;
   }
 
+  if (!correctAnswer) return null;
+
   return {
-    category: category || "Imported",
+    category,
     question_text: questionText,
     correct_answer: correctAnswer,
     question_type: questionType,
-    incorrect_answers: incorrectAnswers,
+    incorrect_answers: incorrectAnswers || null,
     fun_fact: note || null,
   };
-}
-
-function parseWideRow(row) {
-  const results = [];
-
-  for (let i = 1; i <= 50; i += 1) {
-    const questionText = getRowValue(row, [`Question_${i}`, `Question ${i}`]);
-    const category = getRowValue(row, [`Category_${i}`, `Category ${i}`]) || "Imported";
-    const correctAnswer = getRowValue(row, [
-      `Answer_${i}`,
-      `Answer ${i}`,
-      `Correct Answer_${i}`,
-      `Correct Answer ${i}`,
-    ]);
-    const note = getRowValue(row, [`Fun Fact_${i}`, `Fun Fact ${i}`, `Note_${i}`, `Note ${i}`]);
-
-    const incorrectRaw = [
-      getRowValue(row, [`Incorrect Answers_${i}`, `Incorrect Answers ${i}`]),
-      getRowValue(row, [`Answer 2_${i}`, `Answer 2 ${i}`]),
-      getRowValue(row, [`Answer 3_${i}`, `Answer 3 ${i}`]),
-      getRowValue(row, [`Answer 4_${i}`, `Answer 4 ${i}`]),
-      getRowValue(row, [`Option A_${i}`, `Option A ${i}`]),
-      getRowValue(row, [`Option B_${i}`, `Option B ${i}`]),
-      getRowValue(row, [`Option C_${i}`, `Option C ${i}`]),
-      getRowValue(row, [`Option D_${i}`, `Option D ${i}`]),
-    ]
-      .filter(Boolean)
-      .join(";");
-
-    const question = buildQuestionObject({
-      questionText,
-      category,
-      correctAnswer,
-      incorrectRaw,
-      note,
-    });
-
-    if (question) {
-      results.push(question);
-    }
-  }
-
-  return results;
-}
-
-function parseStandardRow(row) {
-  const questionText = getRowValue(row, [
-    "question",
-    "Question",
-    "prompt",
-    "Prompt",
-  ]);
-
-  const category = getRowValue(row, [
-    "category",
-    "Category",
-    "round",
-    "Round",
-  ]) || "Imported";
-
-  const correctAnswer = getRowValue(row, [
-    "correctAnswer",
-    "Correct Answer",
-    "correct_answer",
-    "answer",
-    "Answer",
-  ]);
-
-  const note = getRowValue(row, [
-    "note",
-    "Note",
-    "fun_fact",
-    "Fun Fact",
-    "explanation",
-    "Explanation",
-  ]);
-
-  const incorrectRaw =
-    getRowValue(row, ["incorrectAnswers", "incorrect_answers"]) ||
-    [
-      getRowValue(row, ["Answer 2"]),
-      getRowValue(row, ["Answer 3"]),
-      getRowValue(row, ["Answer 4"]),
-      getRowValue(row, ["Option A"]),
-      getRowValue(row, ["Option B"]),
-      getRowValue(row, ["Option C"]),
-      getRowValue(row, ["Option D"]),
-    ]
-      .filter(Boolean)
-      .join(";");
-
-  const question = buildQuestionObject({
-    questionText,
-    category,
-    correctAnswer,
-    incorrectRaw,
-    note,
-  });
-
-  return question ? [question] : [];
-}
-
-function expandCrowdpurrRow(row) {
-  const keys = Object.keys(row).map((k) => String(k).toLowerCase());
-  const hasWideFormat = keys.some(
-    (k) =>
-      /^question[_ ]\d+$/.test(k) ||
-      /^answer[_ ]\d+$/.test(k) ||
-      /^category[_ ]\d+$/.test(k)
-  );
-
-  return hasWideFormat ? parseWideRow(row) : parseStandardRow(row);
-}
-
-function dedupeQuestions(questions) {
-  const seen = new Set();
-  const result = [];
-
-  for (const q of questions) {
-    const key = `${q.question_text}|||${q.correct_answer}`.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    result.push(q);
-  }
-
-  return result;
 }
 
 function splitByType(questions) {
@@ -270,11 +144,7 @@ function splitByType(questions) {
 
 function buildSessionName(filename) {
   if (!filename) return `Imported Session ${new Date().toLocaleDateString()}`;
-
-  return filename
-    .replace(/\.csv$/i, "")
-    .replace(/[_-]+/g, " ")
-    .trim();
+  return filename.replace(/\.csv$/i, "").replace(/[_-]+/g, " ").trim();
 }
 
 module.exports = async function handler(req, res) {
@@ -312,35 +182,18 @@ module.exports = async function handler(req, res) {
       return res.status(400).json({ error: "No CSV content found" });
     }
 
-    const seen = {};
     const parsed = Papa.parse(csvText, {
       header: true,
       skipEmptyLines: true,
-      transformHeader: (header) => normalizeHeader(header, seen),
+      transformHeader: (header) => String(header || "").trim(),
     });
-
-    const realErrors = (parsed.errors || []).filter((err) => {
-      const msg = String(err.message || "");
-      return !msg.includes("Duplicate headers found and renamed");
-    });
-
-    if (realErrors.length > 0) {
-      return res.status(400).json({
-        error: realErrors[0].message || "Failed to parse CSV",
-      });
-    }
 
     const rows = Array.isArray(parsed.data) ? parsed.data : [];
+    const normalizedQuestions = rows
+      .map(normalizeCrowdpurrRow)
+      .filter(Boolean);
 
-    let allQuestions = [];
-    for (const rawRow of rows) {
-      const expandedQuestions = expandCrowdpurrRow(rawRow);
-      allQuestions.push(...expandedQuestions);
-    }
-
-    allQuestions = dedupeQuestions(allQuestions);
-
-    if (!allQuestions.length) {
+    if (!normalizedQuestions.length) {
       return res.status(400).json({
         error: "No valid questions found in CSV",
       });
@@ -350,7 +203,7 @@ module.exports = async function handler(req, res) {
     let skipped = 0;
     const errors = [];
 
-    for (const normalized of allQuestions) {
+    for (const normalized of normalizedQuestions) {
       try {
         const { data: existing, error: lookupError } = await supabase
           .from("questions")
@@ -385,21 +238,19 @@ module.exports = async function handler(req, res) {
       }
     }
 
-    const grouped = splitByType(allQuestions);
-
-    const sessionPayload = {
-      user_id: sessionUserId,
-      name: buildSessionName(originalFilename),
-      is_past: true,
-      true_false_questions: grouped.true_false_questions,
-      multiple_choice_questions: grouped.multiple_choice_questions,
-      written_questions: grouped.written_questions,
-      picture_questions: grouped.picture_questions,
-    };
+    const grouped = splitByType(normalizedQuestions);
 
     const { data: sessionData, error: sessionError } = await supabase
       .from("sessions")
-      .insert(sessionPayload)
+      .insert({
+        user_id: sessionUserId,
+        name: buildSessionName(originalFilename),
+        is_past: true,
+        true_false_questions: grouped.true_false_questions,
+        multiple_choice_questions: grouped.multiple_choice_questions,
+        written_questions: grouped.written_questions,
+        picture_questions: grouped.picture_questions,
+      })
       .select()
       .single();
 
@@ -420,7 +271,7 @@ module.exports = async function handler(req, res) {
       sessions_created: 1,
       session_id: sessionData.id,
       session_name: sessionData.name,
-      total_session_questions: allQuestions.length,
+      total_session_questions: normalizedQuestions.length,
     });
   } catch (error) {
     console.error("IMPORT ERROR:", error);
