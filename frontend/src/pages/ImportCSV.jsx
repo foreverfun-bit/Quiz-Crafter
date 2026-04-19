@@ -111,6 +111,12 @@ const ImportCSV = () => {
       } else {
         toast.info("No new questions were imported");
       }
+
+      if (data.session_error) {
+        toast.error(`Questions imported, but past session failed: ${data.session_error}`);
+      } else if (data.sessions_created > 0) {
+        toast.success("Past session created!");
+      }
     } catch (error) {
       console.error("Import failed:", error);
       setResult({
@@ -130,7 +136,7 @@ const ImportCSV = () => {
           <span className="gradient-text">Import</span> Crowdpurr CSV
         </h1>
         <p className="text-zinc-500">
-          Clean import flow for Crowdpurr exports only
+          Import past trivia sessions from Crowdpurr exports
         </p>
       </div>
 
@@ -138,12 +144,18 @@ const ImportCSV = () => {
         <CardHeader>
           <CardTitle className="text-white text-lg">Supported Crowdpurr Fields</CardTitle>
           <CardDescription className="text-zinc-500">
-            This rebuild only supports Crowdpurr exports for now
+            This importer reads row-based Crowdpurr CSV exports
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap gap-2">
-            {["question", "category", "correctAnswer", "incorrectAnswers", "note", "round"].map((col) => (
+            {[
+              "Question",
+              "Question Type",
+              "Question Note",
+              "Correct Answer(s)",
+              "Additional Answers",
+            ].map((col) => (
               <Badge key={col} className="bg-zinc-800 text-zinc-300">
                 {col}
               </Badge>
@@ -240,16 +252,30 @@ const ImportCSV = () => {
                     <tbody>
                       {preview.preview.map((row, idx) => (
                         <tr key={idx} className="border-b border-white/5">
-                          <td className="py-1 px-2 text-zinc-300 max-w-[200px] truncate">{row.question || "-"}</td>
-                          <td className="py-1 px-2 text-zinc-300">{row.category || "-"}</td>
-                          <td className="py-1 px-2 text-zinc-300">{row.correctAnswer || "-"}</td>
-                          <td className="py-1 px-2 text-zinc-300 max-w-[160px] truncate">
+                          <td className="py-1 px-2 text-zinc-300 max-w-[260px] truncate">
+                            {row.question || "-"}
+                          </td>
+                          <td className="py-1 px-2 text-zinc-300">
+                            {row.category || "-"}
+                          </td>
+                          <td className="py-1 px-2 text-zinc-300">
+                            {row.correctAnswer || "-"}
+                          </td>
+                          <td className="py-1 px-2 text-zinc-300 max-w-[180px] truncate">
                             {row.incorrectAnswers || "-"}
                           </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
+                </div>
+              )}
+
+              {preview.warnings?.length > 0 && (
+                <div className="mt-3 p-2 bg-amber-500/10 rounded text-xs text-amber-300">
+                  {preview.warnings.slice(0, 3).map((warning, i) => (
+                    <p key={i}>{warning}</p>
+                  ))}
                 </div>
               )}
             </div>
@@ -296,17 +322,33 @@ const ImportCSV = () => {
                   ) : (
                     <>
                       <p className="text-emerald-400 font-semibold mb-2">Import Complete</p>
+
                       <ul className="text-sm space-y-1">
                         <li className="text-zinc-300">
                           Format detected: <span className="text-[#71E0DC]">{result.format}</span>
                         </li>
                         <li className="text-zinc-300">
-                          <span className="text-emerald-400">{result.imported}</span> imported
+                          <span className="text-emerald-400">{result.imported || 0}</span> imported
                         </li>
                         <li className="text-zinc-300">
-                          <span className="text-zinc-500">{result.skipped}</span> skipped
+                          <span className="text-zinc-500">{result.skipped || 0}</span> skipped
                         </li>
+                        <li className="text-zinc-300">
+                          <span className="text-[#AEB2EF]">{result.sessions_created || 0}</span> past session
+                          {(result.sessions_created || 0) === 1 ? "" : "s"} created
+                        </li>
+                        {result.session_name && (
+                          <li className="text-zinc-300">
+                            Session name: <span className="text-white">{result.session_name}</span>
+                          </li>
+                        )}
                       </ul>
+
+                      {result.session_error && (
+                        <div className="mt-3 p-2 bg-amber-500/10 rounded text-xs text-amber-300">
+                          Past session was not created: {result.session_error}
+                        </div>
+                      )}
 
                       {result.errors?.length > 0 && (
                         <div className="mt-3 p-2 bg-red-500/10 rounded text-xs text-red-400">
