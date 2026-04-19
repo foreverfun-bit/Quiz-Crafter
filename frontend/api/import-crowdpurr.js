@@ -99,7 +99,7 @@ function normalizeCrowdpurrRow(row) {
   let questionType = "written";
   let correctAnswer = categoryOrRound;
   let incorrectAnswers = null;
-  let category = "Imported";
+  let category = "Round Import";
 
   if (questionTypeRaw === "multiplechoice") {
     questionType = "multiple_choice";
@@ -219,15 +219,21 @@ module.exports = async function handler(req, res) {
           continue;
         }
 
-        const { error: insertError } = await supabase.from("questions").insert({
-          user_id: sessionUserId,
-          category: normalized.category,
-          question_text: normalized.question_text,
-          correct_answer: normalized.correct_answer,
-          question_type: normalized.question_type,
-          incorrect_answers: normalized.incorrect_answers,
-          fun_fact: normalized.fun_fact,
-        });
+        const insertPayload = {
+  user_id: sessionUserId,
+  question_text: normalized.question_text,
+  correct_answer: normalized.correct_answer,
+};
+
+// Only add optional fields if they exist
+if (normalized.category) insertPayload.category = normalized.category;
+if (normalized.question_type) insertPayload.question_type = normalized.question_type;
+if (normalized.incorrect_answers) insertPayload.incorrect_answers = normalized.incorrect_answers;
+if (normalized.fun_fact) insertPayload.fun_fact = normalized.fun_fact;
+
+const { error: insertError } = await supabase
+  .from("questions")
+  .insert(insertPayload);
 
         if (insertError) throw insertError;
 
