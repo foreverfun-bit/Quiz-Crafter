@@ -92,20 +92,22 @@ function normalizeCrowdpurrRow(row) {
   if (!questionText) return null;
   if (questionTypeRaw === "reorder") return null;
 
-  // Crowdpurr sometimes spills extra answers into unnamed columns
-  const knownKeys = new Set([
-    "Question",
-    "Question Type",
-    "Question Points (Leave Blank For Polls)",
-    "Question Time",
-    "Question Image URL",
-    "Question Note",
-    "Question Link",
-    "Correct Answer(s)",
-    "Additional Answers",
-  ].map((k) => k.toLowerCase()));
+  const knownKeys = new Set(
+    [
+      "Question",
+      "Question Type",
+      "Question Points (Leave Blank For Polls)",
+      "Question Time",
+      "Question Image URL",
+      "Question Note",
+      "Question Link",
+      "Correct Answer(s)",
+      "Additional Answers",
+      "__parsed_extra",
+    ].map((k) => k.toLowerCase())
+  );
 
-  const overflowAnswers = Object.entries(row)
+  const overflowNamedAnswers = Object.entries(row)
     .filter(([key, value]) => {
       if (!key) return false;
       if (knownKeys.has(String(key).toLowerCase())) return false;
@@ -113,10 +115,23 @@ function normalizeCrowdpurrRow(row) {
     })
     .map(([, value]) => String(value).trim());
 
+  const parsedExtraAnswers = Array.isArray(row.__parsed_extra)
+    ? row.__parsed_extra
+        .map((value) => String(value).trim())
+        .filter(Boolean)
+    : row.__parsed_extra
+    ? [String(row.__parsed_extra).trim()].filter(Boolean)
+    : [];
+
   const allExtraAnswers = [
     ...splitOptions(additionalAnswersRaw),
-    ...overflowAnswers,
-  ].filter(Boolean);
+    ...overflowNamedAnswers,
+    ...parsedExtraAnswers,
+  ]
+    .map((v) => String(v).trim())
+    .filter(Boolean)
+    .filter((v, i, arr) => arr.findIndex((x) => x.toLowerCase() === v.toLowerCase()) === i)
+    .filter((v) => v.toLowerCase() !== String(correctAnswerRaw || "").toLowerCase());
 
   let questionType = "written";
   let correctAnswer = correctAnswerRaw;
