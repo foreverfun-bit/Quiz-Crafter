@@ -76,6 +76,39 @@ function cleanHtml(value) {
     .trim();
 }
 
+function parseAnswerWithImage(value) {
+  if (!value) {
+    return { text: "", image: null };
+  }
+
+  const parts = String(value).split("%%%");
+
+  return {
+    text: parts[0]?.trim() || "",
+    image: parts[1]?.trim() || null,
+  };
+}
+
+function uniqueAnswerObjects(items) {
+  const seen = new Set();
+  const result = [];
+
+  for (const item of items) {
+    const text = String(item?.text || "").trim();
+    const image = String(item?.image || "").trim();
+    const key = `${text.toLowerCase()}|||${image.toLowerCase()}`;
+    if (!text && !image) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push({
+      text,
+      image: image || null,
+    });
+  }
+
+  return result;
+}
+
 function normalizeCrowdpurrPreviewRow(row) {
   const questionText = getValue(row, ["Question"]);
   const questionTypeRaw = getValue(row, ["Question Type"]).toLowerCase();
@@ -85,6 +118,8 @@ function normalizeCrowdpurrPreviewRow(row) {
 
   if (!questionText) return null;
   if (questionTypeRaw === "reorder") return null;
+
+  const correctParsed = parseAnswerWithImage(correctAnswerRaw);
 
   const knownKeys = new Set(
     [
@@ -107,34 +142,34 @@ function normalizeCrowdpurrPreviewRow(row) {
       if (knownKeys.has(String(key).toLowerCase())) return false;
       return value !== undefined && value !== null && String(value).trim() !== "";
     })
-    .map(([, value]) => String(value).trim());
+    .map(([, value]) => parseAnswerWithImage(value));
 
   const parsedExtraAnswers = Array.isArray(row.__parsed_extra)
-    ? row.__parsed_extra
-        .map((value) => String(value).trim())
-        .filter(Boolean)
+    ? row.__parsed_extra.map((value) => parseAnswerWithImage(value))
     : row.__parsed_extra
-    ? [String(row.__parsed_extra).trim()].filter(Boolean)
+    ? [parseAnswerWithImage(row.__parsed_extra)]
     : [];
 
-  const allExtraAnswers = [
-    ...splitOptions(additionalAnswersRaw),
+  const splitAdditionalAnswers = splitOptions(additionalAnswersRaw).map((value) =>
+    parseAnswerWithImage(value)
+  );
+
+  const allExtraAnswers = uniqueAnswerObjects([
+    ...splitAdditionalAnswers,
     ...overflowNamedAnswers,
     ...parsedExtraAnswers,
-  ]
-    .map((v) => String(v).trim())
-    .filter(Boolean)
-    .filter((v, i, arr) => arr.findIndex((x) => x.toLowerCase() === v.toLowerCase()) === i)
-    .filter((v) => v.toLowerCase() !== String(correctAnswerRaw || "").toLowerCase());
+  ]).filter(
+    (item) => item.text.toLowerCase() !== String(correctParsed.text || "").toLowerCase()
+  );
 
   let questionType = "written";
-  let correctAnswer = correctAnswerRaw;
+  let correctAnswer = correctParsed.text;
   let incorrectAnswers = "";
   let category = "Imported";
 
   if (questionTypeRaw === "multiplechoice") {
     questionType = "multiple_choice";
-    incorrectAnswers = allExtraAnswers.join("; ");
+    incorrectAnswers = allExtraAnswers.map((a) => a.text).filter(Boolean).join("; ");
   } else if (questionTypeRaw === "text") {
     questionType = "written";
   }
