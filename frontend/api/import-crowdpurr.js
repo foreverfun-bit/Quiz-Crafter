@@ -82,15 +82,51 @@ function cleanHtml(value) {
     .trim();
 }
 
+function parseAnswerWithImage(value) {
+  if (!value) {
+    return { text: "", image: null };
+  }
+
+  const parts = String(value).split("%%%");
+
+  return {
+    text: parts[0]?.trim() || "",
+    image: parts[1]?.trim() || null,
+  };
+}
+
+function uniqueAnswerObjects(items) {
+  const seen = new Set();
+  const result = [];
+
+  for (const item of items) {
+    const text = String(item?.text || "").trim();
+    const image = String(item?.image || "").trim();
+    const key = `${text.toLowerCase()}|||${image.toLowerCase()}`;
+    if (!text && !image) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push({
+      text,
+      image: image || null,
+    });
+  }
+
+  return result;
+}
+
 function normalizeCrowdpurrRow(row) {
   const questionText = getValue(row, ["Question"]);
   const questionTypeRaw = getValue(row, ["Question Type"]).toLowerCase();
   const note = cleanHtml(getValue(row, ["Question Note"]));
   const correctAnswerRaw = getValue(row, ["Correct Answer(s)"]);
   const additionalAnswersRaw = getValue(row, ["Additional Answers"]);
+  const questionImageUrl = getValue(row, ["Question Image URL"]);
 
   if (!questionText) return null;
   if (questionTypeRaw === "reorder") return null;
+
+  const correctParsed = parseAnswerWithImage(correctAnswerRaw);
 
   const knownKeys = new Set(
     [
@@ -113,43 +149,52 @@ function normalizeCrowdpurrRow(row) {
       if (knownKeys.has(String(key).toLowerCase())) return false;
       return value !== undefined && value !== null && String(value).trim() !== "";
     })
-    .map(([, value]) => String(value).trim());
+    .map(([, value]) => parseAnswerWithImage(value));
 
   const parsedExtraAnswers = Array.isArray(row.__parsed_extra)
-    ? row.__parsed_extra
-        .map((value) => String(value).trim())
-        .filter(Boolean)
+    ? row.__parsed_extra.map((value) => parseAnswerWithImage(value))
     : row.__parsed_extra
-    ? [String(row.__parsed_extra).trim()].filter(Boolean)
+    ? [parseAnswerWithImage(row.__parsed_extra)]
     : [];
 
-  const allExtraAnswers = [
-    ...splitOptions(additionalAnswersRaw),
+  const splitAdditionalAnswers = splitOptions(additionalAnswersRaw).map((value) =>
+    parseAnswerWithImage(value)
+  );
+
+  const allExtraAnswers = uniqueAnswerObjects([
+    ...splitAdditionalAnswers,
     ...overflowNamedAnswers,
     ...parsedExtraAnswers,
-  ]
-    .map((v) => String(v).trim())
-    .filter(Boolean)
-    .filter((v, i, arr) => arr.findIndex((x) => x.toLowerCase() === v.toLowerCase()) === i)
-    .filter((v) => v.toLowerCase() !== String(correctAnswerRaw || "").toLowerCase());
+  ]).filter(
+    (item) => item.text.toLowerCase() !== String(correctParsed.text || "").toLowerCase()
+  );
 
   let questionType = "written";
-  let correctAnswer = correctAnswerRaw;
+  let correctAnswer = correctParsed.text;
+  let correctAnswerImage = correctParsed.image || null;
   let incorrectAnswers = null;
   let category = "Imported";
+  let imageUrl = questionImageUrl || null;
 
   if (questionTypeRaw === "multiplechoice") {
     questionType = "multiple_choice";
-    incorrectAnswers = allExtraAnswers.length ? allExtraAnswers.join(";") : null;
+    incorrectAnswers = allExtraAnswers.length
+      ? JSON.stringify(allExtraAnswers)
+      : null;
   } else if (questionTypeRaw === "text") {
     questionType = "written";
-    correctAnswer = correctAnswerRaw;
   }
 
   const answerLower = String(correctAnswer || "").toLowerCase();
   if (answerLower === "true" || answerLower === "false") {
     questionType = "true_false";
-    incorrectAnswers = answerLower === "true" ? "False" : "True";
+    incorrectAnswers = JSON.stringify([
+      {
+        text: answerLower === "true" ? "False" : "True",
+        image: null,
+      },
+    ]);
+    correctAnswerImage = null;
   }
 
   if (!correctAnswer) return null;
@@ -158,9 +203,11 @@ function normalizeCrowdpurrRow(row) {
     category,
     question_text: questionText,
     correct_answer: correctAnswer,
+    correct_answer_image: correctAnswerImage,
     question_type: questionType,
-    incorrect_answers: incorrectAnswers || null,
+    incorrect_answers: incorrectAnswers,
     fun_fact: note || null,
+    image_url: imageUrl,
   };
 }
 
@@ -169,7 +216,7 @@ function splitByType(questions) {
     true_false_questions: questions.filter((q) => q.question_type === "true_false"),
     multiple_choice_questions: questions.filter((q) => q.question_type === "multiple_choice"),
     written_questions: questions.filter((q) => q.question_type === "written"),
-    picture_questions: [],
+    picture_questions: questions.filter((q) => q.question_type === "picture"),
   };
 }
 
@@ -260,6 +307,8 @@ module.exports = async function handler(req, res) {
         if (normalized.question_type) insertPayload.question_type = normalized.question_type;
         if (normalized.incorrect_answers) insertPayload.incorrect_answers = normalized.incorrect_answers;
         if (normalized.fun_fact) insertPayload.fun_fact = normalized.fun_fact;
+        if (normalized.correct_answer_image) insertPayload.correct_answer_image = normalized.correct_answer_image;
+        if (normalized.image_url) insertPayload.image_url = normalized.image_url;
 
         const { error: insertError } = await supabase
           .from("questions")
@@ -282,9 +331,12 @@ module.exports = async function handler(req, res) {
     let sessionErrorMessage = null;
 
     try {
+      const builtSessionName = buildSessionName(originalFilename);
+
       const sessionPayload = {
         user_id: sessionUserId,
-        name: buildSessionName(originalFilename),
+        name: builtSessionName,
+        session_name: builtSessionName,
         is_past: true,
         true_false_questions: grouped.true_false_questions,
         multiple_choice_questions: grouped.multiple_choice_questions,
@@ -303,7 +355,7 @@ module.exports = async function handler(req, res) {
       } else {
         sessionsCreated = 1;
         sessionId = sessionData.id;
-        sessionName = sessionData.name;
+        sessionName = sessionData.name || sessionData.session_name;
       }
     } catch (err) {
       sessionErrorMessage = err.message || "Failed to create past session";
