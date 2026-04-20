@@ -38,8 +38,9 @@ const emptyQuestionForType = (type) => {
       category: "Imported",
       question_text: "",
       correct_answer: "True",
+      correct_answer_image: "",
       question_type: "true_false",
-      incorrect_answers: "False",
+      incorrect_answers: JSON.stringify([{ text: "False", image: null }]),
       fun_fact: "",
       image_url: "",
     };
@@ -50,8 +51,9 @@ const emptyQuestionForType = (type) => {
       category: "Imported",
       question_text: "",
       correct_answer: "",
+      correct_answer_image: "",
       question_type: "multiple_choice",
-      incorrect_answers: "",
+      incorrect_answers: JSON.stringify([]),
       fun_fact: "",
       image_url: "",
     };
@@ -62,8 +64,9 @@ const emptyQuestionForType = (type) => {
       category: "Imported",
       question_text: "",
       correct_answer: "",
+      correct_answer_image: "",
       question_type: "picture",
-      incorrect_answers: "",
+      incorrect_answers: JSON.stringify([]),
       fun_fact: "",
       image_url: "",
     };
@@ -73,11 +76,68 @@ const emptyQuestionForType = (type) => {
     category: "Imported",
     question_text: "",
     correct_answer: "",
+    correct_answer_image: "",
     question_type: "written",
-    incorrect_answers: "",
+    incorrect_answers: JSON.stringify([]),
     fun_fact: "",
     image_url: "",
   };
+};
+
+const STORAGE_BASE =
+  process.env.REACT_APP_SUPABASE_URL
+    ? `${process.env.REACT_APP_SUPABASE_URL}/storage/v1/object/public/`
+    : "";
+
+const buildStorageUrl = (path) => {
+  if (!path) return "";
+  if (String(path).startsWith("http://") || String(path).startsWith("https://")) {
+    return path;
+  }
+  if (!STORAGE_BASE) return path;
+  return `${STORAGE_BASE}${String(path).replace(/^\/+/, "")}`;
+};
+
+const parseIncorrectAnswers = (value) => {
+  if (!value) return [];
+
+  if (Array.isArray(value)) {
+    return value.map((item) =>
+      typeof item === "string"
+        ? { text: item, image: null }
+        : {
+            text: item?.text || "",
+            image: item?.image || null,
+          }
+    );
+  }
+
+  const raw = String(value).trim();
+  if (!raw) return [];
+
+  if (raw.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) =>
+          typeof item === "string"
+            ? { text: item, image: null }
+            : {
+                text: item?.text || "",
+                image: item?.image || null,
+              }
+        );
+      }
+    } catch {
+      // fallback below
+    }
+  }
+
+  return raw
+    .split(";")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((text) => ({ text, image: null }));
 };
 
 const SessionDetail = () => {
@@ -273,6 +333,12 @@ const SessionDetail = () => {
         text += `${index + 1}. [${q.category || "Uncategorized"}]\n`;
         text += `   Q: ${q.question_text}\n`;
         text += `   A: ${q.correct_answer}\n`;
+
+        const incorrect = parseIncorrectAnswers(q.incorrect_answers);
+        if (incorrect.length) {
+          text += `   Options: ${incorrect.map((a) => a.text).join(", ")}\n`;
+        }
+
         if (q.fun_fact) text += `   Fun Fact: ${q.fun_fact}\n`;
         text += "\n";
       });
@@ -326,6 +392,7 @@ const SessionDetail = () => {
           incorrect_answers: q.incorrect_answers || "",
           fun_fact: q.fun_fact || "",
           image_url: q.image_url || "",
+          correct_answer_image: q.correct_answer_image || "",
         });
       });
     } else {
@@ -346,6 +413,7 @@ const SessionDetail = () => {
             incorrect_answers: q?.incorrect_answers || "",
             fun_fact: q?.fun_fact || "",
             image_url: q?.image_url || "",
+            correct_answer_image: q?.correct_answer_image || "",
           });
         });
       });
@@ -361,6 +429,7 @@ const SessionDetail = () => {
       "incorrect_answers",
       "fun_fact",
       "image_url",
+      "correct_answer_image",
     ];
 
     const csv = [
@@ -542,7 +611,9 @@ const SessionDetail = () => {
       };
 
       if (field === "correct_answer" && type === "true_false") {
-        updated[index].incorrect_answers = value === "True" ? "False" : "True";
+        updated[index].incorrect_answers = JSON.stringify([
+          { text: value === "True" ? "False" : "True", image: null },
+        ]);
       }
 
       if (field === "question_type") {
@@ -585,19 +656,21 @@ const SessionDetail = () => {
       moved.question_type = toType;
 
       if (toType === "true_false") {
-        moved.correct_answer =
-          moved.correct_answer === "False" ? "False" : "True";
-        moved.incorrect_answers =
-          moved.correct_answer === "True" ? "False" : "True";
+        moved.correct_answer = moved.correct_answer === "False" ? "False" : "True";
+        moved.correct_answer_image = "";
+        moved.incorrect_answers = JSON.stringify([
+          { text: moved.correct_answer === "True" ? "False" : "True", image: null },
+        ]);
         moved.image_url = "";
       } else if (toType === "written") {
-        moved.incorrect_answers = "";
+        moved.incorrect_answers = JSON.stringify([]);
+        moved.correct_answer_image = "";
         moved.image_url = "";
       } else if (toType === "multiple_choice") {
-        moved.incorrect_answers = moved.incorrect_answers || "";
+        moved.incorrect_answers = moved.incorrect_answers || JSON.stringify([]);
         moved.image_url = "";
       } else if (toType === "picture") {
-        moved.incorrect_answers = moved.incorrect_answers || "";
+        moved.incorrect_answers = moved.incorrect_answers || JSON.stringify([]);
       }
 
       target.push(moved);
@@ -625,8 +698,11 @@ const SessionDetail = () => {
           category: q.category || "Imported",
           question_text: q.question_text || "",
           correct_answer: q.correct_answer || "True",
+          correct_answer_image: "",
           question_type: "true_false",
-          incorrect_answers: "False",
+          incorrect_answers: JSON.stringify([
+            { text: q.correct_answer === "True" ? "False" : "True", image: null },
+          ]),
           fun_fact: q.fun_fact || "",
           image_url: "",
         })),
@@ -634,8 +710,9 @@ const SessionDetail = () => {
           category: q.category || "Imported",
           question_text: q.question_text || "",
           correct_answer: q.correct_answer || "",
+          correct_answer_image: q.correct_answer_image || "",
           question_type: "multiple_choice",
-          incorrect_answers: q.incorrect_answers || "",
+          incorrect_answers: q.incorrect_answers || JSON.stringify([]),
           fun_fact: q.fun_fact || "",
           image_url: "",
         })),
@@ -643,8 +720,9 @@ const SessionDetail = () => {
           category: q.category || "Imported",
           question_text: q.question_text || "",
           correct_answer: q.correct_answer || "",
+          correct_answer_image: "",
           question_type: "written",
-          incorrect_answers: "",
+          incorrect_answers: JSON.stringify([]),
           fun_fact: q.fun_fact || "",
           image_url: "",
         })),
@@ -652,18 +730,21 @@ const SessionDetail = () => {
           category: q.category || "Imported",
           question_text: q.question_text || "",
           correct_answer: q.correct_answer || "",
+          correct_answer_image: q.correct_answer_image || "",
           question_type: "picture",
-          incorrect_answers: q.incorrect_answers || "",
+          incorrect_answers: q.incorrect_answers || JSON.stringify([]),
           fun_fact: q.fun_fact || "",
           image_url: q.image_url || "",
         })),
       };
 
+      const finalName = editableSessionName || "Imported Session";
+
       const { error } = await supabase
         .from("sessions")
         .update({
-          name: editableSessionName || "Imported Session",
-          session_name: editableSessionName || "Imported Session",
+          name: finalName,
+          session_name: finalName,
           true_false_questions: cleaned.true_false_questions,
           multiple_choice_questions: cleaned.multiple_choice_questions,
           written_questions: cleaned.written_questions,
@@ -675,8 +756,8 @@ const SessionDetail = () => {
 
       setSession((prev) => ({
         ...prev,
-        name: editableSessionName || "Imported Session",
-        session_name: editableSessionName || "Imported Session",
+        name: finalName,
+        session_name: finalName,
         ...cleaned,
       }));
 
@@ -930,191 +1011,216 @@ const SessionDetail = () => {
                           </div>
                         )}
 
-                        {entries.map(({ question, round, slot, importedIndex }, index) => (
-                          <Card
-                            key={`${slot.id}-${index}`}
-                            className="bg-zinc-900/50 border-white/10"
-                            data-testid={`session-question-${type.value}-${index}`}
-                          >
-                            <CardContent className="p-4">
-                              <div className="flex items-start justify-between gap-4 mb-3">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  {isImportedSession && isEditingImported ? (
-                                    <>
-                                      <Input
-                                        value={question.category || ""}
-                                        onChange={(e) =>
-                                          updateImportedQuestionField(type.value, importedIndex, "category", e.target.value)
-                                        }
-                                        placeholder="Category"
-                                        className="w-40 bg-zinc-950/50 border-white/10 text-white"
-                                      />
+                        {entries.map(({ question, round, slot, importedIndex }, index) => {
+                          const parsedIncorrect = parseIncorrectAnswers(question.incorrect_answers);
 
-                                      <select
-                                        value={normalizeType(question)}
-                                        onChange={(e) =>
-                                          moveImportedQuestionToType(type.value, importedIndex, e.target.value)
-                                        }
-                                        className="h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3"
+                          return (
+                            <Card
+                              key={`${slot.id}-${index}`}
+                              className="bg-zinc-900/50 border-white/10"
+                              data-testid={`session-question-${type.value}-${index}`}
+                            >
+                              <CardContent className="p-4">
+                                <div className="flex items-start justify-between gap-4 mb-3">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    {isImportedSession && isEditingImported ? (
+                                      <>
+                                        <Input
+                                          value={question.category || ""}
+                                          onChange={(e) =>
+                                            updateImportedQuestionField(type.value, importedIndex, "category", e.target.value)
+                                          }
+                                          placeholder="Category"
+                                          className="w-40 bg-zinc-950/50 border-white/10 text-white"
+                                        />
+
+                                        <select
+                                          value={normalizeType(question)}
+                                          onChange={(e) =>
+                                            moveImportedQuestionToType(type.value, importedIndex, e.target.value)
+                                          }
+                                          className="h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3"
+                                        >
+                                          {questionTypes.map((qt) => (
+                                            <option key={qt.value} value={qt.value}>
+                                              {qt.label}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Badge variant="outline" className="border-zinc-700 text-zinc-400">
+                                          {question.category || "Uncategorized"}
+                                        </Badge>
+                                        <Badge variant="outline" className="border-zinc-700 text-zinc-500">
+                                          {round?.round_name || `Round ${round?.round_order || ""}`}
+                                        </Badge>
+                                      </>
+                                    )}
+                                  </div>
+
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-zinc-600 text-sm font-mono">
+                                      #{slot.question_order}
+                                    </span>
+
+                                    {isImportedSession && isEditingImported && (
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="text-red-400 hover:bg-red-500/10"
+                                        onClick={() => removeImportedQuestion(type.value, importedIndex)}
                                       >
-                                        {questionTypes.map((qt) => (
-                                          <option key={qt.value} value={qt.value}>
-                                            {qt.label}
-                                          </option>
-                                        ))}
-                                      </select>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <Badge variant="outline" className="border-zinc-700 text-zinc-400">
-                                        {question.category || "Uncategorized"}
-                                      </Badge>
-                                      <Badge variant="outline" className="border-zinc-700 text-zinc-500">
-                                        {round?.round_name || `Round ${round?.round_order || ""}`}
-                                      </Badge>
-                                    </>
-                                  )}
+                                        <Trash2 size={14} />
+                                      </Button>
+                                    )}
+                                  </div>
                                 </div>
 
-                                <div className="flex items-center gap-2">
-                                  <span className="text-zinc-600 text-sm font-mono">
-                                    #{slot.question_order}
-                                  </span>
-
-                                  {isImportedSession && isEditingImported && (
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      className="text-red-400 hover:bg-red-500/10"
-                                      onClick={() => removeImportedQuestion(type.value, importedIndex)}
-                                    >
-                                      <Trash2 size={14} />
-                                    </Button>
-                                  )}
-                                </div>
-                              </div>
-
-                              {isImportedSession && isEditingImported ? (
-                                <div className="space-y-3">
-                                  <textarea
-                                    value={question.question_text || ""}
-                                    onChange={(e) =>
-                                      updateImportedQuestionField(type.value, importedIndex, "question_text", e.target.value)
-                                    }
-                                    placeholder="Question text"
-                                    className="w-full min-h-[90px] rounded-md bg-zinc-950/50 border border-white/10 text-white p-3"
-                                  />
-
-                                  {type.value === "true_false" ? (
-                                    <select
-                                      value={question.correct_answer || "True"}
+                                {isImportedSession && isEditingImported ? (
+                                  <div className="space-y-3">
+                                    <textarea
+                                      value={question.question_text || ""}
                                       onChange={(e) =>
-                                        updateImportedQuestionField(type.value, importedIndex, "correct_answer", e.target.value)
+                                        updateImportedQuestionField(type.value, importedIndex, "question_text", e.target.value)
                                       }
-                                      className="h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3"
-                                    >
-                                      <option value="True">True</option>
-                                      <option value="False">False</option>
-                                    </select>
-                                  ) : (
-                                    <>
-                                      <Input
-                                        value={question.correct_answer || ""}
+                                      placeholder="Question text"
+                                      className="w-full min-h-[90px] rounded-md bg-zinc-950/50 border border-white/10 text-white p-3"
+                                    />
+
+                                    {type.value === "true_false" ? (
+                                      <select
+                                        value={question.correct_answer || "True"}
                                         onChange={(e) =>
                                           updateImportedQuestionField(type.value, importedIndex, "correct_answer", e.target.value)
                                         }
-                                        placeholder="Correct answer"
-                                        className="bg-zinc-950/50 border-white/10 text-white"
-                                      />
-
-                                      {(type.value === "multiple_choice" || type.value === "picture") && (
+                                        className="h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3"
+                                      >
+                                        <option value="True">True</option>
+                                        <option value="False">False</option>
+                                      </select>
+                                    ) : (
+                                      <>
                                         <Input
-                                          value={question.incorrect_answers || ""}
+                                          value={question.correct_answer || ""}
                                           onChange={(e) =>
-                                            updateImportedQuestionField(type.value, importedIndex, "incorrect_answers", e.target.value)
+                                            updateImportedQuestionField(type.value, importedIndex, "correct_answer", e.target.value)
                                           }
-                                          placeholder="Incorrect answers separated by semicolons"
+                                          placeholder="Correct answer"
                                           className="bg-zinc-950/50 border-white/10 text-white"
                                         />
-                                      )}
 
-                                      {type.value === "picture" && (
                                         <Input
-                                          value={question.image_url || ""}
+                                          value={question.correct_answer_image || ""}
                                           onChange={(e) =>
-                                            updateImportedQuestionField(type.value, importedIndex, "image_url", e.target.value)
+                                            updateImportedQuestionField(type.value, importedIndex, "correct_answer_image", e.target.value)
                                           }
-                                          placeholder="Image URL"
+                                          placeholder="Correct answer image path"
                                           className="bg-zinc-950/50 border-white/10 text-white"
                                         />
-                                      )}
-                                    </>
-                                  )}
 
-                                  <textarea
-                                    value={question.fun_fact || ""}
-                                    onChange={(e) =>
-                                      updateImportedQuestionField(type.value, importedIndex, "fun_fact", e.target.value)
-                                    }
-                                    placeholder="Fun fact"
-                                    className="w-full min-h-[80px] rounded-md bg-zinc-950/50 border border-white/10 text-white p-3"
-                                  />
-                                </div>
-                              ) : (
-                                <>
-                                  <p className="text-white font-medium mb-3">{question.question_text}</p>
+                                        {(type.value === "multiple_choice" || type.value === "picture") && (
+                                          <textarea
+                                            value={question.incorrect_answers || ""}
+                                            onChange={(e) =>
+                                              updateImportedQuestionField(type.value, importedIndex, "incorrect_answers", e.target.value)
+                                            }
+                                            placeholder='Incorrect answers JSON, e.g. [{"text":"Option 1","image":null}]'
+                                            className="w-full min-h-[100px] rounded-md bg-zinc-950/50 border border-white/10 text-white p-3"
+                                          />
+                                        )}
 
-                                  {question.image_url && (
-                                    <div className="mb-3">
-                                      <img
-                                        src={question.image_url}
-                                        alt="Question"
-                                        className="w-full max-w-sm rounded-lg border border-white/10"
-                                        data-testid={`session-question-image-${type.value}-${index}`}
-                                      />
-                                    </div>
-                                  )}
+                                        {type.value === "picture" && (
+                                          <Input
+                                            value={question.image_url || ""}
+                                            onChange={(e) =>
+                                              updateImportedQuestionField(type.value, importedIndex, "image_url", e.target.value)
+                                            }
+                                            placeholder="Question image path"
+                                            className="bg-zinc-950/50 border-white/10 text-white"
+                                          />
+                                        )}
+                                      </>
+                                    )}
 
-                                  {question.incorrect_answers && (
-                                    <div className="grid grid-cols-2 gap-2 mb-3">
-                                      {String(question.incorrect_answers)
-                                        .split(";")
-                                        .map((option) => option.trim())
-                                        .filter(Boolean)
-                                        .map((option, optIndex) => (
+                                    <textarea
+                                      value={question.fun_fact || ""}
+                                      onChange={(e) =>
+                                        updateImportedQuestionField(type.value, importedIndex, "fun_fact", e.target.value)
+                                      }
+                                      placeholder="Fun fact"
+                                      className="w-full min-h-[80px] rounded-md bg-zinc-950/50 border border-white/10 text-white p-3"
+                                    />
+                                  </div>
+                                ) : (
+                                  <>
+                                    <p className="text-white font-medium mb-3">{question.question_text}</p>
+
+                                    {question.image_url && (
+                                      <div className="mb-3">
+                                        <img
+                                          src={buildStorageUrl(question.image_url)}
+                                          alt="Question"
+                                          className="w-full max-w-sm rounded-lg border border-white/10"
+                                          data-testid={`session-question-image-${type.value}-${index}`}
+                                        />
+                                      </div>
+                                    )}
+
+                                    {(parsedIncorrect.length > 0 || question.correct_answer) && (
+                                      <div className="grid grid-cols-2 gap-2 mb-3">
+                                        {parsedIncorrect.map((option, optIndex) => (
                                           <div
-                                            key={optIndex}
-                                            className="px-3 py-2 rounded-md text-sm bg-zinc-800/50 text-zinc-400"
+                                            key={`incorrect-${optIndex}`}
+                                            className="px-3 py-2 rounded-md text-sm bg-zinc-800/50 text-zinc-300"
                                           >
-                                            {option}
+                                            <div>{option.text}</div>
+                                            {option.image && (
+                                              <img
+                                                src={buildStorageUrl(option.image)}
+                                                alt={option.text || `Option ${optIndex + 1}`}
+                                                className="mt-2 max-h-24 rounded border border-white/10"
+                                              />
+                                            )}
                                           </div>
                                         ))}
-                                    </div>
-                                  )}
 
-<p className="text-xs text-amber-300 mt-2">
-  Raw incorrect_answers: {String(question.incorrect_answers || "")}
-</p>
-                                  
-                                  <div className="pt-3 border-t border-white/10 space-y-1">
-                                    <p className="text-sm">
-                                      <span className="text-zinc-500">Answer: </span>
-                                      <span className="text-emerald-400 font-medium">
-                                        {question.correct_answer}
-                                      </span>
-                                    </p>
-                                    {question.fun_fact && (
-                                      <p className="text-sm">
-                                        <span className="text-zinc-500">Fun Fact: </span>
-                                        <span className="text-zinc-300">{question.fun_fact}</span>
-                                      </p>
+                                        {question.correct_answer && (
+                                          <div className="px-3 py-2 rounded-md text-sm bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
+                                            <div>{question.correct_answer}</div>
+                                            {question.correct_answer_image && (
+                                              <img
+                                                src={buildStorageUrl(question.correct_answer_image)}
+                                                alt={question.correct_answer}
+                                                className="mt-2 max-h-24 rounded border border-white/10"
+                                              />
+                                            )}
+                                          </div>
+                                        )}
+                                      </div>
                                     )}
-                                  </div>
-                                </>
-                              )}
-                            </CardContent>
-                          </Card>
-                        ))}
+
+                                    <div className="pt-3 border-t border-white/10 space-y-1">
+                                      <p className="text-sm">
+                                        <span className="text-zinc-500">Answer: </span>
+                                        <span className="text-emerald-400 font-medium">
+                                          {question.correct_answer}
+                                        </span>
+                                      </p>
+                                      {question.fun_fact && (
+                                        <p className="text-sm">
+                                          <span className="text-zinc-500">Fun Fact: </span>
+                                          <span className="text-zinc-300">{question.fun_fact}</span>
+                                        </p>
+                                      )}
+                                    </div>
+                                  </>
+                                )}
+                              </CardContent>
+                            </Card>
+                          );
+                        })}
                       </div>
                     )}
                   </ScrollArea>
