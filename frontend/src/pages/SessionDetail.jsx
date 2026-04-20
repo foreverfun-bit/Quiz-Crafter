@@ -1092,6 +1092,10 @@ const SessionDetail = () => {
                                     </div>
                                   )}
 
+<p className="text-xs text-amber-300 mt-2">
+  Raw incorrect_answers: {String(question.incorrect_answers || "")}
+</p>
+                                  
                                   <div className="pt-3 border-t border-white/10 space-y-1">
                                     <p className="text-sm">
                                       <span className="text-zinc-500">Answer: </span>
