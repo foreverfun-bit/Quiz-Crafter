@@ -37,6 +37,6 @@ No package install or build step is required.
 ## Suggested next improvements
 
 - Add optional time limits for practice mode.
-- Track missed answers in a results review section.
 - Add edit-in-place support for existing questions.
 - Add category filters for larger quizzes.
+- Add a printable quiz view for classroom or offline use.
