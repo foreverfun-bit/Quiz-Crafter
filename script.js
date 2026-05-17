@@ -1,8 +1,17 @@
 const STORAGE_KEY = "quiz-crafter-draft";
 const CHOICE_COUNT = 4;
 
+const defaultMeta = {
+  title: "",
+  category: "",
+  difficulty: "Mixed"
+};
+
+const savedDraft = loadDraft();
+
 const state = {
-  questions: loadQuestions(),
+  meta: savedDraft.meta,
+  questions: savedDraft.questions,
   currentView: "builder",
   currentQuestionIndex: 0,
   score: 0,
@@ -15,19 +24,28 @@ const elements = {
   clearForm: document.querySelector("#clear-form"),
   clearQuiz: document.querySelector("#clear-quiz"),
   emptyBuilder: document.querySelector("#empty-builder"),
+  exportQuiz: document.querySelector("#export-quiz"),
   form: document.querySelector("#question-form"),
+  importFile: document.querySelector("#import-file"),
+  importQuiz: document.querySelector("#import-quiz"),
+  importStatus: document.querySelector("#import-status"),
   modeTabs: document.querySelectorAll(".mode-tab"),
   nextQuestion: document.querySelector("#next-question"),
   practiceCard: document.querySelector("#practice-card"),
   practiceChoices: document.querySelector("#practice-choices"),
   practiceEmpty: document.querySelector("#practice-empty"),
   practiceFeedback: document.querySelector("#practice-feedback"),
+  practiceLabel: document.querySelector("#practice-label"),
   practiceProgress: document.querySelector("#practice-progress"),
   practiceQuestion: document.querySelector("#practice-question"),
   practiceScore: document.querySelector("#practice-score"),
   questionCount: document.querySelector("#question-count"),
   questionList: document.querySelector("#question-list"),
   questionText: document.querySelector("#question-text"),
+  quizCategory: document.querySelector("#quiz-category"),
+  quizDifficulty: document.querySelector("#quiz-difficulty"),
+  quizSummary: document.querySelector("#quiz-summary"),
+  quizTitle: document.querySelector("#quiz-title"),
   restartQuiz: document.querySelector("#restart-quiz"),
   resultsCard: document.querySelector("#results-card"),
   resultsDetail: document.querySelector("#results-detail"),
@@ -37,6 +55,7 @@ const elements = {
 function init() {
   buildChoiceInputs();
   bindEvents();
+  renderMetaFields();
   renderBuilder();
   renderPractice();
 }
@@ -61,8 +80,15 @@ function bindEvents() {
   elements.form.addEventListener("submit", handleQuestionSubmit);
   elements.clearForm.addEventListener("click", resetForm);
   elements.clearQuiz.addEventListener("click", clearQuiz);
+  elements.exportQuiz.addEventListener("click", exportQuiz);
+  elements.importQuiz.addEventListener("click", () => elements.importFile.click());
+  elements.importFile.addEventListener("change", importQuiz);
   elements.nextQuestion.addEventListener("click", moveToNextQuestion);
   elements.restartQuiz.addEventListener("click", restartPractice);
+
+  [elements.quizTitle, elements.quizCategory, elements.quizDifficulty].forEach((input) => {
+    input.addEventListener("input", updateMetaFromFields);
+  });
 
   elements.modeTabs.forEach((tab) => {
     tab.addEventListener("click", () => switchView(tab.dataset.view));
@@ -74,20 +100,21 @@ function handleQuestionSubmit(event) {
 
   const questionText = elements.questionText.value.trim();
   const choices = getChoiceInputs().map((input) => input.value.trim());
-  const correctIndex = Number(document.querySelector("input[name='correct-choice']:checked").value);
+  const correctInput = document.querySelector("input[name='correct-choice']:checked");
+  const correctIndex = Number(correctInput.value);
 
   if (!questionText || choices.some((choice) => !choice)) {
     return;
   }
 
   state.questions.push({
-    id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
+    id: createQuestionId(),
     text: questionText,
     choices,
     correctIndex
   });
 
-  saveQuestions();
+  saveDraft();
   resetForm();
   renderBuilder();
   renderPractice();
@@ -98,10 +125,32 @@ function getChoiceInputs() {
 }
 
 function resetForm() {
-  elements.form.reset();
+  elements.questionText.value = "";
+  getChoiceInputs().forEach((input) => {
+    input.value = "";
+  });
   const firstRadio = document.querySelector("input[name='correct-choice']");
   firstRadio.checked = true;
   elements.questionText.focus();
+}
+
+function updateMetaFromFields() {
+  state.meta = {
+    title: elements.quizTitle.value.trim(),
+    category: elements.quizCategory.value.trim(),
+    difficulty: elements.quizDifficulty.value
+  };
+
+  saveDraft();
+  renderQuizSummary();
+  renderPracticeLabel();
+  setImportStatus("");
+}
+
+function renderMetaFields() {
+  elements.quizTitle.value = state.meta.title;
+  elements.quizCategory.value = state.meta.category;
+  elements.quizDifficulty.value = state.meta.difficulty || defaultMeta.difficulty;
 }
 
 function clearQuiz() {
@@ -110,18 +159,76 @@ function clearQuiz() {
   }
 
   state.questions = [];
-  saveQuestions();
+  saveDraft();
+  restartPractice();
+  renderBuilder();
+  renderPractice();
+  setImportStatus("Quiz questions cleared.", "success");
+}
+
+function removeQuestion(id) {
+  state.questions = state.questions.filter((question) => question.id !== id);
+  saveDraft();
   restartPractice();
   renderBuilder();
   renderPractice();
 }
 
-function removeQuestion(id) {
-  state.questions = state.questions.filter((question) => question.id !== id);
-  saveQuestions();
-  restartPractice();
-  renderBuilder();
-  renderPractice();
+function exportQuiz() {
+  const payload = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    meta: state.meta,
+    questions: state.questions
+  };
+  const fileName = `${slugify(state.meta.title || "quiz-crafter")}.json`;
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = fileName;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  setImportStatus("Quiz exported as JSON.", "success");
+}
+
+function importQuiz() {
+  const file = elements.importFile.files[0];
+
+  if (!file) {
+    return;
+  }
+
+  const reader = new FileReader();
+
+  reader.addEventListener("load", () => {
+    try {
+      const payload = JSON.parse(reader.result);
+      const draft = normalizeDraft(payload);
+      state.meta = draft.meta;
+      state.questions = draft.questions;
+      saveDraft();
+      renderMetaFields();
+      restartPractice();
+      renderBuilder();
+      renderPractice();
+      setImportStatus(`Imported ${state.questions.length} questions.`, "success");
+    } catch (error) {
+      setImportStatus(error.message || "That file could not be imported.", "error");
+    } finally {
+      elements.importFile.value = "";
+    }
+  });
+
+  reader.addEventListener("error", () => {
+    setImportStatus("That file could not be read.", "error");
+    elements.importFile.value = "";
+  });
+
+  reader.readAsText(file);
 }
 
 function renderBuilder() {
@@ -129,6 +236,8 @@ function renderBuilder() {
   elements.questionList.innerHTML = "";
   elements.emptyBuilder.hidden = state.questions.length > 0;
   elements.clearQuiz.disabled = state.questions.length === 0;
+  elements.exportQuiz.disabled = state.questions.length === 0;
+  renderQuizSummary();
 
   state.questions.forEach((question, index) => {
     const item = document.createElement("li");
@@ -157,6 +266,12 @@ function renderBuilder() {
     item.append(title, choices, actions);
     elements.questionList.append(item);
   });
+}
+
+function renderQuizSummary() {
+  const title = state.meta.title || "Untitled quiz";
+  const descriptors = [state.meta.category, state.meta.difficulty].filter(Boolean);
+  elements.quizSummary.textContent = descriptors.length ? `${title} - ${descriptors.join(" - ")}` : title;
 }
 
 function switchView(view) {
@@ -200,6 +315,7 @@ function renderPractice() {
   elements.practiceScore.textContent = `Score ${state.score}`;
   elements.practiceQuestion.textContent = question.text;
   state.hasAnsweredCurrent = false;
+  renderPracticeLabel();
 
   question.choices.forEach((choice, index) => {
     const button = document.createElement("button");
@@ -209,6 +325,16 @@ function renderPractice() {
     button.addEventListener("click", () => answerQuestion(index));
     elements.practiceChoices.append(button);
   });
+}
+
+function renderPracticeLabel() {
+  if (!elements.practiceLabel) {
+    return;
+  }
+
+  const title = state.meta.title || "Untitled quiz";
+  const descriptors = [state.meta.category, state.meta.difficulty].filter(Boolean);
+  elements.practiceLabel.textContent = descriptors.length ? `${title} - ${descriptors.join(" - ")}` : title;
 }
 
 function answerQuestion(selectedIndex) {
@@ -274,17 +400,92 @@ function getResultsMessage() {
   return "Keep refining. A few clearer choices may make this quiz stronger.";
 }
 
-function loadQuestions() {
+function loadDraft() {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? JSON.parse(saved) : [];
+    return saved ? normalizeDraft(JSON.parse(saved)) : { meta: { ...defaultMeta }, questions: [] };
   } catch (error) {
-    return [];
+    return { meta: { ...defaultMeta }, questions: [] };
   }
 }
 
-function saveQuestions() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.questions));
+function normalizeDraft(payload) {
+  const sourceQuestions = Array.isArray(payload) ? payload : payload.questions;
+  const questions = normalizeQuestions(sourceQuestions);
+  const payloadMeta = Array.isArray(payload) ? {} : payload.meta || {};
+
+  return {
+    meta: {
+      ...defaultMeta,
+      title: typeof payloadMeta.title === "string" ? payloadMeta.title.trim() : "",
+      category: typeof payloadMeta.category === "string" ? payloadMeta.category.trim() : "",
+      difficulty: normalizeDifficulty(payloadMeta.difficulty)
+    },
+    questions
+  };
+}
+
+function normalizeQuestions(questions) {
+  if (!Array.isArray(questions)) {
+    throw new Error("Import failed: JSON must include a questions array.");
+  }
+
+  return questions.map((question, index) => {
+    const text = typeof question.text === "string" ? question.text.trim() : "";
+    const choices = Array.isArray(question.choices)
+      ? question.choices.map((choice) => String(choice).trim())
+      : [];
+    const correctIndex = Number(question.correctIndex);
+
+    if (!text || choices.length !== CHOICE_COUNT || choices.some((choice) => !choice)) {
+      throw new Error(`Import failed: question ${index + 1} needs text and ${CHOICE_COUNT} choices.`);
+    }
+
+    if (!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex >= CHOICE_COUNT) {
+      throw new Error(`Import failed: question ${index + 1} has an invalid correct answer.`);
+    }
+
+    return {
+      id: typeof question.id === "string" && question.id ? question.id : createQuestionId(),
+      text,
+      choices,
+      correctIndex
+    };
+  });
+}
+
+function normalizeDifficulty(value) {
+  const allowed = ["Mixed", "Easy", "Medium", "Hard"];
+  return allowed.includes(value) ? value : defaultMeta.difficulty;
+}
+
+function saveDraft() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    meta: state.meta,
+    questions: state.questions
+  }));
+}
+
+function createQuestionId() {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") {
+    return window.crypto.randomUUID();
+  }
+
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function slugify(value) {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "quiz-crafter";
+}
+
+function setImportStatus(message, type = "") {
+  elements.importStatus.textContent = message;
+  elements.importStatus.classList.toggle("is-error", type === "error");
+  elements.importStatus.classList.toggle("is-success", type === "success");
 }
 
 init();
