@@ -381,6 +381,32 @@ textarea:focus,
   font-weight: 700;
 }
 
+.missed-review {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.missed-review__item {
+  border: 1px solid var(--line);
+  background: #fffdf8;
+  padding: 12px;
+}
+
+.missed-review__item h3 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+.missed-review__item p {
+  margin-bottom: 6px;
+  color: var(--muted);
+}
+
+.missed-review__item strong {
+  color: var(--ink);
+}
+
 @media (max-width: 760px) {
   .app-shell {
     width: 100%;
