@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Quiz Crafter</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <section class="workspace" aria-labelledby="app-title">
+      <div class="workspace__header">
+        <div>
+          <p class="eyebrow">Quiz builder</p>
+          <h1 id="app-title">Quiz Crafter</h1>
+        </div>
+        <div class="score-pill" aria-live="polite">
+          <span id="question-count">0</span> questions
+        </div>
+      </div>
+
+      <div class="mode-tabs" role="tablist" aria-label="Quiz modes">
+        <button class="mode-tab is-active" type="button" data-view="builder">Build</button>
+        <button class="mode-tab" type="button" data-view="practice">Practice</button>
+      </div>
+
+      <section id="builder-view" class="panel is-active" aria-label="Build a quiz">
+        <form id="question-form" class="question-form">
+          <label class="field field--wide">
+            <span>Question</span>
+            <textarea id="question-text" rows="3" placeholder="What is the capital of France?" required></textarea>
+          </label>
+
+          <fieldset class="choices-fieldset">
+            <legend>Answer choices</legend>
+            <div class="choice-grid" id="choice-grid"></div>
+          </fieldset>
+
+          <div class="form-actions">
+            <button class="button button--ghost" id="clear-form" type="button">Clear</button>
+            <button class="button button--primary" type="submit">Add question</button>
+          </div>
+        </form>
+
+        <div class="question-list-wrap">
+          <div class="section-heading">
+            <h2>Draft quiz</h2>
+            <button class="text-button" id="clear-quiz" type="button">Clear quiz</button>
+          </div>
+          <ol id="question-list" class="question-list"></ol>
+          <p id="empty-builder" class="empty-state">Add your first question to start shaping the quiz.</p>
+        </div>
+      </section>
+
+      <section id="practice-view" class="panel" aria-label="Practice quiz">
+        <div id="practice-empty" class="empty-state empty-state--large">
+          Add at least one question before starting practice mode.
+        </div>
+
+        <div id="practice-card" class="practice-card" hidden>
+          <div class="practice-meta">
+            <span id="practice-progress">Question 1 of 1</span>
+            <span id="practice-score">Score 0</span>
+          </div>
+          <h2 id="practice-question"></h2>
+          <div id="practice-choices" class="practice-choices"></div>
+          <div id="practice-feedback" class="practice-feedback" aria-live="polite"></div>
+          <button class="button button--primary" id="next-question" type="button" hidden>Next</button>
+        </div>
+
+        <div id="results-card" class="results-card" hidden>
+          <p class="eyebrow">Results</p>
+          <h2 id="results-title"></h2>
+          <p id="results-detail"></p>
+          <button class="button button--primary" id="restart-quiz" type="button">Try again</button>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <template id="choice-template">
+    <label class="choice-input">
+      <input type="radio" name="correct-choice" required>
+      <span class="choice-input__marker"></span>
+      <input class="choice-input__text" type="text" required>
+    </label>
+  </template>
+
+  <script src="script.js"></script>
+</body>
+</html>
