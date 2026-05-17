@@ -15,7 +15,8 @@ const state = {
   currentView: "builder",
   currentQuestionIndex: 0,
   score: 0,
-  hasAnsweredCurrent: false
+  hasAnsweredCurrent: false,
+  missedAnswers: []
 };
 
 const elements = {
@@ -29,6 +30,7 @@ const elements = {
   importFile: document.querySelector("#import-file"),
   importQuiz: document.querySelector("#import-quiz"),
   importStatus: document.querySelector("#import-status"),
+  missedReview: document.querySelector("#missed-review"),
   modeTabs: document.querySelectorAll(".mode-tab"),
   nextQuestion: document.querySelector("#next-question"),
   practiceCard: document.querySelector("#practice-card"),
@@ -294,6 +296,7 @@ function restartPractice() {
   state.currentQuestionIndex = 0;
   state.score = 0;
   state.hasAnsweredCurrent = false;
+  state.missedAnswers = [];
   elements.resultsCard.hidden = true;
   renderPractice();
 }
@@ -351,6 +354,11 @@ function answerQuestion(selectedIndex) {
     state.score += 1;
     elements.practiceFeedback.textContent = "Correct.";
   } else {
+    state.missedAnswers.push({
+      text: question.text,
+      selectedAnswer: question.choices[selectedIndex],
+      correctAnswer: question.choices[question.correctIndex]
+    });
     elements.practiceFeedback.textContent = `Not quite. Correct answer: ${question.choices[question.correctIndex]}`;
   }
 
@@ -384,6 +392,36 @@ function showResults() {
   elements.resultsCard.hidden = false;
   elements.resultsTitle.textContent = `${state.score} of ${state.questions.length} correct`;
   elements.resultsDetail.textContent = getResultsMessage();
+  renderMissedReview();
+}
+
+function renderMissedReview() {
+  elements.missedReview.innerHTML = "";
+
+  if (!state.missedAnswers.length) {
+    return;
+  }
+
+  const heading = document.createElement("h3");
+  heading.textContent = "Review missed answers";
+  elements.missedReview.append(heading);
+
+  state.missedAnswers.forEach((missed) => {
+    const item = document.createElement("article");
+    item.className = "missed-review__item";
+
+    const question = document.createElement("h3");
+    question.textContent = missed.text;
+
+    const selected = document.createElement("p");
+    selected.innerHTML = `<strong>Your answer:</strong> ${escapeHtml(missed.selectedAnswer)}`;
+
+    const correct = document.createElement("p");
+    correct.innerHTML = `<strong>Correct answer:</strong> ${escapeHtml(missed.correctAnswer)}`;
+
+    item.append(question, selected, correct);
+    elements.missedReview.append(item);
+  });
 }
 
 function getResultsMessage() {
@@ -410,6 +448,10 @@ function loadDraft() {
 }
 
 function normalizeDraft(payload) {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Import failed: JSON must include a quiz object.");
+  }
+
   const sourceQuestions = Array.isArray(payload) ? payload : payload.questions;
   const questions = normalizeQuestions(sourceQuestions);
   const payloadMeta = Array.isArray(payload) ? {} : payload.meta || {};
@@ -480,6 +522,15 @@ function slugify(value) {
     .trim()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "") || "quiz-crafter";
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 function setImportStatus(message, type = "") {
