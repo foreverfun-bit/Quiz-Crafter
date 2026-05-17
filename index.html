@@ -26,6 +26,26 @@
 
       <section id="builder-view" class="panel is-active" aria-label="Build a quiz">
         <form id="question-form" class="question-form">
+          <div class="quiz-details">
+            <label class="field">
+              <span>Quiz title</span>
+              <input id="quiz-title" type="text" placeholder="World capitals warmup">
+            </label>
+            <label class="field">
+              <span>Category</span>
+              <input id="quiz-category" type="text" placeholder="Geography">
+            </label>
+            <label class="field">
+              <span>Difficulty</span>
+              <select id="quiz-difficulty">
+                <option value="Mixed">Mixed</option>
+                <option value="Easy">Easy</option>
+                <option value="Medium">Medium</option>
+                <option value="Hard">Hard</option>
+              </select>
+            </label>
+          </div>
+
           <label class="field field--wide">
             <span>Question</span>
             <textarea id="question-text" rows="3" placeholder="What is the capital of France?" required></textarea>
@@ -44,9 +64,18 @@
 
         <div class="question-list-wrap">
           <div class="section-heading">
-            <h2>Draft quiz</h2>
-            <button class="text-button" id="clear-quiz" type="button">Clear quiz</button>
+            <div>
+              <h2>Draft quiz</h2>
+              <p id="quiz-summary" class="quiz-summary">Untitled quiz</p>
+            </div>
+            <div class="utility-actions">
+              <button class="button button--ghost" id="import-quiz" type="button">Import</button>
+              <button class="button button--ghost" id="export-quiz" type="button">Export</button>
+              <button class="text-button" id="clear-quiz" type="button">Clear quiz</button>
+            </div>
           </div>
+          <input id="import-file" type="file" accept="application/json,.json" hidden>
+          <p id="import-status" class="status-message" aria-live="polite"></p>
           <ol id="question-list" class="question-list"></ol>
           <p id="empty-builder" class="empty-state">Add your first question to start shaping the quiz.</p>
         </div>
@@ -62,6 +91,7 @@
             <span id="practice-progress">Question 1 of 1</span>
             <span id="practice-score">Score 0</span>
           </div>
+          <p id="practice-label" class="quiz-summary"></p>
           <h2 id="practice-question"></h2>
           <div id="practice-choices" class="practice-choices"></div>
           <div id="practice-feedback" class="practice-feedback" aria-live="polite"></div>
