@@ -11,6 +11,7 @@ import {
   History,
   Trophy,
   PencilLine,
+  Trash2,
 } from "lucide-react";
 
 const Sidebar = ({ isOpen, onClose }) => {
@@ -31,6 +32,7 @@ const Sidebar = ({ isOpen, onClose }) => {
     { path: "/past-sessions", icon: History, label: "Past Sessions" },
     { path: "/game-history", icon: Trophy, label: "Game History" },
     { path: "/import", icon: Upload, label: "Import CSV" },
+    { path: "/reset-data", icon: Trash2, label: "Reset Data", danger: true },
   ];
 
   return (
@@ -62,7 +64,7 @@ const Sidebar = ({ isOpen, onClose }) => {
             </button>
           </div>
 
-          <nav className="flex-1 px-4 py-6 space-y-1">
+          <nav className="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
             {navItems.map((item) => (
               <NavLink
                 key={item.path}
@@ -71,8 +73,12 @@ const Sidebar = ({ isOpen, onClose }) => {
                 className={({ isActive }) =>
                   `flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${
                     isActive
-                      ? "bg-gradient-to-r from-[#71E0DC]/20 to-[#AEB2EF]/20 text-white border border-[#71E0DC]/30"
-                      : "text-zinc-400 hover:text-white hover:bg-zinc-800/50"
+                      ? item.danger
+                        ? "bg-red-500/15 text-red-200 border border-red-500/30"
+                        : "bg-gradient-to-r from-[#71E0DC]/20 to-[#AEB2EF]/20 text-white border border-[#71E0DC]/30"
+                      : item.danger
+                        ? "text-red-300/70 hover:text-red-200 hover:bg-red-500/10"
+                        : "text-zinc-400 hover:text-white hover:bg-zinc-800/50"
                   }`
                 }
                 data-testid={`nav-${item.label.toLowerCase().replace(" ", "-")}`}
