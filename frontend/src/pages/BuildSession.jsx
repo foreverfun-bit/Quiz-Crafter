@@ -24,7 +24,6 @@ import {
   RefreshCw,
   Save,
   Search,
-  Shuffle,
   Sparkles,
   Tag,
   Trash2,
@@ -188,6 +187,18 @@ const BuildSession = () => {
   const clearSavedState = () => {
     localStorage.removeItem(BUILD_STORAGE_KEY);
     localStorage.removeItem("trivia-flex-round-builder-state-v2");
+  };
+
+  const scrollToLibrary = () => {
+    window.setTimeout(() => {
+      document.getElementById("build-session-library")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
+  };
+
+  const handleBrowseLibrary = () => {
+    setShowLibrary(true);
+    setShowWriteForm(false);
+    scrollToLibrary();
   };
 
   const fetchBuilderData = async () => {
@@ -459,6 +470,7 @@ const BuildSession = () => {
     setTheme("");
     setTypeFilter("all");
     setShowWriteForm(false);
+    setShowLibrary(true);
     toast.success("Session cleared");
   };
 
@@ -596,7 +608,7 @@ const BuildSession = () => {
                     showWriteForm={showWriteForm}
                     setShowWriteForm={setShowWriteForm}
                     showLibrary={showLibrary}
-                    setShowLibrary={setShowLibrary}
+                    onBrowseLibrary={handleBrowseLibrary}
                     generateType={generateType}
                     setGenerateType={setGenerateType}
                     generateCount={generateCount}
@@ -624,7 +636,7 @@ const BuildSession = () => {
           </Card>
 
           {showLibrary && (
-            <Card className="glass-card">
+            <Card id="build-session-library" className="glass-card scroll-mt-6">
               <CardHeader className="pb-3">
                 <div className="flex items-start justify-between gap-4 flex-wrap">
                   <div>
@@ -680,10 +692,10 @@ const Field = ({ label, children }) => (
   </div>
 );
 
-const BuilderToolbar = ({ showWriteForm, setShowWriteForm, showLibrary, setShowLibrary, generateType, setGenerateType, generateCount, setGenerateCount, generating, onGenerate }) => (
+const BuilderToolbar = ({ showWriteForm, setShowWriteForm, showLibrary, onBrowseLibrary, generateType, setGenerateType, generateCount, setGenerateCount, generating, onGenerate }) => (
   <div className="flex items-center gap-2 flex-wrap">
     <IconAction label="Create" active={showWriteForm} onClick={() => setShowWriteForm((value) => !value)} icon={Pencil} />
-    <IconAction label="Browse" active={showLibrary} onClick={() => setShowLibrary((value) => !value)} icon={List} />
+    <IconAction label="Browse" active={showLibrary} onClick={onBrowseLibrary} icon={List} />
     <div className="h-10 flex items-center gap-2 rounded-md bg-zinc-950/50 border border-white/10 px-2">
       <select value={generateType} onChange={(e) => setGenerateType(e.target.value)} className="h-8 bg-transparent text-white text-sm outline-none">
         <option value="true_false">T/F</option>
@@ -701,7 +713,7 @@ const BuilderToolbar = ({ showWriteForm, setShowWriteForm, showLibrary, setShowL
 );
 
 const IconAction = ({ label, icon: Icon, onClick, active }) => (
-  <Button title={label} aria-label={label} variant="outline" onClick={onClick} className={`h-10 w-10 p-0 border-white/10 ${active ? "bg-[#71E0DC]/15 text-[#71E0DC]" : "bg-zinc-950/50 text-zinc-300 hover:text-white"}`}>
+  <Button title={label} aria-label={label} variant="outline" type="button" onClick={onClick} className={`h-10 w-10 p-0 border-white/10 ${active ? "bg-[#71E0DC]/15 text-[#71E0DC]" : "bg-zinc-950/50 text-zinc-300 hover:text-white"}`}>
     <Icon size={18} />
   </Button>
 );
