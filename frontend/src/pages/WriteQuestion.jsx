@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import axios from "axios";
 import { supabase } from "../lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -33,30 +34,6 @@ const initialForm = {
 };
 
 const cleanList = (values) => values.map((value) => value.trim()).filter(Boolean);
-
-const readJsonResponse = async (response, fallbackMessage) => {
-  let raw = "";
-
-  try {
-    raw = await response.clone().text();
-  } catch {
-    raw = "";
-  }
-
-  let data = {};
-
-  try {
-    data = raw ? JSON.parse(raw) : {};
-  } catch {
-    throw new Error(raw ? `${fallbackMessage}: ${raw.slice(0, 200)}` : fallbackMessage);
-  }
-
-  if (!response.ok) {
-    throw new Error(data.error || fallbackMessage);
-  }
-
-  return data;
-};
 
 const buildIncorrectAnswers = (type, correctAnswer, wrongAnswers) => {
   if (type === "true_false") {
@@ -105,16 +82,10 @@ const WriteQuestion = () => {
 
     setAssisting(true);
     try {
-      const response = await fetch("/api/assist-custom-question", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          question_text: form.question_text.trim(),
-          category: form.category.trim(),
-        }),
+      const { data } = await axios.post("/api/assist-custom-question", {
+        question_text: form.question_text.trim(),
+        category: form.category.trim(),
       });
-
-      const data = await readJsonResponse(response, "Question assist failed");
 
       setForm((prev) => ({
         ...prev,
@@ -135,7 +106,7 @@ const WriteQuestion = () => {
       toast.success("Suggestion ready");
     } catch (error) {
       console.error("Assist question error:", error);
-      toast.error(error.message || "Failed to assist question");
+      toast.error(error.response?.data?.error || error.message || "Failed to assist question");
     } finally {
       setAssisting(false);
     }
