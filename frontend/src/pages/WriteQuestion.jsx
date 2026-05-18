@@ -35,7 +35,14 @@ const initialForm = {
 const cleanList = (values) => values.map((value) => value.trim()).filter(Boolean);
 
 const readJsonResponse = async (response, fallbackMessage) => {
-  const raw = await response.text();
+  let raw = "";
+
+  try {
+    raw = await response.clone().text();
+  } catch {
+    raw = "";
+  }
+
   let data = {};
 
   try {
@@ -49,6 +56,22 @@ const readJsonResponse = async (response, fallbackMessage) => {
   }
 
   return data;
+};
+
+const readErrorMessage = async (response, fallbackMessage) => {
+  try {
+    const raw = await response.clone().text();
+    if (!raw) return fallbackMessage;
+
+    try {
+      const data = JSON.parse(raw);
+      return data.error || fallbackMessage;
+    } catch {
+      return raw.slice(0, 200) || fallbackMessage;
+    }
+  } catch {
+    return fallbackMessage;
+  }
 };
 
 const WriteQuestion = () => {
@@ -164,7 +187,9 @@ const WriteQuestion = () => {
         }),
       });
 
-      await readJsonResponse(response, "Failed to save question");
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response, "Failed to save question"));
+      }
 
       toast.success("Question saved to library");
       setForm(initialForm);
