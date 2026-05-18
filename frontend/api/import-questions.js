@@ -1,12 +1,6 @@
 const Papa = require("papaparse");
 const { createClient } = require("@supabase/supabase-js");
 
-exports.config = {
-  api: {
-    bodyParser: false,
-  },
-};
-
 const SOURCE_LABELS = {
   auto: "Auto Detect",
   crowdpurr: "CrowdPurr",
@@ -17,11 +11,21 @@ const SOURCE_LABELS = {
 
 function readRequestBuffer(req) {
   return new Promise((resolve, reject) => {
+    if (Buffer.isBuffer(req.body)) return resolve(req.body);
+    if (typeof req.body === "string") return resolve(Buffer.from(req.body));
+
     const chunks = [];
     req.on("data", (chunk) => chunks.push(chunk));
     req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
+}
+
+function trimCrlf(buffer) {
+  let output = buffer;
+  while (output.length >= 2 && output.slice(0, 2).toString() === "\r\n") output = output.slice(2);
+  while (output.length >= 2 && output.slice(-2).toString() === "\r\n") output = output.slice(0, -2);
+  return output;
 }
 
 function extractMultipartParts(req, buffer) {
@@ -41,14 +45,12 @@ function extractMultipartParts(req, buffer) {
     const next = buffer.indexOf(boundaryBuffer, start + boundaryBuffer.length);
     if (next === -1) break;
 
-    let part = buffer.slice(start + boundaryBuffer.length, next);
-    if (part.slice(0, 2).toString() === "\r\n") part = part.slice(2);
-    if (part.slice(-2).toString() === "\r\n") part = part.slice(0, -2);
+    const rawPart = trimCrlf(buffer.slice(start + boundaryBuffer.length, next));
+    const headerEnd = rawPart.indexOf(Buffer.from("\r\n\r\n"));
 
-    const headerEnd = part.indexOf(Buffer.from("\r\n\r\n"));
     if (headerEnd !== -1) {
-      const headers = part.slice(0, headerEnd).toString("utf8");
-      const body = part.slice(headerEnd + 4);
+      const headers = rawPart.slice(0, headerEnd).toString("utf8");
+      const body = trimCrlf(rawPart.slice(headerEnd + 4));
       const name = headers.match(/name="([^"]+)"/)?.[1];
       const filename = headers.match(/filename="([^"]*)"/)?.[1];
       const fieldContentType = headers.match(/content-type:\s*([^\r\n]+)/i)?.[1] || "";
@@ -98,7 +100,7 @@ function splitAnswers(value) {
   const text = clean(value);
   if (!text) return [];
   return text
-    .split(/\s*(?:;|\||\n|•)\s*/)
+    .split(/\s*(?:;|\||\n|\*)\s*/)
     .map(clean)
     .filter(Boolean);
 }
@@ -135,6 +137,44 @@ function detectQuestionType(rawType, correctAnswer, wrongAnswers, imageUrl) {
   return "written";
 }
 
+function normalizeRecord(record) {
+  const questionText = clean(record.question_text);
+  const correctAnswer = clean(record.correct_answer);
+  if (!questionText || !correctAnswer) return null;
+
+  let questionType = record.question_type || "written";
+  const wrongAnswers = unique(record.incorrect_answers || [], correctAnswer);
+
+  if (questionType === "true_false") {
+    const answer = correctAnswer.toLowerCase() === "false" ? "False" : "True";
+    return {
+      category: clean(record.category) || "Imported",
+      question_text: questionText,
+      correct_answer: answer,
+      question_type: "true_false",
+      incorrect_answers: answer === "True" ? "False" : "True",
+      fun_fact: clean(record.fun_fact) || null,
+      image_url: null,
+      has_image: false,
+      source: "imported",
+    };
+  }
+
+  if (questionType === "multiple_choice" && wrongAnswers.length < 2) questionType = "written";
+
+  return {
+    category: clean(record.category) || "Imported",
+    question_text: questionText,
+    correct_answer: correctAnswer,
+    question_type: questionType,
+    incorrect_answers: questionType === "multiple_choice" ? wrongAnswers.join("; ") : null,
+    fun_fact: clean(record.fun_fact) || null,
+    image_url: clean(record.image_url) || null,
+    has_image: questionType === "picture" || Boolean(clean(record.image_url)),
+    source: "imported",
+  };
+}
+
 function normalizeCrowdpurrRows(rows) {
   const dataRows = rows.filter((row) => Array.isArray(row) && clean(row[0]) && compactKey(row[0]) !== "question");
 
@@ -161,22 +201,8 @@ function normalizeCrowdpurrRows(rows) {
 
 function normalizeObjectRows(rows, requestedSource) {
   return rows.map((row) => {
-    const question = getValue(row, [
-      "Question",
-      "Question Text",
-      "Prompt",
-      "Trivia Question",
-      "Question Title",
-      "Text",
-    ]);
-    const correctAnswer = getValue(row, [
-      "Correct Answer(s)",
-      "Correct Answer",
-      "Answer",
-      "Correct",
-      "Correct Option",
-      "Right Answer",
-    ]);
+    const question = getValue(row, ["Question", "Question Text", "Prompt", "Trivia Question", "Question Title", "Text"]);
+    const correctAnswer = getValue(row, ["Correct Answer(s)", "Correct Answer", "Answer", "Correct", "Correct Option", "Right Answer"]);
     const category = getValue(row, ["Category", "Round", "Topic", "Subject", "Tags"]);
     const rawType = getValue(row, ["Question Type", "Type", "Format", "Kind"]);
     const funFact = getValue(row, ["Question Note", "Fun Fact", "Explanation", "Fact", "Notes"]);
@@ -207,44 +233,6 @@ function normalizeObjectRows(rows, requestedSource) {
       image_url: imageUrl,
     });
   }).filter(Boolean);
-}
-
-function normalizeRecord(record) {
-  const questionText = clean(record.question_text);
-  const correctAnswer = clean(record.correct_answer);
-  if (!questionText || !correctAnswer) return null;
-
-  let questionType = record.question_type || "written";
-  let wrongAnswers = unique(record.incorrect_answers || [], correctAnswer);
-
-  if (questionType === "true_false") {
-    const answer = correctAnswer.toLowerCase() === "false" ? "False" : "True";
-    return {
-      category: clean(record.category) || "Imported",
-      question_text: questionText,
-      correct_answer: answer,
-      question_type: "true_false",
-      incorrect_answers: answer === "True" ? "False" : "True",
-      fun_fact: clean(record.fun_fact) || null,
-      image_url: null,
-      has_image: false,
-      source: "imported",
-    };
-  }
-
-  if (questionType === "multiple_choice" && wrongAnswers.length < 2) questionType = "written";
-
-  return {
-    category: clean(record.category) || "Imported",
-    question_text: questionText,
-    correct_answer: correctAnswer,
-    question_type: questionType,
-    incorrect_answers: questionType === "multiple_choice" ? wrongAnswers.join("; ") : null,
-    fun_fact: clean(record.fun_fact) || null,
-    image_url: clean(record.image_url) || null,
-    has_image: questionType === "picture" || Boolean(clean(record.image_url)),
-    source: "imported",
-  };
 }
 
 function detectCsvSource(rows, requestedSource) {
@@ -287,14 +275,22 @@ function parseCsv(text, requestedSource) {
   };
 }
 
+function loadPdfParser() {
+  try {
+    return require("pdf-parse/lib/pdf-parse.js");
+  } catch {
+    return require("pdf-parse");
+  }
+}
+
 async function parsePdf(buffer, requestedSource) {
   let text = "";
   try {
-    const pdfParse = require("pdf-parse");
+    const pdfParse = loadPdfParser();
     const parsed = await pdfParse(buffer);
     text = clean(parsed.text || "");
   } catch (error) {
-    throw new Error(`Could not read PDF text: ${error.message}`);
+    throw new Error(`Could not read PDF text. If this is a scanned/image-only PDF, export it as CSV or text first. ${error.message}`);
   }
 
   const aiQuestions = await extractQuestionsWithAi(text);
@@ -329,10 +325,7 @@ async function extractQuestionsWithAi(text) {
       temperature: 0.1,
       response_format: { type: "json_object" },
       messages: [
-        {
-          role: "system",
-          content: "Extract trivia questions from messy PDF text. Return strict JSON only.",
-        },
+        { role: "system", content: "Extract trivia questions from messy PDF text. Return strict JSON only." },
         {
           role: "user",
           content: `Extract up to 150 trivia questions from this text. Return {"questions":[{"category":"Imported","question_text":"...","correct_answer":"...","question_type":"true_false|multiple_choice|written|picture","incorrect_answers":["..."],"fun_fact":"..."}]}\n\nTEXT:\n${text.slice(0, 60000)}`,
@@ -356,25 +349,13 @@ function parseQuestionsFromText(text) {
     const line = lines[i];
     const inlineMatch = line.match(/^(?:q[:.)\-]?\s*)?(.*\?)\s*(?:a(?:nswer)?[:.)\-]\s*)(.+)$/i);
     if (inlineMatch) {
-      questions.push(normalizeRecord({
-        category: "PDF",
-        question_text: inlineMatch[1],
-        correct_answer: inlineMatch[2],
-        question_type: "written",
-        incorrect_answers: [],
-      }));
+      questions.push(normalizeRecord({ category: "PDF", question_text: inlineMatch[1], correct_answer: inlineMatch[2], question_type: "written", incorrect_answers: [] }));
       continue;
     }
 
     if (/\?$/.test(line) && lines[i + 1]) {
       const answerLine = lines[i + 1].replace(/^a(?:nswer)?[:.)\-]\s*/i, "");
-      questions.push(normalizeRecord({
-        category: "PDF",
-        question_text: line,
-        correct_answer: answerLine,
-        question_type: "written",
-        incorrect_answers: [],
-      }));
+      questions.push(normalizeRecord({ category: "PDF", question_text: line, correct_answer: answerLine, question_type: "written", incorrect_answers: [] }));
       i += 1;
     }
   }
@@ -387,7 +368,7 @@ async function parseUploadedFile(file, requestedSource) {
   const lower = filename.toLowerCase();
   const source = requestedSource || "auto";
 
-  if (lower.endsWith(".pdf") || file.contentType.includes("pdf")) {
+  if (lower.endsWith(".pdf") || file.contentType.includes("pdf") || source === "pdf") {
     return parsePdf(file.buffer, source);
   }
 
@@ -404,9 +385,7 @@ function groupByType(questions) {
 }
 
 function buildSessionName(filename) {
-  return clean(filename)
-    .replace(/\.(csv|tsv|txt|pdf)$/i, "")
-    .replace(/[_-]+/g, " ") || `Imported Session ${new Date().toLocaleDateString()}`;
+  return clean(filename).replace(/\.(csv|tsv|txt|pdf)$/i, "").replace(/[_-]+/g, " ") || `Imported Session ${new Date().toLocaleDateString()}`;
 }
 
 async function importQuestions({ questions, userId, filename }) {
@@ -423,13 +402,7 @@ async function importQuestions({ questions, userId, filename }) {
 
   for (const question of questions) {
     try {
-      const { data: existing, error: lookupError } = await supabase
-        .from("questions")
-        .select("id")
-        .eq("question_text", question.question_text)
-        .limit(1)
-        .maybeSingle();
-
+      const { data: existing, error: lookupError } = await supabase.from("questions").select("id").eq("question_text", question.question_text).limit(1).maybeSingle();
       if (lookupError) throw lookupError;
       if (existing?.id) {
         skipped += 1;
@@ -459,13 +432,7 @@ async function importQuestions({ questions, userId, filename }) {
     const builtSessionName = buildSessionName(filename);
     const { data, error } = await supabase
       .from("sessions")
-      .insert({
-        user_id: userId,
-        name: builtSessionName,
-        session_name: builtSessionName,
-        is_past: true,
-        ...grouped,
-      })
+      .insert({ user_id: userId, name: builtSessionName, session_name: builtSessionName, is_past: true, ...grouped })
       .select()
       .single();
 
@@ -480,7 +447,7 @@ async function importQuestions({ questions, userId, filename }) {
   return { imported, skipped, errors, sessionsCreated, sessionId, sessionName, sessionError };
 }
 
-module.exports = async function handler(req, res) {
+async function handler(req, res) {
   try {
     if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
@@ -491,7 +458,12 @@ module.exports = async function handler(req, res) {
     const requestedSource = clean(parts.source || "auto").toLowerCase();
     const userId = clean(parts.sessionUserId);
 
-    if (!file?.buffer?.length) return res.status(400).json({ error: "No file found" });
+    if (!file?.buffer?.length) {
+      return res.status(400).json({
+        error: "No file found in upload. Please choose the file again and retry.",
+        debug: { contentType: req.headers["content-type"] || "", bytesReceived: buffer.length, fieldsFound: Object.keys(parts) },
+      });
+    }
 
     const parsed = await parseUploadedFile(file, requestedSource);
     const questions = parsed.questions || [];
@@ -533,4 +505,11 @@ module.exports = async function handler(req, res) {
     console.error("import-questions error:", error);
     return res.status(500).json({ error: error.message || "Import failed" });
   }
+}
+
+module.exports = handler;
+module.exports.config = {
+  api: {
+    bodyParser: false,
+  },
 };
