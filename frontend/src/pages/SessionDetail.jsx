@@ -1,34 +1,29 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { Input } from "../components/ui/input";
 import {
   ArrowLeft,
-  CheckCircle,
   Copy,
   Download,
-  Image,
-  List,
   Loader2,
-  MessageSquare,
   Pencil,
   Plus,
   Radio,
   Save,
   Trash2,
-  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
 const questionTypes = [
-  { value: "true_false", label: "True/False", shortLabel: "T/F", icon: CheckCircle, color: "text-[#71E0DC]" },
-  { value: "multiple_choice", label: "Multiple Choice", shortLabel: "MC", icon: List, color: "text-[#AEB2EF]" },
-  { value: "written", label: "Written", shortLabel: "Written", icon: MessageSquare, color: "text-emerald-400" },
-  { value: "picture", label: "Picture", shortLabel: "Picture", icon: Image, color: "text-amber-400" },
+  { value: "true_false", label: "True/False" },
+  { value: "multiple_choice", label: "Multiple Choice" },
+  { value: "written", label: "Written" },
+  { value: "picture", label: "Picture" },
 ];
 
 const arrayKeyByType = {
@@ -196,14 +191,6 @@ const SessionDetail = () => {
 
   const roundGroups = useMemo(() => makeRoundGroups(hasArrayQuestions ? importedEntries : structuredEntries), [hasArrayQuestions, importedEntries, structuredEntries]);
   const totalQuestions = roundGroups.reduce((sum, round) => sum + round.entries.length, 0);
-
-  const typeCounts = useMemo(() => {
-    return roundGroups.flatMap((round) => round.entries).reduce((acc, entry) => {
-      const type = normalizeType(entry.question);
-      acc[type] = (acc[type] || 0) + 1;
-      return acc;
-    }, {});
-  }, [roundGroups]);
 
   const fetchSessionData = async () => {
     setLoading(true);
@@ -537,29 +524,12 @@ const SessionDetail = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        {questionTypes.map((type) => {
-          const TypeIcon = type.icon;
-          return (
-            <Card key={type.value} className="glass-card">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between mb-2">
-                  <TypeIcon className={type.color} size={20} />
-                  <Badge className="bg-zinc-800 text-zinc-300">{typeCounts[type.value] || 0}</Badge>
-                </div>
-                <p className="text-white font-medium">{type.label}</p>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
-
       <Card className="glass-card">
         <CardHeader>
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div>
               <CardTitle className="text-white">Rounds</CardTitle>
-              <CardDescription className="text-zinc-500">Questions are shown in saved round order, not by type.</CardDescription>
+              <CardDescription className="text-zinc-500">Questions are shown in saved round order.</CardDescription>
             </div>
             {canEditArrays && isEditingImported && (
               <Button className="gradient-btn" onClick={() => addImportedQuestion(roundGroups[0]?.name || "Imported Session")}>
@@ -569,7 +539,7 @@ const SessionDetail = () => {
           </div>
         </CardHeader>
         <CardContent>
-          <ScrollArea className="h-[620px] pr-4">
+          <ScrollArea className="h-[700px] pr-4">
             {roundGroups.length === 0 ? (
               <div className="text-center py-16"><p className="text-zinc-500">No questions in this session.</p></div>
             ) : (
@@ -607,8 +577,6 @@ const SessionDetail = () => {
 const SessionQuestionCard = ({ entry, index, canEdit, onUpdate, onMove, onRemove }) => {
   const { question, storageType, importedIndex } = entry;
   const type = normalizeType(question);
-  const typeConfig = questionTypes.find((item) => item.value === type) || questionTypes[2];
-  const TypeIcon = typeConfig.icon;
   const parsedIncorrect = parseIncorrectAnswers(question.incorrect_answers);
 
   return (
@@ -627,7 +595,6 @@ const SessionQuestionCard = ({ entry, index, canEdit, onUpdate, onMove, onRemove
             ) : (
               <>
                 <Badge variant="outline" className="border-zinc-700 text-zinc-400">{question.category || "Uncategorized"}</Badge>
-                <Badge className="bg-zinc-800 text-zinc-300"><TypeIcon size={12} className={`mr-1 ${typeConfig.color}`} />{typeConfig.shortLabel}</Badge>
                 {question.image_url && <Badge className="bg-amber-500/10 text-amber-300 border border-amber-500/20">Image</Badge>}
               </>
             )}
