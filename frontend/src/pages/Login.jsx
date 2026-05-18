@@ -8,14 +8,26 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../co
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { Loader2 } from "lucide-react";
 
+const REMEMBER_EMAIL_KEY = "quiz-crafter-remembered-email";
+
+const getRememberedEmail = () => {
+  try {
+    return localStorage.getItem(REMEMBER_EMAIL_KEY) || "";
+  } catch {
+    return "";
+  }
+};
+
 const Login = () => {
   const { user, login, register, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
+  const rememberedEmail = getRememberedEmail();
   
   // Login form state
-  const [loginEmail, setLoginEmail] = useState("");
+  const [loginEmail, setLoginEmail] = useState(rememberedEmail);
   const [loginPassword, setLoginPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(Boolean(rememberedEmail));
   
   // Register form state
   const [registerName, setRegisterName] = useState("");
@@ -34,15 +46,20 @@ const Login = () => {
     return <Navigate to="/" replace />;
   }
 
-const handleLogin = async (e) => {
-  e.preventDefault();
-  setLoading(true);
-  const result = await login(loginEmail, loginPassword);
-  setLoading(false);
-  if (result.success) {
-    navigate("/");
-  }
-};
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    const result = await login(loginEmail, loginPassword);
+    setLoading(false);
+    if (result.success) {
+      if (rememberMe) {
+        localStorage.setItem(REMEMBER_EMAIL_KEY, loginEmail.trim());
+      } else {
+        localStorage.removeItem(REMEMBER_EMAIL_KEY);
+      }
+      navigate("/");
+    }
+  };
 
   const handleRegister = async (e) => {
     e.preventDefault();
@@ -50,6 +67,9 @@ const handleLogin = async (e) => {
     const result = await register(registerEmail, registerPassword, registerName);
     setLoading(false);
     if (result.success) {
+      if (rememberMe) {
+        localStorage.setItem(REMEMBER_EMAIL_KEY, registerEmail.trim());
+      }
       navigate("/");
     }
   };
@@ -116,6 +136,18 @@ const handleLogin = async (e) => {
                       data-testid="login-password-input"
                     />
                   </div>
+
+                  <label className="flex items-center gap-3 text-sm text-zinc-300 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={rememberMe}
+                      onChange={(event) => setRememberMe(event.target.checked)}
+                      className="h-4 w-4 rounded border-white/20 bg-zinc-950 accent-[#71E0DC]"
+                      data-testid="remember-me-checkbox"
+                    />
+                    Remember my email on this device
+                  </label>
+
                   <Button
                     type="submit"
                     disabled={loading}
