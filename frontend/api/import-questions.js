@@ -175,7 +175,6 @@ function normalizeRecord(record) {
     round_name: roundName,
     round_order: Number.isFinite(Number(record.round_order)) ? Number(record.round_order) : getRoundSortValue(roundName, record.source_order || 0),
     source_order: Number.isFinite(Number(record.source_order)) ? Number(record.source_order) : 0,
-    source: "imported",
   };
 
   if (questionType === "true_false") {
@@ -187,8 +186,7 @@ function normalizeRecord(record) {
       question_type: "true_false",
       incorrect_answers: answer === "True" ? "False" : "True",
       fun_fact: clean(record.fun_fact) || null,
-      image_url: null,
-      has_image: false,
+      image_url: clean(record.image_url) || null,
     };
   }
 
@@ -202,7 +200,6 @@ function normalizeRecord(record) {
     incorrect_answers: questionType === "multiple_choice" ? wrongAnswers.join("; ") : null,
     fun_fact: clean(record.fun_fact) || null,
     image_url: clean(record.image_url) || null,
-    has_image: questionType === "picture" || Boolean(clean(record.image_url)),
   };
 }
 
@@ -418,7 +415,7 @@ async function parseUploadedFile(file, requestedSource) {
 }
 
 function stripQuestionMetadata(question) {
-  const { round_name, round_order, source_order, ...dbQuestion } = question;
+  const { round_name, round_order, source_order, source, has_image, ...dbQuestion } = question;
   return dbQuestion;
 }
 
