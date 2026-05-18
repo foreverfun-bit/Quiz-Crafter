@@ -34,6 +34,23 @@ const initialForm = {
 
 const cleanList = (values) => values.map((value) => value.trim()).filter(Boolean);
 
+const readJsonResponse = async (response, fallbackMessage) => {
+  const raw = await response.text();
+  let data = {};
+
+  try {
+    data = raw ? JSON.parse(raw) : {};
+  } catch {
+    throw new Error(raw ? `${fallbackMessage}: ${raw.slice(0, 200)}` : fallbackMessage);
+  }
+
+  if (!response.ok) {
+    throw new Error(data.error || fallbackMessage);
+  }
+
+  return data;
+};
+
 const WriteQuestion = () => {
   const navigate = useNavigate();
   const [form, setForm] = useState(initialForm);
@@ -78,12 +95,7 @@ const WriteQuestion = () => {
         }),
       });
 
-      const raw = await response.text();
-      const data = raw ? JSON.parse(raw) : {};
-
-      if (!response.ok) {
-        throw new Error(data.error || "Question assist failed");
-      }
+      const data = await readJsonResponse(response, "Question assist failed");
 
       setForm((prev) => ({
         ...prev,
@@ -138,21 +150,21 @@ const WriteQuestion = () => {
         throw new Error("You must be signed in");
       }
 
-      const payload = {
-        user_id: session.user.id,
-        category,
-        question_text: questionText,
-        question_type: form.question_type,
-        correct_answer: correctAnswer,
-        incorrect_answers: buildIncorrectAnswers(form),
-        fun_fact: form.fun_fact.trim() || null,
-        source: "manual",
-        has_image: false,
-        image_url: null,
-      };
+      const response = await fetch("/api/save-custom-question", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: session.user.id,
+          category,
+          question_text: questionText,
+          question_type: form.question_type,
+          correct_answer: correctAnswer,
+          incorrect_answers: cleanList(form.incorrect_answers),
+          fun_fact: form.fun_fact.trim() || null,
+        }),
+      });
 
-      const { error } = await supabase.from("questions").insert(payload);
-      if (error) throw error;
+      await readJsonResponse(response, "Failed to save question");
 
       toast.success("Question saved to library");
       setForm(initialForm);
@@ -349,17 +361,5 @@ const WriteQuestion = () => {
     </div>
   );
 };
-
-function buildIncorrectAnswers(form) {
-  if (form.question_type === "true_false") {
-    return form.correct_answer === "True" ? "False" : "True";
-  }
-
-  if (form.question_type === "multiple_choice") {
-    return cleanList(form.incorrect_answers).join("; ") || null;
-  }
-
-  return null;
-}
 
 export default WriteQuestion;
