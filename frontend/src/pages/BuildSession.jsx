@@ -22,56 +22,25 @@ import {
   Sparkles,
   Plus,
   Trash2,
+  Pencil,
 } from "lucide-react";
 import { toast } from "sonner";
 
-const rounds = [
-  {
-    id: "round1",
-    label: "Round 1",
-    shortLabel: "R1",
-    type: "true_false",
-    storageKey: "true_false_questions",
-    title: "True/False",
-    target: 9,
-    bonusTarget: 1,
-    icon: CheckCircle,
-    color: "text-[#71E0DC]",
-  },
-  {
-    id: "round2",
-    label: "Round 2",
-    shortLabel: "R2",
-    type: "multiple_choice",
-    storageKey: "multiple_choice_questions",
-    title: "Multiple Choice",
-    target: 9,
-    bonusTarget: 1,
-    icon: List,
-    color: "text-[#AEB2EF]",
-  },
-  {
-    id: "round3",
-    label: "Round 3",
-    shortLabel: "R3",
-    type: "written",
-    storageKey: "written_questions",
-    title: "Written Answer",
-    target: 9,
-    bonusTarget: 1,
-    icon: MessageSquare,
-    color: "text-emerald-400",
-  },
+const questionTypes = [
+  { value: "all", label: "All", icon: List, color: "text-zinc-300" },
+  { value: "true_false", label: "True/False", icon: CheckCircle, color: "text-[#71E0DC]" },
+  { value: "multiple_choice", label: "Multiple Choice", icon: List, color: "text-[#AEB2EF]" },
+  { value: "written", label: "Written", icon: MessageSquare, color: "text-emerald-400" },
+  { value: "picture", label: "Picture", icon: Image, color: "text-amber-400" },
 ];
 
-const emptySelected = {
-  round1: [],
-  round2: [],
-  round3: [],
-  picture: [],
-};
+const defaultRounds = [
+  { id: "round-1", name: "Round 1", questionIds: [] },
+  { id: "round-2", name: "Round 2", questionIds: [] },
+  { id: "round-3", name: "Round 3", questionIds: [] },
+];
 
-const BUILD_STORAGE_KEY = "trivia-round-builder-state-v2";
+const BUILD_STORAGE_KEY = "trivia-flex-round-builder-state-v1";
 
 const parseAnswerOptions = (value) => {
   if (Array.isArray(value)) return value.map((x) => String(x).trim()).filter(Boolean);
@@ -80,31 +49,27 @@ const parseAnswerOptions = (value) => {
 };
 
 const normalizeText = (value) => String(value || "").replace(/\s+/g, " ").trim();
-
 const fingerprint = (value) => normalizeText(value).toLowerCase().replace(/[^a-z0-9]/g, "");
+
+const normalizeType = (question, fallbackType = "written") => {
+  if (fallbackType === "picture") return "picture";
+  if (question?.question_type === "picture") return "picture";
+  if (question?.has_image || question?.image_url) return "picture";
+  return question?.question_type || fallbackType || "written";
+};
 
 const normalizeQuestion = (q, fallbackType) => ({
   ...q,
   id: q.id || q.local_id || `local-${Date.now()}-${Math.random().toString(16).slice(2)}`,
   question_text: normalizeText(q.question_text || q.question),
   correct_answer: normalizeText(q.correct_answer || q.answer),
-  question_type: q.question_type || fallbackType || "written",
+  question_type: normalizeType(q, fallbackType),
   category: normalizeText(q.category) || "General",
   incorrect_answers: q.incorrect_answers ?? null,
   options: parseAnswerOptions(q.incorrect_answers ?? q.options),
   fun_fact: normalizeText(q.fun_fact),
   image_url: q.image_url || "",
   isGenerated: Boolean(q.isGenerated),
-});
-
-const toSessionQuestion = (question, type) => ({
-  category: question.category || "General",
-  question_text: question.question_text,
-  correct_answer: question.correct_answer,
-  question_type: type === "picture" ? "picture" : type,
-  incorrect_answers: Array.isArray(question.options) && question.options.length ? question.options.join("; ") : question.incorrect_answers || null,
-  fun_fact: question.fun_fact || null,
-  image_url: question.image_url || null,
 });
 
 const collectSessionQuestions = (session) => {
@@ -116,6 +81,21 @@ const collectSessionQuestions = (session) => {
   ];
   return arrays.flatMap((value) => (Array.isArray(value) ? value : []));
 };
+
+const toSessionQuestion = (question, round, roundIndex, sourceOrder) => ({
+  category: question.category || "General",
+  round_name: round.name,
+  round_order: roundIndex + 1,
+  source_order: sourceOrder + 1,
+  question_text: question.question_text,
+  correct_answer: question.correct_answer,
+  question_type: question.question_type,
+  incorrect_answers: Array.isArray(question.options) && question.options.length ? question.options.join("; ") : question.incorrect_answers || null,
+  fun_fact: question.fun_fact || null,
+  image_url: question.image_url || null,
+});
+
+const newRoundId = () => `round-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 const BuildSession = () => {
   const navigate = useNavigate();
@@ -132,20 +112,26 @@ const BuildSession = () => {
   const savedState = loadSavedState();
 
   const [sessionName, setSessionName] = useState(savedState?.sessionName || "");
+  const [rounds, setRounds] = useState(savedState?.rounds || defaultRounds);
+  const [activeRoundId, setActiveRoundId] = useState(savedState?.activeRoundId || (savedState?.rounds?.[0]?.id || "round-1"));
   const [questions, setQuestions] = useState([]);
   const [usedFingerprints, setUsedFingerprints] = useState(new Set());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [activeRoundId, setActiveRoundId] = useState(savedState?.activeRoundId || "round1");
   const [searchQuery, setSearchQuery] = useState("");
   const [theme, setTheme] = useState(savedState?.theme || "");
   const [difficulty, setDifficulty] = useState(savedState?.difficulty || "host_hard");
-  const [generatingRound, setGeneratingRound] = useState(null);
-  const [selected, setSelected] = useState(savedState?.selected || emptySelected);
+  const [typeFilter, setTypeFilter] = useState(savedState?.typeFilter || "all");
+  const [generateType, setGenerateType] = useState(savedState?.generateType || "multiple_choice");
+  const [generateCount, setGenerateCount] = useState(savedState?.generateCount || "3");
+  const [generating, setGenerating] = useState(false);
 
   useEffect(() => {
-    localStorage.setItem(BUILD_STORAGE_KEY, JSON.stringify({ sessionName, selected, activeRoundId, theme, difficulty }));
-  }, [sessionName, selected, activeRoundId, theme, difficulty]);
+    localStorage.setItem(
+      BUILD_STORAGE_KEY,
+      JSON.stringify({ sessionName, rounds, activeRoundId, theme, difficulty, typeFilter, generateType, generateCount })
+    );
+  }, [sessionName, rounds, activeRoundId, theme, difficulty, typeFilter, generateType, generateCount]);
 
   useEffect(() => {
     fetchBuilderData();
@@ -159,9 +145,7 @@ const BuildSession = () => {
 
       const [questionsResult, sessionsResult] = await Promise.all([
         supabase.from("questions").select("*").order("created_at", { ascending: false }),
-        user?.id
-          ? supabase.from("sessions").select("*").eq("user_id", user.id)
-          : supabase.from("sessions").select("*").limit(0),
+        user?.id ? supabase.from("sessions").select("*").eq("user_id", user.id) : supabase.from("sessions").select("*").limit(0),
       ]);
 
       if (questionsResult.error) throw questionsResult.error;
@@ -185,96 +169,86 @@ const BuildSession = () => {
     }
   };
 
-  const activeRound = rounds.find((round) => round.id === activeRoundId) || rounds[0];
+  const questionById = useMemo(() => new Map(questions.map((q) => [String(q.id), q])), [questions]);
+  const activeRound = rounds.find((round) => round.id === activeRoundId) || rounds[0] || defaultRounds[0];
+  const selectedIds = useMemo(() => new Set(rounds.flatMap((round) => round.questionIds || []).map(String)), [rounds]);
 
-  const selectedQuestionsByRound = useMemo(() => {
-    const all = [...questions];
-    const byId = new Map(all.map((q) => [String(q.id), q]));
-
-    return {
-      round1: (selected.round1 || []).map((id) => byId.get(String(id))).filter(Boolean),
-      round2: (selected.round2 || []).map((id) => byId.get(String(id))).filter(Boolean),
-      round3: (selected.round3 || []).map((id) => byId.get(String(id))).filter(Boolean),
-      picture: (selected.picture || []).map((id) => byId.get(String(id))).filter(Boolean),
-    };
-  }, [questions, selected]);
-
-  const activeSelected = selected[activeRound.id] || [];
-  const selectedPictures = selected.picture || [];
+  const activeRoundQuestions = useMemo(() => {
+    return (activeRound?.questionIds || []).map((id) => questionById.get(String(id))).filter(Boolean);
+  }, [activeRound, questionById]);
 
   const availableQuestions = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    const selectedIds = new Set([...(selected[activeRound.id] || []), ...(selected.picture || [])].map(String));
 
     return questions.filter((question) => {
-      const isPicture = question.question_type === "picture" || Boolean(question.image_url);
-      if (isPicture) return false;
-      if (question.question_type !== activeRound.type) return false;
-      if (usedFingerprints.has(fingerprint(question.question_text)) && !selectedIds.has(String(question.id))) return false;
+      const type = normalizeType(question);
+      const id = String(question.id);
+      if (typeFilter !== "all" && type !== typeFilter) return false;
+      if (usedFingerprints.has(fingerprint(question.question_text)) && !selectedIds.has(id)) return false;
       if (!query) return true;
       return [question.question_text, question.correct_answer, question.category, question.fun_fact]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(query));
     });
-  }, [activeRound, questions, searchQuery, selected, usedFingerprints]);
+  }, [questions, searchQuery, selectedIds, typeFilter, usedFingerprints]);
 
-  const availablePictures = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
-    const selectedIds = new Set((selected.picture || []).map(String));
-
-    return questions.filter((question) => {
-      const isPicture = question.question_type === "picture" || Boolean(question.image_url);
-      if (!isPicture) return false;
-      if (usedFingerprints.has(fingerprint(question.question_text)) && !selectedIds.has(String(question.id))) return false;
-      if (!query) return true;
-      return [question.question_text, question.correct_answer, question.category, question.fun_fact]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(query));
-    });
-  }, [questions, searchQuery, selected.picture, usedFingerprints]);
-
-  const toggleMainQuestion = (question) => {
-    setSelected((prev) => {
-      const current = prev[activeRound.id] || [];
-      const key = question.id;
-      if (current.includes(key)) {
-        return { ...prev, [activeRound.id]: current.filter((id) => id !== key) };
-      }
-      if (current.length >= activeRound.target) {
-        toast.error(`${activeRound.label} already has ${activeRound.target} questions`);
-        return prev;
-      }
-      return { ...prev, [activeRound.id]: [...current, key] };
-    });
+  const handleAddRound = () => {
+    const round = { id: newRoundId(), name: `Round ${rounds.length + 1}`, questionIds: [] };
+    setRounds((prev) => [...prev, round]);
+    setActiveRoundId(round.id);
   };
 
-  const togglePictureQuestion = (question) => {
-    setSelected((prev) => {
-      const current = prev.picture || [];
-      const key = question.id;
-      if (current.includes(key)) return { ...prev, picture: current.filter((id) => id !== key) };
-      if (current.length >= 3) {
-        toast.error("The standard format has 3 picture bonus questions");
-        return prev;
-      }
-      return { ...prev, picture: [...current, key] };
-    });
+  const handleDeleteRound = (roundId) => {
+    if (rounds.length === 1) {
+      toast.error("Keep at least one round");
+      return;
+    }
+    setRounds((prev) => prev.filter((round) => round.id !== roundId));
+    if (activeRoundId === roundId) {
+      const next = rounds.find((round) => round.id !== roundId);
+      if (next) setActiveRoundId(next.id);
+    }
   };
 
-  const handleGenerateForActiveRound = async () => {
-    const needed = Math.max(1, activeRound.target - activeSelected.length);
-    setGeneratingRound(activeRound.id);
+  const handleRenameRound = (roundId, name) => {
+    setRounds((prev) => prev.map((round) => (round.id === roundId ? { ...round, name } : round)));
+  };
+
+  const toggleQuestion = (question) => {
+    setRounds((prev) =>
+      prev.map((round) => {
+        if (round.id !== activeRound.id) return round;
+        const current = round.questionIds || [];
+        if (current.includes(question.id)) {
+          return { ...round, questionIds: current.filter((id) => id !== question.id) };
+        }
+        return { ...round, questionIds: [...current, question.id] };
+      })
+    );
+  };
+
+  const removeFromRound = (roundId, questionId) => {
+    setRounds((prev) =>
+      prev.map((round) =>
+        round.id === roundId ? { ...round, questionIds: (round.questionIds || []).filter((id) => id !== questionId) } : round
+      )
+    );
+  };
+
+  const handleGenerateForRound = async () => {
+    const count = Math.max(1, Math.min(20, Number(generateCount) || 3));
+    setGenerating(true);
 
     try {
       const { data } = await axios.post("/api/generate-session-candidates", {
         sessionId: `build-${activeRound.id}`,
-        questionType: activeRound.type,
-        count: Math.min(needed, 5),
+        questionType: generateType,
+        count,
         difficulty,
         theme,
         excludeUsed: true,
         avoidDuplicates: true,
-        excludeCategories: selectedQuestionsByRound[activeRound.id].map((q) => q.category).filter(Boolean),
+        excludeCategories: activeRoundQuestions.map((q) => q.category).filter(Boolean),
       });
 
       const generated = (Array.isArray(data.candidates) ? data.candidates : []).map((candidate, index) =>
@@ -282,74 +256,39 @@ const BuildSession = () => {
           {
             ...candidate,
             id: `ai-${activeRound.id}-${Date.now()}-${index}`,
+            question_type: generateType === "picture" ? "picture" : candidate.question_type,
             isGenerated: true,
           },
-          activeRound.type
+          generateType
         )
       );
 
       if (!generated.length) throw new Error("No candidates returned");
 
       setQuestions((prev) => [...generated, ...prev]);
-      setSelected((prev) => ({
-        ...prev,
-        [activeRound.id]: [...(prev[activeRound.id] || []), ...generated.map((q) => q.id)].slice(0, activeRound.target),
-      }));
-      toast.success(`Added ${generated.length} generated question${generated.length === 1 ? "" : "s"} to ${activeRound.label}`);
-    } catch (error) {
-      console.error("Round generate error:", error);
-      toast.error(error.response?.data?.error || error.message || "Failed to generate round questions");
-    } finally {
-      setGeneratingRound(null);
-    }
-  };
-
-  const handleGeneratePictureBonus = async () => {
-    const needed = Math.max(1, 3 - selectedPictures.length);
-    setGeneratingRound("picture");
-
-    try {
-      const { data } = await axios.post("/api/generate-session-candidates", {
-        sessionId: "build-picture",
-        questionType: "picture",
-        count: Math.min(needed, 3),
-        difficulty,
-        theme,
-        excludeUsed: true,
-        avoidDuplicates: true,
-      });
-
-      const generated = (Array.isArray(data.candidates) ? data.candidates : []).map((candidate, index) =>
-        normalizeQuestion(
-          {
-            ...candidate,
-            id: `ai-picture-${Date.now()}-${index}`,
-            question_type: "picture",
-            isGenerated: true,
-          },
-          "picture"
+      setRounds((prev) =>
+        prev.map((round) =>
+          round.id === activeRound.id
+            ? { ...round, questionIds: [...(round.questionIds || []), ...generated.map((q) => q.id)] }
+            : round
         )
       );
-
-      if (!generated.length) throw new Error("No picture candidates returned");
-
-      setQuestions((prev) => [...generated, ...prev]);
-      setSelected((prev) => ({ ...prev, picture: [...(prev.picture || []), ...generated.map((q) => q.id)].slice(0, 3) }));
-      toast.success(`Added ${generated.length} picture bonus prompt${generated.length === 1 ? "" : "s"}`);
+      toast.success(`Added ${generated.length} generated question${generated.length === 1 ? "" : "s"} to ${activeRound.name}`);
     } catch (error) {
-      console.error("Picture generate error:", error);
-      toast.error(error.response?.data?.error || error.message || "Failed to generate picture bonuses");
+      console.error("Round generate error:", error);
+      toast.error(error.response?.data?.error || error.message || "Failed to generate questions");
     } finally {
-      setGeneratingRound(null);
+      setGenerating(false);
     }
   };
 
   const handleClearSession = () => {
     clearSavedState();
     setSessionName("");
-    setSelected(emptySelected);
-    setActiveRoundId("round1");
+    setRounds(defaultRounds);
+    setActiveRoundId("round-1");
     setTheme("");
+    setTypeFilter("all");
     toast.success("Session cleared");
   };
 
@@ -360,12 +299,28 @@ const BuildSession = () => {
     }
 
     const builtName = sessionName.trim() || `${new Date().toLocaleDateString()} Trivia`;
-    const trueFalseQuestions = selectedQuestionsByRound.round1.map((q) => toSessionQuestion(q, "true_false"));
-    const multipleChoiceQuestions = selectedQuestionsByRound.round2.map((q) => toSessionQuestion(q, "multiple_choice"));
-    const writtenQuestions = selectedQuestionsByRound.round3.map((q) => toSessionQuestion(q, "written"));
-    const pictureQuestions = selectedQuestionsByRound.picture.map((q) => toSessionQuestion(q, "picture"));
+    const grouped = {
+      true_false_questions: [],
+      multiple_choice_questions: [],
+      written_questions: [],
+      picture_questions: [],
+    };
 
-    if (!trueFalseQuestions.length && !multipleChoiceQuestions.length && !writtenQuestions.length && !pictureQuestions.length) {
+    rounds.forEach((round, roundIndex) => {
+      (round.questionIds || []).forEach((id, sourceOrder) => {
+        const question = questionById.get(String(id));
+        if (!question) return;
+        const type = normalizeType(question);
+        const sessionQuestion = toSessionQuestion(question, round, roundIndex, sourceOrder);
+        if (type === "true_false") grouped.true_false_questions.push(sessionQuestion);
+        else if (type === "multiple_choice") grouped.multiple_choice_questions.push(sessionQuestion);
+        else if (type === "picture") grouped.picture_questions.push(sessionQuestion);
+        else grouped.written_questions.push(sessionQuestion);
+      });
+    });
+
+    const total = Object.values(grouped).reduce((sum, items) => sum + items.length, 0);
+    if (!total) {
       toast.error("Add at least one question before saving");
       return;
     }
@@ -379,10 +334,7 @@ const BuildSession = () => {
           name: builtName,
           session_name: builtName,
           is_past: false,
-          true_false_questions: trueFalseQuestions,
-          multiple_choice_questions: multipleChoiceQuestions,
-          written_questions: writtenQuestions,
-          picture_questions: pictureQuestions,
+          ...grouped,
         })
         .select("id")
         .single();
@@ -399,7 +351,8 @@ const BuildSession = () => {
     }
   };
 
-  const selectedTotal = Object.values(selected).flat().length;
+  const selectedTotal = rounds.reduce((sum, round) => sum + (round.questionIds?.length || 0), 0);
+  const ActiveIcon = questionTypes.find((type) => type.value === typeFilter)?.icon || List;
 
   if (loading) {
     return (
@@ -416,7 +369,7 @@ const BuildSession = () => {
           <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">
             Build <span className="gradient-text">Session</span>
           </h1>
-          <p className="text-zinc-500">Assemble rounds, browse unused questions, and generate fresh gaps in place.</p>
+          <p className="text-zinc-500">Create flexible rounds with any mix of question types, including picture prompts.</p>
         </div>
         <div className="flex gap-2">
           {selectedTotal > 0 && (
@@ -439,7 +392,7 @@ const BuildSession = () => {
             </div>
             <div className="space-y-2">
               <Label className="text-zinc-300">AI Direction</Label>
-              <Input value={theme} onChange={(e) => setTheme(e.target.value)} placeholder="e.g. weird science, no sports, cozy nerd trivia" className="bg-zinc-950/50 border-white/10 text-white" />
+              <Input value={theme} onChange={(e) => setTheme(e.target.value)} placeholder="e.g. 90s night, no sports, cozy nerd trivia" className="bg-zinc-950/50 border-white/10 text-white" />
             </div>
             <div className="space-y-2">
               <Label className="text-zinc-300">Difficulty</Label>
@@ -454,134 +407,155 @@ const BuildSession = () => {
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        {rounds.map((round) => {
-          const Icon = round.icon;
-          const count = selected[round.id]?.length || 0;
-          const complete = count >= round.target;
-          return (
-            <Card key={round.id} onClick={() => setActiveRoundId(round.id)} className={`glass-card cursor-pointer transition-all ${activeRoundId === round.id ? "border-[#71E0DC]/50" : ""} ${complete ? "border-emerald-500/40" : ""}`}>
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <Icon className={round.color} size={22} />
-                  {complete && <Check className="text-emerald-400" size={18} />}
-                </div>
-                <p className="text-white font-semibold">{round.label}: {round.title}</p>
-                <p className={`text-sm ${complete ? "text-emerald-400" : "text-zinc-500"}`}>{count}/{round.target} main questions</p>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
-
-      <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-[320px_1fr] gap-6">
         <Card className="glass-card">
           <CardHeader>
-            <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div className="flex items-center justify-between gap-3">
               <div>
-                <CardTitle className="text-white flex items-center gap-2">
-                  <activeRound.icon className={activeRound.color} size={20} />
-                  {activeRound.label}: {activeRound.title}
-                </CardTitle>
-                <CardDescription className="text-zinc-500">Only unused saved questions are shown here.</CardDescription>
+                <CardTitle className="text-white">Rounds</CardTitle>
+                <CardDescription className="text-zinc-500">Add, rename, and fill freely.</CardDescription>
               </div>
-              <Button onClick={handleGenerateForActiveRound} disabled={generatingRound === activeRound.id || activeSelected.length >= activeRound.target} className="gradient-btn">
-                {generatingRound === activeRound.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles size={16} className="mr-2" />}
-                Generate For Round
-              </Button>
+              <Button size="sm" onClick={handleAddRound} className="gradient-btn"><Plus size={15} /></Button>
             </div>
           </CardHeader>
-          <CardContent>
-            <div className="relative mb-4">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
-              <Input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search unused questions..." className="pl-9 bg-zinc-950/50 border-white/10 text-white" />
-            </div>
+          <CardContent className="space-y-3">
+            {rounds.map((round, index) => {
+              const active = activeRoundId === round.id;
+              const count = round.questionIds?.length || 0;
+              return (
+                <div key={round.id} className={`rounded-lg border p-3 transition-all ${active ? "border-[#71E0DC]/50 bg-[#71E0DC]/10" : "border-white/10 bg-zinc-950/30"}`}>
+                  <button className="w-full text-left" onClick={() => setActiveRoundId(round.id)}>
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <span className="text-white font-semibold">{round.name || `Round ${index + 1}`}</span>
+                      <Badge className="bg-zinc-800 text-zinc-300">{count}</Badge>
+                    </div>
+                  </button>
+                  <div className="flex gap-2">
+                    <Input value={round.name} onChange={(e) => handleRenameRound(round.id, e.target.value)} className="h-8 bg-zinc-950/50 border-white/10 text-white text-sm" />
+                    <Button size="sm" variant="outline" onClick={() => handleDeleteRound(round.id)} className="h-8 border-zinc-700 text-zinc-400"><Trash2 size={13} /></Button>
+                  </div>
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
 
-            <SelectedStrip questions={selectedQuestionsByRound[activeRound.id]} onRemove={(id) => toggleMainQuestion({ id })} />
-
-            <ScrollArea className="h-[520px] pr-3">
-              {availableQuestions.length === 0 ? (
-                <div className="text-center py-16">
-                  <p className="text-zinc-500">No unused {activeRound.title.toLowerCase()} questions found.</p>
-                  <Button onClick={handleGenerateForActiveRound} disabled={generatingRound === activeRound.id} className="gradient-btn mt-4">
-                    {generatingRound === activeRound.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles size={16} className="mr-2" />}
-                    Generate Some
+        <div className="space-y-6">
+          <Card className="glass-card">
+            <CardHeader>
+              <div className="flex items-start justify-between gap-4 flex-wrap">
+                <div>
+                  <CardTitle className="text-white flex items-center gap-2"><Pencil size={20} className="text-[#71E0DC]" />{activeRound.name}</CardTitle>
+                  <CardDescription className="text-zinc-500">Selected questions stay in this round in the order added.</CardDescription>
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  <select value={generateType} onChange={(e) => setGenerateType(e.target.value)} className="h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3 text-sm">
+                    <option value="true_false">T/F</option>
+                    <option value="multiple_choice">Multiple Choice</option>
+                    <option value="written">Written</option>
+                    <option value="picture">Picture</option>
+                  </select>
+                  <Input value={generateCount} onChange={(e) => setGenerateCount(e.target.value)} className="w-20 h-10 bg-zinc-950/50 border-white/10 text-white" />
+                  <Button onClick={handleGenerateForRound} disabled={generating} className="gradient-btn">
+                    {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles size={16} className="mr-2" />}
+                    Generate
                   </Button>
                 </div>
-              ) : (
-                <div className="space-y-3">
-                  {availableQuestions.map((question) => (
-                    <QuestionRow key={question.id} question={question} selected={(selected[activeRound.id] || []).includes(question.id)} onClick={() => toggleMainQuestion(question)} />
-                  ))}
-                </div>
-              )}
-            </ScrollArea>
-          </CardContent>
-        </Card>
-
-        <Card className="glass-card">
-          <CardHeader>
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <CardTitle className="text-white flex items-center gap-2"><Image className="text-amber-400" size={20} />Picture Bonuses</CardTitle>
-                <CardDescription className="text-zinc-500">One bonus per round, 3 total.</CardDescription>
               </div>
-              <Button size="sm" variant="outline" onClick={handleGeneratePictureBonus} disabled={generatingRound === "picture" || selectedPictures.length >= 3} className="border-amber-500/30 text-amber-300">
-                {generatingRound === "picture" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus size={15} />}
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="mb-4">
-              <p className="text-sm text-zinc-400">Selected: <span className="text-amber-300">{selectedPictures.length}/3</span></p>
-            </div>
-            <SelectedStrip questions={selectedQuestionsByRound.picture} onRemove={(id) => togglePictureQuestion({ id })} compact />
-            <ScrollArea className="h-[500px] pr-2">
-              {availablePictures.length === 0 ? (
-                <div className="text-center py-12">
-                  <p className="text-zinc-500 text-sm">No unused picture prompts found.</p>
+            </CardHeader>
+            <CardContent>
+              <SelectedRoundList
+                questions={(activeRound.questionIds || []).map((id) => questionById.get(String(id))).filter(Boolean)}
+                onRemove={(questionId) => removeFromRound(activeRound.id, questionId)}
+              />
+            </CardContent>
+          </Card>
+
+          <Card className="glass-card">
+            <CardHeader>
+              <div className="flex items-start justify-between gap-4 flex-wrap">
+                <div>
+                  <CardTitle className="text-white flex items-center gap-2"><ActiveIcon size={20} className="text-zinc-300" />Unused Question Library</CardTitle>
+                  <CardDescription className="text-zinc-500">Past-session questions are hidden unless already selected here.</CardDescription>
                 </div>
-              ) : (
-                <div className="space-y-3">
-                  {availablePictures.map((question) => (
-                    <QuestionRow key={question.id} question={question} selected={(selected.picture || []).includes(question.id)} onClick={() => togglePictureQuestion(question)} compact />
-                  ))}
+                <div className="flex gap-2 flex-wrap">
+                  <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3 text-sm">
+                    {questionTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
+                  </select>
                 </div>
-              )}
-            </ScrollArea>
-          </CardContent>
-        </Card>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="relative mb-4">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
+                <Input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search unused questions..." className="pl-9 bg-zinc-950/50 border-white/10 text-white" />
+              </div>
+
+              <ScrollArea className="h-[520px] pr-3">
+                {availableQuestions.length === 0 ? (
+                  <div className="text-center py-16">
+                    <p className="text-zinc-500">No unused questions match this view.</p>
+                    <Button onClick={handleGenerateForRound} disabled={generating} className="gradient-btn mt-4">
+                      {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles size={16} className="mr-2" />}
+                      Generate For {activeRound.name}
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {availableQuestions.map((question) => (
+                      <QuestionRow key={question.id} question={question} selected={(activeRound.questionIds || []).includes(question.id)} alreadyInSession={selectedIds.has(String(question.id)) && !(activeRound.questionIds || []).includes(question.id)} onClick={() => toggleQuestion(question)} />
+                    ))}
+                  </div>
+                )}
+              </ScrollArea>
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </div>
   );
 };
 
-const SelectedStrip = ({ questions, onRemove, compact = false }) => {
-  if (!questions.length) return null;
+const SelectedRoundList = ({ questions, onRemove }) => {
+  if (!questions.length) {
+    return <p className="text-zinc-500 text-sm">No questions in this round yet. Browse below or generate directly into this round.</p>;
+  }
+
   return (
-    <div className="mb-4 p-3 rounded-lg bg-[#71E0DC]/10 border border-[#71E0DC]/20">
-      <p className="text-[#71E0DC] text-sm font-medium mb-2">Selected</p>
-      <div className="flex flex-wrap gap-2">
-        {questions.map((question, index) => (
-          <button key={question.id} onClick={() => onRemove(question.id)} className="inline-flex items-center gap-2 rounded-full bg-zinc-900/80 border border-white/10 px-3 py-1.5 text-xs text-zinc-300 hover:text-white">
-            <span>{compact ? index + 1 : `${index + 1}. ${question.category}`}</span>
-            <X size={12} />
-          </button>
-        ))}
-      </div>
+    <div className="space-y-2">
+      {questions.map((question, index) => (
+        <div key={question.id} className="flex items-start gap-3 rounded-lg bg-zinc-950/40 border border-white/10 p-3">
+          <span className="text-zinc-500 text-sm font-mono mt-0.5">{index + 1}</span>
+          <div className="flex-1 min-w-0">
+            <QuestionMeta question={question} />
+            <p className="text-white text-sm mt-1">{question.question_text}</p>
+          </div>
+          <Button size="sm" variant="ghost" onClick={() => onRemove(question.id)} className="text-zinc-500 hover:text-white"><X size={15} /></Button>
+        </div>
+      ))}
     </div>
   );
 };
 
-const QuestionRow = ({ question, selected, onClick, compact = false }) => (
-  <div onClick={onClick} className={`session-question-card ${selected ? "selected" : ""}`}>
+const QuestionMeta = ({ question }) => {
+  const type = normalizeType(question);
+  const typeConfig = questionTypes.find((item) => item.value === type) || questionTypes[0];
+  const Icon = typeConfig.icon;
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <Badge variant="outline" className="text-xs border-zinc-700 text-zinc-400">{question.category}</Badge>
+      <Badge className="bg-zinc-800 text-zinc-300 text-xs"><Icon size={12} className={`mr-1 ${typeConfig.color}`} />{typeConfig.label}</Badge>
+      {question.isGenerated && <Badge className="bg-[#71E0DC]/15 text-[#71E0DC] text-xs">AI</Badge>}
+    </div>
+  );
+};
+
+const QuestionRow = ({ question, selected, alreadyInSession, onClick }) => (
+  <div onClick={onClick} className={`session-question-card ${selected ? "selected" : ""} ${alreadyInSession ? "opacity-60" : ""}`}>
     <div className="flex items-start justify-between gap-3">
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-2 flex-wrap">
-          <Badge variant="outline" className="text-xs border-zinc-700 text-zinc-400">{question.category}</Badge>
-          {question.isGenerated && <Badge className="bg-[#71E0DC]/15 text-[#71E0DC] text-xs">AI</Badge>}
-        </div>
-        <p className={`text-white ${compact ? "text-xs" : "text-sm"}`}>{question.question_text}</p>
+        <QuestionMeta question={question} />
+        <p className="text-white text-sm mt-2">{question.question_text}</p>
         <p className="text-zinc-500 text-xs mt-1">Answer: <span className="text-emerald-400">{question.correct_answer}</span></p>
         {question.options?.length > 0 && (
           <div className="flex gap-1 mt-1 flex-wrap">
