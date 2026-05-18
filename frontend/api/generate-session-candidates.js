@@ -5,7 +5,7 @@ const QUESTION_TYPES = {
     hasImage: false,
     incorrectCount: 0,
     answerRule: 'correct_answer must be exactly "True" or "False".',
-    roundGuidance: "This belongs in Round 1: a fast true/false round. Use claims that are surprising, fair, and cleanly verifiable.",
+    roundGuidance: "This belongs in a true/false slot. Use claims that are surprising, fair, and cleanly verifiable.",
   },
   multiple_choice: {
     label: "Multiple Choice",
@@ -13,7 +13,7 @@ const QUESTION_TYPES = {
     hasImage: false,
     incorrectCount: 3,
     answerRule: "incorrect_answers must contain exactly 3 plausible wrong answers and must not include correct_answer.",
-    roundGuidance: "This belongs in Round 2: multiple choice. Wrong answers should be comparable, not silly giveaways.",
+    roundGuidance: "This belongs in a multiple choice slot. Wrong answers should be comparable, not silly giveaways.",
   },
   written: {
     label: "Written Answer",
@@ -21,15 +21,15 @@ const QUESTION_TYPES = {
     hasImage: false,
     incorrectCount: 0,
     answerRule: "correct_answer should be concise, specific, and easy for a host to verify.",
-    roundGuidance: "This belongs in Round 3: written answer. The answer should be gettable without options and not depend on exact spelling unless famous.",
+    roundGuidance: "This belongs in a written-answer slot. The answer should be gettable without options and not depend on exact spelling unless famous.",
   },
   picture: {
-    label: "Picture-Based Bonus",
+    label: "Picture-Based Prompt",
     outputType: "written",
     hasImage: true,
     incorrectCount: 0,
-    answerRule: "question_text should describe a practical picture bonus prompt, correct_answer should be short, and image_url must be empty.",
-    roundGuidance: "This is a picture-based bonus prompt. The host will add or choose the image later, so describe what kind of image to use in the question text.",
+    answerRule: "question_text should describe a practical picture prompt, correct_answer should be short, and image_url must be empty.",
+    roundGuidance: "This is a media-friendly prompt. The host may add the image to any question later, so describe the visual angle clearly.",
   },
 };
 
@@ -89,6 +89,9 @@ export default async function handler(req, res) {
       excludeUsed = true,
       avoidDuplicates = true,
       excludeCategories = [],
+      approvedCategories = [],
+      rejectedCategories = [],
+      rejectedQuestions = [],
     } = req.body || {};
 
     if (!sessionId || !questionType) {
@@ -104,19 +107,23 @@ export default async function handler(req, res) {
     const difficultyKey = normalizeDifficulty(difficulty);
     const difficultyProfile = DIFFICULTY_PROFILES[difficultyKey];
     const cleanTheme = typeof theme === "string" ? theme.trim() : "";
-    const cleanExcludeCategories = normalizeStringArray(excludeCategories);
+    const cleanApprovedCategories = dedupeStrings(normalizeStringArray(approvedCategories));
+    const cleanRejectedCategories = dedupeStrings(normalizeStringArray(rejectedCategories));
+    const cleanExcludeCategories = dedupeStrings([...normalizeStringArray(excludeCategories), ...cleanRejectedCategories]);
+    const cleanRejectedQuestions = dedupeStrings(normalizeStringArray(rejectedQuestions));
     const existingQuestions = avoidDuplicates || excludeUsed ? await fetchExistingQuestions() : [];
     const existingFingerprints = new Set(existingQuestions.map((q) => fingerprint(q.question_text)));
     const existingAnswerPairs = new Set(existingQuestions.map((q) => answerPairFingerprint(q.question_text, q.correct_answer)));
+    const rejectedQuestionFingerprints = new Set(cleanRejectedQuestions.map(fingerprint));
 
     const prompt = buildPrompt({
       config,
-      questionType,
       safeCount,
       difficultyKey,
       difficultyProfile,
       cleanTheme,
       cleanExcludeCategories,
+      cleanApprovedCategories,
       existingQuestions,
       excludeUsed,
       avoidDuplicates,
@@ -129,8 +136,10 @@ export default async function handler(req, res) {
       questionType,
       difficultyKey,
       cleanExcludeCategories,
+      cleanApprovedCategories,
       existingFingerprints,
       existingAnswerPairs,
+      rejectedQuestionFingerprints,
       avoidDuplicates,
     });
 
@@ -159,6 +168,16 @@ function normalizeStringArray(value) {
   return value.map((item) => String(item).trim()).filter(Boolean);
 }
 
+function dedupeStrings(values) {
+  const seen = new Set();
+  return values.filter((value) => {
+    const key = value.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function buildPrompt({
   config,
   safeCount,
@@ -166,12 +185,16 @@ function buildPrompt({
   difficultyProfile,
   cleanTheme,
   cleanExcludeCategories,
+  cleanApprovedCategories,
   existingQuestions,
   excludeUsed,
   avoidDuplicates,
 }) {
-  const overGenerateCount = Math.min(20, Math.max(safeCount + 4, Math.ceil(safeCount * 1.7)));
-  const excludedCategoryText = cleanExcludeCategories.length ? `Do not use these categories: ${cleanExcludeCategories.join(", ")}.` : "";
+  const overGenerateCount = Math.min(20, Math.max(safeCount + 5, Math.ceil(safeCount * 2)));
+  const approvedCategoryText = cleanApprovedCategories.length
+    ? `Use only these pre-approved categories. The category field must exactly match one of these names: ${cleanApprovedCategories.join(", ")}.`
+    : `Use varied broad categories such as: ${BROAD_CATEGORIES.join(", ")}.`;
+  const excludedCategoryText = cleanExcludeCategories.length ? `Do not use these rejected or avoided categories: ${cleanExcludeCategories.join(", ")}.` : "";
   const themeText = cleanTheme ? `Theme/vibe/category guidance: ${cleanTheme}. Stay useful to that direction, but avoid repetitive question angles.` : "";
   const duplicateExamples = existingQuestions
     .slice(0, 80)
@@ -185,8 +208,8 @@ Generate exactly ${overGenerateCount} ${config.label} trivia question candidates
 
 Host context:
 - The host runs live trivia and wants an assistant, not a generic question bank.
-- Default format is 3 rounds: 9 true/false, 9 multiple choice, 9 written answer, each round with 1 picture-based bonus.
-- The host sometimes runs theme rounds and wants flexibility.
+- The host usually builds flexible rounds with any mix of true/false, multiple choice, written answer, and picture-friendly prompts.
+- Any question can have media attached later, so do not force picture questions into their own category.
 - The biggest need is fresh categories, fun angles, and non-generic questions.
 - The host has been hosting since 2019 and has already used a lot of common trivia.
 
@@ -214,7 +237,7 @@ Trivia host style:
 - Difficulty: ${difficultyProfile.label}. ${difficultyProfile.guidance}
 - Prefer obscure-but-fair, gettable, satisfying facts over generic quiz-bank material.
 - Avoid questions that are just "What is the capital of...", "Who was the first president...", basic Oscar winners, obvious Disney facts, or overused bar trivia.
-- Use varied broad categories such as: ${BROAD_CATEGORIES.join(", ")}.
+- ${approvedCategoryText}
 - Avoid repeated categories within this batch when possible.
 - Write concise, host-friendly question text that sounds natural when read aloud.
 - Avoid ambiguous answers, disputed facts, and answer wording that would cause scoring arguments.
@@ -278,12 +301,24 @@ async function requestCandidates(prompt) {
   }
 }
 
-function normalizeCandidates({ candidates, config, questionType, difficultyKey, cleanExcludeCategories, existingFingerprints, existingAnswerPairs, avoidDuplicates }) {
+function normalizeCandidates({
+  candidates,
+  config,
+  questionType,
+  difficultyKey,
+  cleanExcludeCategories,
+  cleanApprovedCategories,
+  existingFingerprints,
+  existingAnswerPairs,
+  rejectedQuestionFingerprints,
+  avoidDuplicates,
+}) {
   const rejected = [];
   const accepted = [];
   const batchFingerprints = new Set();
   const batchAnswerPairs = new Set();
   const excludedCategories = new Set(cleanExcludeCategories.map((category) => category.toLowerCase()));
+  const approvedCategorySet = new Set(cleanApprovedCategories.map((category) => category.toLowerCase()));
 
   if (!Array.isArray(candidates)) throw new Error("No candidates returned");
 
@@ -299,8 +334,18 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
     const itemAnswerPair = answerPairFingerprint(item.question_text, item.correct_answer);
     const categoryKey = item.category.toLowerCase();
 
+    if (approvedCategorySet.size > 0 && !approvedCategorySet.has(categoryKey)) {
+      rejected.push({ index, reason: "not_approved_category" });
+      return;
+    }
+
     if (excludedCategories.has(categoryKey)) {
       rejected.push({ index, reason: "excluded_category" });
+      return;
+    }
+
+    if (rejectedQuestionFingerprints.has(itemFingerprint)) {
+      rejected.push({ index, reason: "permanently_rejected_question" });
       return;
     }
 
