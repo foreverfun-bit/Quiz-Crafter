@@ -80,8 +80,7 @@ const ImportCSV = () => {
     await handlePreview(selectedFile, source);
   };
 
-  const parseJsonResponse = async (response, fallbackMessage) => {
-    const text = await response.text();
+  const parseJsonText = (text, ok, fallbackMessage) => {
     let data = null;
 
     try {
@@ -91,7 +90,7 @@ const ImportCSV = () => {
       throw new Error(`${fallbackMessage}.${raw}`);
     }
 
-    if (!response.ok) {
+    if (!ok) {
       const debugText = data?.debug
         ? ` (${Object.entries(data.debug).map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : value}`).join("; ")})`
         : "";
@@ -101,9 +100,30 @@ const ImportCSV = () => {
     return data || {};
   };
 
+  const parseJsonResponse = async (response, fallbackMessage) => {
+    const text = await response.text();
+    return parseJsonText(text, response.ok, fallbackMessage);
+  };
+
+  const postFormData = (formData, fallbackMessage) => {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", "/api/import-questions");
+      xhr.onload = () => {
+        try {
+          resolve(parseJsonText(xhr.responseText || "", xhr.status >= 200 && xhr.status < 300, fallbackMessage));
+        } catch (error) {
+          reject(error);
+        }
+      };
+      xhr.onerror = () => reject(new Error(fallbackMessage));
+      xhr.send(formData);
+    });
+  };
+
   const buildFormData = (selectedFile, action, selectedSource) => {
     const formData = new FormData();
-    formData.append("file", selectedFile);
+    formData.append("file", selectedFile, selectedFile.name);
     formData.append("action", action);
     formData.append("source", selectedSource);
     return formData;
@@ -173,12 +193,7 @@ const ImportCSV = () => {
       const formData = buildFormData(file, "import", source);
       formData.append("sessionUserId", userId);
 
-      const response = await fetch("/api/import-questions", {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await parseJsonResponse(response, "Import failed");
+      const data = await postFormData(formData, "Import failed");
       setResult(data);
 
       if (data.imported > 0) toast.success(`Imported ${data.imported} question${data.imported === 1 ? "" : "s"}`);
