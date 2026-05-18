@@ -26,13 +26,13 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: "gpt-4.1-mini",
-        temperature: 0.25,
+        temperature: 0.12,
         response_format: { type: "json_object" },
         messages: [
           {
             role: "system",
             content:
-              "You help a trivia host turn rough custom questions into clean library-ready trivia records. Return strict JSON only.",
+              "You are a careful trivia co-host for a live trivia host who has hosted since 2019. You edit rough question ideas into playable, fair trivia records. You do not invent facts. Return strict JSON only.",
           },
           { role: "user", content: prompt },
         ],
@@ -57,12 +57,24 @@ export default async function handler(req, res) {
 
 function buildPrompt(questionText, existingCategory) {
   return `
-Analyze this rough trivia question and suggest the best structure for saving it.
+You are helping a trivia host build an all-in-one trivia assistant, not a generic quiz site.
 
-Question:
+Host format context:
+- Default show format is 3 rounds.
+- Round 1: 9 true/false questions plus 1 picture-based bonus.
+- Round 2: 9 multiple choice questions plus 1 picture-based bonus.
+- Round 3: 9 written-answer questions plus 1 picture-based bonus.
+- The host sometimes runs themed rounds and needs flexibility.
+- The host struggles most with fresh categories, fun angles, and non-generic ideas.
+- The host has used many common pub trivia questions since 2019, so avoid stale quiz-bank wording and overused bar trivia.
+
+Your job for this request:
+Turn the rough input into the cleanest save-ready question record you can, while being honest about uncertainty.
+
+Rough input:
 ${questionText}
 
-${existingCategory ? `Preferred category if it fits: ${existingCategory}` : ""}
+${existingCategory ? `Preferred category if it genuinely fits: ${existingCategory}` : ""}
 
 Return this exact JSON shape:
 {
@@ -73,18 +85,27 @@ Return this exact JSON shape:
   "incorrect_answers": ["Wrong choice 1", "Wrong choice 2", "Wrong choice 3"],
   "fun_fact": "One short sentence of context",
   "confidence": 0.0,
-  "notes": "Short note explaining why this type/category fits"
+  "notes": "Short note explaining type/category and any review needed"
 }
 
-Rules:
-- Pick true_false only if the question naturally works as a true/false statement.
-- Pick multiple_choice when believable wrong answers would help players and the correct answer is one of several comparable options.
-- Pick written when the answer is short and fair without choices.
-- For multiple_choice, include exactly 3 incorrect_answers and do not include the correct answer in that array.
-- For true_false, correct_answer must be exactly "True" or "False" and incorrect_answers must be [].
+Fact-safety rules:
+- Do not invent a factual answer that is not clearly present in the rough input or obvious from the wording.
+- If the rough input does not include enough information to know the answer, leave correct_answer as an empty string, set confidence below 0.45, and say what needs verification in notes.
+- If you are not sure a fact is correct, keep the question close to the user's wording, lower confidence, and mention verification in notes.
+- Do not turn a rough idea into a different fact just to make the record complete.
+- Fun facts must not introduce risky or unverified claims. Leave fun_fact empty if unsure.
+
+Question-shaping rules:
+- Pick true_false only when the input naturally works as a claim that can be judged true or false.
+- Pick multiple_choice when choices make the question more playable and the answer belongs to a comparable set.
+- Pick written when the answer is short, fair, and gettable without options.
+- For multiple_choice, include exactly 3 plausible wrong answers only when you know the answer. Do not include the correct answer in incorrect_answers.
+- For true_false, correct_answer must be exactly "True" or "False" when known, and incorrect_answers must be [].
 - For written, incorrect_answers must be [].
-- Category should be broad enough to balance a trivia session, like History, Movies, Music, Science, Geography, Sports, Food & Drink, Books, Television, Nature, Pop Culture, Art, or World Culture.
-- Keep wording concise, fair, and host-friendly.
+- Category should help balance a live session. Prefer useful broad categories like History, Movies, Music, Science, Geography, Sports, Food & Drink, Books, Television, Nature, Pop Culture, Art, World Culture, Weird Science, Internet Culture, Local Flavor, or Before & After.
+- Prefer obscure-but-fair angles over generic trivia. Avoid common questions like basic capitals, obvious Oscar winners, or first-president style facts unless the input specifically asks for them.
+- Keep wording concise, host-friendly, and easy to read aloud.
+- The final question should not be too wordy, too academic, or too easy unless the rough input requires it.
 `.trim();
 }
 
@@ -98,7 +119,7 @@ function normalizeSuggestion(value, originalQuestion, existingCategory) {
     category: String(value.category || existingCategory || "General").trim(),
     clean_question_text: cleanQuestion,
     correct_answer: correctAnswer,
-    incorrect_answers: type === "multiple_choice" ? normalizeIncorrectAnswers(value.incorrect_answers, correctAnswer) : [],
+    incorrect_answers: type === "multiple_choice" && correctAnswer ? normalizeIncorrectAnswers(value.incorrect_answers, correctAnswer) : [],
     fun_fact: String(value.fun_fact || "").trim(),
     confidence: clampConfidence(value.confidence),
     notes: String(value.notes || "Review the suggestion, then adjust anything before saving.").trim(),
@@ -112,11 +133,11 @@ function buildHeuristicSuggestion(questionText, existingCategory) {
       question_type: type,
       category: existingCategory || inferCategory(questionText),
       clean_question_text: questionText,
-      correct_answer: type === "true_false" ? "True" : "",
+      correct_answer: "",
       incorrect_answers: [],
       fun_fact: "",
-      confidence: 0.35,
-      notes: "AI assistance is not configured, so this is a simple starter suggestion.",
+      confidence: 0.25,
+      notes: "AI assistance is not configured, so this is only a starter shape. Add or verify the answer before saving.",
     },
     questionText,
     existingCategory
@@ -148,6 +169,7 @@ function inferCategory(questionText) {
 function normalizeAnswer(answer, type) {
   const text = String(answer || "").trim();
   if (type !== "true_false") return text;
+  if (!text) return "";
   return text.toLowerCase() === "false" ? "False" : "True";
 }
 
