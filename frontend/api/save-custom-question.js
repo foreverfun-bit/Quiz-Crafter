@@ -83,16 +83,14 @@ module.exports = async function handler(req, res) {
       if (payload[key] === undefined || payload[key] === "") delete payload[key];
     });
 
-    const supabase = createClient(supabaseUrl, serviceRoleKey);
-    const { data, error } = await supabase
-      .from("questions")
-      .insert(payload)
-      .select("*")
-      .single();
+    const supabase = createClient(supabaseUrl, serviceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { error } = await supabase.from("questions").insert(payload);
 
     if (error) throw error;
 
-    return res.status(200).json({ question: data });
+    return res.status(200).json({ ok: true });
   } catch (error) {
     console.error("save-custom-question error:", error);
     return res.status(500).json({ error: error.message || "Failed to save question" });
