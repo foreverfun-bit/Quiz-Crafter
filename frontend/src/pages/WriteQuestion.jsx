@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
-import { supabase } from "../lib/supabase";
+import { useAuth } from "../App";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -35,20 +35,9 @@ const initialForm = {
 
 const cleanList = (values) => values.map((value) => value.trim()).filter(Boolean);
 
-const buildIncorrectAnswers = (type, correctAnswer, wrongAnswers) => {
-  if (type === "true_false") {
-    return correctAnswer.toLowerCase() === "false" ? "True" : "False";
-  }
-
-  if (type === "multiple_choice") {
-    return wrongAnswers.join("; ");
-  }
-
-  return null;
-};
-
 const WriteQuestion = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [form, setForm] = useState(initialForm);
   const [assisting, setAssisting] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -130,31 +119,22 @@ const WriteQuestion = () => {
       return;
     }
 
+    if (!user?.id) {
+      toast.error("You must be signed in");
+      return;
+    }
+
     setSaving(true);
     try {
-      const {
-        data: { session },
-        error: sessionError,
-      } = await supabase.auth.getSession();
-
-      if (sessionError) throw sessionError;
-      if (!session?.user?.id) throw new Error("You must be signed in");
-
-      const payload = {
-        user_id: session.user.id,
+      await axios.post("/api/save-custom-question", {
+        user_id: user.id,
         category,
         question_text: questionText,
         question_type: form.question_type,
-        correct_answer: form.question_type === "true_false" ? (correctAnswer.toLowerCase() === "false" ? "False" : "True") : correctAnswer,
-        incorrect_answers: buildIncorrectAnswers(form.question_type, correctAnswer, wrongAnswers),
+        correct_answer: correctAnswer,
+        incorrect_answers: wrongAnswers,
         fun_fact: form.fun_fact.trim() || null,
-        source: "manual",
-        has_image: false,
-        image_url: null,
-      };
-
-      const { error } = await supabase.from("questions").insert(payload);
-      if (error) throw error;
+      });
 
       toast.success("Question saved to library");
       setForm(initialForm);
@@ -162,7 +142,7 @@ const WriteQuestion = () => {
       setConfidence(null);
     } catch (error) {
       console.error("Save custom question error:", error);
-      toast.error(error.message || "Failed to save question");
+      toast.error(error.response?.data?.error || error.message || "Failed to save question");
     } finally {
       setSaving(false);
     }
