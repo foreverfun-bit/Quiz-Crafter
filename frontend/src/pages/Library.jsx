@@ -12,7 +12,10 @@ import {
   List,
   Loader2,
   MessageSquare,
+  Pencil,
+  Save,
   Search,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -25,9 +28,10 @@ const typeConfig = {
 };
 
 const typeOrder = ["all", "true_false", "multiple_choice", "written", "picture"];
+const editableTypes = ["true_false", "multiple_choice", "written", "picture"];
 
 const parseOptions = (value) => {
-  if (Array.isArray(value)) return value.filter(Boolean);
+  if (Array.isArray(value)) return value.map((item) => (typeof item === "string" ? item : item?.text || "")).filter(Boolean);
   if (!value) return [];
   return String(value)
     .split(";")
@@ -35,13 +39,28 @@ const parseOptions = (value) => {
     .filter(Boolean);
 };
 
+const optionsToString = (value) => parseOptions(value).join("; ");
 const formatType = (type) => typeConfig[type]?.label || "Question";
+const normalizeText = (value) => String(value || "").replace(/\s+/g, " ").trim();
+
+const toEditForm = (question) => ({
+  category: question.category || "",
+  question_text: question.question_text || "",
+  question_type: question.question_type || "written",
+  correct_answer: question.correct_answer || "",
+  incorrect_answers: optionsToString(question.incorrect_answers),
+  fun_fact: question.fun_fact || "",
+  image_url: question.image_url || "",
+});
 
 export default function Library() {
   const [questions, setQuestions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeType, setActiveType] = useState("all");
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState(null);
+  const [savingId, setSavingId] = useState(null);
 
   useEffect(() => {
     fetchQuestions();
@@ -85,17 +104,80 @@ export default function Library() {
       if (activeType !== "all" && type !== activeType) return false;
       if (!query) return true;
 
-      return [
-        question.question_text,
-        question.correct_answer,
-        question.category,
-        question.fun_fact,
-        question.source,
-      ]
+      return [question.question_text, question.correct_answer, question.category, question.fun_fact]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(query));
     });
   }, [activeType, questions, searchQuery]);
+
+  const startEditing = (question) => {
+    setEditingId(question.id);
+    setEditForm(toEditForm(question));
+  };
+
+  const cancelEditing = () => {
+    setEditingId(null);
+    setEditForm(null);
+  };
+
+  const updateEditForm = (field, value) => {
+    setEditForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const buildPayload = () => {
+    const type = editForm.question_type || "written";
+    const correct = normalizeText(editForm.correct_answer);
+    const wrongAnswers = parseOptions(editForm.incorrect_answers).filter((answer) => answer.toLowerCase() !== correct.toLowerCase());
+
+    if (!normalizeText(editForm.question_text) || !correct) {
+      throw new Error("Question and answer are required");
+    }
+
+    if (type === "multiple_choice" && wrongAnswers.length < 2) {
+      throw new Error("Multiple choice questions need at least two wrong answers");
+    }
+
+    return {
+      category: normalizeText(editForm.category) || "General",
+      question_text: normalizeText(editForm.question_text),
+      question_type: type,
+      correct_answer: type === "true_false" ? (correct.toLowerCase() === "false" ? "False" : "True") : correct,
+      incorrect_answers:
+        type === "multiple_choice"
+          ? wrongAnswers.join("; ")
+          : type === "true_false"
+            ? correct.toLowerCase() === "false" ? "True" : "False"
+            : null,
+      fun_fact: normalizeText(editForm.fun_fact) || null,
+      image_url: normalizeText(editForm.image_url) || null,
+    };
+  };
+
+  const saveQuestion = async (questionId) => {
+    setSavingId(questionId);
+    try {
+      let payload = buildPayload();
+      let result = await supabase.from("questions").update(payload).eq("id", questionId).select("*").single();
+
+      if (result.error && /image_url/i.test(result.error.message || "")) {
+        const { image_url, ...withoutImage } = payload;
+        payload = withoutImage;
+        result = await supabase.from("questions").update(payload).eq("id", questionId).select("*").single();
+      }
+
+      if (result.error) throw result.error;
+
+      setQuestions((prev) => prev.map((question) => (question.id === questionId ? result.data : question)));
+      setEditingId(null);
+      setEditForm(null);
+      toast.success("Question updated");
+    } catch (error) {
+      console.error("Library save error:", error);
+      toast.error(error.message || "Failed to update question");
+    } finally {
+      setSavingId(null);
+    }
+  };
 
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto animate-fade-in" data-testid="library-page">
@@ -104,7 +186,7 @@ export default function Library() {
           <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">
             Question <span className="gradient-text">Library</span>
           </h1>
-          <p className="text-zinc-500">Browse saved questions from imports, generated sets, and custom writing.</p>
+          <p className="text-zinc-500">Browse and edit saved questions from imports, generated sets, and custom writing.</p>
         </div>
         <Button onClick={fetchQuestions} variant="outline" className="border-zinc-700 text-zinc-300 hover:text-white">
           Refresh
@@ -164,48 +246,18 @@ export default function Library() {
         <ScrollArea className="h-[calc(100vh-270px)] pr-2">
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
             {filteredQuestions.map((question) => {
-              const type = question.question_type || "written";
-              const config = typeConfig[type] || typeConfig.written;
-              const Icon = config.icon;
-              const options = parseOptions(question.incorrect_answers);
-
-              return (
-                <Card key={question.id} className="bg-zinc-900/70 border-white/10">
-                  <CardContent className="p-5 space-y-4">
-                    <div className="flex items-start justify-between gap-4">
-                      <Badge className="bg-zinc-800 text-zinc-300 border border-white/10">
-                        <Icon size={13} className={`mr-1 ${config.color}`} />
-                        {formatType(type)}
-                      </Badge>
-                      <span className="text-xs text-zinc-600">{question.source || "library"}</span>
-                    </div>
-
-                    <div>
-                      <p className="text-white font-semibold leading-relaxed">{question.question_text}</p>
-                      <p className="text-zinc-500 text-sm mt-2">{question.category || "Uncategorized"}</p>
-                    </div>
-
-                    {options.length > 0 && (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {options.map((option) => (
-                          <div key={option} className="px-3 py-2 rounded-md bg-zinc-950/50 text-zinc-400 text-sm">
-                            {option}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    <div className="pt-3 border-t border-white/10 space-y-2">
-                      <p className="text-sm">
-                        <span className="text-zinc-500">Answer: </span>
-                        <span className="text-emerald-300 font-medium">{question.correct_answer}</span>
-                      </p>
-                      {question.fun_fact && (
-                        <p className="text-sm text-zinc-400 leading-relaxed">{question.fun_fact}</p>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
+              const isEditing = editingId === question.id;
+              return isEditing ? (
+                <EditableQuestionCard
+                  key={question.id}
+                  form={editForm}
+                  saving={savingId === question.id}
+                  onChange={updateEditForm}
+                  onSave={() => saveQuestion(question.id)}
+                  onCancel={cancelEditing}
+                />
+              ) : (
+                <QuestionCard key={question.id} question={question} onEdit={() => startEditing(question)} />
               );
             })}
           </div>
@@ -214,3 +266,95 @@ export default function Library() {
     </div>
   );
 }
+
+const QuestionCard = ({ question, onEdit }) => {
+  const type = question.question_type || "written";
+  const config = typeConfig[type] || typeConfig.written;
+  const Icon = config.icon;
+  const options = parseOptions(question.incorrect_answers);
+
+  return (
+    <Card className="bg-zinc-900/70 border-white/10">
+      <CardContent className="p-5 space-y-4">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Badge className="bg-zinc-800 text-zinc-300 border border-white/10">
+              <Icon size={13} className={`mr-1 ${config.color}`} />
+              {formatType(type)}
+            </Badge>
+            {question.image_url && <Badge className="bg-amber-500/10 text-amber-300 border border-amber-500/20">Image</Badge>}
+          </div>
+          <Button size="sm" variant="outline" onClick={onEdit} className="border-zinc-700 text-zinc-300 hover:text-white">
+            <Pencil size={14} className="mr-2" />Edit
+          </Button>
+        </div>
+
+        <div>
+          <p className="text-white font-semibold leading-relaxed">{question.question_text}</p>
+          <p className="text-zinc-500 text-sm mt-2">{question.category || "Uncategorized"}</p>
+        </div>
+
+        {question.image_url && <img src={question.image_url} alt="Question" className="max-h-40 rounded-md border border-white/10" />}
+
+        {options.length > 0 && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {options.map((option) => (
+              <div key={option} className="px-3 py-2 rounded-md bg-zinc-950/50 text-zinc-400 text-sm">
+                {option}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="pt-3 border-t border-white/10 space-y-2">
+          <p className="text-sm">
+            <span className="text-zinc-500">Answer: </span>
+            <span className="text-emerald-300 font-medium">{question.correct_answer}</span>
+          </p>
+          {question.fun_fact && <p className="text-sm text-zinc-400 leading-relaxed">{question.fun_fact}</p>}
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
+
+const EditableQuestionCard = ({ form, saving, onChange, onSave, onCancel }) => (
+  <Card className="bg-zinc-900/80 border-[#71E0DC]/30">
+    <CardContent className="p-5 space-y-3">
+      <div className="grid grid-cols-1 sm:grid-cols-[170px_1fr] gap-3">
+        <select value={form.question_type} onChange={(event) => onChange("question_type", event.target.value)} className="h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3">
+          {editableTypes.map((type) => <option key={type} value={type}>{formatType(type)}</option>)}
+        </select>
+        <Input value={form.category} onChange={(event) => onChange("category", event.target.value)} placeholder="Category" className="bg-zinc-950/50 border-white/10 text-white" />
+      </div>
+
+      <textarea value={form.question_text} onChange={(event) => onChange("question_text", event.target.value)} placeholder="Question" className="w-full min-h-[100px] rounded-md bg-zinc-950/50 border border-white/10 text-white p-3" />
+
+      {form.question_type === "true_false" ? (
+        <select value={form.correct_answer || "True"} onChange={(event) => onChange("correct_answer", event.target.value)} className="h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3">
+          <option value="True">True</option>
+          <option value="False">False</option>
+        </select>
+      ) : (
+        <Input value={form.correct_answer} onChange={(event) => onChange("correct_answer", event.target.value)} placeholder="Correct answer" className="bg-zinc-950/50 border-white/10 text-white" />
+      )}
+
+      {form.question_type === "multiple_choice" && (
+        <textarea value={form.incorrect_answers} onChange={(event) => onChange("incorrect_answers", event.target.value)} placeholder="Wrong answers separated by semicolons" className="w-full min-h-[80px] rounded-md bg-zinc-950/50 border border-white/10 text-white p-3" />
+      )}
+
+      <Input value={form.image_url} onChange={(event) => onChange("image_url", event.target.value)} placeholder="Image/media URL" className="bg-zinc-950/50 border-white/10 text-white" />
+      <textarea value={form.fun_fact} onChange={(event) => onChange("fun_fact", event.target.value)} placeholder="Fun fact" className="w-full min-h-[70px] rounded-md bg-zinc-950/50 border border-white/10 text-white p-3" />
+
+      <div className="flex justify-end gap-2 pt-2">
+        <Button variant="outline" onClick={onCancel} disabled={saving} className="border-zinc-700 text-zinc-300">
+          <X size={14} className="mr-2" />Cancel
+        </Button>
+        <Button onClick={onSave} disabled={saving} className="gradient-btn">
+          {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save size={14} className="mr-2" />}
+          Save
+        </Button>
+      </div>
+    </CardContent>
+  </Card>
+);
