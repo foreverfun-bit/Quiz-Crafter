@@ -8,6 +8,7 @@ import { Toaster, toast } from "sonner";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Generate from "./pages/Generate";
+import WriteQuestion from "./pages/WriteQuestion";
 import Library from "./pages/Library";
 import BuildSession from "./pages/BuildSession";
 import ImportCSV from "./pages/ImportCSV";
@@ -268,6 +269,17 @@ function App() {
                 <ProtectedRoute>
                   <AppLayout>
                     <Generate />
+                  </AppLayout>
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="/write-question"
+              element={
+                <ProtectedRoute>
+                  <AppLayout>
+                    <WriteQuestion />
                   </AppLayout>
                 </ProtectedRoute>
               }
