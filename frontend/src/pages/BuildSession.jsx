@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { Card, CardContent, CardHeader } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
@@ -23,7 +23,6 @@ import {
   ChevronDown,
   ChevronUp,
   Coins,
-  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -42,6 +41,35 @@ const DEFAULT_SCORING = {
 };
 
 const BUILD_STORAGE_KEY = "trivia-build-session-state";
+
+const parseAnswerOptions = (value) => {
+  if (Array.isArray(value)) return value.map((x) => String(x).trim()).filter(Boolean);
+  if (typeof value !== "string") return [];
+  return value
+    .split(";")
+    .map((x) => x.trim())
+    .filter(Boolean);
+};
+
+const normalizeQuestion = (q) => ({
+  ...q,
+  question: q.question_text || q.question || "",
+  answer: q.correct_answer || q.answer || "",
+  options: parseAnswerOptions(q.incorrect_answers ?? q.options),
+  image_url: q.image_url || "",
+});
+
+const uniqueTrimmed = (values) => {
+  const seen = new Set();
+  return values
+    .map((value) => value.trim())
+    .filter((value) => {
+      const key = value.toLowerCase();
+      if (!value || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+};
 
 const BuildSession = () => {
   const navigate = useNavigate();
@@ -74,7 +102,6 @@ const BuildSession = () => {
     picture: [],
   });
 
-  // Write question form state
   const emptyForm = { question: "", answer: "", category: "", fun_fact: "", options: ["", "", "", ""], image_url: "" };
   const [writeForm, setWriteForm] = useState({ ...emptyForm });
 
@@ -97,33 +124,22 @@ const BuildSession = () => {
 
   useEffect(() => { fetchQuestions(); }, []);
 
- const fetchQuestions = async () => {
-  try {
-    const { data, error } = await supabase
-      .from("questions")
-      .select("*")
-      .order("created_at", { ascending: false });
+  const fetchQuestions = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("questions")
+        .select("*")
+        .order("created_at", { ascending: false });
 
-    if (error) throw error;
-
-    const normalized = (data || []).map((q) => ({
-      ...q,
-      question: q.question_text,
-      answer: q.correct_answer,
-      options: q.incorrect_answers
-        ? q.incorrect_answers.split(";").map((x) => x.trim()).filter(Boolean)
-        : [],
-      image_url: q.image_url,
-    }));
-
-    setQuestions(normalized);
-  } catch (error) {
-    console.error(error);
-    toast.error("Failed to load questions");
-  } finally {
-    setLoading(false);
-  }
-};
+      if (error) throw error;
+      setQuestions((data || []).map(normalizeQuestion));
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to load questions");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const toggleQuestion = (questionId, type) => {
     setSelected((prev) => {
@@ -142,42 +158,72 @@ const BuildSession = () => {
 
   const handleWriteQuestion = async () => {
     const type = activeTab;
-    if (!writeForm.question.trim() || !writeForm.answer.trim() || !writeForm.category.trim()) {
+    const category = writeForm.category.trim();
+    const questionText = writeForm.question.trim();
+    const correctAnswer = writeForm.answer.trim();
+    const funFact = writeForm.fun_fact.trim();
+    const imageUrl = writeForm.image_url.trim();
+
+    if (!questionText || !correctAnswer || !category) {
       toast.error("Question, answer, and category are required");
       return;
     }
 
+    const insertPayload = {
+      category,
+      question_text: questionText,
+      correct_answer: correctAnswer,
+      question_type: type,
+      fun_fact: funFact || null,
+      source: "manual",
+      has_image: type === "picture" && Boolean(imageUrl),
+      image_url: type === "picture" && imageUrl ? imageUrl : null,
+    };
+
+    if (type === "multiple_choice") {
+      const options = uniqueTrimmed(writeForm.options);
+      const answerKey = correctAnswer.toLowerCase();
+
+      if (options.length < 2) {
+        toast.error("At least 2 options required for multiple choice");
+        return;
+      }
+
+      if (!options.some((option) => option.toLowerCase() === answerKey)) {
+        toast.error("The correct answer must match one of the multiple choice options");
+        return;
+      }
+
+      insertPayload.incorrect_answers = options
+        .filter((option) => option.toLowerCase() !== answerKey)
+        .join("; ");
+    }
+
+    if (type === "true_false") {
+      insertPayload.incorrect_answers = correctAnswer.toLowerCase() === "true" ? "False" : "True";
+    }
+
     setCreatingQuestion(true);
     try {
-      const payload = {
-        category: writeForm.category.trim(),
-        question: writeForm.question.trim(),
-        answer: writeForm.answer.trim(),
-        question_type: type,
-        fun_fact: writeForm.fun_fact.trim() || null,
-      };
-      if (type === "multiple_choice") {
-        const opts = writeForm.options.filter((o) => o.trim());
-        if (opts.length < 2) {
-          toast.error("At least 2 options required for multiple choice");
-          setCreatingQuestion(false);
-          return;
-        }
-        payload.options = opts.map((o) => o.trim());
-      }
-      if (type === "picture" && writeForm.image_url.trim()) {
-        payload.image_url = writeForm.image_url.trim();
-      }
+      const { data: userData, error: userError } = await supabase.auth.getUser();
+      if (userError) throw userError;
+      if (userData?.user?.id) insertPayload.user_id = userData.user.id;
 
-      const res = await api.post("/questions", payload);
-      const newQ = res.data;
+      const { data, error } = await supabase
+        .from("questions")
+        .insert(insertPayload)
+        .select("*")
+        .single();
 
-      // Add to questions list and auto-select
-      setQuestions((prev) => [newQ, ...prev]);
+      if (error) throw error;
+
+      const newQuestion = normalizeQuestion(data);
+      setQuestions((prev) => [newQuestion, ...prev]);
+
       const target = questionTypes.find((t) => t.value === type)?.target || 9;
       setSelected((prev) => {
         if (prev[type].length < target) {
-          return { ...prev, [type]: [...prev[type], newQ.id] };
+          return { ...prev, [type]: [...prev[type], newQuestion.id] };
         }
         return prev;
       });
@@ -185,52 +231,53 @@ const BuildSession = () => {
       setWriteForm({ ...emptyForm });
       setShowWriteForm(null);
       toast.success("Question created and added!");
-    } catch {
-      toast.error("Failed to create question");
+    } catch (error) {
+      console.error("Create question error:", error);
+      toast.error(error.message || "Failed to create question");
     } finally {
       setCreatingQuestion(false);
     }
   };
 
-const handleSave = async () => {
-  setSaving(true);
-  try {
-    const { data: template, error: templateError } = await supabase
-      .from("session_templates")
-      .select("id")
-      .eq("mode", "standard")
-      .limit(1)
-      .single();
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const { data: template, error: templateError } = await supabase
+        .from("session_templates")
+        .select("id")
+        .eq("mode", "standard")
+        .limit(1)
+        .single();
 
-    if (templateError) throw templateError;
-    if (!template?.id) throw new Error("Standard template not found");
+      if (templateError) throw templateError;
+      if (!template?.id) throw new Error("Standard template not found");
 
-    const { data: sessionId, error: rpcError } = await supabase.rpc(
-      "build_session_from_template",
-      {
-        template_uuid: template.id,
-      }
-    );
+      const { data: sessionId, error: rpcError } = await supabase.rpc(
+        "build_session_from_template",
+        {
+          template_uuid: template.id,
+        }
+      );
 
-    if (rpcError) throw rpcError;
-    if (!sessionId) throw new Error("No session created");
+      if (rpcError) throw rpcError;
+      if (!sessionId) throw new Error("No session created");
 
-    clearSavedState();
-    toast.success("Standard session created!");
-    navigate(`/session/${sessionId}`);
-  } catch (error) {
-    console.error("Build session error:", error);
-    toast.error(error.message || "Failed to create session");
-  } finally {
-    setSaving(false);
-  }
-};
-  
+      clearSavedState();
+      toast.success("Standard session created!");
+      navigate(`/session/${sessionId}`);
+    } catch (error) {
+      console.error("Build session error:", error);
+      toast.error(error.message || "Failed to create session");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const getFilteredQuestions = (type) => {
+    const query = searchQuery.toLowerCase();
     return questions.filter((q) => {
       if (q.question_type !== type) return false;
-      if (searchQuery && !q.question.toLowerCase().includes(searchQuery.toLowerCase()) && !q.category.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+      if (query && !q.question.toLowerCase().includes(query) && !q.category.toLowerCase().includes(query)) return false;
       return true;
     });
   };
@@ -249,13 +296,12 @@ const handleSave = async () => {
 
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto animate-fade-in" data-testid="build-session-page">
-      {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
         <div>
           <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">
             Build <span className="gradient-text">Trivia Session</span>
           </h1>
-        <p className="text-zinc-500">Create a standard session from your saved template</p>
+          <p className="text-zinc-500">Create a standard session from your saved template</p>
         </div>
         <div className="flex gap-2">
           {(sessionName || Object.values(selected).flat().length > 0) && (
@@ -263,23 +309,22 @@ const handleSave = async () => {
               <X size={16} className="mr-2" /> Clear
             </Button>
           )}
-        <Button onClick={handleSave} disabled={saving} className="gradient-btn" data-testid="save-session-btn">
-  {saving ? (
-    <>
-      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-      Saving...
-    </>
-  ) : (
-    <>
-      <Save className="mr-2" size={18} />
-      Build Standard Session
-    </>
-  )}
-</Button>
+          <Button onClick={handleSave} disabled={saving} className="gradient-btn" data-testid="save-session-btn">
+            {saving ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Saving...
+              </>
+            ) : (
+              <>
+                <Save className="mr-2" size={18} />
+                Build Standard Session
+              </>
+            )}
+          </Button>
         </div>
       </div>
 
-      {/* Session Name + Search */}
       <Card className="glass-card mb-6">
         <CardContent className="p-4">
           <div className="flex flex-col md:flex-row gap-4 items-end">
@@ -295,7 +340,6 @@ const handleSave = async () => {
         </CardContent>
       </Card>
 
-      {/* Scoring Options */}
       <Card className="glass-card mb-6">
         <CardContent className="p-0">
           <button
@@ -359,7 +403,6 @@ const handleSave = async () => {
         </CardContent>
       </Card>
 
-      {/* Progress Summary */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         {questionTypes.map((type) => {
           const TypeIcon = type.icon;
@@ -384,7 +427,6 @@ const handleSave = async () => {
         })}
       </div>
 
-      {/* Question Selection Tabs */}
       <Card className="glass-card">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <CardHeader className="pb-0">
@@ -419,7 +461,6 @@ const handleSave = async () => {
           <CardContent className="pt-4">
             {questionTypes.map((type) => (
               <TabsContent key={type.value} value={type.value} className="mt-0">
-                {/* Write Custom Question Form */}
                 {showWriteForm === type.value && (
                   <WriteQuestionForm
                     type={type.value}
@@ -431,7 +472,6 @@ const handleSave = async () => {
                   />
                 )}
 
-                {/* Used Categories Warning */}
                 {getUsedCategories(type.value).length > 0 && (
                   <div className="mb-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
                     <p className="text-amber-400 text-sm">
@@ -507,7 +547,6 @@ const handleSave = async () => {
   );
 };
 
-/* ──────────── Write Question Form Component ──────────── */
 const WriteQuestionForm = ({ type, form, setForm, onSubmit, onCancel, creating }) => {
   const isMC = type === "multiple_choice";
   const isTF = type === "true_false";
