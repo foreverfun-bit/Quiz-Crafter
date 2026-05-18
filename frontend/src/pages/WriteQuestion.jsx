@@ -126,7 +126,7 @@ const WriteQuestion = () => {
 
     setSaving(true);
     try {
-      await axios.post("/api/save-custom-question", {
+      await axios.post("/api/save-written-question", {
         user_id: user.id,
         category,
         question_text: questionText,
