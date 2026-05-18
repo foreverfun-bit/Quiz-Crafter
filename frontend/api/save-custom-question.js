@@ -74,8 +74,6 @@ module.exports = async function handler(req, res) {
       correct_answer: questionType === "true_false" ? (correctAnswer.toLowerCase() === "false" ? "False" : "True") : correctAnswer,
       incorrect_answers: buildIncorrectAnswers({ ...body, question_type: questionType, correct_answer: correctAnswer }),
       fun_fact: clean(body.fun_fact) || null,
-      source: "manual",
-      image_url: null,
     };
 
     Object.keys(payload).forEach((key) => {
