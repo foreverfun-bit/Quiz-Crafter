@@ -1,14 +1,14 @@
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import axios from "axios";
 import { supabase } from "../lib/supabase";
-import { Card, CardContent, CardHeader } from "../components/ui/card";
+import { useAuth } from "../App";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { Badge } from "../components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
-import { Textarea } from "../components/ui/textarea";
 import {
   CheckCircle,
   List,
@@ -19,60 +19,107 @@ import {
   Search,
   X,
   Check,
+  Sparkles,
   Plus,
-  ChevronDown,
-  ChevronUp,
-  Coins,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 
-const questionTypes = [
-  { value: "true_false", label: "True/False", icon: CheckCircle, color: "text-[#71E0DC]", target: 9 },
-  { value: "multiple_choice", label: "Multiple Choice", icon: List, color: "text-[#AEB2EF]", target: 9 },
-  { value: "written", label: "Written", icon: MessageSquare, color: "text-emerald-400", target: 9 },
-  { value: "picture", label: "Picture", icon: Image, color: "text-amber-400", target: 3 },
+const rounds = [
+  {
+    id: "round1",
+    label: "Round 1",
+    shortLabel: "R1",
+    type: "true_false",
+    storageKey: "true_false_questions",
+    title: "True/False",
+    target: 9,
+    bonusTarget: 1,
+    icon: CheckCircle,
+    color: "text-[#71E0DC]",
+  },
+  {
+    id: "round2",
+    label: "Round 2",
+    shortLabel: "R2",
+    type: "multiple_choice",
+    storageKey: "multiple_choice_questions",
+    title: "Multiple Choice",
+    target: 9,
+    bonusTarget: 1,
+    icon: List,
+    color: "text-[#AEB2EF]",
+  },
+  {
+    id: "round3",
+    label: "Round 3",
+    shortLabel: "R3",
+    type: "written",
+    storageKey: "written_questions",
+    title: "Written Answer",
+    target: 9,
+    bonusTarget: 1,
+    icon: MessageSquare,
+    color: "text-emerald-400",
+  },
 ];
 
-const DEFAULT_SCORING = {
-  true_false: 10,
-  multiple_choice: 10,
-  written: 10,
-  picture: 0,
+const emptySelected = {
+  round1: [],
+  round2: [],
+  round3: [],
+  picture: [],
 };
 
-const BUILD_STORAGE_KEY = "trivia-build-session-state";
+const BUILD_STORAGE_KEY = "trivia-round-builder-state-v2";
 
 const parseAnswerOptions = (value) => {
   if (Array.isArray(value)) return value.map((x) => String(x).trim()).filter(Boolean);
   if (typeof value !== "string") return [];
-  return value
-    .split(";")
-    .map((x) => x.trim())
-    .filter(Boolean);
+  return value.split(";").map((x) => x.trim()).filter(Boolean);
 };
 
-const normalizeQuestion = (q) => ({
+const normalizeText = (value) => String(value || "").replace(/\s+/g, " ").trim();
+
+const fingerprint = (value) => normalizeText(value).toLowerCase().replace(/[^a-z0-9]/g, "");
+
+const normalizeQuestion = (q, fallbackType) => ({
   ...q,
-  question: q.question_text || q.question || "",
-  answer: q.correct_answer || q.answer || "",
+  id: q.id || q.local_id || `local-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  question_text: normalizeText(q.question_text || q.question),
+  correct_answer: normalizeText(q.correct_answer || q.answer),
+  question_type: q.question_type || fallbackType || "written",
+  category: normalizeText(q.category) || "General",
+  incorrect_answers: q.incorrect_answers ?? null,
   options: parseAnswerOptions(q.incorrect_answers ?? q.options),
+  fun_fact: normalizeText(q.fun_fact),
   image_url: q.image_url || "",
+  isGenerated: Boolean(q.isGenerated),
 });
 
-const uniqueTrimmed = (values) => {
-  const seen = new Set();
-  return values
-    .map((value) => value.trim())
-    .filter((value) => {
-      const key = value.toLowerCase();
-      if (!value || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+const toSessionQuestion = (question, type) => ({
+  category: question.category || "General",
+  question_text: question.question_text,
+  correct_answer: question.correct_answer,
+  question_type: type === "picture" ? "picture" : type,
+  incorrect_answers: Array.isArray(question.options) && question.options.length ? question.options.join("; ") : question.incorrect_answers || null,
+  fun_fact: question.fun_fact || null,
+  image_url: question.image_url || null,
+});
+
+const collectSessionQuestions = (session) => {
+  const arrays = [
+    session?.true_false_questions,
+    session?.multiple_choice_questions,
+    session?.written_questions,
+    session?.picture_questions,
+  ];
+  return arrays.flatMap((value) => (Array.isArray(value) ? value : []));
 };
 
 const BuildSession = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const loadSavedState = () => {
     try {
@@ -86,205 +133,273 @@ const BuildSession = () => {
 
   const [sessionName, setSessionName] = useState(savedState?.sessionName || "");
   const [questions, setQuestions] = useState([]);
+  const [usedFingerprints, setUsedFingerprints] = useState(new Set());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [activeTab, setActiveTab] = useState(savedState?.activeTab || "true_false");
+  const [activeRoundId, setActiveRoundId] = useState(savedState?.activeRoundId || "round1");
   const [searchQuery, setSearchQuery] = useState("");
-  const [showScoring, setShowScoring] = useState(savedState?.showScoring || false);
-  const [scoring, setScoring] = useState(savedState?.scoring || { ...DEFAULT_SCORING });
-  const [showWriteForm, setShowWriteForm] = useState(null);
-  const [creatingQuestion, setCreatingQuestion] = useState(false);
-
-  const [selected, setSelected] = useState(savedState?.selected || {
-    true_false: [],
-    multiple_choice: [],
-    written: [],
-    picture: [],
-  });
-
-  const emptyForm = { question: "", answer: "", category: "", fun_fact: "", options: ["", "", "", ""], image_url: "" };
-  const [writeForm, setWriteForm] = useState({ ...emptyForm });
+  const [theme, setTheme] = useState(savedState?.theme || "");
+  const [difficulty, setDifficulty] = useState(savedState?.difficulty || "host_hard");
+  const [generatingRound, setGeneratingRound] = useState(null);
+  const [selected, setSelected] = useState(savedState?.selected || emptySelected);
 
   useEffect(() => {
-    const stateToSave = { sessionName, selected, activeTab, scoring, showScoring };
-    localStorage.setItem(BUILD_STORAGE_KEY, JSON.stringify(stateToSave));
-  }, [sessionName, selected, activeTab, scoring, showScoring]);
+    localStorage.setItem(BUILD_STORAGE_KEY, JSON.stringify({ sessionName, selected, activeRoundId, theme, difficulty }));
+  }, [sessionName, selected, activeRoundId, theme, difficulty]);
+
+  useEffect(() => {
+    fetchBuilderData();
+  }, []);
 
   const clearSavedState = () => localStorage.removeItem(BUILD_STORAGE_KEY);
 
-  const handleClearSession = () => {
-    clearSavedState();
-    setSessionName("");
-    setSelected({ true_false: [], multiple_choice: [], written: [], picture: [] });
-    setScoring({ ...DEFAULT_SCORING });
-    setActiveTab("true_false");
-    setShowWriteForm(null);
-    toast.success("Selection cleared!");
-  };
-
-  useEffect(() => { fetchQuestions(); }, []);
-
-  const fetchQuestions = async () => {
+  const fetchBuilderData = async () => {
     try {
-      const { data, error } = await supabase
-        .from("questions")
-        .select("*")
-        .order("created_at", { ascending: false });
+      setLoading(true);
 
-      if (error) throw error;
-      setQuestions((data || []).map(normalizeQuestion));
+      const [questionsResult, sessionsResult] = await Promise.all([
+        supabase.from("questions").select("*").order("created_at", { ascending: false }),
+        user?.id
+          ? supabase.from("sessions").select("*").eq("user_id", user.id)
+          : supabase.from("sessions").select("*").limit(0),
+      ]);
+
+      if (questionsResult.error) throw questionsResult.error;
+      if (sessionsResult.error) throw sessionsResult.error;
+
+      const used = new Set();
+      (sessionsResult.data || []).forEach((session) => {
+        collectSessionQuestions(session).forEach((question) => {
+          const text = question?.question_text || question?.question;
+          if (text) used.add(fingerprint(text));
+        });
+      });
+
+      setUsedFingerprints(used);
+      setQuestions((questionsResult.data || []).map((q) => normalizeQuestion(q)));
     } catch (error) {
-      console.error(error);
-      toast.error("Failed to load questions");
+      console.error("Build session load error:", error);
+      toast.error(error.message || "Failed to load builder");
     } finally {
       setLoading(false);
     }
   };
 
-  const toggleQuestion = (questionId, type) => {
+  const activeRound = rounds.find((round) => round.id === activeRoundId) || rounds[0];
+
+  const selectedQuestionsByRound = useMemo(() => {
+    const all = [...questions];
+    const byId = new Map(all.map((q) => [String(q.id), q]));
+
+    return {
+      round1: (selected.round1 || []).map((id) => byId.get(String(id))).filter(Boolean),
+      round2: (selected.round2 || []).map((id) => byId.get(String(id))).filter(Boolean),
+      round3: (selected.round3 || []).map((id) => byId.get(String(id))).filter(Boolean),
+      picture: (selected.picture || []).map((id) => byId.get(String(id))).filter(Boolean),
+    };
+  }, [questions, selected]);
+
+  const activeSelected = selected[activeRound.id] || [];
+  const selectedPictures = selected.picture || [];
+
+  const availableQuestions = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    const selectedIds = new Set([...(selected[activeRound.id] || []), ...(selected.picture || [])].map(String));
+
+    return questions.filter((question) => {
+      const isPicture = question.question_type === "picture" || Boolean(question.image_url);
+      if (isPicture) return false;
+      if (question.question_type !== activeRound.type) return false;
+      if (usedFingerprints.has(fingerprint(question.question_text)) && !selectedIds.has(String(question.id))) return false;
+      if (!query) return true;
+      return [question.question_text, question.correct_answer, question.category, question.fun_fact]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query));
+    });
+  }, [activeRound, questions, searchQuery, selected, usedFingerprints]);
+
+  const availablePictures = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    const selectedIds = new Set((selected.picture || []).map(String));
+
+    return questions.filter((question) => {
+      const isPicture = question.question_type === "picture" || Boolean(question.image_url);
+      if (!isPicture) return false;
+      if (usedFingerprints.has(fingerprint(question.question_text)) && !selectedIds.has(String(question.id))) return false;
+      if (!query) return true;
+      return [question.question_text, question.correct_answer, question.category, question.fun_fact]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query));
+    });
+  }, [questions, searchQuery, selected.picture, usedFingerprints]);
+
+  const toggleMainQuestion = (question) => {
     setSelected((prev) => {
-      const cur = prev[type];
-      const target = questionTypes.find((t) => t.value === type)?.target || 9;
-      if (cur.includes(questionId)) {
-        return { ...prev, [type]: cur.filter((id) => id !== questionId) };
-      } else if (cur.length < target) {
-        return { ...prev, [type]: [...cur, questionId] };
-      } else {
-        toast.error(`Maximum ${target} questions for ${type.replace("_", " ")}`);
+      const current = prev[activeRound.id] || [];
+      const key = question.id;
+      if (current.includes(key)) {
+        return { ...prev, [activeRound.id]: current.filter((id) => id !== key) };
+      }
+      if (current.length >= activeRound.target) {
+        toast.error(`${activeRound.label} already has ${activeRound.target} questions`);
         return prev;
       }
+      return { ...prev, [activeRound.id]: [...current, key] };
     });
   };
 
-  const handleWriteQuestion = async () => {
-    const type = activeTab;
-    const category = writeForm.category.trim();
-    const questionText = writeForm.question.trim();
-    const correctAnswer = writeForm.answer.trim();
-    const funFact = writeForm.fun_fact.trim();
-    const imageUrl = writeForm.image_url.trim();
-
-    if (!questionText || !correctAnswer || !category) {
-      toast.error("Question, answer, and category are required");
-      return;
-    }
-
-    const insertPayload = {
-      category,
-      question_text: questionText,
-      correct_answer: correctAnswer,
-      question_type: type,
-      fun_fact: funFact || null,
-      source: "manual",
-      has_image: type === "picture" && Boolean(imageUrl),
-      image_url: type === "picture" && imageUrl ? imageUrl : null,
-    };
-
-    if (type === "multiple_choice") {
-      const options = uniqueTrimmed(writeForm.options);
-      const answerKey = correctAnswer.toLowerCase();
-
-      if (options.length < 2) {
-        toast.error("At least 2 options required for multiple choice");
-        return;
-      }
-
-      if (!options.some((option) => option.toLowerCase() === answerKey)) {
-        toast.error("The correct answer must match one of the multiple choice options");
-        return;
-      }
-
-      insertPayload.incorrect_answers = options
-        .filter((option) => option.toLowerCase() !== answerKey)
-        .join("; ");
-    }
-
-    if (type === "true_false") {
-      insertPayload.incorrect_answers = correctAnswer.toLowerCase() === "true" ? "False" : "True";
-    }
-
-    setCreatingQuestion(true);
-    try {
-      const { data: userData, error: userError } = await supabase.auth.getUser();
-      if (userError) throw userError;
-      if (userData?.user?.id) insertPayload.user_id = userData.user.id;
-
-      const { data, error } = await supabase
-        .from("questions")
-        .insert(insertPayload)
-        .select("*")
-        .single();
-
-      if (error) throw error;
-
-      const newQuestion = normalizeQuestion(data);
-      setQuestions((prev) => [newQuestion, ...prev]);
-
-      const target = questionTypes.find((t) => t.value === type)?.target || 9;
-      setSelected((prev) => {
-        if (prev[type].length < target) {
-          return { ...prev, [type]: [...prev[type], newQuestion.id] };
-        }
+  const togglePictureQuestion = (question) => {
+    setSelected((prev) => {
+      const current = prev.picture || [];
+      const key = question.id;
+      if (current.includes(key)) return { ...prev, picture: current.filter((id) => id !== key) };
+      if (current.length >= 3) {
+        toast.error("The standard format has 3 picture bonus questions");
         return prev;
+      }
+      return { ...prev, picture: [...current, key] };
+    });
+  };
+
+  const handleGenerateForActiveRound = async () => {
+    const needed = Math.max(1, activeRound.target - activeSelected.length);
+    setGeneratingRound(activeRound.id);
+
+    try {
+      const { data } = await axios.post("/api/generate-session-candidates", {
+        sessionId: `build-${activeRound.id}`,
+        questionType: activeRound.type,
+        count: Math.min(needed, 5),
+        difficulty,
+        theme,
+        excludeUsed: true,
+        avoidDuplicates: true,
+        excludeCategories: selectedQuestionsByRound[activeRound.id].map((q) => q.category).filter(Boolean),
       });
 
-      setWriteForm({ ...emptyForm });
-      setShowWriteForm(null);
-      toast.success("Question created and added!");
+      const generated = (Array.isArray(data.candidates) ? data.candidates : []).map((candidate, index) =>
+        normalizeQuestion(
+          {
+            ...candidate,
+            id: `ai-${activeRound.id}-${Date.now()}-${index}`,
+            isGenerated: true,
+          },
+          activeRound.type
+        )
+      );
+
+      if (!generated.length) throw new Error("No candidates returned");
+
+      setQuestions((prev) => [...generated, ...prev]);
+      setSelected((prev) => ({
+        ...prev,
+        [activeRound.id]: [...(prev[activeRound.id] || []), ...generated.map((q) => q.id)].slice(0, activeRound.target),
+      }));
+      toast.success(`Added ${generated.length} generated question${generated.length === 1 ? "" : "s"} to ${activeRound.label}`);
     } catch (error) {
-      console.error("Create question error:", error);
-      toast.error(error.message || "Failed to create question");
+      console.error("Round generate error:", error);
+      toast.error(error.response?.data?.error || error.message || "Failed to generate round questions");
     } finally {
-      setCreatingQuestion(false);
+      setGeneratingRound(null);
     }
   };
 
-  const handleSave = async () => {
-    setSaving(true);
+  const handleGeneratePictureBonus = async () => {
+    const needed = Math.max(1, 3 - selectedPictures.length);
+    setGeneratingRound("picture");
+
     try {
-      const { data: template, error: templateError } = await supabase
-        .from("session_templates")
-        .select("id")
-        .eq("mode", "standard")
-        .limit(1)
-        .single();
+      const { data } = await axios.post("/api/generate-session-candidates", {
+        sessionId: "build-picture",
+        questionType: "picture",
+        count: Math.min(needed, 3),
+        difficulty,
+        theme,
+        excludeUsed: true,
+        avoidDuplicates: true,
+      });
 
-      if (templateError) throw templateError;
-      if (!template?.id) throw new Error("Standard template not found");
-
-      const { data: sessionId, error: rpcError } = await supabase.rpc(
-        "build_session_from_template",
-        {
-          template_uuid: template.id,
-        }
+      const generated = (Array.isArray(data.candidates) ? data.candidates : []).map((candidate, index) =>
+        normalizeQuestion(
+          {
+            ...candidate,
+            id: `ai-picture-${Date.now()}-${index}`,
+            question_type: "picture",
+            isGenerated: true,
+          },
+          "picture"
+        )
       );
 
-      if (rpcError) throw rpcError;
-      if (!sessionId) throw new Error("No session created");
+      if (!generated.length) throw new Error("No picture candidates returned");
 
-      clearSavedState();
-      toast.success("Standard session created!");
-      navigate(`/session/${sessionId}`);
+      setQuestions((prev) => [...generated, ...prev]);
+      setSelected((prev) => ({ ...prev, picture: [...(prev.picture || []), ...generated.map((q) => q.id)].slice(0, 3) }));
+      toast.success(`Added ${generated.length} picture bonus prompt${generated.length === 1 ? "" : "s"}`);
     } catch (error) {
-      console.error("Build session error:", error);
-      toast.error(error.message || "Failed to create session");
+      console.error("Picture generate error:", error);
+      toast.error(error.response?.data?.error || error.message || "Failed to generate picture bonuses");
+    } finally {
+      setGeneratingRound(null);
+    }
+  };
+
+  const handleClearSession = () => {
+    clearSavedState();
+    setSessionName("");
+    setSelected(emptySelected);
+    setActiveRoundId("round1");
+    setTheme("");
+    toast.success("Session cleared");
+  };
+
+  const handleSave = async () => {
+    if (!user?.id) {
+      toast.error("You must be signed in");
+      return;
+    }
+
+    const builtName = sessionName.trim() || `${new Date().toLocaleDateString()} Trivia`;
+    const trueFalseQuestions = selectedQuestionsByRound.round1.map((q) => toSessionQuestion(q, "true_false"));
+    const multipleChoiceQuestions = selectedQuestionsByRound.round2.map((q) => toSessionQuestion(q, "multiple_choice"));
+    const writtenQuestions = selectedQuestionsByRound.round3.map((q) => toSessionQuestion(q, "written"));
+    const pictureQuestions = selectedQuestionsByRound.picture.map((q) => toSessionQuestion(q, "picture"));
+
+    if (!trueFalseQuestions.length && !multipleChoiceQuestions.length && !writtenQuestions.length && !pictureQuestions.length) {
+      toast.error("Add at least one question before saving");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const { data, error } = await supabase
+        .from("sessions")
+        .insert({
+          user_id: user.id,
+          name: builtName,
+          session_name: builtName,
+          is_past: false,
+          true_false_questions: trueFalseQuestions,
+          multiple_choice_questions: multipleChoiceQuestions,
+          written_questions: writtenQuestions,
+          picture_questions: pictureQuestions,
+        })
+        .select("id")
+        .single();
+
+      if (error) throw error;
+      clearSavedState();
+      toast.success("Session saved");
+      navigate(`/session/${data.id}`);
+    } catch (error) {
+      console.error("Save built session error:", error);
+      toast.error(error.message || "Failed to save session");
     } finally {
       setSaving(false);
     }
   };
 
-  const getFilteredQuestions = (type) => {
-    const query = searchQuery.toLowerCase();
-    return questions.filter((q) => {
-      if (q.question_type !== type) return false;
-      if (query && !q.question.toLowerCase().includes(query) && !q.category.toLowerCase().includes(query)) return false;
-      return true;
-    });
-  };
-
-  const getUsedCategories = (type) => {
-    return questions.filter((q) => selected[type].includes(q.id)).map((q) => q.category);
-  };
+  const selectedTotal = Object.values(selected).flat().length;
 
   if (loading) {
     return (
@@ -299,395 +414,188 @@ const BuildSession = () => {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
         <div>
           <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">
-            Build <span className="gradient-text">Trivia Session</span>
+            Build <span className="gradient-text">Session</span>
           </h1>
-          <p className="text-zinc-500">Create a standard session from your saved template</p>
+          <p className="text-zinc-500">Assemble rounds, browse unused questions, and generate fresh gaps in place.</p>
         </div>
         <div className="flex gap-2">
-          {(sessionName || Object.values(selected).flat().length > 0) && (
-            <Button variant="outline" onClick={handleClearSession} className="border-zinc-700 text-zinc-400 hover:text-white hover:bg-zinc-800" data-testid="clear-build-btn">
+          {selectedTotal > 0 && (
+            <Button variant="outline" onClick={handleClearSession} className="border-zinc-700 text-zinc-400 hover:text-white hover:bg-zinc-800">
               <X size={16} className="mr-2" /> Clear
             </Button>
           )}
           <Button onClick={handleSave} disabled={saving} className="gradient-btn" data-testid="save-session-btn">
-            {saving ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Saving...
-              </>
-            ) : (
-              <>
-                <Save className="mr-2" size={18} />
-                Build Standard Session
-              </>
-            )}
+            {saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</> : <><Save className="mr-2" size={18} />Save Session</>}
           </Button>
         </div>
       </div>
 
       <Card className="glass-card mb-6">
         <CardContent className="p-4">
-          <div className="flex flex-col md:flex-row gap-4 items-end">
-            <div className="flex-1 space-y-2">
+          <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr_180px] gap-4 items-end">
+            <div className="space-y-2">
               <Label className="text-zinc-300">Session Name</Label>
-              <Input value={sessionName} onChange={(e) => setSessionName(e.target.value)} placeholder="e.g., Thursday Night Trivia - Week 42" className="bg-zinc-950/50 border-white/10 text-white" data-testid="session-name-input" />
+              <Input value={sessionName} onChange={(e) => setSessionName(e.target.value)} placeholder="e.g., Tuesday Night Trivia" className="bg-zinc-950/50 border-white/10 text-white" />
             </div>
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
-              <Input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search questions..." className="pl-9 bg-zinc-950/50 border-white/10 text-white" data-testid="session-search-input" />
+            <div className="space-y-2">
+              <Label className="text-zinc-300">AI Direction</Label>
+              <Input value={theme} onChange={(e) => setTheme(e.target.value)} placeholder="e.g. weird science, no sports, cozy nerd trivia" className="bg-zinc-950/50 border-white/10 text-white" />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-zinc-300">Difficulty</Label>
+              <select value={difficulty} onChange={(e) => setDifficulty(e.target.value)} className="w-full h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3">
+                <option value="easy">Easy</option>
+                <option value="medium">Medium</option>
+                <option value="hard">Hard</option>
+                <option value="host_hard">Host Hard</option>
+              </select>
             </div>
           </div>
         </CardContent>
       </Card>
 
-      <Card className="glass-card mb-6">
-        <CardContent className="p-0">
-          <button
-            onClick={() => setShowScoring(!showScoring)}
-            className="w-full flex items-center justify-between p-4 text-left hover:bg-white/[0.02] transition-colors rounded-lg"
-            data-testid="scoring-toggle-btn"
-          >
-            <div className="flex items-center gap-3">
-              <Coins className="text-amber-400" size={20} />
-              <div>
-                <p className="text-white font-semibold">Scoring Options</p>
-                <p className="text-zinc-500 text-sm">
-                  {Object.entries(scoring).filter(([k, v]) => v !== DEFAULT_SCORING[k]).length > 0
-                    ? "Custom scoring configured"
-                    : "Default: 10 pts per question, Picture = Wager"}
-                </p>
-              </div>
-            </div>
-            {showScoring ? <ChevronUp className="text-zinc-400" size={20} /> : <ChevronDown className="text-zinc-400" size={20} />}
-          </button>
-
-          {showScoring && (
-            <div className="px-4 pb-4 pt-0">
-              <div className="border-t border-white/5 pt-4">
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  {questionTypes.map((type) => {
-                    const TypeIcon = type.icon;
-                    const isPicture = type.value === "picture";
-                    return (
-                      <div key={type.value} className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <TypeIcon className={type.color} size={16} />
-                          <Label className="text-zinc-300 text-sm">{type.label}</Label>
-                        </div>
-                        {isPicture ? (
-                          <div className="h-10 px-3 flex items-center rounded-md bg-purple-500/10 border border-purple-500/20">
-                            <span className="text-purple-300 text-sm">Wager-based</span>
-                          </div>
-                        ) : (
-                          <div className="relative">
-                            <Input
-                              type="number"
-                              min="1"
-                              max="100"
-                              value={scoring[type.value]}
-                              onChange={(e) => setScoring((prev) => ({ ...prev, [type.value]: parseInt(e.target.value) || 0 }))}
-                              className="bg-zinc-950/50 border-white/10 text-white pr-10 h-10"
-                              data-testid={`scoring-${type.value}`}
-                            />
-                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 text-sm">pts</span>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-                <p className="text-zinc-600 text-xs mt-3">Picture rounds use player wagering instead of fixed points. Points can also be adjusted per-question during a live game.</p>
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        {questionTypes.map((type) => {
-          const TypeIcon = type.icon;
-          const count = selected[type.value].length;
-          const isComplete = count === type.target;
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        {rounds.map((round) => {
+          const Icon = round.icon;
+          const count = selected[round.id]?.length || 0;
+          const complete = count >= round.target;
           return (
-            <Card
-              key={type.value}
-              className={`glass-card cursor-pointer transition-all ${activeTab === type.value ? "border-[#71E0DC]/50" : ""} ${isComplete ? "border-emerald-500/50" : ""}`}
-              onClick={() => setActiveTab(type.value)}
-            >
+            <Card key={round.id} onClick={() => setActiveRoundId(round.id)} className={`glass-card cursor-pointer transition-all ${activeRoundId === round.id ? "border-[#71E0DC]/50" : ""} ${complete ? "border-emerald-500/40" : ""}`}>
               <CardContent className="p-4">
-                <div className="flex items-center justify-between mb-2">
-                  <TypeIcon className={type.color} size={20} />
-                  {isComplete && <Check className="text-emerald-400" size={16} />}
+                <div className="flex items-center justify-between mb-3">
+                  <Icon className={round.color} size={22} />
+                  {complete && <Check className="text-emerald-400" size={18} />}
                 </div>
-                <p className="text-white font-semibold">{type.label}</p>
-                <p className={`text-sm ${isComplete ? "text-emerald-400" : "text-zinc-500"}`}>{count}/{type.target} selected</p>
+                <p className="text-white font-semibold">{round.label}: {round.title}</p>
+                <p className={`text-sm ${complete ? "text-emerald-400" : "text-zinc-500"}`}>{count}/{round.target} main questions</p>
               </CardContent>
             </Card>
           );
         })}
       </div>
 
-      <Card className="glass-card">
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <CardHeader className="pb-0">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <TabsList className="bg-zinc-800/50 justify-start">
-                {questionTypes.map((type) => {
-                  const TypeIcon = type.icon;
-                  return (
-                    <TabsTrigger key={type.value} value={type.value} className="data-[state=active]:bg-zinc-700" data-testid={`tab-${type.value}`}>
-                      <TypeIcon size={16} className={`mr-2 ${type.color}`} />
-                      <span className="hidden sm:inline">{type.label}</span>
-                      <Badge className="ml-2 bg-zinc-700 text-zinc-300">{selected[type.value].length}/{type.target}</Badge>
-                    </TabsTrigger>
-                  );
-                })}
-              </TabsList>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setShowWriteForm(showWriteForm === activeTab ? null : activeTab);
-                  setWriteForm({ ...emptyForm });
-                }}
-                className="border-[#71E0DC]/30 text-[#71E0DC] hover:bg-[#71E0DC]/10"
-                data-testid="write-question-btn"
-              >
-                <Plus size={16} className="mr-1" /> Write Custom
+      <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
+        <Card className="glass-card">
+          <CardHeader>
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div>
+                <CardTitle className="text-white flex items-center gap-2">
+                  <activeRound.icon className={activeRound.color} size={20} />
+                  {activeRound.label}: {activeRound.title}
+                </CardTitle>
+                <CardDescription className="text-zinc-500">Only unused saved questions are shown here.</CardDescription>
+              </div>
+              <Button onClick={handleGenerateForActiveRound} disabled={generatingRound === activeRound.id || activeSelected.length >= activeRound.target} className="gradient-btn">
+                {generatingRound === activeRound.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles size={16} className="mr-2" />}
+                Generate For Round
               </Button>
             </div>
           </CardHeader>
+          <CardContent>
+            <div className="relative mb-4">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
+              <Input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search unused questions..." className="pl-9 bg-zinc-950/50 border-white/10 text-white" />
+            </div>
 
-          <CardContent className="pt-4">
-            {questionTypes.map((type) => (
-              <TabsContent key={type.value} value={type.value} className="mt-0">
-                {showWriteForm === type.value && (
-                  <WriteQuestionForm
-                    type={type.value}
-                    form={writeForm}
-                    setForm={setWriteForm}
-                    onSubmit={handleWriteQuestion}
-                    onCancel={() => { setShowWriteForm(null); setWriteForm({ ...emptyForm }); }}
-                    creating={creatingQuestion}
-                  />
-                )}
+            <SelectedStrip questions={selectedQuestionsByRound[activeRound.id]} onRemove={(id) => toggleMainQuestion({ id })} />
 
-                {getUsedCategories(type.value).length > 0 && (
-                  <div className="mb-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
-                    <p className="text-amber-400 text-sm">
-                      <strong>Categories used:</strong> {getUsedCategories(type.value).join(", ")}
-                    </p>
-                    <p className="text-amber-400/70 text-xs mt-1">Each category should be unique across all questions</p>
-                  </div>
-                )}
-
-                <ScrollArea className="h-[500px]">
-                  {getFilteredQuestions(type.value).length === 0 ? (
-                    <div className="text-center py-12">
-                      <p className="text-zinc-500">No {type.label.toLowerCase()} questions available</p>
-                      <p className="text-zinc-600 text-sm mt-1">Generate or write some questions first!</p>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="mt-4 border-[#71E0DC]/30 text-[#71E0DC]"
-                        onClick={() => { setShowWriteForm(type.value); setWriteForm({ ...emptyForm }); }}
-                        data-testid="write-first-question-btn"
-                      >
-                        <Plus size={16} className="mr-1" /> Write One
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="space-y-3 pr-4">
-                      {getFilteredQuestions(type.value).map((question, index) => {
-                        const isSelected = selected[type.value].includes(question.id);
-                        const categoryUsed = !isSelected && getUsedCategories(type.value).includes(question.category);
-
-                        return (
-                          <div
-                            key={question.id}
-                            onClick={() => !categoryUsed && toggleQuestion(question.id, type.value)}
-                            className={`session-question-card ${isSelected ? "selected" : ""} ${categoryUsed ? "opacity-50 cursor-not-allowed" : ""}`}
-                            data-testid={`question-${type.value}-${index}`}
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2 mb-2 flex-wrap">
-                                  <Badge variant="outline" className={`text-xs ${categoryUsed ? "border-amber-500/50 text-amber-400" : "border-zinc-700 text-zinc-400"}`}>
-                                    {question.category}{categoryUsed && " (used)"}
-                                  </Badge>
-                                  {question.status === "liked" && <Badge className="bg-emerald-500/20 text-emerald-400 text-xs">Liked</Badge>}
-                                  {question.source === "manual" && <Badge className="bg-zinc-700/50 text-zinc-400 text-xs">Custom</Badge>}
-                                </div>
-                                <p className="text-white text-sm">{question.question}</p>
-                                <p className="text-zinc-500 text-xs mt-1">Answer: <span className="text-emerald-400">{question.answer}</span></p>
-                                {question.options && question.options.length > 0 && (
-                                  <div className="flex gap-1 mt-1 flex-wrap">
-                                    {question.options.map((o, i) => (
-                                      <span key={i} className="text-xs px-1.5 py-0.5 rounded bg-zinc-800/70 text-zinc-400">{o}</span>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                              <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${isSelected ? "bg-[#71E0DC] border-[#71E0DC]" : "border-zinc-600"}`}>
-                                {isSelected && <Check size={14} className="text-zinc-900" />}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </ScrollArea>
-              </TabsContent>
-            ))}
+            <ScrollArea className="h-[520px] pr-3">
+              {availableQuestions.length === 0 ? (
+                <div className="text-center py-16">
+                  <p className="text-zinc-500">No unused {activeRound.title.toLowerCase()} questions found.</p>
+                  <Button onClick={handleGenerateForActiveRound} disabled={generatingRound === activeRound.id} className="gradient-btn mt-4">
+                    {generatingRound === activeRound.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles size={16} className="mr-2" />}
+                    Generate Some
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {availableQuestions.map((question) => (
+                    <QuestionRow key={question.id} question={question} selected={(selected[activeRound.id] || []).includes(question.id)} onClick={() => toggleMainQuestion(question)} />
+                  ))}
+                </div>
+              )}
+            </ScrollArea>
           </CardContent>
-        </Tabs>
-      </Card>
+        </Card>
+
+        <Card className="glass-card">
+          <CardHeader>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <CardTitle className="text-white flex items-center gap-2"><Image className="text-amber-400" size={20} />Picture Bonuses</CardTitle>
+                <CardDescription className="text-zinc-500">One bonus per round, 3 total.</CardDescription>
+              </div>
+              <Button size="sm" variant="outline" onClick={handleGeneratePictureBonus} disabled={generatingRound === "picture" || selectedPictures.length >= 3} className="border-amber-500/30 text-amber-300">
+                {generatingRound === "picture" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus size={15} />}
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="mb-4">
+              <p className="text-sm text-zinc-400">Selected: <span className="text-amber-300">{selectedPictures.length}/3</span></p>
+            </div>
+            <SelectedStrip questions={selectedQuestionsByRound.picture} onRemove={(id) => togglePictureQuestion({ id })} compact />
+            <ScrollArea className="h-[500px] pr-2">
+              {availablePictures.length === 0 ? (
+                <div className="text-center py-12">
+                  <p className="text-zinc-500 text-sm">No unused picture prompts found.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {availablePictures.map((question) => (
+                    <QuestionRow key={question.id} question={question} selected={(selected.picture || []).includes(question.id)} onClick={() => togglePictureQuestion(question)} compact />
+                  ))}
+                </div>
+              )}
+            </ScrollArea>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 };
 
-const WriteQuestionForm = ({ type, form, setForm, onSubmit, onCancel, creating }) => {
-  const isMC = type === "multiple_choice";
-  const isTF = type === "true_false";
-  const isPicture = type === "picture";
-
-  const updateOption = (idx, val) => {
-    setForm((prev) => {
-      const opts = [...prev.options];
-      opts[idx] = val;
-      return { ...prev, options: opts };
-    });
-  };
-
+const SelectedStrip = ({ questions, onRemove, compact = false }) => {
+  if (!questions.length) return null;
   return (
-    <div className="mb-6 p-4 rounded-xl bg-zinc-900/80 border border-[#71E0DC]/20" data-testid="write-question-form">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-white font-semibold flex items-center gap-2">
-          <Plus size={18} className="text-[#71E0DC]" /> Write Custom Question
-        </h3>
-        <Button variant="ghost" size="sm" onClick={onCancel} className="text-zinc-500 hover:text-white h-8" data-testid="cancel-write-btn">
-          <X size={16} />
-        </Button>
-      </div>
-
-      <div className="space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="space-y-2">
-            <Label className="text-zinc-400 text-sm">Category *</Label>
-            <Input
-              value={form.category}
-              onChange={(e) => setForm((p) => ({ ...p, category: e.target.value }))}
-              placeholder="e.g., Science, History, Pop Culture"
-              className="bg-zinc-950/50 border-white/10 text-white"
-              data-testid="write-category-input"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label className="text-zinc-400 text-sm">Fun Fact (optional)</Label>
-            <Input
-              value={form.fun_fact}
-              onChange={(e) => setForm((p) => ({ ...p, fun_fact: e.target.value }))}
-              placeholder="An interesting fact about the answer"
-              className="bg-zinc-950/50 border-white/10 text-white"
-              data-testid="write-funfact-input"
-            />
-          </div>
-        </div>
-
-        <div className="space-y-2">
-          <Label className="text-zinc-400 text-sm">Question *</Label>
-          <Textarea
-            value={form.question}
-            onChange={(e) => setForm((p) => ({ ...p, question: e.target.value }))}
-            placeholder="Type your question here..."
-            className="bg-zinc-950/50 border-white/10 text-white min-h-[80px] resize-none"
-            data-testid="write-question-input"
-          />
-        </div>
-
-        {isTF ? (
-          <div className="space-y-2">
-            <Label className="text-zinc-400 text-sm">Answer *</Label>
-            <div className="flex gap-3">
-              <Button
-                type="button"
-                variant={form.answer === "True" ? "default" : "outline"}
-                onClick={() => setForm((p) => ({ ...p, answer: "True" }))}
-                className={form.answer === "True" ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-300" : "border-zinc-700 text-zinc-400"}
-                data-testid="write-answer-true"
-              >
-                True
-              </Button>
-              <Button
-                type="button"
-                variant={form.answer === "False" ? "default" : "outline"}
-                onClick={() => setForm((p) => ({ ...p, answer: "False" }))}
-                className={form.answer === "False" ? "bg-red-500/20 border-red-500/40 text-red-300" : "border-zinc-700 text-zinc-400"}
-                data-testid="write-answer-false"
-              >
-                False
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            <Label className="text-zinc-400 text-sm">Answer *</Label>
-            <Input
-              value={form.answer}
-              onChange={(e) => setForm((p) => ({ ...p, answer: e.target.value }))}
-              placeholder={isMC ? "The correct option (must match one of the options below)" : "The correct answer"}
-              className="bg-zinc-950/50 border-white/10 text-white"
-              data-testid="write-answer-input"
-            />
-          </div>
-        )}
-
-        {isMC && (
-          <div className="space-y-2">
-            <Label className="text-zinc-400 text-sm">Options (at least 2, max 4)</Label>
-            <div className="grid grid-cols-2 gap-2">
-              {form.options.map((opt, i) => (
-                <Input
-                  key={i}
-                  value={opt}
-                  onChange={(e) => updateOption(i, e.target.value)}
-                  placeholder={`Option ${i + 1}`}
-                  className={`bg-zinc-950/50 border-white/10 text-white ${opt && opt === form.answer ? "border-emerald-500/50" : ""}`}
-                  data-testid={`write-option-${i}`}
-                />
-              ))}
-            </div>
-            <p className="text-zinc-600 text-xs">The answer should match one of these options exactly.</p>
-          </div>
-        )}
-
-        {isPicture && (
-          <div className="space-y-2">
-            <Label className="text-zinc-400 text-sm">Image URL (optional)</Label>
-            <Input
-              value={form.image_url}
-              onChange={(e) => setForm((p) => ({ ...p, image_url: e.target.value }))}
-              placeholder="https://example.com/image.jpg"
-              className="bg-zinc-950/50 border-white/10 text-white"
-              data-testid="write-image-url-input"
-            />
-            <p className="text-zinc-600 text-xs">You can also upload images from the Question Library later.</p>
-          </div>
-        )}
-
-        <div className="flex justify-end gap-2 pt-2">
-          <Button variant="outline" onClick={onCancel} className="border-zinc-700 text-zinc-400" data-testid="cancel-write-btn-bottom">
-            Cancel
-          </Button>
-          <Button onClick={onSubmit} disabled={creating} className="bg-gradient-to-r from-[#71E0DC] to-[#AEB2EF] text-zinc-900 font-bold" data-testid="submit-write-btn">
-            {creating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus size={16} className="mr-2" />}
-            Create & Select
-          </Button>
-        </div>
+    <div className="mb-4 p-3 rounded-lg bg-[#71E0DC]/10 border border-[#71E0DC]/20">
+      <p className="text-[#71E0DC] text-sm font-medium mb-2">Selected</p>
+      <div className="flex flex-wrap gap-2">
+        {questions.map((question, index) => (
+          <button key={question.id} onClick={() => onRemove(question.id)} className="inline-flex items-center gap-2 rounded-full bg-zinc-900/80 border border-white/10 px-3 py-1.5 text-xs text-zinc-300 hover:text-white">
+            <span>{compact ? index + 1 : `${index + 1}. ${question.category}`}</span>
+            <X size={12} />
+          </button>
+        ))}
       </div>
     </div>
   );
 };
+
+const QuestionRow = ({ question, selected, onClick, compact = false }) => (
+  <div onClick={onClick} className={`session-question-card ${selected ? "selected" : ""}`}>
+    <div className="flex items-start justify-between gap-3">
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-2 flex-wrap">
+          <Badge variant="outline" className="text-xs border-zinc-700 text-zinc-400">{question.category}</Badge>
+          {question.isGenerated && <Badge className="bg-[#71E0DC]/15 text-[#71E0DC] text-xs">AI</Badge>}
+        </div>
+        <p className={`text-white ${compact ? "text-xs" : "text-sm"}`}>{question.question_text}</p>
+        <p className="text-zinc-500 text-xs mt-1">Answer: <span className="text-emerald-400">{question.correct_answer}</span></p>
+        {question.options?.length > 0 && (
+          <div className="flex gap-1 mt-1 flex-wrap">
+            {question.options.map((option, index) => (
+              <span key={index} className="text-xs px-1.5 py-0.5 rounded bg-zinc-800/70 text-zinc-400">{option}</span>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${selected ? "bg-[#71E0DC] border-[#71E0DC]" : "border-zinc-600"}`}>
+        {selected && <Check size={14} className="text-zinc-900" />}
+      </div>
+    </div>
+  </div>
+);
 
 export default BuildSession;
