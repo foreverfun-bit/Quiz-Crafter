@@ -1,19 +1,22 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "../App";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { supabase } from "../lib/supabase";
+import { Card, CardContent } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Badge } from "../components/ui/badge";
 import { ScrollArea } from "../components/ui/scroll-area";
-import { 
+import {
   FolderOpen,
   Search,
   ThumbsDown,
   ArrowLeft,
-  Loader2
 } from "lucide-react";
 import { toast } from "sonner";
+
+const STORAGE_KEY = "quiz-crafter-category-preferences";
+const rejectedValues = new Set(["rejected", "reject", "hidden", "hide", "disliked", "dislike", "bad"]);
+const approvedValues = new Set(["approved", "approve", "active", "accepted", "accept", "good"]);
 
 const Categories = () => {
   const navigate = useNavigate();
@@ -29,13 +32,32 @@ const Categories = () => {
 
   const fetchData = async () => {
     try {
-      const [catResponse, dislikedResponse] = await Promise.all([
-        api.get("/categories"),
-        api.get("/categories/disliked")
+      const [questionsResult, categoryState] = await Promise.all([
+        supabase.from("questions").select("*"),
+        fetchCategoryState(),
       ]);
-      setCategories(catResponse.data);
-      setDislikedCategories(dislikedResponse.data);
+
+      if (questionsResult.error) throw questionsResult.error;
+
+      const active = new Set(categoryState.approved);
+      const rejected = new Set(categoryState.rejected);
+
+      (questionsResult.data || []).forEach((question) => {
+        const category = cleanCategory(question.category);
+        if (!category) return;
+
+        if (isRejectedQuestionCategory(question)) {
+          rejected.add(category);
+          active.delete(category);
+        } else if (!rejected.has(category)) {
+          active.add(category);
+        }
+      });
+
+      setCategories(sortCategories([...active]));
+      setDislikedCategories(sortCategories([...rejected]));
     } catch (error) {
+      console.error("Failed to load categories:", error);
       toast.error("Failed to load categories");
     } finally {
       setLoading(false);
@@ -43,27 +65,28 @@ const Categories = () => {
   };
 
   const handleDislike = async (category) => {
-    try {
-      await api.post("/categories/dislike", { category });
-      setCategories(prev => prev.filter(c => c !== category));
-      setDislikedCategories(prev => [...prev, category]);
-      toast.success(`"${category}" hidden from future suggestions`);
-    } catch (error) {
-      toast.error("Failed to hide category");
-    }
+    const clean = cleanCategory(category);
+    if (!clean) return;
+
+    setCategories((prev) => prev.filter((c) => c !== clean));
+    setDislikedCategories((prev) => sortCategories([...new Set([...prev, clean])]));
+
+    const saved = await saveCategoryPreference(clean, "rejected");
+    toast.success(saved ? `"${clean}" hidden from future suggestions` : `"${clean}" hidden on this device`);
   };
 
   const handleRestore = async (category) => {
-    try {
-      await api.delete(`/categories/dislike/${encodeURIComponent(category)}`);
-      setDislikedCategories(prev => prev.filter(c => c !== category));
-      toast.success(`"${category}" restored`);
-    } catch (error) {
-      toast.error("Failed to restore category");
-    }
+    const clean = cleanCategory(category);
+    if (!clean) return;
+
+    setDislikedCategories((prev) => prev.filter((c) => c !== clean));
+    setCategories((prev) => sortCategories([...new Set([...prev, clean])]));
+
+    const saved = await saveCategoryPreference(clean, "approved");
+    toast.success(saved ? `"${clean}" restored` : `"${clean}" restored on this device`);
   };
 
-  const filteredCategories = (showDisliked ? dislikedCategories : categories).filter(cat =>
+  const filteredCategories = (showDisliked ? dislikedCategories : categories).filter((cat) =>
     cat.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -77,7 +100,6 @@ const Categories = () => {
 
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto animate-fade-in" data-testid="categories-page">
-      {/* Header */}
       <div className="flex items-center gap-4 mb-8">
         <Button
           variant="ghost"
@@ -92,12 +114,11 @@ const Categories = () => {
             Your <span className="gradient-text">Categories</span>
           </h1>
           <p className="text-zinc-500">
-            {categories.length} active categories from your questions
+            {categories.length} approved and {dislikedCategories.length} rejected categories
           </p>
         </div>
       </div>
 
-      {/* Tabs & Search */}
       <Card className="glass-card mb-6">
         <CardContent className="p-4">
           <div className="flex flex-col md:flex-row gap-4 items-center">
@@ -108,7 +129,7 @@ const Categories = () => {
                 className={!showDisliked ? "gradient-btn" : "border-white/20 text-white hover:bg-zinc-800"}
                 data-testid="active-tab"
               >
-                Active ({categories.length})
+                Approved ({categories.length})
               </Button>
               <Button
                 variant={showDisliked ? "default" : "outline"}
@@ -116,7 +137,7 @@ const Categories = () => {
                 className={showDisliked ? "bg-red-500/20 text-red-400 border-red-500/30" : "border-white/20 text-white hover:bg-zinc-800"}
                 data-testid="hidden-tab"
               >
-                Hidden ({dislikedCategories.length})
+                Rejected ({dislikedCategories.length})
               </Button>
             </div>
             <div className="flex-1 relative">
@@ -133,7 +154,6 @@ const Categories = () => {
         </CardContent>
       </Card>
 
-      {/* Categories List */}
       {filteredCategories.length === 0 ? (
         <Card className="glass-card">
           <CardContent className="py-16 text-center">
@@ -141,7 +161,7 @@ const Categories = () => {
               <FolderOpen className="text-zinc-600" size={32} />
             </div>
             <p className="text-zinc-500">
-              {searchQuery ? "No categories match your search" : showDisliked ? "No hidden categories" : "No categories yet"}
+              {searchQuery ? "No categories match your search" : showDisliked ? "No rejected categories" : "No approved categories yet"}
             </p>
           </CardContent>
         </Card>
@@ -152,11 +172,11 @@ const Categories = () => {
               <div className="flex flex-wrap gap-3">
                 {filteredCategories.map((category, index) => (
                   <div
-                    key={index}
+                    key={category}
                     className={`group flex items-center gap-2 px-4 py-2 rounded-full border transition-all ${
                       showDisliked
-                        ? 'bg-red-500/10 border-red-500/30 text-red-400'
-                        : 'bg-zinc-800/50 border-white/10 text-white hover:border-[#71E0DC]/50'
+                        ? "bg-red-500/10 border-red-500/30 text-red-400"
+                        : "bg-emerald-500/10 border-emerald-500/30 text-emerald-300 hover:border-[#71E0DC]/50"
                     }`}
                     data-testid={`category-${index}`}
                   >
@@ -169,15 +189,15 @@ const Categories = () => {
                         data-testid={`restore-${index}`}
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
-                          <path d="M3 3v5h5"/>
+                          <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                          <path d="M3 3v5h5" />
                         </svg>
                       </button>
                     ) : (
                       <button
                         onClick={() => handleDislike(category)}
                         className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-red-500/20 text-zinc-500 hover:text-red-400 transition-all"
-                        title="Hide category"
+                        title="Reject category"
                         data-testid={`hide-${index}`}
                       >
                         <ThumbsDown size={14} />
@@ -191,17 +211,138 @@ const Categories = () => {
         </Card>
       )}
 
-      {/* Info */}
       <Card className="glass-card mt-6">
         <CardContent className="p-4">
           <p className="text-zinc-500 text-sm">
-            <strong className="text-zinc-300">Tip:</strong> Hidden categories won't appear when generating random categories. 
-            Hover over a category and click the thumbs down to hide it.
+            <strong className="text-zinc-300">Tip:</strong> Rejected categories are kept out of future category planning. Hover over a category to reject or restore it.
           </p>
         </CardContent>
       </Card>
     </div>
   );
 };
+
+async function fetchCategoryState() {
+  const local = loadLocalPreferences();
+  const approved = new Set(local.approved);
+  const rejected = new Set(local.rejected);
+
+  const results = await Promise.allSettled([
+    supabase.from("categories").select("*"),
+    supabase.from("disliked_categories").select("*"),
+    supabase.from("rejected_categories").select("*"),
+    supabase.from("category_preferences").select("*"),
+  ]);
+
+  results.forEach((result) => {
+    if (result.status !== "fulfilled" || result.value.error || !Array.isArray(result.value.data)) return;
+
+    result.value.data.forEach((row) => {
+      const category = cleanCategory(row.category || row.name || row.category_name || row.value);
+      if (!category) return;
+
+      const status = normalizeStatus(row.status || row.state || row.approval_status || row.preference || row.rating);
+      const rejectedByFlag = isTruthy(row.rejected) || isTruthy(row.is_rejected) || isTruthy(row.hidden) || isTruthy(row.is_hidden) || isTruthy(row.disliked) || isTruthy(row.is_disliked);
+      const approvedByFlag = isTruthy(row.approved) || isTruthy(row.is_approved) || isTruthy(row.active) || isTruthy(row.is_active);
+
+      if (rejectedValues.has(status) || rejectedByFlag) {
+        rejected.add(category);
+        approved.delete(category);
+      } else if (approvedValues.has(status) || approvedByFlag || !status) {
+        if (!rejected.has(category)) approved.add(category);
+      }
+    });
+  });
+
+  return { approved, rejected };
+}
+
+async function saveCategoryPreference(category, status) {
+  const local = loadLocalPreferences();
+  const target = status === "rejected" ? local.rejected : local.approved;
+  const opposite = status === "rejected" ? local.approved : local.rejected;
+  target.add(category);
+  opposite.delete(category);
+  saveLocalPreferences(local);
+
+  const session = await supabase.auth.getSession();
+  const userId = session.data?.session?.user?.id;
+  const basePayload = { category, status };
+  const payloads = userId ? [{ ...basePayload, user_id: userId }, basePayload] : [basePayload];
+
+  for (const payload of payloads) {
+    const { error } = await supabase.from("category_preferences").upsert(payload);
+    if (!error) return true;
+  }
+
+  if (status === "rejected") {
+    for (const payload of payloads) {
+      const { error } = await supabase.from("rejected_categories").upsert(payload);
+      if (!error) return true;
+    }
+  } else {
+    for (const payload of payloads) {
+      const { error } = await supabase.from("categories").upsert(payload);
+      if (!error) return true;
+    }
+  }
+
+  return false;
+}
+
+function loadLocalPreferences() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+    return {
+      approved: new Set(Array.isArray(saved.approved) ? saved.approved : []),
+      rejected: new Set(Array.isArray(saved.rejected) ? saved.rejected : []),
+    };
+  } catch {
+    return { approved: new Set(), rejected: new Set() };
+  }
+}
+
+function saveLocalPreferences(preferences) {
+  localStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify({
+      approved: [...preferences.approved],
+      rejected: [...preferences.rejected],
+    })
+  );
+}
+
+function isRejectedQuestionCategory(question) {
+  const status = normalizeStatus(
+    question.category_status || question.category_state || question.approval_status || question.status || question.rating
+  );
+
+  return (
+    rejectedValues.has(status) ||
+    isTruthy(question.rejected) ||
+    isTruthy(question.is_rejected) ||
+    isTruthy(question.category_rejected) ||
+    isTruthy(question.hidden) ||
+    isTruthy(question.is_hidden) ||
+    isTruthy(question.disliked) ||
+    isTruthy(question.is_disliked)
+  );
+}
+
+function cleanCategory(value) {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+}
+
+function normalizeStatus(value) {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function isTruthy(value) {
+  return value === true || value === 1 || value === "1" || normalizeStatus(value) === "true";
+}
+
+function sortCategories(value) {
+  return value.filter(Boolean).sort((a, b) => a.localeCompare(b));
+}
 
 export default Categories;
