@@ -58,20 +58,16 @@ const readJsonResponse = async (response, fallbackMessage) => {
   return data;
 };
 
-const readErrorMessage = async (response, fallbackMessage) => {
-  try {
-    const raw = await response.clone().text();
-    if (!raw) return fallbackMessage;
-
-    try {
-      const data = JSON.parse(raw);
-      return data.error || fallbackMessage;
-    } catch {
-      return raw.slice(0, 200) || fallbackMessage;
-    }
-  } catch {
-    return fallbackMessage;
+const buildIncorrectAnswers = (type, correctAnswer, wrongAnswers) => {
+  if (type === "true_false") {
+    return correctAnswer.toLowerCase() === "false" ? "True" : "False";
   }
+
+  if (type === "multiple_choice") {
+    return wrongAnswers.join("; ");
+  }
+
+  return null;
 };
 
 const WriteQuestion = () => {
@@ -149,47 +145,45 @@ const WriteQuestion = () => {
     const questionText = form.question_text.trim();
     const category = form.category.trim();
     const correctAnswer = form.correct_answer.trim();
+    const wrongAnswers = cleanList(form.incorrect_answers).filter(
+      (answer) => answer.toLowerCase() !== correctAnswer.toLowerCase()
+    );
 
     if (!questionText || !category || !correctAnswer) {
       toast.error("Question, category, and answer are required");
       return;
     }
 
-    if (form.question_type === "multiple_choice") {
-      const wrongAnswers = cleanList(form.incorrect_answers);
-      if (wrongAnswers.length < 2) {
-        toast.error("Add at least two wrong answers for multiple choice");
-        return;
-      }
+    if (form.question_type === "multiple_choice" && wrongAnswers.length < 2) {
+      toast.error("Add at least two wrong answers for multiple choice");
+      return;
     }
 
     setSaving(true);
     try {
       const {
         data: { session },
+        error: sessionError,
       } = await supabase.auth.getSession();
 
-      if (!session?.user?.id) {
-        throw new Error("You must be signed in");
-      }
+      if (sessionError) throw sessionError;
+      if (!session?.user?.id) throw new Error("You must be signed in");
 
-      const response = await fetch("/api/save-custom-question", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user_id: session.user.id,
-          category,
-          question_text: questionText,
-          question_type: form.question_type,
-          correct_answer: correctAnswer,
-          incorrect_answers: cleanList(form.incorrect_answers),
-          fun_fact: form.fun_fact.trim() || null,
-        }),
-      });
+      const payload = {
+        user_id: session.user.id,
+        category,
+        question_text: questionText,
+        question_type: form.question_type,
+        correct_answer: form.question_type === "true_false" ? (correctAnswer.toLowerCase() === "false" ? "False" : "True") : correctAnswer,
+        incorrect_answers: buildIncorrectAnswers(form.question_type, correctAnswer, wrongAnswers),
+        fun_fact: form.fun_fact.trim() || null,
+        source: "manual",
+        has_image: false,
+        image_url: null,
+      };
 
-      if (!response.ok) {
-        throw new Error(await readErrorMessage(response, "Failed to save question"));
-      }
+      const { error } = await supabase.from("questions").insert(payload);
+      if (error) throw error;
 
       toast.success("Question saved to library");
       setForm(initialForm);
