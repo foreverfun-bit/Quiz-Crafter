@@ -103,12 +103,6 @@ const AppLayout = ({ children }) => {
   );
 };
 
-const protectedPage = (children) => (
-  <ProtectedRoute>
-    <AppLayout>{children}</AppLayout>
-  </ProtectedRoute>
-);
-
 function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -258,32 +252,23 @@ function App() {
           />
           <Routes>
             <Route path="/login" element={<Login />} />
-            <Route path="/" element={protectedPage(<Dashboard />)} />
-            <Route path="/generate" element={protectedPage(<Generate />)} />
-            <Route path="/write-question" element={protectedPage(<WriteQuestion />)} />
-            <Route path="/library" element={protectedPage(<Library />)} />
-            <Route path="/build" element={protectedPage(<BuildSession />)} />
-            <Route path="/past-sessions" element={protectedPage(<PastSessions />)} />
-            <Route path="/import" element={protectedPage(<ImportCSV />)} />
-            <Route path="/session/:id" element={protectedPage(<SessionDetail />)} />
-            <Route path="/categories" element={protectedPage(<Categories />)} />
-            <Route path="/reset-data" element={protectedPage(<ResetData />)} />
+            <Route path="/" element={<ProtectedRoute><AppLayout><Dashboard /></AppLayout></ProtectedRoute>} />
+            <Route path="/generate" element={<ProtectedRoute><AppLayout><Generate /></AppLayout></ProtectedRoute>} />
+            <Route path="/write-question" element={<ProtectedRoute><AppLayout><WriteQuestion /></AppLayout></ProtectedRoute>} />
+            <Route path="/library" element={<ProtectedRoute><AppLayout><Library /></AppLayout></ProtectedRoute>} />
+            <Route path="/build" element={<ProtectedRoute><AppLayout><BuildSession /></AppLayout></ProtectedRoute>} />
+            <Route path="/past-sessions" element={<ProtectedRoute><AppLayout><PastSessions /></AppLayout></ProtectedRoute>} />
+            <Route path="/import" element={<ProtectedRoute><AppLayout><ImportCSV /></AppLayout></ProtectedRoute>} />
+            <Route path="/session/:id" element={<ProtectedRoute><AppLayout><SessionDetail /></AppLayout></ProtectedRoute>} />
+            <Route path="/categories" element={<ProtectedRoute><AppLayout><Categories /></AppLayout></ProtectedRoute>} />
+            <Route path="/reset-data" element={<ProtectedRoute><AppLayout><ResetData /></AppLayout></ProtectedRoute>} />
 
             <Route path="/join" element={<JoinGame />} />
             <Route path="/play/:gameId" element={<PlayerView />} />
             <Route path="/present/:code" element={<PresentView />} />
-
-            <Route
-              path="/host/:gameId"
-              element={
-                <ProtectedRoute>
-                  <HostControl />
-                </ProtectedRoute>
-              }
-            />
-
-            <Route path="/game-history" element={protectedPage(<GameHistory />)} />
-            <Route path="/game-history/:historyId" element={protectedPage(<GameHistoryDetail />)} />
+            <Route path="/host/:gameId" element={<ProtectedRoute><HostControl /></ProtectedRoute>} />
+            <Route path="/game-history" element={<ProtectedRoute><AppLayout><GameHistory /></AppLayout></ProtectedRoute>} />
+            <Route path="/game-history/:historyId" element={<ProtectedRoute><AppLayout><GameHistoryDetail /></AppLayout></ProtectedRoute>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
