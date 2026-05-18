@@ -3,6 +3,14 @@ import { supabase } from "../lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
+import { Label } from "../components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui/select";
 import {
   Upload,
   FileText,
@@ -11,11 +19,21 @@ import {
   Loader2,
   Eye,
   FileUp,
+  FileSpreadsheet,
 } from "lucide-react";
 import { toast } from "sonner";
 
+const sourceOptions = [
+  { value: "auto", label: "Auto Detect", description: "Best choice for most files" },
+  { value: "crowdpurr", label: "CrowdPurr", description: "CrowdPurr CSV exports" },
+  { value: "trivianow", label: "TriviaNow", description: "TriviaNow CSV exports" },
+  { value: "generic", label: "Generic CSV", description: "Question/answer spreadsheets" },
+  { value: "pdf", label: "PDF", description: "PDF rounds or question sheets" },
+];
+
 const ImportCSV = () => {
   const [file, setFile] = useState(null);
+  const [source, setSource] = useState("auto");
   const [previewing, setPreviewing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [preview, setPreview] = useState(null);
@@ -27,8 +45,10 @@ const ImportCSV = () => {
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
 
-    if (!selectedFile.name.toLowerCase().endsWith(".csv")) {
-      toast.error("Please select a CSV file");
+    const lowerName = selectedFile.name.toLowerCase();
+    const supported = [".csv", ".tsv", ".txt", ".pdf"].some((extension) => lowerName.endsWith(extension));
+    if (!supported) {
+      toast.error("Please select a CSV, TSV, TXT, or PDF file");
       return;
     }
 
@@ -36,7 +56,7 @@ const ImportCSV = () => {
     setPreview(null);
     setResult(null);
 
-    await handlePreview(selectedFile);
+    await handlePreview(selectedFile, source);
   };
 
   const parseJsonResponse = async (response, fallbackMessage) => {
@@ -54,26 +74,41 @@ const ImportCSV = () => {
     return data;
   };
 
-  const handlePreview = async (selectedFile) => {
+  const buildFormData = (selectedFile, action, selectedSource) => {
+    const formData = new FormData();
+    formData.append("file", selectedFile);
+    formData.append("action", action);
+    formData.append("source", selectedSource);
+    return formData;
+  };
+
+  const handlePreview = async (selectedFile = file, selectedSource = source) => {
+    if (!selectedFile) return;
+
     setPreviewing(true);
 
     try {
-      const formData = new FormData();
-      formData.append("file", selectedFile);
-
-      const response = await fetch("/api/import-preview-crowdpurr", {
+      const response = await fetch("/api/import-questions", {
         method: "POST",
-        body: formData,
+        body: buildFormData(selectedFile, "preview", selectedSource),
       });
 
-      const data = await parseJsonResponse(response, "Failed to preview Crowdpurr CSV");
+      const data = await parseJsonResponse(response, "Failed to preview import file");
       setPreview(data);
     } catch (error) {
       console.error("Preview failed:", error);
+      setPreview(null);
       toast.error(error.message || "Preview failed");
     } finally {
       setPreviewing(false);
     }
+  };
+
+  const handleSourceChange = async (value) => {
+    setSource(value);
+    setPreview(null);
+    setResult(null);
+    if (file) await handlePreview(file, value);
   };
 
   const handleImport = async () => {
@@ -94,11 +129,10 @@ const ImportCSV = () => {
         throw new Error("You must be signed in");
       }
 
-      const formData = new FormData();
-      formData.append("file", file);
+      const formData = buildFormData(file, "import", source);
       formData.append("sessionUserId", userId);
 
-      const response = await fetch("/api/import-crowdpurr", {
+      const response = await fetch("/api/import-questions", {
         method: "POST",
         body: formData,
       });
@@ -129,33 +163,61 @@ const ImportCSV = () => {
     }
   };
 
+  const selectedSource = sourceOptions.find((option) => option.value === source) || sourceOptions[0];
+
   return (
     <div className="p-6 lg:p-8 max-w-5xl mx-auto animate-fade-in">
       <div className="mb-8">
         <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">
-          <span className="gradient-text">Import</span> Crowdpurr CSV
+          <span className="gradient-text">Import</span> Questions
         </h1>
         <p className="text-zinc-500">
-          Import past trivia sessions from Crowdpurr exports
+          Bring in PDF question sheets, CrowdPurr exports, TriviaNow exports, or standard question spreadsheets.
         </p>
       </div>
 
       <Card className="glass-card mb-6">
         <CardHeader>
-          <CardTitle className="text-white text-lg">Supported Crowdpurr Fields</CardTitle>
+          <CardTitle className="text-white text-lg">Import Source</CardTitle>
           <CardDescription className="text-zinc-500">
-            This importer reads row-based Crowdpurr CSV exports
+            Auto Detect is usually enough, but you can force a source when the preview looks wrong.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-4 items-end">
+            <div className="space-y-2">
+              <Label className="text-zinc-300">Source</Label>
+              <Select value={source} onValueChange={handleSourceChange}>
+                <SelectTrigger className="bg-zinc-950/50 border-white/10 text-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-900 border-white/10 text-white">
+                  {sourceOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="rounded-lg border border-white/10 bg-zinc-950/40 p-4">
+              <p className="text-white font-medium">{selectedSource.label}</p>
+              <p className="text-zinc-500 text-sm mt-1">{selectedSource.description}</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="glass-card mb-6">
+        <CardHeader>
+          <CardTitle className="text-white text-lg">Supported Files</CardTitle>
+          <CardDescription className="text-zinc-500">
+            The importer maps your file into saved library questions and creates a past session when possible.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap gap-2">
-            {[
-              "Question",
-              "Question Type",
-              "Question Note",
-              "Correct Answer(s)",
-              "Additional Answers",
-            ].map((col) => (
+            {["PDF", "CrowdPurr CSV", "TriviaNow CSV", "Generic CSV", "TSV", "TXT"].map((col) => (
               <Badge key={col} className="bg-zinc-800 text-zinc-300">
                 {col}
               </Badge>
@@ -175,7 +237,7 @@ const ImportCSV = () => {
             <input
               ref={fileInputRef}
               type="file"
-              accept=".csv"
+              accept=".csv,.tsv,.txt,.pdf,text/csv,application/pdf"
               onChange={handleFileChange}
               className="hidden"
             />
@@ -184,7 +246,11 @@ const ImportCSV = () => {
               {file ? (
                 <>
                   <div className="w-16 h-16 rounded-full bg-[#71E0DC]/20 flex items-center justify-center mb-4">
-                    <FileText className="text-[#71E0DC]" size={32} />
+                    {file.name.toLowerCase().endsWith(".pdf") ? (
+                      <FileText className="text-[#71E0DC]" size={32} />
+                    ) : (
+                      <FileSpreadsheet className="text-[#71E0DC]" size={32} />
+                    )}
                   </div>
                   <p className="text-white font-semibold mb-1">{file.name}</p>
                   <p className="text-zinc-500 text-sm">{(file.size / 1024).toFixed(1)} KB</p>
@@ -195,8 +261,8 @@ const ImportCSV = () => {
                   <div className="w-16 h-16 rounded-full bg-zinc-800 flex items-center justify-center mb-4">
                     <FileUp className="text-zinc-500" size={32} />
                   </div>
-                  <p className="text-white font-semibold mb-1">Upload a Crowdpurr CSV</p>
-                  <p className="text-zinc-500 text-sm">Click to browse</p>
+                  <p className="text-white font-semibold mb-1">Upload questions</p>
+                  <p className="text-zinc-500 text-sm">CSV, TSV, TXT, or PDF</p>
                 </>
               )}
             </div>
@@ -205,7 +271,7 @@ const ImportCSV = () => {
           {previewing && (
             <div className="mt-6 flex items-center justify-center py-4">
               <Loader2 className="h-5 w-5 animate-spin text-zinc-500 mr-2" />
-              <span className="text-zinc-500">Analyzing CSV...</span>
+              <span className="text-zinc-500">Analyzing file...</span>
             </div>
           )}
 
@@ -221,28 +287,31 @@ const ImportCSV = () => {
                   Format detected: <span className="text-[#71E0DC]">{preview.format}</span>
                 </p>
                 <p className="text-zinc-300">
-                  Rows found: <span className="text-[#71E0DC]">{preview.row_count}</span>
+                  Questions found: <span className="text-[#71E0DC]">{preview.row_count}</span>
                 </p>
               </div>
 
-              <div className="mb-3">
-                <p className="text-zinc-500 text-sm mb-2">Detected Columns:</p>
-                <div className="flex flex-wrap gap-2">
-                  {preview.columns?.map((col, idx) => (
-                    <Badge key={idx} className="bg-zinc-800 text-zinc-300">
-                      {col}
-                    </Badge>
-                  ))}
+              {preview.columns?.length > 0 && (
+                <div className="mb-3">
+                  <p className="text-zinc-500 text-sm mb-2">Detected Fields:</p>
+                  <div className="flex flex-wrap gap-2">
+                    {preview.columns.slice(0, 18).map((col, idx) => (
+                      <Badge key={`${col}-${idx}`} className="bg-zinc-800 text-zinc-300">
+                        {col}
+                      </Badge>
+                    ))}
+                    {preview.columns.length > 18 && <span className="text-zinc-500 text-sm">+{preview.columns.length - 18} more</span>}
+                  </div>
                 </div>
-              </div>
+              )}
 
               {preview.preview?.length > 0 && (
                 <div className="overflow-x-auto">
-                  <p className="text-zinc-500 text-sm mb-2">First {preview.preview.length} row(s):</p>
+                  <p className="text-zinc-500 text-sm mb-2">First {preview.preview.length} question(s):</p>
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="border-b border-white/10">
-                        {["question", "category", "correctAnswer", "incorrectAnswers"].map((col) => (
+                        {["question", "type", "category", "answer", "wrong answers"].map((col) => (
                           <th key={col} className="text-left py-1 px-2 text-zinc-400 font-medium">
                             {col}
                           </th>
@@ -252,13 +321,16 @@ const ImportCSV = () => {
                     <tbody>
                       {preview.preview.map((row, idx) => (
                         <tr key={idx} className="border-b border-white/5">
-                          <td className="py-1 px-2 text-zinc-300 max-w-[260px] truncate">
+                          <td className="py-1 px-2 text-zinc-300 max-w-[280px] truncate">
                             {row.question || "-"}
+                          </td>
+                          <td className="py-1 px-2 text-zinc-300">
+                            {row.questionType || "-"}
                           </td>
                           <td className="py-1 px-2 text-zinc-300">
                             {row.category || "-"}
                           </td>
-                          <td className="py-1 px-2 text-zinc-300">
+                          <td className="py-1 px-2 text-zinc-300 max-w-[160px] truncate">
                             {row.correctAnswer || "-"}
                           </td>
                           <td className="py-1 px-2 text-zinc-300 max-w-[180px] truncate">
@@ -273,7 +345,7 @@ const ImportCSV = () => {
 
               {preview.warnings?.length > 0 && (
                 <div className="mt-3 p-2 bg-amber-500/10 rounded text-xs text-amber-300">
-                  {preview.warnings.slice(0, 3).map((warning, i) => (
+                  {preview.warnings.slice(0, 4).map((warning, i) => (
                     <p key={i}>{warning}</p>
                   ))}
                 </div>
@@ -284,7 +356,7 @@ const ImportCSV = () => {
           <div className="mt-6 flex justify-center">
             <Button
               onClick={handleImport}
-              disabled={!file || importing}
+              disabled={!file || importing || previewing || !preview?.row_count}
               className="gradient-btn px-8"
             >
               {importing ? (
@@ -295,7 +367,7 @@ const ImportCSV = () => {
               ) : (
                 <>
                   <Upload className="mr-2" size={18} />
-                  Import Crowdpurr CSV
+                  Import Questions
                 </>
               )}
             </Button>
