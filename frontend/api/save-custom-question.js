@@ -75,7 +75,6 @@ module.exports = async function handler(req, res) {
       incorrect_answers: buildIncorrectAnswers({ ...body, question_type: questionType, correct_answer: correctAnswer }),
       fun_fact: clean(body.fun_fact) || null,
       source: "manual",
-      has_image: false,
       image_url: null,
     };
 
