@@ -37,6 +37,7 @@ const ImportCSV = () => {
   const [previewing, setPreviewing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [preview, setPreview] = useState(null);
+  const [previewError, setPreviewError] = useState(null);
   const [result, setResult] = useState(null);
 
   const fileInputRef = useRef(null);
@@ -54,6 +55,7 @@ const ImportCSV = () => {
 
     setFile(selectedFile);
     setPreview(null);
+    setPreviewError(null);
     setResult(null);
 
     await handlePreview(selectedFile, source);
@@ -68,7 +70,8 @@ const ImportCSV = () => {
     }
 
     if (!response.ok) {
-      throw new Error(data.error || fallbackMessage);
+      const debugText = data.debug ? ` (${Object.entries(data.debug).map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : value}`).join("; ")})` : "";
+      throw new Error(`${data.error || fallbackMessage}${debugText}`);
     }
 
     return data;
@@ -86,6 +89,7 @@ const ImportCSV = () => {
     if (!selectedFile) return;
 
     setPreviewing(true);
+    setPreviewError(null);
 
     try {
       const response = await fetch("/api/import-questions", {
@@ -98,6 +102,7 @@ const ImportCSV = () => {
     } catch (error) {
       console.error("Preview failed:", error);
       setPreview(null);
+      setPreviewError(error.message || "Preview failed");
       toast.error(error.message || "Preview failed");
     } finally {
       setPreviewing(false);
@@ -107,6 +112,7 @@ const ImportCSV = () => {
   const handleSourceChange = async (value) => {
     setSource(value);
     setPreview(null);
+    setPreviewError(null);
     setResult(null);
     if (file) await handlePreview(file, value);
   };
@@ -272,6 +278,18 @@ const ImportCSV = () => {
             <div className="mt-6 flex items-center justify-center py-4">
               <Loader2 className="h-5 w-5 animate-spin text-zinc-500 mr-2" />
               <span className="text-zinc-500">Analyzing file...</span>
+            </div>
+          )}
+
+          {previewError && !previewing && (
+            <div className="mt-6 p-4 rounded-lg bg-red-500/10 border border-red-500/20">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="text-red-400 flex-shrink-0" size={20} />
+                <div>
+                  <p className="text-red-300 font-semibold">Preview failed</p>
+                  <p className="text-red-200/80 text-sm mt-1 break-words">{previewError}</p>
+                </div>
+              </div>
             </div>
           )}
 
