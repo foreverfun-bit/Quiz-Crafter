@@ -3,12 +3,36 @@ import { useNavigate } from "react-router-dom";
 import { AlertTriangle, Loader2, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "../lib/supabase";
+import { useAuth } from "../App";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Input } from "../components/ui/input";
 
+async function tryDelete(table, applyQuery) {
+  try {
+    const { error } = await applyQuery(supabase.from(table).delete());
+    if (error) throw error;
+    return null;
+  } catch (error) {
+    const message = error?.message || "Delete failed";
+    if (/does not exist|schema cache|Could not find/i.test(message)) return null;
+    return `${table}: ${message}`;
+  }
+}
+
+async function fetchIds(table, userId) {
+  try {
+    const { data, error } = await supabase.from(table).select("id").eq("user_id", userId);
+    if (error) throw error;
+    return (data || []).map((row) => row.id).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 export default function ResetData() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [confirmation, setConfirmation] = useState("");
   const [resetting, setResetting] = useState(false);
   const canReset = confirmation === "DELETE";
@@ -18,25 +42,62 @@ export default function ResetData() {
       toast.error("Type DELETE to confirm");
       return;
     }
+    if (!user?.id) {
+      toast.error("Please log in again before resetting data");
+      return;
+    }
 
     setResetting(true);
     try {
-      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-      if (sessionError) throw sessionError;
-      const token = sessionData?.session?.access_token;
-      if (!token) throw new Error("Please log in again before resetting data");
+      const errors = [];
+      const sessionIds = await fetchIds("sessions", user.id);
+      const gameIds = await fetchIds("game_sessions", user.id);
+      const liveGameIds = await fetchIds("live_games", user.id);
 
-      const response = await fetch("/api/reset-trivia-data", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ confirmation }),
-      });
+      let roundIds = [];
+      if (sessionIds.length) {
+        try {
+          const { data } = await supabase.from("session_rounds").select("id").in("session_id", sessionIds);
+          roundIds = (data || []).map((row) => row.id).filter(Boolean);
+        } catch {
+          roundIds = [];
+        }
+      }
 
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "Reset failed");
+      if (roundIds.length) errors.push(await tryDelete("session_questions", (query) => query.in("session_round_id", roundIds)));
+      if (sessionIds.length) errors.push(await tryDelete("session_rounds", (query) => query.in("session_id", sessionIds)));
+      if (gameIds.length) {
+        errors.push(await tryDelete("game_answers", (query) => query.in("game_id", gameIds)));
+        errors.push(await tryDelete("game_players", (query) => query.in("game_id", gameIds)));
+      }
+      if (liveGameIds.length) {
+        errors.push(await tryDelete("player_answers", (query) => query.in("game_id", liveGameIds)));
+        errors.push(await tryDelete("players", (query) => query.in("game_id", liveGameIds)));
+      }
+
+      for (const table of [
+        "questions",
+        "sessions",
+        "game_history",
+        "game_sessions",
+        "live_games",
+        "games",
+        "players",
+        "game_players",
+        "player_answers",
+        "game_answers",
+        "category_preferences",
+        "categories",
+        "disliked_categories",
+        "rejected_categories",
+      ]) {
+        errors.push(await tryDelete(table, (query) => query.eq("user_id", user.id)));
+      }
+
+      const realErrors = errors.filter(Boolean);
+      if (realErrors.length) {
+        throw new Error(realErrors[0]);
+      }
 
       localStorage.removeItem("trivia-flex-round-builder-state-v3");
       localStorage.removeItem("trivia-flex-round-builder-state-v2");
