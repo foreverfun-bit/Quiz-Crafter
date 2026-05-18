@@ -137,6 +137,31 @@ function detectQuestionType(rawType, correctAnswer, wrongAnswers, imageUrl) {
   return "written";
 }
 
+function getRoundSortValue(value, fallback) {
+  const text = clean(value);
+  const numberMatch = text.match(/\d+/);
+  if (numberMatch) return Number(numberMatch[0]);
+  return fallback;
+}
+
+function compareRoundNames(a, b) {
+  const roundA = Number.isFinite(a.round_order) ? a.round_order : getRoundSortValue(a.round_name || a.category, a.source_order || 0);
+  const roundB = Number.isFinite(b.round_order) ? b.round_order : getRoundSortValue(b.round_name || b.category, b.source_order || 0);
+  if (roundA !== roundB) return roundA - roundB;
+
+  const nameCompare = clean(a.round_name || a.category).localeCompare(clean(b.round_name || b.category), undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+  if (nameCompare !== 0) return nameCompare;
+
+  return (a.source_order || 0) - (b.source_order || 0);
+}
+
+function sortQuestionsByRound(questions) {
+  return [...questions].sort(compareRoundNames);
+}
+
 function normalizeRecord(record) {
   const questionText = clean(record.question_text);
   const correctAnswer = clean(record.correct_answer);
@@ -144,11 +169,19 @@ function normalizeRecord(record) {
 
   let questionType = record.question_type || "written";
   const wrongAnswers = unique(record.incorrect_answers || [], correctAnswer);
+  const roundName = clean(record.round_name || record.category) || "Imported";
+  const base = {
+    category: clean(record.category) || roundName,
+    round_name: roundName,
+    round_order: Number.isFinite(Number(record.round_order)) ? Number(record.round_order) : getRoundSortValue(roundName, record.source_order || 0),
+    source_order: Number.isFinite(Number(record.source_order)) ? Number(record.source_order) : 0,
+    source: "imported",
+  };
 
   if (questionType === "true_false") {
     const answer = correctAnswer.toLowerCase() === "false" ? "False" : "True";
     return {
-      category: clean(record.category) || "Imported",
+      ...base,
       question_text: questionText,
       correct_answer: answer,
       question_type: "true_false",
@@ -156,14 +189,13 @@ function normalizeRecord(record) {
       fun_fact: clean(record.fun_fact) || null,
       image_url: null,
       has_image: false,
-      source: "imported",
     };
   }
 
   if (questionType === "multiple_choice" && wrongAnswers.length < 2) questionType = "written";
 
   return {
-    category: clean(record.category) || "Imported",
+    ...base,
     question_text: questionText,
     correct_answer: correctAnswer,
     question_type: questionType,
@@ -171,14 +203,13 @@ function normalizeRecord(record) {
     fun_fact: clean(record.fun_fact) || null,
     image_url: clean(record.image_url) || null,
     has_image: questionType === "picture" || Boolean(clean(record.image_url)),
-    source: "imported",
   };
 }
 
 function normalizeCrowdpurrRows(rows) {
   const dataRows = rows.filter((row) => Array.isArray(row) && clean(row[0]) && compactKey(row[0]) !== "question");
 
-  return dataRows.map((row) => {
+  return dataRows.map((row, index) => {
     const question = stripQuestionNumber(row[0]);
     const rawType = clean(row[1]);
     const imageUrl = clean(row[4]);
@@ -189,6 +220,9 @@ function normalizeCrowdpurrRows(rows) {
 
     return normalizeRecord({
       category: "Imported",
+      round_name: "Imported",
+      round_order: 1,
+      source_order: index + 1,
       question_text: question,
       correct_answer: parsedCorrect.text,
       question_type: questionType,
@@ -200,13 +234,16 @@ function normalizeCrowdpurrRows(rows) {
 }
 
 function normalizeObjectRows(rows, requestedSource) {
-  return rows.map((row) => {
+  return rows.map((row, index) => {
     const question = getValue(row, ["Question", "Question Text", "Prompt", "Trivia Question", "Question Title", "Text"]);
     const correctAnswer = getValue(row, ["Correct Answer(s)", "Correct Answer", "Answer", "Correct", "Correct Option", "Right Answer"]);
-    const category = getValue(row, ["Category", "Round", "Topic", "Subject", "Tags"]);
+    const roundName = getValue(row, ["Round", "Round Name", "RoundName", "Round Title", "Game Round"]);
+    const category = getValue(row, ["Category", "Topic", "Subject", "Tags"]) || roundName;
     const rawType = getValue(row, ["Question Type", "Type", "Format", "Kind"]);
     const funFact = getValue(row, ["Question Note", "Fun Fact", "Explanation", "Fact", "Notes"]);
     const imageUrl = getValue(row, ["Question Image URL", "Image URL", "Image", "Picture", "Media URL"]);
+    const explicitRoundOrder = getValue(row, ["Round Order", "Round Number", "Round #", "Round No"]);
+    const explicitQuestionOrder = getValue(row, ["Question Order", "Question Number", "Question #", "Order"]);
 
     const optionValues = [
       getValue(row, ["Additional Answers", "Incorrect Answers", "Wrong Answers", "Distractors"]),
@@ -222,9 +259,14 @@ function normalizeObjectRows(rows, requestedSource) {
 
     const wrongAnswers = unique(optionValues.flatMap(splitAnswers), correctAnswer);
     const questionType = detectQuestionType(rawType, correctAnswer, wrongAnswers, imageUrl);
+    const fallbackRoundName = requestedSource === "trivianow" ? "TriviaNow" : "Imported";
+    const finalRoundName = roundName || category || fallbackRoundName;
 
     return normalizeRecord({
-      category: category || (requestedSource === "trivianow" ? "TriviaNow" : "Imported"),
+      category: category || finalRoundName,
+      round_name: finalRoundName,
+      round_order: explicitRoundOrder ? Number(explicitRoundOrder) : getRoundSortValue(finalRoundName, index + 1),
+      source_order: explicitQuestionOrder ? Number(explicitQuestionOrder) : index + 1,
       question_text: stripQuestionNumber(question),
       correct_answer: correctAnswer,
       question_type: questionType,
@@ -241,7 +283,7 @@ function detectCsvSource(rows, requestedSource) {
   const headers = Object.keys(firstObject || {}).map(compactKey);
 
   if (headers.includes("correctanswers") || headers.includes("questionnote")) return "crowdpurr";
-  if (headers.some((h) => h.includes("trivianow")) || headers.includes("roundname")) return "trivianow";
+  if (headers.some((h) => h.includes("trivianow")) || headers.includes("roundname") || headers.includes("round")) return "trivianow";
   return "generic";
 }
 
@@ -261,7 +303,7 @@ function parseCsv(text, requestedSource) {
       return {
         source,
         columns: arrayParsed.data?.[0] || objectParsed.meta?.fields || [],
-        questions: positionalQuestions,
+        questions: sortQuestionsByRound(positionalQuestions),
         warnings: (arrayParsed.errors || []).map((error) => error.message),
       };
     }
@@ -270,7 +312,7 @@ function parseCsv(text, requestedSource) {
   return {
     source,
     columns: objectParsed.meta?.fields || [],
-    questions: normalizeObjectRows(objectRows, source),
+    questions: sortQuestionsByRound(normalizeObjectRows(objectRows, source)),
     warnings: (objectParsed.errors || []).map((error) => error.message),
   };
 }
@@ -298,7 +340,7 @@ async function parsePdf(buffer, requestedSource) {
     return {
       source: requestedSource === "auto" ? "pdf" : requestedSource,
       columns: ["PDF Text"],
-      questions: aiQuestions.map(normalizeRecord).filter(Boolean),
+      questions: sortQuestionsByRound(aiQuestions.map((question, index) => normalizeRecord({ ...question, source_order: index + 1 })).filter(Boolean)),
       warnings: [],
     };
   }
@@ -306,7 +348,7 @@ async function parsePdf(buffer, requestedSource) {
   return {
     source: "pdf",
     columns: ["PDF Text"],
-    questions: parseQuestionsFromText(text),
+    questions: sortQuestionsByRound(parseQuestionsFromText(text)),
     warnings: ["Used simple PDF text parsing. Review the preview before importing."],
   };
 }
@@ -328,7 +370,7 @@ async function extractQuestionsWithAi(text) {
         { role: "system", content: "Extract trivia questions from messy PDF text. Return strict JSON only." },
         {
           role: "user",
-          content: `Extract up to 150 trivia questions from this text. Return {"questions":[{"category":"Imported","question_text":"...","correct_answer":"...","question_type":"true_false|multiple_choice|written|picture","incorrect_answers":["..."],"fun_fact":"..."}]}\n\nTEXT:\n${text.slice(0, 60000)}`,
+          content: `Extract up to 150 trivia questions from this text. Return {"questions":[{"category":"Imported","round_name":"Round 1","question_text":"...","correct_answer":"...","question_type":"true_false|multiple_choice|written|picture","incorrect_answers":["..."],"fun_fact":"..."}]}\n\nTEXT:\n${text.slice(0, 60000)}`,
         },
       ],
     }),
@@ -349,13 +391,13 @@ function parseQuestionsFromText(text) {
     const line = lines[i];
     const inlineMatch = line.match(/^(?:q[:.)\-]?\s*)?(.*\?)\s*(?:a(?:nswer)?[:.)\-]\s*)(.+)$/i);
     if (inlineMatch) {
-      questions.push(normalizeRecord({ category: "PDF", question_text: inlineMatch[1], correct_answer: inlineMatch[2], question_type: "written", incorrect_answers: [] }));
+      questions.push(normalizeRecord({ category: "PDF", round_name: "PDF", source_order: i + 1, question_text: inlineMatch[1], correct_answer: inlineMatch[2], question_type: "written", incorrect_answers: [] }));
       continue;
     }
 
     if (/\?$/.test(line) && lines[i + 1]) {
       const answerLine = lines[i + 1].replace(/^a(?:nswer)?[:.)\-]\s*/i, "");
-      questions.push(normalizeRecord({ category: "PDF", question_text: line, correct_answer: answerLine, question_type: "written", incorrect_answers: [] }));
+      questions.push(normalizeRecord({ category: "PDF", round_name: "PDF", source_order: i + 1, question_text: line, correct_answer: answerLine, question_type: "written", incorrect_answers: [] }));
       i += 1;
     }
   }
@@ -375,12 +417,18 @@ async function parseUploadedFile(file, requestedSource) {
   return parseCsv(file.text, source);
 }
 
+function stripQuestionMetadata(question) {
+  const { round_name, round_order, source_order, ...dbQuestion } = question;
+  return dbQuestion;
+}
+
 function groupByType(questions) {
+  const sorted = sortQuestionsByRound(questions);
   return {
-    true_false_questions: questions.filter((q) => q.question_type === "true_false"),
-    multiple_choice_questions: questions.filter((q) => q.question_type === "multiple_choice"),
-    written_questions: questions.filter((q) => q.question_type === "written"),
-    picture_questions: questions.filter((q) => q.question_type === "picture"),
+    true_false_questions: sorted.filter((q) => q.question_type === "true_false"),
+    multiple_choice_questions: sorted.filter((q) => q.question_type === "multiple_choice"),
+    written_questions: sorted.filter((q) => q.question_type === "written"),
+    picture_questions: sorted.filter((q) => q.question_type === "picture"),
   };
 }
 
@@ -396,11 +444,12 @@ async function importQuestions({ questions, userId, filename }) {
   if (!serviceRoleKey) throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY");
 
   const supabase = createClient(supabaseUrl, serviceRoleKey);
+  const sortedQuestions = sortQuestionsByRound(questions);
   let imported = 0;
   let skipped = 0;
   const errors = [];
 
-  for (const question of questions) {
+  for (const question of sortedQuestions) {
     try {
       const { data: existing, error: lookupError } = await supabase.from("questions").select("id").eq("question_text", question.question_text).limit(1).maybeSingle();
       if (lookupError) throw lookupError;
@@ -409,7 +458,7 @@ async function importQuestions({ questions, userId, filename }) {
         continue;
       }
 
-      const payload = { ...question, user_id: userId };
+      const payload = { ...stripQuestionMetadata(question), user_id: userId };
       Object.keys(payload).forEach((key) => {
         if (payload[key] === undefined || payload[key] === "") delete payload[key];
       });
@@ -428,7 +477,7 @@ async function importQuestions({ questions, userId, filename }) {
   let sessionError = null;
 
   try {
-    const grouped = groupByType(questions);
+    const grouped = groupByType(sortedQuestions);
     const builtSessionName = buildSessionName(filename);
     const { data, error } = await supabase
       .from("sessions")
@@ -466,7 +515,7 @@ async function handler(req, res) {
     }
 
     const parsed = await parseUploadedFile(file, requestedSource);
-    const questions = parsed.questions || [];
+    const questions = sortQuestionsByRound(parsed.questions || []);
 
     if (action === "preview") {
       return res.status(200).json({
@@ -475,6 +524,7 @@ async function handler(req, res) {
         columns: parsed.columns || [],
         row_count: questions.length,
         preview: questions.slice(0, 8).map((question) => ({
+          round: question.round_name || question.category,
           question: question.question_text,
           category: question.category,
           correctAnswer: question.correct_answer,
