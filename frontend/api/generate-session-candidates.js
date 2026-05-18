@@ -1,248 +1,138 @@
+const QUESTION_TYPES = {
+  true_false: {
+    label: "True/False",
+    outputType: "true_false",
+    hasImage: false,
+    incorrectCount: 0,
+    answerRule: 'correct_answer must be exactly "True" or "False".',
+  },
+  multiple_choice: {
+    label: "Multiple Choice",
+    outputType: "multiple_choice",
+    hasImage: false,
+    incorrectCount: 3,
+    answerRule: "incorrect_answers must contain exactly 3 plausible wrong answers and must not include correct_answer.",
+  },
+  written: {
+    label: "Written Answer",
+    outputType: "written",
+    hasImage: false,
+    incorrectCount: 0,
+    answerRule: "correct_answer should be concise, specific, and easy for a host to verify.",
+  },
+  picture: {
+    label: "Picture-Based",
+    outputType: "written",
+    hasImage: true,
+    incorrectCount: 0,
+    answerRule: "question_text should make sense with an image, correct_answer should be short, and image_url must be empty.",
+  },
+};
+
+const DIFFICULTY_PROFILES = {
+  easy: {
+    label: "Easy",
+    guidance: "Accessible for casual players. Avoid trick wording. The average trivia team should have a fair shot.",
+  },
+  medium: {
+    label: "Medium",
+    guidance: "Balanced pub-trivia difficulty. Not obvious, but answerable by a good mixed team.",
+  },
+  hard: {
+    label: "Hard",
+    guidance: "Challenging but fair. Prefer second-layer knowledge over household-name facts.",
+  },
+  host_hard: {
+    label: "Host Hard",
+    guidance:
+      "Obscure but fair trivia-host difficulty. Avoid overused pub trivia. Use concise wording, interesting angles, and answers that feel satisfying rather than impossible.",
+  },
+};
+
+const BROAD_CATEGORIES = [
+  "Art",
+  "Books",
+  "Food & Drink",
+  "Geography",
+  "History",
+  "Movies",
+  "Music",
+  "Nature",
+  "Pop Culture",
+  "Science",
+  "Sports",
+  "Television",
+  "Theater",
+  "Video Games",
+  "World Culture",
+];
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
   try {
-    const { sessionId, questionType, count, theme, excludeCategories } = req.body;
+    const {
+      sessionId,
+      questionType,
+      count,
+      difficulty = "medium",
+      theme,
+      excludeUsed = true,
+      avoidDuplicates = true,
+      excludeCategories = [],
+    } = req.body || {};
 
     if (!sessionId || !questionType) {
       return res.status(400).json({ error: "Missing sessionId or questionType" });
     }
 
-    const safeCount =
-      Number.isInteger(Number(count)) && Number(count) > 0 && Number(count) <= 20
-        ? Number(count)
-        : 5;
-
-    const excludedCategoryText =
-      Array.isArray(excludeCategories) && excludeCategories.length > 0
-        ? `Do not use any of these categories: ${excludeCategories.join(", ")}.`
-        : "";
-
-    const themeText = theme?.trim()
-      ? `Theme guidance: ${theme.trim()}.`
-      : "";
-
-    const typeConfigs = {
-      true_false: {
-        label: "True/False",
-        prompt: `
-Generate exactly ${safeCount} True/False trivia question candidates.
-
-Rules:
-- Return valid JSON only.
-- Use this exact shape:
-{
-  "candidates": [
-    {
-      "category": "Science",
-      "question_text": "Venus is the hottest planet in our solar system.",
-      "correct_answer": "True",
-      "incorrect_answers": [],
-      "fun_fact": "Venus is hotter than Mercury because of its dense atmosphere.",
-      "difficulty": "medium",
-      "question_type": "true_false",
-      "has_image": false,
-      "image_url": ""
-    }
-  ]
-}
-- correct_answer must be exactly "True" or "False"
-- incorrect_answers must be []
-- question_type must be "true_false"
-- has_image must be false
-- image_url must be ""
-- difficulty should be "medium"
-- categories should be broad pub trivia categories
-- every candidate should aim for a distinct category when possible
-- fun_fact should be one short sentence
-- avoid obscure or badly worded questions
-${themeText}
-${excludedCategoryText}
-        `,
-      },
-
-      multiple_choice: {
-        label: "Multiple Choice",
-        prompt: `
-Generate exactly ${safeCount} Multiple Choice trivia question candidates.
-
-Rules:
-- Return valid JSON only.
-- Use this exact shape:
-{
-  "candidates": [
-    {
-      "category": "History",
-      "question_text": "Which empire built Machu Picchu?",
-      "correct_answer": "Inca",
-      "incorrect_answers": ["Maya", "Aztec", "Roman"],
-      "fun_fact": "Machu Picchu was built in the 15th century in Peru.",
-      "difficulty": "medium",
-      "question_type": "multiple_choice",
-      "has_image": false,
-      "image_url": ""
-    }
-  ]
-}
-- each question must have exactly 3 incorrect answers
-- incorrect_answers must NOT include the correct answer
-- question_type must be "multiple_choice"
-- has_image must be false
-- image_url must be ""
-- difficulty should be "medium"
-- categories should be broad pub trivia categories
-- every candidate should aim for a distinct category when possible
-- fun_fact should be one short sentence
-- avoid obscure or badly worded questions
-${themeText}
-${excludedCategoryText}
-        `,
-      },
-
-      written: {
-        label: "Written",
-        prompt: `
-Generate exactly ${safeCount} Written Answer trivia question candidates.
-
-Rules:
-- Return valid JSON only.
-- Use this exact shape:
-{
-  "candidates": [
-    {
-      "category": "Geography",
-      "question_text": "What is the capital of Australia?",
-      "correct_answer": "Canberra",
-      "incorrect_answers": [],
-      "fun_fact": "Many people guess Sydney or Melbourne, but the capital is Canberra.",
-      "difficulty": "medium",
-      "question_type": "written",
-      "has_image": false,
-      "image_url": ""
-    }
-  ]
-}
-- incorrect_answers must be []
-- question_type must be "written"
-- has_image must be false
-- image_url must be ""
-- difficulty should be "medium"
-- categories should be broad pub trivia categories
-- every candidate should aim for a distinct category when possible
-- fun_fact should be one short sentence
-- avoid obscure or badly worded questions
-${themeText}
-${excludedCategoryText}
-        `,
-      },
-
-      picture: {
-        label: "Picture",
-        prompt: `
-Generate exactly ${safeCount} Picture-Based trivia question candidates.
-
-Rules:
-- Return valid JSON only.
-- Use this exact shape:
-{
-  "candidates": [
-    {
-      "category": "Movies",
-      "question_text": "Name this movie character from the image.",
-      "correct_answer": "Indiana Jones",
-      "incorrect_answers": [],
-      "fun_fact": "Indiana Jones first appeared in Raiders of the Lost Ark in 1981.",
-      "difficulty": "medium",
-      "question_type": "written",
-      "has_image": true,
-      "image_url": ""
-    }
-  ]
-}
-- these are picture-based questions
-- question_type must be "written"
-- has_image must be true
-- image_url must be ""
-- incorrect_answers must be []
-- correct_answer should be short and clear
-- difficulty should be "medium"
-- categories should be broad pub trivia categories
-- every candidate should aim for a distinct category when possible
-- fun_fact should be one short sentence
-- the question should make sense with an image
-${themeText}
-${excludedCategoryText}
-        `,
-      },
-    };
-
-    const config = typeConfigs[questionType];
-
+    const config = QUESTION_TYPES[questionType];
     if (!config) {
       return res.status(400).json({ error: `Unsupported questionType: ${questionType}` });
     }
 
-    const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "gpt-4.1-mini",
-        temperature: 0.8,
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are a professional pub trivia writer. Return only valid JSON. No markdown. No explanation.",
-          },
-          {
-            role: "user",
-            content: `
-Session ID: ${sessionId}
-Question Type: ${config.label}
+    const safeCount = clampCount(count);
+    const difficultyKey = normalizeDifficulty(difficulty);
+    const difficultyProfile = DIFFICULTY_PROFILES[difficultyKey];
+    const cleanTheme = typeof theme === "string" ? theme.trim() : "";
+    const cleanExcludeCategories = normalizeStringArray(excludeCategories);
+    const existingQuestions = avoidDuplicates || excludeUsed ? await fetchExistingQuestions() : [];
+    const existingFingerprints = new Set(existingQuestions.map((q) => fingerprint(q.question_text)));
+    const existingAnswerPairs = new Set(
+      existingQuestions.map((q) => answerPairFingerprint(q.question_text, q.correct_answer))
+    );
 
-${config.prompt}
-            `,
-          },
-        ],
-      }),
+    const prompt = buildPrompt({
+      config,
+      questionType,
+      safeCount,
+      difficultyKey,
+      difficultyProfile,
+      cleanTheme,
+      cleanExcludeCategories,
+      existingQuestions,
+      excludeUsed,
+      avoidDuplicates,
     });
 
-    const data = await openaiRes.json();
-
-    if (!openaiRes.ok) {
-      console.error("OpenAI error response:", data);
-      return res.status(500).json({
-        error: data?.error?.message || "OpenAI request failed",
-      });
-    }
-
-    const content = data?.choices?.[0]?.message?.content;
-
-    if (!content) {
-      console.error("Missing completion content:", data);
-      return res.status(500).json({ error: "No AI response received" });
-    }
-
-    let parsed;
-    try {
-      parsed = JSON.parse(content);
-    } catch (parseError) {
-      console.error("Failed to parse model JSON:", content);
-      return res.status(500).json({ error: "AI returned invalid JSON" });
-    }
-
-    if (!parsed || !Array.isArray(parsed.candidates)) {
-      console.error("Unexpected parsed response:", parsed);
-      return res.status(500).json({ error: "No candidates returned" });
-    }
+    const parsed = await requestCandidates(prompt);
+    const validation = normalizeCandidates({
+      candidates: parsed.candidates,
+      config,
+      questionType,
+      difficultyKey,
+      cleanExcludeCategories,
+      existingFingerprints,
+      existingAnswerPairs,
+      avoidDuplicates,
+    });
 
     return res.status(200).json({
-      candidates: parsed.candidates,
+      candidates: validation.candidates.slice(0, safeCount),
+      rejected: validation.rejected,
+      requested: safeCount,
     });
   } catch (error) {
     console.error("generate-session-candidates error:", error);
@@ -251,3 +141,348 @@ ${config.prompt}
     });
   }
 }
+
+function clampCount(count) {
+  const parsed = Number(count);
+  return Number.isInteger(parsed) && parsed > 0 && parsed <= 20 ? parsed : 5;
+}
+
+function normalizeDifficulty(value) {
+  return Object.prototype.hasOwnProperty.call(DIFFICULTY_PROFILES, value) ? value : "medium";
+}
+
+function normalizeStringArray(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item).trim()).filter(Boolean);
+}
+
+function buildPrompt({
+  config,
+  questionType,
+  safeCount,
+  difficultyKey,
+  difficultyProfile,
+  cleanTheme,
+  cleanExcludeCategories,
+  existingQuestions,
+  excludeUsed,
+  avoidDuplicates,
+}) {
+  const overGenerateCount = Math.min(20, Math.max(safeCount + 3, Math.ceil(safeCount * 1.6)));
+  const excludedCategoryText = cleanExcludeCategories.length
+    ? `Do not use these categories: ${cleanExcludeCategories.join(", ")}.`
+    : "";
+  const themeText = cleanTheme
+    ? `Theme guidance: ${cleanTheme}. Stay on-theme, but avoid repetitive question angles.`
+    : "";
+  const duplicateExamples = existingQuestions
+    .slice(0, 60)
+    .map((q) => `- ${q.question_text}${q.correct_answer ? ` Answer: ${q.correct_answer}` : ""}`)
+    .join("\n");
+  const duplicateText = avoidDuplicates && duplicateExamples
+    ? `Avoid duplicating or rephrasing these existing questions:\n${duplicateExamples}`
+    : "";
+  const usedText = excludeUsed
+    ? "Prefer questions that have not appeared in the existing library or recent sessions."
+    : "";
+
+  return `
+Generate exactly ${overGenerateCount} ${config.label} trivia question candidates so the app can keep the best ${safeCount}.
+
+Return valid JSON only. No markdown. No comments. No extra keys outside the requested object.
+
+Use this exact shape:
+{
+  "candidates": [
+    {
+      "category": "History",
+      "question_text": "Question text goes here.",
+      "correct_answer": "Correct answer",
+      "incorrect_answers": [],
+      "fun_fact": "One short sentence.",
+      "difficulty": "${difficultyKey}",
+      "question_type": "${config.outputType}",
+      "has_image": ${config.hasImage},
+      "image_url": ""
+    }
+  ]
+}
+
+Trivia host style:
+- Difficulty: ${difficultyProfile.label}. ${difficultyProfile.guidance}
+- Write concise, host-friendly question text.
+- Prefer uncommon but answerable facts over generic quiz-bank material.
+- Avoid ambiguous answers, disputed facts, and questions that require exact spelling unless the answer is famous.
+- Avoid repeated categories within this batch when possible.
+- Use broad categories such as: ${BROAD_CATEGORIES.join(", ")}.
+- fun_fact must be one short sentence that adds context without spoiling another question.
+- ${config.answerRule}
+- question_type must be "${config.outputType}".
+- has_image must be ${config.hasImage}.
+- image_url must be "".
+- difficulty must be "${difficultyKey}".
+${themeText}
+${excludedCategoryText}
+${usedText}
+${duplicateText}
+`.trim();
+}
+
+async function requestCandidates(prompt) {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY is not configured in Vercel");
+  }
+
+  const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "gpt-4.1-mini",
+      temperature: 0.72,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a professional pub trivia writer for a weekly live trivia host. Return only valid JSON.",
+        },
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+    }),
+  });
+
+  const data = await openaiRes.json();
+
+  if (!openaiRes.ok) {
+    console.error("OpenAI error response:", data);
+    throw new Error(data?.error?.message || "OpenAI request failed");
+  }
+
+  const content = data?.choices?.[0]?.message?.content;
+  if (!content) {
+    console.error("Missing completion content:", data);
+    throw new Error("No AI response received");
+  }
+
+  try {
+    return JSON.parse(content);
+  } catch (error) {
+    console.error("Failed to parse model JSON:", content);
+    throw new Error("AI returned invalid JSON");
+  }
+}
+
+function normalizeCandidates({
+  candidates,
+  config,
+  questionType,
+  difficultyKey,
+  cleanExcludeCategories,
+  existingFingerprints,
+  existingAnswerPairs,
+  avoidDuplicates,
+}) {
+  const rejected = [];
+  const accepted = [];
+  const batchFingerprints = new Set();
+  const batchAnswerPairs = new Set();
+  const excludedCategories = new Set(cleanExcludeCategories.map((category) => category.toLowerCase()));
+
+  if (!Array.isArray(candidates)) {
+    throw new Error("No candidates returned");
+  }
+
+  candidates.forEach((candidate, index) => {
+    const normalized = normalizeCandidate(candidate, config, questionType, difficultyKey);
+
+    if (!normalized.ok) {
+      rejected.push({ index, reason: normalized.reason });
+      return;
+    }
+
+    const item = normalized.candidate;
+    const itemFingerprint = fingerprint(item.question_text);
+    const itemAnswerPair = answerPairFingerprint(item.question_text, item.correct_answer);
+    const categoryKey = item.category.toLowerCase();
+
+    if (excludedCategories.has(categoryKey)) {
+      rejected.push({ index, reason: "excluded_category" });
+      return;
+    }
+
+    if (avoidDuplicates) {
+      if (existingFingerprints.has(itemFingerprint) || batchFingerprints.has(itemFingerprint)) {
+        rejected.push({ index, reason: "duplicate_question" });
+        return;
+      }
+
+      if (existingAnswerPairs.has(itemAnswerPair) || batchAnswerPairs.has(itemAnswerPair)) {
+        rejected.push({ index, reason: "duplicate_answer_angle" });
+        return;
+      }
+    }
+
+    batchFingerprints.add(itemFingerprint);
+    batchAnswerPairs.add(itemAnswerPair);
+    accepted.push(item);
+  });
+
+  return { candidates: accepted, rejected };
+}
+
+function normalizeCandidate(candidate, config, questionType, difficultyKey) {
+  if (!candidate || typeof candidate !== "object") {
+    return { ok: false, reason: "candidate_not_object" };
+  }
+
+  const category = cleanText(candidate.category);
+  const questionText = cleanText(candidate.question_text);
+  const correctAnswer = cleanText(candidate.correct_answer);
+  const funFact = cleanText(candidate.fun_fact);
+  const incorrectAnswers = Array.isArray(candidate.incorrect_answers)
+    ? candidate.incorrect_answers.map(cleanText).filter(Boolean)
+    : [];
+
+  if (!category || !questionText || !correctAnswer) {
+    return { ok: false, reason: "missing_required_text" };
+  }
+
+  if (config.incorrectCount === 0 && incorrectAnswers.length !== 0) {
+    return { ok: false, reason: "unexpected_incorrect_answers" };
+  }
+
+  if (config.incorrectCount > 0) {
+    const uniqueIncorrect = [...new Set(incorrectAnswers.map((answer) => answer.trim()))];
+    const duplicatesCorrect = uniqueIncorrect.some(
+      (answer) => answer.toLowerCase() === correctAnswer.toLowerCase()
+    );
+
+    if (uniqueIncorrect.length !== config.incorrectCount || duplicatesCorrect) {
+      return { ok: false, reason: "invalid_multiple_choice_answers" };
+    }
+  }
+
+  if (questionType === "true_false" && !["True", "False"].includes(correctAnswer)) {
+    return { ok: false, reason: "invalid_true_false_answer" };
+  }
+
+  return {
+    ok: true,
+    candidate: {
+      category,
+      question_text: questionText,
+      correct_answer: correctAnswer,
+      incorrect_answers: config.incorrectCount > 0 ? incorrectAnswers : [],
+      fun_fact: funFact,
+      difficulty: difficultyKey,
+      question_type: config.outputType,
+      has_image: config.hasImage,
+      image_url: "",
+    },
+  };
+}
+
+function cleanText(value) {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+}
+
+function fingerprint(value) {
+  return cleanText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, "")
+    .split(" ")
+    .filter((word) => word && !STOP_WORDS.has(word))
+    .sort()
+    .join(" ");
+}
+
+function answerPairFingerprint(questionText, answer) {
+  return `${fingerprint(questionText)}::${cleanText(answer).toLowerCase()}`;
+}
+
+async function fetchExistingQuestions() {
+  const supabaseUrl =
+    process.env.SUPABASE_URL ||
+    process.env.REACT_APP_SUPABASE_URL ||
+    process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    process.env.REACT_APP_SUPABASE_ANON_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !supabaseKey) {
+    console.warn("Supabase env vars missing; duplicate filtering will only check generated batch");
+    return [];
+  }
+
+  try {
+    const response = await fetch(
+      `${supabaseUrl.replace(/\/$/, "")}/rest/v1/questions?select=question_text,correct_answer,category,difficulty,question_type&limit=1000`,
+      {
+        headers: {
+          apikey: supabaseKey,
+          Authorization: `Bearer ${supabaseKey}`,
+        },
+      }
+    );
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.warn("Supabase duplicate lookup failed:", text);
+      return [];
+    }
+
+    const data = await response.json();
+    return Array.isArray(data) ? data : [];
+  } catch (error) {
+    console.warn("Supabase duplicate lookup crashed:", error);
+    return [];
+  }
+}
+
+const STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "by",
+  "did",
+  "do",
+  "does",
+  "for",
+  "from",
+  "has",
+  "have",
+  "in",
+  "is",
+  "it",
+  "its",
+  "of",
+  "on",
+  "or",
+  "that",
+  "the",
+  "this",
+  "to",
+  "was",
+  "were",
+  "what",
+  "when",
+  "where",
+  "which",
+  "who",
+  "whom",
+  "whose",
+  "why",
+  "with",
+]);
