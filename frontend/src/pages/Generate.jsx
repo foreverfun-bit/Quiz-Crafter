@@ -4,7 +4,6 @@ import { useAuth } from "../App";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
-import { Badge } from "../components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -22,6 +21,8 @@ import {
   Trash2,
   Layers,
   Wand2,
+  RefreshCw,
+  Ban,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -53,7 +54,48 @@ const difficultyLabels = {
   host_hard: "Host Hard",
 };
 
+const CATEGORY_PREF_KEY = "quiz-crafter-category-preferences";
+const REJECTED_AI_KEY = "quiz-crafter-rejected-ai-questions";
+
 const cleanList = (values) => values.map((value) => String(value || "").trim()).filter(Boolean);
+const normalizeText = (value) => String(value || "").replace(/\s+/g, " ").trim();
+const fingerprint = (value) => normalizeText(value).toLowerCase().replace(/[^a-z0-9]/g, "");
+const candidateFingerprint = (candidate) => fingerprint(`${candidate?.question_text || ""} ${candidate?.correct_answer || ""}`);
+
+const readJsonArray = (key) => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const writeJsonArray = (key, values) => {
+  localStorage.setItem(key, JSON.stringify([...new Set(values.filter(Boolean))]));
+};
+
+const readCategoryPrefs = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CATEGORY_PREF_KEY) || "{}");
+    return {
+      approved: Array.isArray(parsed.approved) ? parsed.approved : [],
+      rejected: Array.isArray(parsed.rejected) ? parsed.rejected : [],
+    };
+  } catch {
+    return { approved: [], rejected: [] };
+  }
+};
+
+const writeCategoryPrefs = ({ approved, rejected }) => {
+  localStorage.setItem(
+    CATEGORY_PREF_KEY,
+    JSON.stringify({
+      approved: [...new Set(cleanList(approved || []))],
+      rejected: [...new Set(cleanList(rejected || []))],
+    })
+  );
+};
 
 const Generate = () => {
   const { user } = useAuth();
@@ -71,6 +113,7 @@ const Generate = () => {
   const [groupedCandidates, setGroupedCandidates] = useState(emptyGroupedCandidates);
   const [generating, setGenerating] = useState(false);
   const [savingKey, setSavingKey] = useState(null);
+  const [refreshingKey, setRefreshingKey] = useState(null);
 
   const totalGenerated = useMemo(() => {
     return Object.values(groupedCandidates).reduce((sum, arr) => sum + arr.length, 0);
@@ -80,7 +123,20 @@ const Generate = () => {
     setGroupedCandidates(emptyGroupedCandidates);
   };
 
-  const callGenerateRoute = async ({ questionType, count, themeValue, excludeCategories = [] }) => {
+  const getGenerationPreferences = (extraRejectedQuestions = []) => {
+    const prefs = readCategoryPrefs();
+    const rejectedQuestions = [...readJsonArray(REJECTED_AI_KEY), ...extraRejectedQuestions];
+
+    return {
+      approvedCategories: cleanList(prefs.approved),
+      rejectedCategories: cleanList(prefs.rejected),
+      rejectedQuestions: cleanList(rejectedQuestions),
+    };
+  };
+
+  const callGenerateRoute = async ({ questionType, count, themeValue, excludeCategories = [], extraRejectedQuestions = [] }) => {
+    const preferences = getGenerationPreferences(extraRejectedQuestions);
+
     const { data } = await axios.post("/api/generate-session-candidates", {
       sessionId: `generate-${mode}`,
       questionType,
@@ -90,6 +146,7 @@ const Generate = () => {
       avoidDuplicates,
       excludeCategories,
       count,
+      ...preferences,
     });
 
     return Array.isArray(data.candidates) ? data.candidates : [];
@@ -152,11 +209,72 @@ const Generate = () => {
     }
   };
 
+  const handleRefreshQuestion = async (type, index) => {
+    const key = `${type}-${index}`;
+    const current = groupedCandidates[type]?.[index];
+    if (!current) return;
+
+    setRefreshingKey(key);
+
+    try {
+      const generated = await callGenerateRoute({
+        questionType: type,
+        count: 1,
+        themeValue: mode === "theme" ? roundThemeSubject : theme || "",
+        extraRejectedQuestions: [candidateFingerprint(current)],
+      });
+
+      if (!generated.length) {
+        toast.error("Could not find a fresh replacement");
+        return;
+      }
+
+      setGroupedCandidates((prev) => ({
+        ...prev,
+        [type]: prev[type].map((candidate, i) => (i === index ? generated[0] : candidate)),
+      }));
+
+      toast.success("Question refreshed");
+    } catch (error) {
+      console.error("Refresh error:", error);
+      toast.error(error.response?.data?.error || error.message || "Failed to refresh question");
+    } finally {
+      setRefreshingKey(null);
+    }
+  };
+
   const handleDiscardQuestion = (type, index) => {
+    const candidate = groupedCandidates[type]?.[index];
+    const rejected = readJsonArray(REJECTED_AI_KEY);
+    const rejectedFingerprint = candidateFingerprint(candidate);
+
+    if (rejectedFingerprint) {
+      writeJsonArray(REJECTED_AI_KEY, [...rejected, rejectedFingerprint]);
+    }
+
     setGroupedCandidates((prev) => ({
       ...prev,
       [type]: prev[type].filter((_, i) => i !== index),
     }));
+
+    toast.success("Question discarded permanently");
+  };
+
+  const handleRejectCategory = (type, index) => {
+    const category = normalizeText(groupedCandidates[type]?.[index]?.category);
+    if (!category) return;
+
+    const prefs = readCategoryPrefs();
+    const approved = prefs.approved.filter((item) => item.toLowerCase() !== category.toLowerCase());
+    const rejected = [...prefs.rejected, category];
+    writeCategoryPrefs({ approved, rejected });
+
+    setGroupedCandidates((prev) => ({
+      ...prev,
+      [type]: prev[type].filter((candidate) => normalizeText(candidate.category).toLowerCase() !== category.toLowerCase()),
+    }));
+
+    toast.success(`${category} added to rejected categories`);
   };
 
   const handleDiscardSection = (type) => {
@@ -210,6 +328,7 @@ const Generate = () => {
 
   const renderQuestionCard = (candidate, type, index) => {
     const saveId = `${type}-${index}`;
+    const isRefreshing = refreshingKey === saveId;
 
     return (
       <Card key={saveId} className="bg-zinc-900/70 border-white/10">
@@ -252,10 +371,10 @@ const Generate = () => {
             {type === "picture" && <p className="text-xs text-amber-300 mt-2">Picture bonus prompt</p>}
           </div>
 
-          <div className="flex gap-2 mt-4">
+          <div className="flex flex-wrap gap-2 mt-4">
             <Button
               size="sm"
-              disabled={savingKey === saveId}
+              disabled={savingKey === saveId || isRefreshing}
               className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
               onClick={() => handleSaveToLibrary(candidate, type, index)}
             >
@@ -265,11 +384,37 @@ const Generate = () => {
             <Button
               size="sm"
               variant="outline"
-              className="border-zinc-700 text-zinc-300"
+              disabled={isRefreshing || savingKey === saveId}
+              className="border-sky-500/30 text-sky-300 hover:bg-sky-500/10"
+              onClick={() => handleRefreshQuestion(type, index)}
+            >
+              {isRefreshing ? <Loader2 size={14} className="mr-2 animate-spin" /> : <RefreshCw size={14} className="mr-2" />}
+              Refresh
+            </Button>
+
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={isRefreshing || savingKey === saveId}
+              className="border-red-500/30 text-red-300 hover:bg-red-500/10"
               onClick={() => handleDiscardQuestion(type, index)}
             >
+              <Trash2 size={14} className="mr-2" />
               Discard
             </Button>
+
+            {candidate.category && (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={isRefreshing || savingKey === saveId}
+                className="text-zinc-400 hover:text-red-200 hover:bg-red-500/10"
+                onClick={() => handleRejectCategory(type, index)}
+              >
+                <Ban size={14} className="mr-2" />
+                Reject Category
+              </Button>
+            )}
           </div>
         </CardContent>
       </Card>
