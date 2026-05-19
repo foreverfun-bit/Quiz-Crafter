@@ -1,5 +1,11 @@
 const QUESTION_TYPES = ["true_false", "multiple_choice", "written"];
 
+const TYPE_LABELS = {
+  true_false: "True/False",
+  multiple_choice: "Multiple Choice",
+  written: "Written Answer",
+};
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -8,16 +14,18 @@ export default async function handler(req, res) {
   try {
     const questionText = String(req.body?.question_text || "").trim();
     const existingCategory = String(req.body?.category || "").trim();
+    const preferredType = QUESTION_TYPES.includes(req.body?.question_type) ? req.body.question_type : "";
+    const forceQuestionType = Boolean(req.body?.force_question_type && preferredType);
 
     if (!questionText) {
       return res.status(400).json({ error: "Question text is required" });
     }
 
     if (!process.env.OPENAI_API_KEY) {
-      return res.status(200).json(buildHeuristicSuggestion(questionText, existingCategory));
+      return res.status(200).json(buildHeuristicSuggestion(questionText, existingCategory, preferredType, forceQuestionType));
     }
 
-    const prompt = buildPrompt(questionText, existingCategory);
+    const prompt = buildPrompt(questionText, existingCategory, preferredType, forceQuestionType);
     const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -48,14 +56,22 @@ export default async function handler(req, res) {
     const content = json.choices?.[0]?.message?.content || "{}";
     const parsed = JSON.parse(content);
 
-    return res.status(200).json(normalizeSuggestion(parsed, questionText, existingCategory));
+    return res.status(200).json(normalizeSuggestion(parsed, questionText, existingCategory, preferredType, forceQuestionType));
   } catch (error) {
     console.error("assist-custom-question error:", error);
     return res.status(500).json({ error: error?.message || "Failed to assist question" });
   }
 }
 
-function buildPrompt(questionText, existingCategory) {
+function buildPrompt(questionText, existingCategory, preferredType, forceQuestionType) {
+  const targetTypeText = forceQuestionType
+    ? `The host already selected the question type: ${TYPE_LABELS[preferredType]}. You must keep question_type as "${preferredType}" and shape the record for that format.`
+    : preferredType
+      ? `The host is leaning toward ${TYPE_LABELS[preferredType]}, but you may change the type if it clearly does not fit.`
+      : "Choose the best question type for the rough input.";
+
+  const typeSpecificRules = forceQuestionType ? buildForcedTypeRules(preferredType) : buildFlexibleTypeRules();
+
   return `
 You are helping a trivia host build an all-in-one trivia assistant, not a generic quiz site.
 
@@ -69,7 +85,8 @@ Host format context:
 - The host has used many common pub trivia questions since 2019, so avoid stale quiz-bank wording and overused bar trivia.
 
 Your job for this request:
-Turn the rough input into the cleanest save-ready question record you can, while being honest about uncertainty.
+${targetTypeText}
+Rewrite the rough input into the cleanest save-ready question record you can, while being honest about uncertainty.
 
 Rough input:
 ${questionText}
@@ -96,12 +113,7 @@ Fact-safety rules:
 - Fun facts must not introduce risky or unverified claims. Leave fun_fact empty if unsure.
 
 Question-shaping rules:
-- Pick true_false only when the input naturally works as a claim that can be judged true or false.
-- Pick multiple_choice when choices make the question more playable and the answer belongs to a comparable set.
-- Pick written when the answer is short, fair, and gettable without options.
-- For multiple_choice, include exactly 3 plausible wrong answers only when you know the answer. Do not include the correct answer in incorrect_answers.
-- For true_false, correct_answer must be exactly "True" or "False" when known, and incorrect_answers must be [].
-- For written, incorrect_answers must be [].
+${typeSpecificRules}
 - Category should help balance a live session. Prefer useful broad categories like History, Movies, Music, Science, Geography, Sports, Food & Drink, Books, Television, Nature, Pop Culture, Art, World Culture, Weird Science, Internet Culture, Local Flavor, or Before & After.
 - Prefer obscure-but-fair angles over generic trivia. Avoid common questions like basic capitals, obvious Oscar winners, or first-president style facts unless the input specifically asks for them.
 - Keep wording concise, host-friendly, and easy to read aloud.
@@ -109,8 +121,52 @@ Question-shaping rules:
 `.trim();
 }
 
-function normalizeSuggestion(value, originalQuestion, existingCategory) {
-  const type = QUESTION_TYPES.includes(value.question_type) ? value.question_type : inferType(originalQuestion);
+function buildForcedTypeRules(type) {
+  if (type === "true_false") {
+    return `
+- The output question_type must be "true_false".
+- Rewrite the input as a clear factual claim that can be judged true or false.
+- correct_answer must be exactly "True" or "False" when known.
+- incorrect_answers must be [].
+- If the input is originally a normal question, convert it into a true/false statement without changing the underlying fact.
+- If you cannot verify whether the statement is true or false from the input, leave correct_answer empty and explain what needs checking.`.trim();
+  }
+
+  if (type === "multiple_choice") {
+    return `
+- The output question_type must be "multiple_choice".
+- Rewrite the input as a concise multiple choice question.
+- correct_answer should be short and specific.
+- incorrect_answers must include exactly 3 plausible wrong answers when the correct answer is known.
+- Wrong answers must be in the same family as the correct answer, not silly giveaways.
+- Do not include the correct answer in incorrect_answers.
+- If you cannot know the correct answer from the input, leave correct_answer empty and incorrect_answers empty, then explain what needs checking.`.trim();
+  }
+
+  return `
+- The output question_type must be "written".
+- Rewrite the input as a concise written-answer question.
+- correct_answer should be short, specific, and easy for a host to score.
+- incorrect_answers must be [].
+- Do not force multiple choice options into a written-answer record.`.trim();
+}
+
+function buildFlexibleTypeRules() {
+  return `
+- Pick true_false only when the input naturally works as a claim that can be judged true or false.
+- Pick multiple_choice when choices make the question more playable and the answer belongs to a comparable set.
+- Pick written when the answer is short, fair, and gettable without options.
+- For multiple_choice, include exactly 3 plausible wrong answers only when you know the answer. Do not include the correct answer in incorrect_answers.
+- For true_false, correct_answer must be exactly "True" or "False" when known, and incorrect_answers must be [].
+- For written, incorrect_answers must be [].`.trim();
+}
+
+function normalizeSuggestion(value, originalQuestion, existingCategory, preferredType, forceQuestionType) {
+  const type = forceQuestionType
+    ? preferredType
+    : QUESTION_TYPES.includes(value.question_type)
+      ? value.question_type
+      : preferredType || inferType(originalQuestion);
   const cleanQuestion = String(value.clean_question_text || originalQuestion).trim();
   const correctAnswer = normalizeAnswer(value.correct_answer, type);
 
@@ -122,12 +178,12 @@ function normalizeSuggestion(value, originalQuestion, existingCategory) {
     incorrect_answers: type === "multiple_choice" && correctAnswer ? normalizeIncorrectAnswers(value.incorrect_answers, correctAnswer) : [],
     fun_fact: String(value.fun_fact || "").trim(),
     confidence: clampConfidence(value.confidence),
-    notes: String(value.notes || "Review the suggestion, then adjust anything before saving.").trim(),
+    notes: String(value.notes || defaultNotes(type, forceQuestionType)).trim(),
   };
 }
 
-function buildHeuristicSuggestion(questionText, existingCategory) {
-  const type = inferType(questionText);
+function buildHeuristicSuggestion(questionText, existingCategory, preferredType, forceQuestionType) {
+  const type = forceQuestionType && preferredType ? preferredType : preferredType || inferType(questionText);
   return normalizeSuggestion(
     {
       question_type: type,
@@ -140,8 +196,17 @@ function buildHeuristicSuggestion(questionText, existingCategory) {
       notes: "AI assistance is not configured, so this is only a starter shape. Add or verify the answer before saving.",
     },
     questionText,
-    existingCategory
+    existingCategory,
+    preferredType,
+    forceQuestionType
   );
+}
+
+function defaultNotes(type, forceQuestionType) {
+  const label = TYPE_LABELS[type] || "question";
+  return forceQuestionType
+    ? `Shaped as ${label} because that format was selected. Review the answer before saving.`
+    : "Review the suggestion, then adjust anything before saving.";
 }
 
 function inferType(questionText) {
