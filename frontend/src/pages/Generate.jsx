@@ -16,7 +16,6 @@ import {
   CheckCircle,
   List,
   MessageSquare,
-  Image,
   Loader2,
   Trash2,
   Layers,
@@ -54,6 +53,7 @@ const difficultyLabels = {
 
 const CATEGORY_PREF_KEY = "quiz-crafter-category-preferences";
 const REJECTED_AI_KEY = "quiz-crafter-rejected-ai-questions";
+const GENERATED_HISTORY_KEY = "quiz-crafter-recent-ai-suggestions";
 
 const cleanList = (values) => values.map((value) => String(value || "").trim()).filter(Boolean);
 const normalizeText = (value) => String(value || "").replace(/\s+/g, " ").trim();
@@ -71,6 +71,12 @@ const readJsonArray = (key) => {
 
 const writeJsonArray = (key, values) => {
   localStorage.setItem(key, JSON.stringify([...new Set(values.filter(Boolean))]));
+};
+
+const rememberGenerated = (groupedCandidates) => {
+  const current = readJsonArray(GENERATED_HISTORY_KEY);
+  const next = Object.values(groupedCandidates).flatMap((items) => items.map(candidateFingerprint)).filter(Boolean);
+  writeJsonArray(GENERATED_HISTORY_KEY, [...next, ...current].slice(0, 500));
 };
 
 const readCategoryPrefs = () => {
@@ -120,11 +126,12 @@ const Generate = () => {
   const [generating, setGenerating] = useState(false);
   const [savingKey, setSavingKey] = useState(null);
   const [refreshingKey, setRefreshingKey] = useState(null);
-  const [imageGeneratingKey, setImageGeneratingKey] = useState(null);
 
   const totalGenerated = useMemo(() => {
     return Object.values(groupedCandidates).reduce((sum, arr) => sum + arr.length, 0);
   }, [groupedCandidates]);
+
+  const visibleCandidateFingerprints = () => Object.values(groupedCandidates).flatMap((items) => items.map(candidateFingerprint)).filter(Boolean);
 
   const clearCandidates = () => {
     setGroupedCandidates(emptyGroupedCandidates);
@@ -154,6 +161,7 @@ const Generate = () => {
       includeImagePrompt: includeMediaIdeas,
       excludeCategories,
       count,
+      currentBatchQuestions: [...readJsonArray(GENERATED_HISTORY_KEY), ...visibleCandidateFingerprints()],
       ...preferences,
     });
 
@@ -205,6 +213,7 @@ const Generate = () => {
       }
 
       setGroupedCandidates(next);
+      rememberGenerated(next);
       const total = Object.values(next).reduce((sum, arr) => sum + arr.length, 0);
       toast.success(`${total} candidates generated`);
     } catch (error) {
@@ -235,10 +244,14 @@ const Generate = () => {
         return;
       }
 
-      setGroupedCandidates((prev) => ({
-        ...prev,
-        [type]: prev[type].map((candidate, i) => (i === index ? generated[0] : candidate)),
-      }));
+      setGroupedCandidates((prev) => {
+        const updated = {
+          ...prev,
+          [type]: prev[type].map((candidate, i) => (i === index ? generated[0] : candidate)),
+        };
+        rememberGenerated(updated);
+        return updated;
+      });
 
       toast.success("Question refreshed");
     } catch (error) {
@@ -267,27 +280,6 @@ const Generate = () => {
     const dataUrl = await fileToDataUrl(file);
     updateCandidate(type, index, { image_url: dataUrl });
     toast.success("Image attached");
-  };
-
-  const handleGenerateImage = async (candidate, type, index) => {
-    const key = `${type}-${index}`;
-    setImageGeneratingKey(key);
-    try {
-      const { data } = await axios.post("/api/generate-question-image", {
-        question_text: candidate.question_text,
-        correct_answer: candidate.correct_answer,
-        category: candidate.category,
-        image_prompt: candidate.image_prompt || theme,
-      });
-      if (!data?.image_url) throw new Error("No image returned");
-      updateCandidate(type, index, { image_url: data.image_url });
-      toast.success("Image generated and attached");
-    } catch (error) {
-      console.error("Generate image error:", error);
-      toast.error(error.response?.data?.error || error.message || "Failed to generate image");
-    } finally {
-      setImageGeneratingKey(null);
-    }
   };
 
   const handleDiscardQuestion = (type, index) => {
@@ -374,7 +366,6 @@ const Generate = () => {
   const renderQuestionCard = (candidate, type, index) => {
     const saveId = `${type}-${index}`;
     const isRefreshing = refreshingKey === saveId;
-    const isImageGenerating = imageGeneratingKey === saveId;
 
     return (
       <Card key={saveId} className="bg-zinc-900/70 border-white/10">
@@ -448,11 +439,6 @@ const Generate = () => {
               onClick={() => handleSaveToLibrary(candidate, type, index)}
             >
               {savingKey === saveId ? "Saving..." : "Save to Library"}
-            </Button>
-
-            <Button size="sm" variant="outline" disabled={isImageGenerating} className="border-amber-500/30 text-amber-300 hover:bg-amber-500/10" onClick={() => handleGenerateImage(candidate, type, index)}>
-              {isImageGenerating ? <Loader2 size={14} className="mr-2 animate-spin" /> : <Image size={14} className="mr-2" />}
-              Generate Image
             </Button>
 
             <Button
