@@ -70,7 +70,7 @@ const fingerprint = (value) => normalizeText(value).toLowerCase().replace(/[^a-z
 const cleanList = (values) => values.map((value) => normalizeText(value)).filter(Boolean);
 const normalizeType = (question, fallbackType = "written") => {
   const type = question?.question_type || fallbackType || "written";
-  return type === "picture" ? "written" : type;
+  return type === "true_false" || type === "multiple_choice" || type === "written" ? type : "written";
 };
 
 const normalizeQuestion = (q, fallbackType) => ({
@@ -328,7 +328,7 @@ const BuildSession = () => {
   };
 
   const handleAddCustomQuestion = () => {
-    const type = writeForm.question_type === "picture" ? "written" : writeForm.question_type;
+    const type = normalizeType(writeForm);
     const questionText = normalizeText(writeForm.question_text);
     const correctAnswer = normalizeText(writeForm.correct_answer);
     const category = normalizeText(writeForm.category);
@@ -544,7 +544,7 @@ const RowIcon = ({ label, icon: Icon, onClick, active, disabled, spin, tone }) =
 
 const QuestionMeta = ({ question }) => {
   const type = normalizeType(question);
-  const typeConfig = questionTypes.find((item) => item.value === type) || questionTypes[3];
+  const typeConfig = questionTypes.find((item) => item.value === type) || questionTypes[0];
   const Icon = typeConfig.icon;
   return <div className="flex items-center gap-2 flex-wrap"><Badge variant="outline" className="text-xs border-zinc-700 text-zinc-400">{question.category}</Badge><Badge className="bg-zinc-800 text-zinc-300 text-xs"><Icon size={12} className={`mr-1 ${typeConfig.color}`} />{typeConfig.shortLabel}</Badge>{question.isGenerated && <Badge className="bg-[#71E0DC]/15 text-[#71E0DC] text-xs">AI</Badge>}</div>;
 };
