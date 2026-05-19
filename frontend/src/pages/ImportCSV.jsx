@@ -371,7 +371,7 @@ const ImportCSV = () => {
             <div className={`mt-6 p-4 rounded-lg ${result.error ? "bg-red-500/10 border border-red-500/20" : "bg-emerald-500/10 border border-emerald-500/20"}`}>
               <div className="flex items-start gap-3">
                 {result.error ? <AlertCircle className="text-red-400 flex-shrink-0" size={20} /> : <CheckCircle className="text-emerald-400 flex-shrink-0" size={20} />}
-                <div>
+                <div className="w-full min-w-0">
                   {result.error ? <p className="text-red-400">{result.message}</p> : (
                     <>
                       <p className="text-emerald-400 font-semibold mb-2">Import Complete</p>
@@ -382,6 +382,25 @@ const ImportCSV = () => {
                         <li className="text-zinc-300"><span className="text-[#AEB2EF]">{result.sessions_created || 0}</span> past session{(result.sessions_created || 0) === 1 ? "" : "s"} created</li>
                         {result.session_name && <li className="text-zinc-300">Session name: <span className="text-white">{result.session_name}</span></li>}
                       </ul>
+                      {result.skipped_details?.length > 0 && (
+                        <div className="mt-4 rounded-lg border border-amber-500/20 bg-amber-500/10 p-3">
+                          <p className="text-amber-300 font-semibold text-sm mb-2">Skipped Questions</p>
+                          <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                            {result.skipped_details.slice(0, 20).map((item, index) => (
+                              <div key={`${item.question}-${index}`} className="rounded-md bg-zinc-950/40 border border-white/10 p-3 text-xs">
+                                <div className="flex items-center gap-2 flex-wrap mb-1">
+                                  {item.row && <Badge className="bg-zinc-800 text-zinc-300">#{item.row}</Badge>}
+                                  {item.round && <Badge className="bg-zinc-800 text-zinc-300">{item.round}</Badge>}
+                                  {item.category && <Badge className="bg-zinc-800 text-zinc-300">{item.category}</Badge>}
+                                </div>
+                                <p className="text-zinc-200 leading-relaxed break-words">{item.question}</p>
+                                <p className="text-amber-200/90 mt-1">Reason: {item.reason}</p>
+                              </div>
+                            ))}
+                            {result.skipped_details.length > 20 && <p className="text-zinc-500 text-xs">+{result.skipped_details.length - 20} more skipped questions</p>}
+                          </div>
+                        </div>
+                      )}
                       {result.session_error && <div className="mt-3 p-2 bg-amber-500/10 rounded text-xs text-amber-300">Past session was not created: {result.session_error}</div>}
                       {result.errors?.length > 0 && <div className="mt-3 p-2 bg-red-500/10 rounded text-xs text-red-400">{result.errors.slice(0, 5).map((err, i) => <p key={i}>{err}</p>)}</div>}
                     </>
