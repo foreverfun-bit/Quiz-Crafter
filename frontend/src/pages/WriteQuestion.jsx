@@ -33,7 +33,21 @@ const initialForm = {
   fun_fact: "",
 };
 
+const CATEGORY_PREF_KEY = "quiz-crafter-category-preferences";
+
 const cleanList = (values) => values.map((value) => value.trim()).filter(Boolean);
+
+const readCategoryPrefs = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CATEGORY_PREF_KEY) || "{}");
+    return {
+      approved: Array.isArray(parsed.approved) ? cleanList(parsed.approved.map(String)) : [],
+      rejected: Array.isArray(parsed.rejected) ? cleanList(parsed.rejected.map(String)) : [],
+    };
+  } catch {
+    return { approved: [], rejected: [] };
+  }
+};
 
 const WriteQuestion = () => {
   const navigate = useNavigate();
@@ -80,11 +94,14 @@ const WriteQuestion = () => {
 
     setAssisting(true);
     try {
+      const categoryPrefs = readCategoryPrefs();
       const { data } = await axios.post("/api/assist-custom-question", {
         question_text: form.question_text.trim(),
         category: form.category.trim(),
         question_type: form.question_type,
         force_question_type: true,
+        approved_categories: categoryPrefs.approved,
+        rejected_categories: categoryPrefs.rejected,
       });
 
       const assistedType = data.question_type || form.question_type;
@@ -220,6 +237,7 @@ const WriteQuestion = () => {
                 className="bg-zinc-950/50 border-white/10 text-white"
                 data-testid="custom-category-input"
               />
+              <p className="text-xs text-zinc-600">If this is blank, Assist will try your approved categories before suggesting a new one.</p>
             </div>
 
             {form.question_type === "true_false" ? (
@@ -335,7 +353,7 @@ const WriteQuestion = () => {
           <Card className="glass-card">
             <CardContent className="p-5">
               <p className="text-zinc-400 text-sm leading-relaxed">
-                Pick the format first when you know it. Assist will reword the draft, suggest the answer setup, and add category/fun fact support for that format.
+                Pick the format first when you know it. Assist will reword the draft, suggest the answer setup, and prefer your approved categories when one fits.
               </p>
             </CardContent>
           </Card>
