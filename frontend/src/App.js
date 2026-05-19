@@ -18,6 +18,7 @@ import Categories from "./pages/Categories";
 import ResetData from "./pages/ResetData";
 import JoinGame from "./pages/JoinGame";
 import HostControl from "./pages/HostControl";
+import HostSession from "./pages/HostSession";
 import PresentView from "./pages/PresentView";
 import PlayerView from "./pages/PlayerView";
 import { GameHistory } from "./pages/GameHistory";
@@ -260,6 +261,7 @@ function App() {
             <Route path="/past-sessions" element={<ProtectedRoute><AppLayout><PastSessions /></AppLayout></ProtectedRoute>} />
             <Route path="/import" element={<ProtectedRoute><AppLayout><ImportCSV /></AppLayout></ProtectedRoute>} />
             <Route path="/session/:id" element={<ProtectedRoute><AppLayout><SessionDetail /></AppLayout></ProtectedRoute>} />
+            <Route path="/host-session/:id" element={<ProtectedRoute><HostSession /></ProtectedRoute>} />
             <Route path="/categories" element={<ProtectedRoute><AppLayout><Categories /></AppLayout></ProtectedRoute>} />
             <Route path="/reset-data" element={<ProtectedRoute><AppLayout><ResetData /></AppLayout></ProtectedRoute>} />
 
