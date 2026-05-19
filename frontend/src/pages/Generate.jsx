@@ -23,6 +23,8 @@ import {
   RefreshCw,
   Ban,
   Upload,
+  Lock,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -54,6 +56,7 @@ const difficultyLabels = {
 const CATEGORY_PREF_KEY = "quiz-crafter-category-preferences";
 const REJECTED_AI_KEY = "quiz-crafter-rejected-ai-questions";
 const GENERATED_HISTORY_KEY = "quiz-crafter-recent-ai-suggestions";
+const LOCKED_CATEGORY_KEY = "quiz-crafter-locked-generator-categories";
 
 const cleanList = (values) => values.map((value) => String(value || "").trim()).filter(Boolean);
 const normalizeText = (value) => String(value || "").replace(/\s+/g, " ").trim();
@@ -117,6 +120,7 @@ const Generate = () => {
   const [excludeUsed, setExcludeUsed] = useState(true);
   const [avoidDuplicates, setAvoidDuplicates] = useState(true);
   const [includeMediaIdeas, setIncludeMediaIdeas] = useState(false);
+  const [lockedCategories, setLockedCategories] = useState(() => readJsonArray(LOCKED_CATEGORY_KEY));
 
   const [roundThemeSubject, setRoundThemeSubject] = useState("");
   const [freeBuildType, setFreeBuildType] = useState("multiple_choice");
@@ -144,8 +148,33 @@ const Generate = () => {
     return {
       approvedCategories: cleanList(prefs.approved),
       rejectedCategories: cleanList(prefs.rejected),
+      lockedCategories: cleanList(lockedCategories),
       rejectedQuestions: cleanList(rejectedQuestions),
     };
+  };
+
+  const saveLockedCategories = (nextCategories) => {
+    const cleaned = [...new Set(cleanList(nextCategories))];
+    setLockedCategories(cleaned);
+    writeJsonArray(LOCKED_CATEGORY_KEY, cleaned);
+  };
+
+  const handleLockCategory = (category) => {
+    const cleanCategory = normalizeText(category);
+    if (!cleanCategory) return;
+
+    const prefs = readCategoryPrefs();
+    const approved = [...prefs.approved.filter((item) => item.toLowerCase() !== cleanCategory.toLowerCase()), cleanCategory];
+    const rejected = prefs.rejected.filter((item) => item.toLowerCase() !== cleanCategory.toLowerCase());
+    writeCategoryPrefs({ approved, rejected });
+    saveLockedCategories([...lockedCategories, cleanCategory]);
+    toast.success(`${cleanCategory} locked for generation`);
+  };
+
+  const handleUnlockCategory = (category) => {
+    const cleanCategory = normalizeText(category);
+    saveLockedCategories(lockedCategories.filter((item) => item.toLowerCase() !== cleanCategory.toLowerCase()));
+    toast.success(`${cleanCategory} unlocked`);
   };
 
   const callGenerateRoute = async ({ questionType, count, themeValue, excludeCategories = [], extraRejectedQuestions = [] }) => {
@@ -307,6 +336,7 @@ const Generate = () => {
     const approved = prefs.approved.filter((item) => item.toLowerCase() !== category.toLowerCase());
     const rejected = [...prefs.rejected, category];
     writeCategoryPrefs({ approved, rejected });
+    saveLockedCategories(lockedCategories.filter((item) => item.toLowerCase() !== category.toLowerCase()));
 
     setGroupedCandidates((prev) => ({
       ...prev,
@@ -366,6 +396,7 @@ const Generate = () => {
   const renderQuestionCard = (candidate, type, index) => {
     const saveId = `${type}-${index}`;
     const isRefreshing = refreshingKey === saveId;
+    const categoryLocked = lockedCategories.some((item) => item.toLowerCase() === normalizeText(candidate.category).toLowerCase());
 
     return (
       <Card key={saveId} className="bg-zinc-900/70 border-white/10">
@@ -452,6 +483,19 @@ const Generate = () => {
               Refresh
             </Button>
 
+            {candidate.category && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={isRefreshing || savingKey === saveId}
+                className={categoryLocked ? "border-[#71E0DC]/40 text-[#71E0DC] bg-[#71E0DC]/10" : "border-[#71E0DC]/30 text-[#71E0DC] hover:bg-[#71E0DC]/10"}
+                onClick={() => categoryLocked ? handleUnlockCategory(candidate.category) : handleLockCategory(candidate.category)}
+              >
+                <Lock size={14} className="mr-2" />
+                {categoryLocked ? "Locked" : "Lock Category"}
+              </Button>
+            )}
+
             <Button
               size="sm"
               variant="outline"
@@ -516,6 +560,20 @@ const Generate = () => {
         </CardHeader>
 
         <CardContent className="space-y-4">
+          {lockedCategories.length > 0 && (
+            <div className="rounded-lg border border-[#71E0DC]/20 bg-[#71E0DC]/5 p-3">
+              <div className="flex items-center gap-2 mb-2 text-sm font-medium text-[#71E0DC]"><Lock size={15} />Locked categories</div>
+              <div className="flex flex-wrap gap-2">
+                {lockedCategories.map((category) => (
+                  <button key={category} type="button" onClick={() => handleUnlockCategory(category)} className="inline-flex items-center gap-2 rounded-full border border-[#71E0DC]/30 bg-zinc-950/60 px-3 py-1 text-sm text-white hover:bg-[#71E0DC]/10">
+                    {category}<X size={13} className="text-zinc-400" />
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-zinc-500 mt-2">New generations will stay inside these categories until you unlock them.</p>
+            </div>
+          )}
+
           {mode === "theme" && (
             <div className="space-y-2">
               <label className="text-zinc-300 text-sm font-medium">Theme</label>
