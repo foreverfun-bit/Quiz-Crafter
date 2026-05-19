@@ -74,6 +74,7 @@ module.exports = async function handler(req, res) {
       correct_answer: questionType === "true_false" ? (correctAnswer.toLowerCase() === "false" ? "False" : "True") : correctAnswer,
       incorrect_answers: buildIncorrectAnswers({ ...body, question_type: questionType, correct_answer: correctAnswer }),
       fun_fact: clean(body.fun_fact) || null,
+      image_url: clean(body.image_url) || null,
     };
 
     Object.keys(payload).forEach((key) => {
@@ -83,7 +84,13 @@ module.exports = async function handler(req, res) {
     const supabase = createClient(supabaseUrl, serviceRoleKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
-    const { error } = await supabase.from("questions").insert(payload);
+
+    let { error } = await supabase.from("questions").insert(payload);
+    if (error && /image_url|schema cache/i.test(error.message || "")) {
+      const { image_url, ...withoutImage } = payload;
+      const retry = await supabase.from("questions").insert(withoutImage);
+      error = retry.error;
+    }
 
     if (error) throw error;
 
