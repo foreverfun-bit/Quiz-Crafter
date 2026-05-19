@@ -68,6 +68,7 @@ export default async function handler(req, res) {
       excludeCategories = [],
       approvedCategories = [],
       rejectedCategories = [],
+      lockedCategories = [],
       rejectedQuestions = [],
       currentBatchQuestions = [],
     } = req.body || {};
@@ -82,9 +83,10 @@ export default async function handler(req, res) {
     const difficultyKey = normalizeDifficulty(difficulty);
     const difficultyProfile = DIFFICULTY_PROFILES[difficultyKey];
     const cleanTheme = typeof theme === "string" ? theme.trim() : "";
-    const cleanApprovedCategories = dedupeStrings(normalizeStringArray(approvedCategories));
-    const cleanRejectedCategories = dedupeStrings(normalizeStringArray(rejectedCategories));
-    const cleanExcludeCategories = dedupeStrings([...normalizeStringArray(excludeCategories), ...cleanRejectedCategories]);
+    const cleanLockedCategories = dedupeStrings(normalizeStringArray(lockedCategories));
+    const cleanApprovedCategories = dedupeStrings([...normalizeStringArray(approvedCategories), ...cleanLockedCategories]);
+    const cleanRejectedCategories = dedupeStrings(normalizeStringArray(rejectedCategories).filter((category) => !containsCategory(cleanLockedCategories, category)));
+    const cleanExcludeCategories = dedupeStrings([...normalizeStringArray(excludeCategories), ...cleanRejectedCategories].filter((category) => !containsCategory(cleanLockedCategories, category)));
     const cleanRejectedQuestions = dedupeStrings([...normalizeStringArray(rejectedQuestions), ...normalizeStringArray(currentBatchQuestions)]);
     const existingQuestions = avoidDuplicates || excludeUsed ? await fetchExistingQuestions() : [];
     const existingFingerprints = new Set(existingQuestions.map((q) => fingerprint(q.question_text)));
@@ -101,6 +103,7 @@ export default async function handler(req, res) {
       cleanTheme,
       cleanExcludeCategories,
       cleanApprovedCategories,
+      cleanLockedCategories,
       existingQuestions,
       excludeUsed,
       avoidDuplicates,
@@ -114,6 +117,7 @@ export default async function handler(req, res) {
       difficultyKey,
       cleanExcludeCategories,
       cleanApprovedCategories,
+      cleanLockedCategories,
       existingFingerprints,
       existingAnswerPairs,
       existingAnswers,
@@ -154,9 +158,18 @@ function dedupeStrings(values) {
   });
 }
 
-function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, existingQuestions, excludeUsed, avoidDuplicates, includeImagePrompt }) {
+function containsCategory(categories, category) {
+  return categories.some((item) => item.toLowerCase() === String(category || "").toLowerCase());
+}
+
+function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, existingQuestions, excludeUsed, avoidDuplicates, includeImagePrompt }) {
   const overGenerateCount = Math.min(30, Math.max(safeCount + 8, Math.ceil(safeCount * 2.5)));
-  const approvedCategoryText = cleanApprovedCategories.length ? `Use only these pre-approved categories. The category field must exactly match one of these names: ${cleanApprovedCategories.join(", ")}.` : `Use varied broad categories such as: ${BROAD_CATEGORIES.join(", ")}.`;
+  const lockedCategoryText = cleanLockedCategories.length ? `Locked categories are active. The category field must exactly match one of these locked categories: ${cleanLockedCategories.join(", ")}. Generate all candidates inside these locked categories until the host unlocks them.` : "";
+  const approvedCategoryText = cleanLockedCategories.length
+    ? lockedCategoryText
+    : cleanApprovedCategories.length
+      ? `Use only these pre-approved categories. The category field must exactly match one of these names: ${cleanApprovedCategories.join(", ")}.`
+      : `Use varied broad categories such as: ${BROAD_CATEGORIES.join(", ")}.`;
   const excludedCategoryText = cleanExcludeCategories.length ? `Do not use these rejected or avoided categories: ${cleanExcludeCategories.join(", ")}.` : "";
   const themeText = cleanTheme ? `Theme/vibe/category guidance: ${cleanTheme}. Stay useful to that direction, but avoid repetitive question angles.` : "";
   const duplicateExamples = existingQuestions.slice(0, 180).map((q) => `- ${q.question_text}${q.correct_answer ? ` Answer: ${q.correct_answer}` : ""}`).join("\n");
@@ -210,8 +223,8 @@ Trivia host style:
 - Difficulty: ${difficultyProfile.label}. ${difficultyProfile.guidance}
 - Prefer obscure-but-fair, gettable, satisfying facts over generic quiz-bank material.
 - ${approvedCategoryText}
-- Avoid repeated categories within this batch when possible.
 - Avoid repeating a correct answer anywhere in the batch.
+- If more than one locked category is active, balance the candidates across those locked categories.
 - Write concise, host-friendly question text that sounds natural when read aloud.
 - Avoid ambiguous answers, disputed facts, and answer wording that would cause scoring arguments.
 - fun_fact must be one short sentence that adds color without spoiling another question.
@@ -263,7 +276,7 @@ async function requestCandidates(prompt) {
   }
 }
 
-function normalizeCandidates({ candidates, config, questionType, difficultyKey, cleanExcludeCategories, cleanApprovedCategories, existingFingerprints, existingAnswerPairs, existingAnswers, rejectedQuestionFingerprints, rejectedAnswerFingerprints, avoidDuplicates, includeImagePrompt }) {
+function normalizeCandidates({ candidates, config, questionType, difficultyKey, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, existingFingerprints, existingAnswerPairs, existingAnswers, rejectedQuestionFingerprints, rejectedAnswerFingerprints, avoidDuplicates, includeImagePrompt }) {
   const rejected = [];
   const accepted = [];
   const batchFingerprints = new Set();
@@ -271,6 +284,7 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
   const batchAnswers = new Set();
   const excludedCategories = new Set(cleanExcludeCategories.map((category) => category.toLowerCase()));
   const approvedCategorySet = new Set(cleanApprovedCategories.map((category) => category.toLowerCase()));
+  const lockedCategorySet = new Set(cleanLockedCategories.map((category) => category.toLowerCase()));
 
   if (!Array.isArray(candidates)) throw new Error("No candidates returned");
 
@@ -289,6 +303,10 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
 
     if (isGenericQuestion(item.question_text)) {
       rejected.push({ index, question: item.question_text, reason: "generic_overused_trivia_pattern" });
+      return;
+    }
+    if (lockedCategorySet.size > 0 && !lockedCategorySet.has(categoryKey)) {
+      rejected.push({ index, question: item.question_text, reason: "not_locked_category" });
       return;
     }
     if (approvedCategorySet.size > 0 && !approvedCategorySet.has(categoryKey)) {
