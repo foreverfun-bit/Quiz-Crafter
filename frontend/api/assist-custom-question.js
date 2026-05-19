@@ -16,16 +16,18 @@ export default async function handler(req, res) {
     const existingCategory = String(req.body?.category || "").trim();
     const preferredType = QUESTION_TYPES.includes(req.body?.question_type) ? req.body.question_type : "";
     const forceQuestionType = Boolean(req.body?.force_question_type && preferredType);
+    const approvedCategories = normalizeStringArray(req.body?.approved_categories);
+    const rejectedCategories = normalizeStringArray(req.body?.rejected_categories);
 
     if (!questionText) {
       return res.status(400).json({ error: "Question text is required" });
     }
 
     if (!process.env.OPENAI_API_KEY) {
-      return res.status(200).json(buildHeuristicSuggestion(questionText, existingCategory, preferredType, forceQuestionType));
+      return res.status(200).json(buildHeuristicSuggestion(questionText, existingCategory, preferredType, forceQuestionType, approvedCategories, rejectedCategories));
     }
 
-    const prompt = buildPrompt(questionText, existingCategory, preferredType, forceQuestionType);
+    const prompt = buildPrompt(questionText, existingCategory, preferredType, forceQuestionType, approvedCategories, rejectedCategories);
     const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -56,14 +58,14 @@ export default async function handler(req, res) {
     const content = json.choices?.[0]?.message?.content || "{}";
     const parsed = JSON.parse(content);
 
-    return res.status(200).json(normalizeSuggestion(parsed, questionText, existingCategory, preferredType, forceQuestionType));
+    return res.status(200).json(normalizeSuggestion(parsed, questionText, existingCategory, preferredType, forceQuestionType, approvedCategories, rejectedCategories));
   } catch (error) {
     console.error("assist-custom-question error:", error);
     return res.status(500).json({ error: error?.message || "Failed to assist question" });
   }
 }
 
-function buildPrompt(questionText, existingCategory, preferredType, forceQuestionType) {
+function buildPrompt(questionText, existingCategory, preferredType, forceQuestionType, approvedCategories, rejectedCategories) {
   const targetTypeText = forceQuestionType
     ? `The host already selected the question type: ${TYPE_LABELS[preferredType]}. You must keep question_type as "${preferredType}" and shape the record for that format.`
     : preferredType
@@ -71,6 +73,7 @@ function buildPrompt(questionText, existingCategory, preferredType, forceQuestio
       : "Choose the best question type for the rough input.";
 
   const typeSpecificRules = forceQuestionType ? buildForcedTypeRules(preferredType) : buildFlexibleTypeRules();
+  const categoryRules = buildCategoryRules(existingCategory, approvedCategories, rejectedCategories);
 
   return `
 You are helping a trivia host build an all-in-one trivia assistant, not a generic quiz site.
@@ -114,11 +117,28 @@ Fact-safety rules:
 
 Question-shaping rules:
 ${typeSpecificRules}
-- Category should help balance a live session. Prefer useful broad categories like History, Movies, Music, Science, Geography, Sports, Food & Drink, Books, Television, Nature, Pop Culture, Art, World Culture, Weird Science, Internet Culture, Local Flavor, or Before & After.
+${categoryRules}
 - Prefer obscure-but-fair angles over generic trivia. Avoid common questions like basic capitals, obvious Oscar winners, or first-president style facts unless the input specifically asks for them.
 - Keep wording concise, host-friendly, and easy to read aloud.
 - The final question should not be too wordy, too academic, or too easy unless the rough input requires it.
 `.trim();
+}
+
+function buildCategoryRules(existingCategory, approvedCategories, rejectedCategories) {
+  const approvedText = approvedCategories.length
+    ? `- Approved categories are available. Prefer one of these first if it fits the question, and use the exact spelling from this list: ${approvedCategories.join(", ")}.`
+    : "- No approved category list was provided, so choose a useful broad category.";
+  const rejectedText = rejectedCategories.length
+    ? `- Do not suggest these rejected categories: ${rejectedCategories.join(", ")}.`
+    : "";
+  const fallbackText = approvedCategories.length
+    ? "- Only suggest a new category outside the approved list when none of the approved categories fit naturally."
+    : "- Category should help balance a live session. Prefer useful broad categories like History, Movies, Music, Science, Geography, Sports, Food & Drink, Books, Television, Nature, Pop Culture, Art, World Culture, Weird Science, Internet Culture, Local Flavor, or Before & After.";
+  const typedText = existingCategory
+    ? "- If the host typed a category and it is not rejected, keep it when it genuinely fits."
+    : "- If the category field was blank, your first choice should come from the approved list when possible.";
+
+  return [approvedText, rejectedText, fallbackText, typedText].filter(Boolean).join("\n");
 }
 
 function buildForcedTypeRules(type) {
@@ -161,7 +181,7 @@ function buildFlexibleTypeRules() {
 - For written, incorrect_answers must be [].`.trim();
 }
 
-function normalizeSuggestion(value, originalQuestion, existingCategory, preferredType, forceQuestionType) {
+function normalizeSuggestion(value, originalQuestion, existingCategory, preferredType, forceQuestionType, approvedCategories, rejectedCategories) {
   const type = forceQuestionType
     ? preferredType
     : QUESTION_TYPES.includes(value.question_type)
@@ -169,10 +189,11 @@ function normalizeSuggestion(value, originalQuestion, existingCategory, preferre
       : preferredType || inferType(originalQuestion);
   const cleanQuestion = String(value.clean_question_text || originalQuestion).trim();
   const correctAnswer = normalizeAnswer(value.correct_answer, type);
+  const category = normalizeCategory(value.category, existingCategory, originalQuestion, approvedCategories, rejectedCategories);
 
   return {
     question_type: type,
-    category: String(value.category || existingCategory || "General").trim(),
+    category,
     clean_question_text: cleanQuestion,
     correct_answer: correctAnswer,
     incorrect_answers: type === "multiple_choice" && correctAnswer ? normalizeIncorrectAnswers(value.incorrect_answers, correctAnswer) : [],
@@ -182,12 +203,12 @@ function normalizeSuggestion(value, originalQuestion, existingCategory, preferre
   };
 }
 
-function buildHeuristicSuggestion(questionText, existingCategory, preferredType, forceQuestionType) {
+function buildHeuristicSuggestion(questionText, existingCategory, preferredType, forceQuestionType, approvedCategories, rejectedCategories) {
   const type = forceQuestionType && preferredType ? preferredType : preferredType || inferType(questionText);
   return normalizeSuggestion(
     {
       question_type: type,
-      category: existingCategory || inferCategory(questionText),
+      category: existingCategory || chooseApprovedOrInferredCategory(questionText, approvedCategories, rejectedCategories),
       clean_question_text: questionText,
       correct_answer: "",
       incorrect_answers: [],
@@ -198,8 +219,46 @@ function buildHeuristicSuggestion(questionText, existingCategory, preferredType,
     questionText,
     existingCategory,
     preferredType,
-    forceQuestionType
+    forceQuestionType,
+    approvedCategories,
+    rejectedCategories
   );
+}
+
+function normalizeStringArray(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  return value
+    .map((item) => String(item || "").trim())
+    .filter((item) => {
+      const key = item.toLowerCase();
+      if (!item || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function normalizeCategory(category, existingCategory, originalQuestion, approvedCategories, rejectedCategories) {
+  const rejectedKeys = new Set(rejectedCategories.map((item) => item.toLowerCase()));
+  const typed = String(existingCategory || "").trim();
+  if (typed && !rejectedKeys.has(typed.toLowerCase())) return typed;
+
+  const suggested = String(category || "").trim();
+  const approvedMatch = approvedCategories.find((item) => item.toLowerCase() === suggested.toLowerCase());
+  if (approvedMatch) return approvedMatch;
+
+  if (suggested && !rejectedKeys.has(suggested.toLowerCase())) return suggested;
+
+  return chooseApprovedOrInferredCategory(originalQuestion, approvedCategories, rejectedCategories);
+}
+
+function chooseApprovedOrInferredCategory(questionText, approvedCategories, rejectedCategories) {
+  const inferred = inferCategory(questionText);
+  const rejectedKeys = new Set(rejectedCategories.map((item) => item.toLowerCase()));
+  const approvedMatch = approvedCategories.find((item) => item.toLowerCase() === inferred.toLowerCase());
+  if (approvedMatch) return approvedMatch;
+  if (approvedCategories.length) return approvedCategories[0];
+  return rejectedKeys.has(inferred.toLowerCase()) ? "General" : inferred;
 }
 
 function defaultNotes(type, forceQuestionType) {
