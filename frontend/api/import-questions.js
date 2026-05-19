@@ -433,6 +433,18 @@ function buildSessionName(filename) {
   return clean(filename).replace(/\.(csv|tsv|txt|pdf)$/i, "").replace(/[_-]+/g, " ") || `Imported Session ${new Date().toLocaleDateString()}`;
 }
 
+function describeQuestion(question, reason) {
+  return {
+    row: question.source_order || null,
+    round: question.round_name || question.category || "Imported",
+    category: question.category || "Imported",
+    type: question.question_type || "written",
+    question: question.question_text || "Untitled question",
+    answer: question.correct_answer || "",
+    reason,
+  };
+}
+
 async function importQuestions({ questions, userId, filename }) {
   const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.REACT_APP_SUPABASE_URL || "";
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
@@ -445,6 +457,7 @@ async function importQuestions({ questions, userId, filename }) {
   let imported = 0;
   let skipped = 0;
   const errors = [];
+  const skippedDetails = [];
 
   for (const question of sortedQuestions) {
     try {
@@ -452,6 +465,7 @@ async function importQuestions({ questions, userId, filename }) {
       if (lookupError) throw lookupError;
       if (existing?.id) {
         skipped += 1;
+        skippedDetails.push(describeQuestion(question, "Already exists in your question library"));
         continue;
       }
 
@@ -464,7 +478,9 @@ async function importQuestions({ questions, userId, filename }) {
       if (insertError) throw insertError;
       imported += 1;
     } catch (error) {
-      errors.push(error.message || "Question import failed");
+      const reason = error.message || "Question import failed";
+      errors.push(reason);
+      skippedDetails.push(describeQuestion(question, reason));
     }
   }
 
@@ -490,7 +506,7 @@ async function importQuestions({ questions, userId, filename }) {
     sessionError = error.message || "Failed to create past session";
   }
 
-  return { imported, skipped, errors, sessionsCreated, sessionId, sessionName, sessionError };
+  return { imported, skipped, errors, skippedDetails, sessionsCreated, sessionId, sessionName, sessionError };
 }
 
 async function handler(req, res) {
@@ -541,6 +557,7 @@ async function handler(req, res) {
       format: SOURCE_LABELS[parsed.source] || parsed.source || "Imported",
       imported: result.imported,
       skipped: result.skipped,
+      skipped_details: result.skippedDetails,
       errors: result.errors,
       sessions_created: result.sessionsCreated,
       session_id: result.sessionId,
