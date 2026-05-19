@@ -56,6 +56,15 @@ const WriteQuestion = () => {
     setForm((prev) => ({ ...prev, ...patch }));
   };
 
+  const updateQuestionType = (value) => {
+    setForm((prev) => ({
+      ...prev,
+      question_type: value,
+      correct_answer: value === "true_false" && !["True", "False"].includes(prev.correct_answer) ? "" : prev.correct_answer,
+      incorrect_answers: value === "multiple_choice" ? prev.incorrect_answers : ["", "", ""],
+    }));
+  };
+
   const updateWrongAnswer = (index, value) => {
     setForm((prev) => ({
       ...prev,
@@ -74,25 +83,30 @@ const WriteQuestion = () => {
       const { data } = await axios.post("/api/assist-custom-question", {
         question_text: form.question_text.trim(),
         category: form.category.trim(),
+        question_type: form.question_type,
+        force_question_type: true,
       });
 
+      const assistedType = data.question_type || form.question_type;
       setForm((prev) => ({
         ...prev,
         question_text: data.clean_question_text || prev.question_text,
-        question_type: data.question_type || prev.question_type,
+        question_type: assistedType,
         category: data.category || prev.category,
         correct_answer: data.correct_answer || prev.correct_answer,
-        incorrect_answers: [
-          ...(Array.isArray(data.incorrect_answers) ? data.incorrect_answers : []),
-          "",
-          "",
-          "",
-        ].slice(0, 3),
+        incorrect_answers: assistedType === "multiple_choice"
+          ? [
+              ...(Array.isArray(data.incorrect_answers) ? data.incorrect_answers : []),
+              "",
+              "",
+              "",
+            ].slice(0, 3)
+          : ["", "", ""],
         fun_fact: data.fun_fact || prev.fun_fact,
       }));
       setAssistantNotes(data.notes || "");
       setConfidence(typeof data.confidence === "number" ? data.confidence : null);
-      toast.success("Suggestion ready");
+      toast.success(`${typeConfig[assistedType]?.label || "Question"} suggestion ready`);
     } catch (error) {
       console.error("Assist question error:", error);
       toast.error(error.response?.data?.error || error.message || "Failed to assist question");
@@ -154,7 +168,7 @@ const WriteQuestion = () => {
         <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">
           Write <span className="gradient-text">Custom Question</span>
         </h1>
-        <p className="text-zinc-500">Draft a question, let the app suggest the best format, then save it to your library.</p>
+        <p className="text-zinc-500">Choose a format, draft your rough idea, then let the app polish it with answers and a fun fact.</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-[1.4fr_0.8fr] gap-6">
@@ -166,47 +180,46 @@ const WriteQuestion = () => {
               </CardTitle>
               <Button onClick={handleAssist} disabled={assisting} className="gradient-btn" data-testid="assist-question-btn">
                 {assisting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2" size={16} />}
-                Assist
+                Assist as {selectedType.label}
               </Button>
             </div>
           </CardHeader>
           <CardContent className="space-y-5">
             <div className="space-y-2">
-              <Label className="text-zinc-300">Question</Label>
+              <Label className="text-zinc-300">Question Type</Label>
+              <Select value={form.question_type} onValueChange={updateQuestionType}>
+                <SelectTrigger className="bg-zinc-950/50 border-white/10 text-white" data-testid="question-type-select">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-900 border-white/10 text-white">
+                  <SelectItem value="true_false">True/False</SelectItem>
+                  <SelectItem value="multiple_choice">Multiple Choice</SelectItem>
+                  <SelectItem value="written">Written Answer</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-zinc-600">The Assist button will keep this format and build the answer fields around it.</p>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-zinc-300">Rough Question or Idea</Label>
               <Textarea
                 value={form.question_text}
                 onChange={(e) => updateForm({ question_text: e.target.value })}
-                placeholder="Type the question you want to add..."
+                placeholder="Type the rough question, clue, fact, or idea you want to turn into trivia..."
                 className="bg-zinc-950/50 border-white/10 text-white min-h-[120px] resize-none"
                 data-testid="custom-question-input"
               />
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label className="text-zinc-300">Suggested Type</Label>
-                <Select value={form.question_type} onValueChange={(value) => updateForm({ question_type: value })}>
-                  <SelectTrigger className="bg-zinc-950/50 border-white/10 text-white" data-testid="question-type-select">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="bg-zinc-900 border-white/10 text-white">
-                    <SelectItem value="true_false">True/False</SelectItem>
-                    <SelectItem value="multiple_choice">Multiple Choice</SelectItem>
-                    <SelectItem value="written">Written Answer</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <Label className="text-zinc-300">Category</Label>
-                <Input
-                  value={form.category}
-                  onChange={(e) => updateForm({ category: e.target.value })}
-                  placeholder="Science, Music, History..."
-                  className="bg-zinc-950/50 border-white/10 text-white"
-                  data-testid="custom-category-input"
-                />
-              </div>
+            <div className="space-y-2">
+              <Label className="text-zinc-300">Category</Label>
+              <Input
+                value={form.category}
+                onChange={(e) => updateForm({ category: e.target.value })}
+                placeholder="Science, Music, History..."
+                className="bg-zinc-950/50 border-white/10 text-white"
+                data-testid="custom-category-input"
+              />
             </div>
 
             {form.question_type === "true_false" ? (
@@ -322,7 +335,7 @@ const WriteQuestion = () => {
           <Card className="glass-card">
             <CardContent className="p-5">
               <p className="text-zinc-400 text-sm leading-relaxed">
-                The assistant can suggest structure, but you stay in control. Edit the type, category, answer, and wrong answers before saving.
+                Pick the format first when you know it. Assist will reword the draft, suggest the answer setup, and add category/fun fact support for that format.
               </p>
             </CardContent>
           </Card>
