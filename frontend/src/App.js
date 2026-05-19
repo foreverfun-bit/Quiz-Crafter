@@ -152,6 +152,20 @@ function App() {
     return () => subscription.unsubscribe();
   }, []);
 
+  useEffect(() => {
+    const openHostSession = (event) => {
+      const button = event.target?.closest?.('[data-testid="go-live-btn"]');
+      const match = window.location.pathname.match(/^\/session\/([^/]+)/);
+      if (!button || !match) return;
+      event.preventDefault();
+      event.stopPropagation();
+      window.location.assign(`/host-session/${match[1]}`);
+    };
+
+    document.addEventListener("click", openHostSession, true);
+    return () => document.removeEventListener("click", openHostSession, true);
+  }, []);
+
   const login = async (email, password) => {
     try {
       const { data, error } = await supabase.auth.signInWithPassword({
