@@ -45,7 +45,7 @@ const defaultRounds = [
   { id: "round-3", name: "Round 3", questionIds: [] },
 ];
 
-const BUILD_STORAGE_KEY = "trivia-flex-round-builder-state-v4";
+const BUILD_STORAGE_KEY = "trivia-flex-round-builder-state-v5";
 const CATEGORY_PREF_KEY = "quiz-crafter-category-preferences";
 const REJECTED_AI_KEY = "quiz-crafter-rejected-ai-questions";
 
@@ -147,7 +147,11 @@ const BuildSession = () => {
 
   const loadSavedState = () => {
     try {
-      const saved = localStorage.getItem(BUILD_STORAGE_KEY) || localStorage.getItem("trivia-flex-round-builder-state-v3") || localStorage.getItem("trivia-flex-round-builder-state-v2");
+      const saved =
+        localStorage.getItem(BUILD_STORAGE_KEY) ||
+        localStorage.getItem("trivia-flex-round-builder-state-v4") ||
+        localStorage.getItem("trivia-flex-round-builder-state-v3") ||
+        localStorage.getItem("trivia-flex-round-builder-state-v2");
       if (!saved) return null;
       const parsed = JSON.parse(saved);
       return {
@@ -182,7 +186,6 @@ const BuildSession = () => {
   const [includeImageIdeas, setIncludeImageIdeas] = useState(Boolean(savedState?.includeImageIdeas));
   const [generating, setGenerating] = useState(false);
   const [actionQuestionId, setActionQuestionId] = useState(null);
-  const [imageQuestionId, setImageQuestionId] = useState(null);
   const [showWriteForm, setShowWriteForm] = useState(false);
   const [showLibrary, setShowLibrary] = useState(true);
   const [writeForm, setWriteForm] = useState(emptyWriteForm);
@@ -198,6 +201,7 @@ const BuildSession = () => {
 
   const clearSavedState = () => {
     localStorage.removeItem(BUILD_STORAGE_KEY);
+    localStorage.removeItem("trivia-flex-round-builder-state-v4");
     localStorage.removeItem("trivia-flex-round-builder-state-v3");
     localStorage.removeItem("trivia-flex-round-builder-state-v2");
   };
@@ -271,8 +275,9 @@ const BuildSession = () => {
 
   const handleDeleteRound = (roundId) => {
     if (rounds.length === 1) return toast.error("Keep at least one round");
+    const nextRound = rounds.find((round) => round.id !== roundId) || rounds[0];
     setRounds((prev) => prev.filter((round) => round.id !== roundId));
-    if (activeRoundId === roundId) setActiveRoundId((rounds.find((round) => round.id !== roundId) || rounds[0]).id);
+    if (activeRoundId === roundId) setActiveRoundId(nextRound.id);
   };
 
   const handleRenameRound = (roundId, name) => setRounds((prev) => prev.map((round) => (round.id === roundId ? { ...round, name } : round)));
@@ -291,7 +296,8 @@ const BuildSession = () => {
   const toggleMedia = (questionId) => setExpandedMediaIds((prev) => {
     const next = new Set(prev);
     const key = String(questionId);
-    if (next.has(key)) next.delete(key); else next.add(key);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
     return next;
   });
 
@@ -303,17 +309,6 @@ const BuildSession = () => {
     const dataUrl = await fileToDataUrl(file);
     updateQuestion(questionId, { image_url: dataUrl });
     toast.success("Image attached");
-  };
-
-  const handleGenerateImage = async (question) => {
-    setImageQuestionId(question.id);
-    try {
-      throw new Error("Image generation is not available yet. Use the image idea, then drag/drop a photo or paste a media URL.");
-    } catch (error) {
-      toast.error(error.message || "Failed to generate image");
-    } finally {
-      setImageQuestionId(null);
-    }
   };
 
   const handleAddCustomQuestion = () => {
@@ -480,18 +475,97 @@ const BuildSession = () => {
   return (
     <div className="p-4 lg:p-6 max-w-7xl mx-auto animate-fade-in" data-testid="build-session-page">
       <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-4 mb-5">
-        <div><h1 className="text-3xl md:text-4xl font-bold text-white mb-2">Build <span className="gradient-text">Session</span></h1><p className="text-zinc-500">Build rounds freely, add media anywhere, and let AI fill gaps from approved categories.</p></div>
-        <div className="flex gap-2 flex-wrap">{selectedTotal > 0 && <Button variant="outline" onClick={handleClearSession} className="border-zinc-700 text-zinc-400 hover:text-white hover:bg-zinc-800"><X size={16} className="mr-2" />Clear</Button>}<Button onClick={handleSave} disabled={saving} className="gradient-btn" data-testid="save-session-btn">{saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</> : <><Save className="mr-2" size={18} />Save Session</>}</Button></div>
+        <div>
+          <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">Build <span className="gradient-text">Session</span></h1>
+          <p className="text-zinc-500">Build rounds freely, add media anywhere, and let AI fill gaps from approved categories.</p>
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          {selectedTotal > 0 && <Button variant="outline" onClick={handleClearSession} className="border-zinc-700 text-zinc-400 hover:text-white hover:bg-zinc-800"><X size={16} className="mr-2" />Clear</Button>}
+          <Button onClick={handleSave} disabled={saving} className="gradient-btn" data-testid="save-session-btn">
+            {saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</> : <><Save className="mr-2" size={18} />Save Session</>}
+          </Button>
+        </div>
       </div>
 
-      <Card className="glass-card mb-5"><CardContent className="p-4 space-y-4"><div className="grid grid-cols-1 lg:grid-cols-[1fr_1.4fr_180px] gap-3"><Field label="Session Name"><Input value={sessionName} onChange={(e) => setSessionName(e.target.value)} placeholder="e.g., Tuesday Night Trivia" className="bg-zinc-950/50 border-white/10 text-white" /></Field><Field label="AI Direction"><Input value={theme} onChange={(e) => setTheme(e.target.value)} placeholder="e.g. 90s night, no sports, cozy nerd trivia" className="bg-zinc-950/50 border-white/10 text-white" /></Field><Field label="Difficulty"><select value={difficulty} onChange={(e) => setDifficulty(e.target.value)} className="w-full h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3"><option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option><option value="host_hard">Host Hard</option></select></Field></div>{approvedCategories.length > 0 && <p className="text-xs text-zinc-500">AI category pool: {approvedCategories.slice(0, 10).join(", ")}{approvedCategories.length > 10 ? "..." : ""}</p>}</CardContent></Card>
+      <Card className="glass-card mb-5">
+        <CardContent className="p-4 space-y-4">
+          <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.4fr_180px] gap-3">
+            <Field label="Session Name"><Input value={sessionName} onChange={(e) => setSessionName(e.target.value)} placeholder="e.g., Tuesday Night Trivia" className="bg-zinc-950/50 border-white/10 text-white" /></Field>
+            <Field label="AI Direction"><Input value={theme} onChange={(e) => setTheme(e.target.value)} placeholder="e.g. 90s night, no sports, cozy nerd trivia" className="bg-zinc-950/50 border-white/10 text-white" /></Field>
+            <Field label="Difficulty"><select value={difficulty} onChange={(e) => setDifficulty(e.target.value)} className="w-full h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3"><option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option><option value="host_hard">Host Hard</option></select></Field>
+          </div>
+          {approvedCategories.length > 0 && <p className="text-xs text-zinc-500">AI category pool: {approvedCategories.slice(0, 10).join(", ")}{approvedCategories.length > 10 ? "..." : ""}</p>}
+        </CardContent>
+      </Card>
 
       <div className="space-y-5">
         <RoundStrip rounds={rounds} activeRoundId={activeRoundId} onSelect={setActiveRoundId} onRename={handleRenameRound} onDelete={handleDeleteRound} onAdd={handleAddRound} />
 
-        <Card className="glass-card overflow-hidden"><CardHeader className="pb-3 border-b border-white/10"><div className="flex items-center justify-between gap-3 flex-wrap"><div><CardTitle className="text-white flex items-center gap-2"><Layers size={20} className="text-[#71E0DC]" />{activeRound.name}</CardTitle><CardDescription className="text-zinc-500">{activeRoundQuestions.length} question{activeRoundQuestions.length === 1 ? "" : "s"} selected</CardDescription></div><BuilderToolbar showWriteForm={showWriteForm} setShowWriteForm={setShowWriteForm} showLibrary={showLibrary} onBrowseLibrary={handleBrowseLibrary} generateType={generateType} setGenerateType={setGenerateType} generateCount={generateCount} setGenerateCount={setGenerateCount} includeImageIdeas={includeImageIdeas} setIncludeImageIdeas={setIncludeImageIdeas} generating={generating} onGenerate={handleGenerateForRound} /></div></CardHeader><CardContent className="p-4">{showWriteForm && <FreeWriteForm form={writeForm} setForm={setWriteForm} categories={approvedCategories} onSubmit={handleAddCustomQuestion} onCancel={() => setShowWriteForm(false)} />}<SelectedRoundList questions={activeRoundQuestions} expandedMediaIds={expandedMediaIds} actionQuestionId={actionQuestionId} imageQuestionId={imageQuestionId} onToggleMedia={toggleMedia} onDropImage={handleDropImage} onGenerateImage={handleGenerateImage} onRemove={(questionId) => removeFromRound(activeRound.id, questionId)} onUpdate={updateQuestion} onRefresh={handleRefreshGenerated} onRejectQuestion={handleRejectQuestion} onRejectCategory={handleRejectCategory} /></CardContent></Card>
+        <Card className="glass-card overflow-hidden">
+          <CardHeader className="pb-3 border-b border-white/10">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <CardTitle className="text-white flex items-center gap-2"><Layers size={20} className="text-[#71E0DC]" />{activeRound.name}</CardTitle>
+                <CardDescription className="text-zinc-500">{activeRoundQuestions.length} question{activeRoundQuestions.length === 1 ? "" : "s"} selected</CardDescription>
+              </div>
+              <BuilderToolbar
+                showWriteForm={showWriteForm}
+                setShowWriteForm={setShowWriteForm}
+                showLibrary={showLibrary}
+                onBrowseLibrary={handleBrowseLibrary}
+                generateType={generateType}
+                setGenerateType={setGenerateType}
+                generateCount={generateCount}
+                setGenerateCount={setGenerateCount}
+                includeImageIdeas={includeImageIdeas}
+                setIncludeImageIdeas={setIncludeImageIdeas}
+                generating={generating}
+                onGenerate={handleGenerateForRound}
+              />
+            </div>
+          </CardHeader>
+          <CardContent className="p-4">
+            {showWriteForm && <FreeWriteForm form={writeForm} setForm={setWriteForm} categories={approvedCategories} onSubmit={handleAddCustomQuestion} onCancel={() => setShowWriteForm(false)} />}
+            <SelectedRoundList
+              questions={activeRoundQuestions}
+              expandedMediaIds={expandedMediaIds}
+              actionQuestionId={actionQuestionId}
+              onToggleMedia={toggleMedia}
+              onDropImage={handleDropImage}
+              onRemove={(questionId) => removeFromRound(activeRound.id, questionId)}
+              onUpdate={updateQuestion}
+              onRefresh={handleRefreshGenerated}
+              onRejectQuestion={handleRejectQuestion}
+              onRejectCategory={handleRejectCategory}
+            />
+          </CardContent>
+        </Card>
 
-        {showLibrary && <Card id="build-session-library" className="glass-card scroll-mt-6"><CardHeader className="pb-3"><div className="flex items-start justify-between gap-4 flex-wrap"><div><CardTitle className="text-white flex items-center gap-2"><Upload size={20} className="text-zinc-300" />Unused Question Library</CardTitle><CardDescription className="text-zinc-500">Questions from past saved sessions are hidden.</CardDescription></div><select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3 text-sm">{questionTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}</select></div></CardHeader><CardContent><div className="relative mb-4"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" /><Input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search unused questions..." className="pl-9 bg-zinc-950/50 border-white/10 text-white" /></div><ScrollArea className="h-[500px] pr-3">{availableQuestions.length === 0 ? <div className="text-center py-16"><p className="text-zinc-500">No unused questions match this view.</p><Button onClick={handleGenerateForRound} disabled={generating} className="gradient-btn mt-4">{generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles size={16} className="mr-2" />}Generate For {activeRound.name}</Button></div> : <div className="space-y-3">{availableQuestions.map((question) => <QuestionRow key={question.id} question={question} selected={(activeRound.questionIds || []).map(String).includes(String(question.id))} alreadyInSession={selectedIds.has(String(question.id)) && !(activeRound.questionIds || []).map(String).includes(String(question.id))} onClick={() => toggleQuestion(question)} />)}</div>}</ScrollArea></CardContent></Card>}
+        {showLibrary && <Card id="build-session-library" className="glass-card scroll-mt-6">
+          <CardHeader className="pb-3">
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div>
+                <CardTitle className="text-white flex items-center gap-2"><Upload size={20} className="text-zinc-300" />Unused Question Library</CardTitle>
+                <CardDescription className="text-zinc-500">Questions from past saved sessions are hidden.</CardDescription>
+              </div>
+              <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3 text-sm">
+                {questionTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
+              </select>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="relative mb-4">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
+              <Input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search unused questions..." className="pl-9 bg-zinc-950/50 border-white/10 text-white" />
+            </div>
+            <ScrollArea className="h-[500px] pr-3">
+              {availableQuestions.length === 0 ? <div className="text-center py-16">
+                <p className="text-zinc-500">No unused questions match this view.</p>
+                <Button onClick={handleGenerateForRound} disabled={generating} className="gradient-btn mt-4">{generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles size={16} className="mr-2" />}Generate For {activeRound.name}</Button>
+              </div> : <div className="space-y-3">{availableQuestions.map((question) => <QuestionRow key={question.id} question={question} selected={(activeRound.questionIds || []).map(String).includes(String(question.id))} alreadyInSession={selectedIds.has(String(question.id)) && !(activeRound.questionIds || []).map(String).includes(String(question.id))} onClick={() => toggleQuestion(question)} />)}</div>}
+            </ScrollArea>
+          </CardContent>
+        </Card>}
       </div>
     </div>
   );
@@ -501,10 +575,42 @@ const Field = ({ label, children }) => <div className="space-y-2"><Label classNa
 
 const RoundStrip = ({ rounds, activeRoundId, onSelect, onRename, onDelete, onAdd }) => {
   const activeRound = rounds.find((round) => round.id === activeRoundId) || rounds[0];
-  return <Card className="glass-card"><CardContent className="p-3"><div className="flex items-center gap-2 overflow-x-auto pb-1">{rounds.map((round) => { const active = round.id === activeRoundId; return <button key={round.id} onClick={() => onSelect(round.id)} className={`flex items-center gap-2 h-10 px-3 rounded-md border text-sm font-semibold whitespace-nowrap transition-all ${active ? "border-[#71E0DC]/50 bg-[#71E0DC]/10 text-white" : "border-white/10 bg-zinc-950/40 text-zinc-400 hover:text-white"}`}><span>{round.name}</span><Badge className="bg-zinc-800 text-zinc-300">{round.questionIds?.length || 0}</Badge></button>; })}<Button size="sm" onClick={onAdd} className="h-10 w-10 p-0 gradient-btn flex-shrink-0"><Plus size={16} /></Button></div>{activeRound && <div className="mt-3 flex items-center gap-2"><Input value={activeRound.name} onChange={(e) => onRename(activeRound.id, e.target.value)} className="h-9 max-w-xs bg-zinc-950/50 border-white/10 text-white text-sm" /><Button title="Delete round" aria-label="Delete round" size="sm" variant="outline" onClick={() => onDelete(activeRound.id)} className="h-9 border-zinc-700 text-zinc-400 hover:text-red-300"><Trash2 size={14} /></Button></div>}</CardContent></Card>;
+  return (
+    <Card className="glass-card">
+      <CardContent className="p-3">
+        <div className="flex items-center gap-2 overflow-x-auto pb-1">
+          {rounds.map((round) => {
+            const active = round.id === activeRoundId;
+            return (
+              <button key={round.id} type="button" onClick={() => onSelect(round.id)} className={`flex items-center gap-2 h-10 px-3 rounded-md border text-sm font-semibold whitespace-nowrap transition-all ${active ? "border-[#71E0DC]/50 bg-[#71E0DC]/10 text-white" : "border-white/10 bg-zinc-950/40 text-zinc-400 hover:text-white"}`}>
+                <span>{round.name}</span>
+                <Badge className="bg-zinc-800 text-zinc-300">{round.questionIds?.length || 0}</Badge>
+              </button>
+            );
+          })}
+          <Button size="sm" onClick={onAdd} className="h-10 w-10 p-0 gradient-btn flex-shrink-0"><Plus size={16} /></Button>
+        </div>
+        {activeRound && <div className="mt-3 flex items-center gap-2">
+          <Input value={activeRound.name} onChange={(e) => onRename(activeRound.id, e.target.value)} className="h-9 max-w-xs bg-zinc-950/50 border-white/10 text-white text-sm" />
+          <Button title="Delete round" aria-label="Delete round" size="sm" variant="outline" onClick={() => onDelete(activeRound.id)} className="h-9 border-zinc-700 text-zinc-400 hover:text-red-300"><Trash2 size={14} /></Button>
+        </div>}
+      </CardContent>
+    </Card>
+  );
 };
 
-const BuilderToolbar = ({ showWriteForm, setShowWriteForm, showLibrary, onBrowseLibrary, generateType, setGenerateType, generateCount, setGenerateCount, includeImageIdeas, setIncludeImageIdeas, generating, onGenerate }) => <div className="flex items-center gap-2 flex-wrap"><IconAction label="Create" active={showWriteForm} onClick={() => setShowWriteForm((value) => !value)} icon={Pencil} /><IconAction label="Browse" active={showLibrary} onClick={onBrowseLibrary} icon={List} /><div className="h-10 flex items-center gap-2 rounded-md bg-zinc-950/50 border border-white/10 px-2"><select value={generateType} onChange={(e) => setGenerateType(e.target.value)} className="h-8 bg-transparent text-white text-sm outline-none"><option value="true_false">T/F</option><option value="multiple_choice">MC</option><option value="written">Written</option></select><Input value={generateCount} onChange={(e) => setGenerateCount(e.target.value)} className="w-12 h-7 bg-zinc-900 border-white/10 text-white text-center px-1" /></div><label className="h-10 flex items-center gap-2 rounded-md bg-zinc-950/50 border border-white/10 px-3 text-xs text-zinc-300"><input type="checkbox" checked={includeImageIdeas} onChange={(e) => setIncludeImageIdeas(e.target.checked)} className="accent-[#71E0DC]" />Image ideas</label><Button onClick={onGenerate} disabled={generating} className="gradient-btn h-10">{generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles size={16} className="mr-2" />}Generate</Button></div>;
+const BuilderToolbar = ({ showWriteForm, setShowWriteForm, showLibrary, onBrowseLibrary, generateType, setGenerateType, generateCount, setGenerateCount, includeImageIdeas, setIncludeImageIdeas, generating, onGenerate }) => (
+  <div className="flex items-center gap-2 flex-wrap">
+    <IconAction label="Create" active={showWriteForm} onClick={() => setShowWriteForm((value) => !value)} icon={Pencil} />
+    <IconAction label="Browse" active={showLibrary} onClick={onBrowseLibrary} icon={List} />
+    <div className="h-10 flex items-center gap-2 rounded-md bg-zinc-950/50 border border-white/10 px-2">
+      <select value={generateType} onChange={(e) => setGenerateType(e.target.value)} className="h-8 bg-transparent text-white text-sm outline-none"><option value="true_false">T/F</option><option value="multiple_choice">MC</option><option value="written">Written</option></select>
+      <Input value={generateCount} onChange={(e) => setGenerateCount(e.target.value)} className="w-12 h-7 bg-zinc-900 border-white/10 text-white text-center px-1" />
+    </div>
+    <label className="h-10 flex items-center gap-2 rounded-md bg-zinc-950/50 border border-white/10 px-3 text-xs text-zinc-300"><input type="checkbox" checked={includeImageIdeas} onChange={(e) => setIncludeImageIdeas(e.target.checked)} className="accent-[#71E0DC]" />Image ideas</label>
+    <Button onClick={onGenerate} disabled={generating} className="gradient-btn h-10">{generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles size={16} className="mr-2" />}Generate</Button>
+  </div>
+);
 
 const IconAction = ({ label, icon: Icon, onClick, active }) => <Button title={label} aria-label={label} variant="outline" type="button" onClick={onClick} className={`h-10 w-10 p-0 border-white/10 ${active ? "bg-[#71E0DC]/15 text-[#71E0DC]" : "bg-zinc-950/50 text-zinc-300 hover:text-white"}`}><Icon size={18} /></Button>;
 
@@ -517,17 +623,61 @@ const FreeWriteForm = ({ form, setForm, categories, onSubmit, onCancel }) => {
     const dataUrl = await fileToDataUrl(file);
     setForm((prev) => ({ ...prev, image_url: dataUrl }));
   };
-  return <div className="mb-5 rounded-md border border-[#71E0DC]/20 bg-zinc-950/40 p-4 space-y-4"><div className="grid grid-cols-1 md:grid-cols-[160px_1fr_1fr] gap-3"><select value={form.question_type} onChange={(e) => setForm((prev) => ({ ...prev, question_type: e.target.value }))} className="h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3"><option value="written">Free Response</option><option value="true_false">True/False</option><option value="multiple_choice">Multiple Choice</option></select><Input value={form.category} onChange={(e) => setForm((prev) => ({ ...prev, category: e.target.value }))} placeholder={categories[0] || "Category"} list="approved-category-list" className="bg-zinc-950/50 border-white/10 text-white" /><Input value={form.image_url} onChange={(e) => setForm((prev) => ({ ...prev, image_url: e.target.value }))} placeholder="Image or media URL" className="bg-zinc-950/50 border-white/10 text-white" /></div><datalist id="approved-category-list">{categories.map((category) => <option key={category} value={category} />)}</datalist><Textarea value={form.question_text} onChange={(e) => setForm((prev) => ({ ...prev, question_text: e.target.value }))} placeholder="Question" className="bg-zinc-950/50 border-white/10 text-white min-h-[86px]" /><Input value={form.correct_answer} onChange={(e) => setForm((prev) => ({ ...prev, correct_answer: e.target.value }))} placeholder="Correct answer" className="bg-zinc-950/50 border-white/10 text-white" />{form.question_type === "multiple_choice" && <div className="grid grid-cols-1 md:grid-cols-3 gap-2">{form.incorrect_answers.map((answer, index) => <Input key={index} value={answer} onChange={(e) => updateWrong(index, e.target.value)} placeholder={`Wrong answer ${index + 1}`} className="bg-zinc-950/50 border-white/10 text-white" />)}</div>}<Input value={form.fun_fact} onChange={(e) => setForm((prev) => ({ ...prev, fun_fact: e.target.value }))} placeholder="Fun fact" className="bg-zinc-950/50 border-white/10 text-white" /><div onDragOver={(event) => event.preventDefault()} onDrop={handleDrop} className="rounded-md border border-dashed border-white/10 bg-zinc-950/40 p-3 text-sm text-zinc-500">Drop a photo here or paste a media URL above. Pictures are optional for every question.</div><div className="flex justify-end gap-2"><Button variant="outline" onClick={onCancel} className="border-zinc-700 text-zinc-400">Cancel</Button><Button onClick={onSubmit} className="gradient-btn"><Plus size={16} className="mr-2" />Create Question</Button></div></div>;
+  return (
+    <div className="mb-5 rounded-md border border-[#71E0DC]/20 bg-zinc-950/40 p-4 space-y-4">
+      <div className="grid grid-cols-1 md:grid-cols-[160px_1fr_1fr] gap-3">
+        <select value={form.question_type} onChange={(e) => setForm((prev) => ({ ...prev, question_type: e.target.value }))} className="h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3"><option value="written">Free Response</option><option value="true_false">True/False</option><option value="multiple_choice">Multiple Choice</option></select>
+        <Input value={form.category} onChange={(e) => setForm((prev) => ({ ...prev, category: e.target.value }))} placeholder={categories[0] || "Category"} list="approved-category-list" className="bg-zinc-950/50 border-white/10 text-white" />
+        <Input value={form.image_url} onChange={(e) => setForm((prev) => ({ ...prev, image_url: e.target.value }))} placeholder="Image or media URL" className="bg-zinc-950/50 border-white/10 text-white" />
+      </div>
+      <datalist id="approved-category-list">{categories.map((category) => <option key={category} value={category} />)}</datalist>
+      <Textarea value={form.question_text} onChange={(e) => setForm((prev) => ({ ...prev, question_text: e.target.value }))} placeholder="Question" className="bg-zinc-950/50 border-white/10 text-white min-h-[86px]" />
+      <Input value={form.correct_answer} onChange={(e) => setForm((prev) => ({ ...prev, correct_answer: e.target.value }))} placeholder="Correct answer" className="bg-zinc-950/50 border-white/10 text-white" />
+      {form.question_type === "multiple_choice" && <div className="grid grid-cols-1 md:grid-cols-3 gap-2">{form.incorrect_answers.map((answer, index) => <Input key={index} value={answer} onChange={(e) => updateWrong(index, e.target.value)} placeholder={`Wrong answer ${index + 1}`} className="bg-zinc-950/50 border-white/10 text-white" />)}</div>}
+      <Input value={form.fun_fact} onChange={(e) => setForm((prev) => ({ ...prev, fun_fact: e.target.value }))} placeholder="Fun fact" className="bg-zinc-950/50 border-white/10 text-white" />
+      <div onDragOver={(event) => event.preventDefault()} onDrop={handleDrop} className="rounded-md border border-dashed border-white/10 bg-zinc-950/40 p-3 text-sm text-zinc-500">Drop a photo here or paste a media URL above. Pictures are optional for every question.</div>
+      <div className="flex justify-end gap-2"><Button variant="outline" onClick={onCancel} className="border-zinc-700 text-zinc-400">Cancel</Button><Button onClick={onSubmit} className="gradient-btn"><Plus size={16} className="mr-2" />Create Question</Button></div>
+    </div>
+  );
 };
 
-const SelectedRoundList = ({ questions, expandedMediaIds, actionQuestionId, imageQuestionId, onToggleMedia, onDropImage, onGenerateImage, onRemove, onUpdate, onRefresh, onRejectQuestion, onRejectCategory }) => {
+const SelectedRoundList = ({ questions, expandedMediaIds, actionQuestionId, onToggleMedia, onDropImage, onRemove, onUpdate, onRefresh, onRejectQuestion, onRejectCategory }) => {
   if (!questions.length) return <div className="min-h-[260px] flex items-center justify-center text-center"><div><p className="text-2xl font-bold text-white mb-1">No Questions</p><p className="text-zinc-500">Create, browse, or generate questions for this round.</p></div></div>;
-  return <div className="space-y-2">{questions.map((question, index) => {
-    const mediaOpen = expandedMediaIds.has(String(question.id));
-    const busy = String(actionQuestionId) === String(question.id);
-    const imageBusy = String(imageQuestionId) === String(question.id);
-    return <div key={question.id} className="rounded-md bg-zinc-950/40 border border-white/10 p-3"><div className="flex items-start gap-3"><span className="text-zinc-500 text-sm font-mono mt-0.5 w-6 text-right">{index + 1}</span><div className="flex-1 min-w-0"><QuestionMeta question={question} /><p className="text-white text-sm mt-1 leading-relaxed">{question.question_text}</p><p className="text-zinc-500 text-xs mt-1">Answer: <span className="text-emerald-400">{question.correct_answer}</span></p>{question.image_prompt && <p className="text-amber-200 text-xs mt-1">Image idea: {question.image_prompt}</p>}{question.image_url && <p className="text-amber-300 text-xs mt-1">Media attached</p>}</div><div className="flex gap-1 flex-wrap justify-end"><RowIcon label="Add media" icon={Image} onClick={() => onToggleMedia(question.id)} active={mediaOpen || Boolean(question.image_url)} /><RowIcon label="Generate image" icon={imageBusy ? Loader2 : Sparkles} onClick={() => onGenerateImage(question)} disabled={imageBusy} spin={imageBusy} />{question.isGenerated && <RowIcon label="Refresh question" icon={busy ? Loader2 : RefreshCw} onClick={() => onRefresh(question)} disabled={busy} spin={busy} />}{question.isGenerated && <RowIcon label="Reject question" icon={Ban} onClick={() => onRejectQuestion(question)} tone="danger" />}{question.isGenerated && <RowIcon label="Reject category" icon={Tag} onClick={() => onRejectCategory(question)} tone="warning" />}<RowIcon label="Remove" icon={X} onClick={() => onRemove(question.id)} /></div></div>{mediaOpen && <div onDragOver={(event) => event.preventDefault()} onDrop={(event) => onDropImage(event, question.id)} className="mt-3 rounded-md border border-dashed border-white/10 bg-zinc-950/40 p-3"><div className="flex flex-col md:flex-row md:items-center gap-2">{question.image_url && <img src={question.image_url} alt="Question media" className="h-16 w-16 object-cover rounded border border-white/10" />}<Input value={question.image_url || ""} onChange={(e) => onUpdate(question.id, { image_url: e.target.value })} placeholder="Drop a photo here or paste image/media URL" className="bg-zinc-950/50 border-white/10 text-white h-9" /></div></div>}</div>;
-  })}</div>;
+  return (
+    <div className="space-y-2">
+      {questions.map((question, index) => {
+        const mediaOpen = expandedMediaIds.has(String(question.id));
+        const busy = String(actionQuestionId) === String(question.id);
+        return (
+          <div key={question.id} className="rounded-md bg-zinc-950/40 border border-white/10 p-3">
+            <div className="flex items-start gap-3">
+              <span className="text-zinc-500 text-sm font-mono mt-0.5 w-6 text-right">{index + 1}</span>
+              <div className="flex-1 min-w-0">
+                <QuestionMeta question={question} />
+                <p className="text-white text-sm mt-1 leading-relaxed">{question.question_text}</p>
+                <p className="text-zinc-500 text-xs mt-1">Answer: <span className="text-emerald-400">{question.correct_answer}</span></p>
+                {question.image_prompt && <p className="text-amber-200 text-xs mt-1">Image idea: {question.image_prompt}</p>}
+                {question.image_url && <p className="text-amber-300 text-xs mt-1">Media attached</p>}
+              </div>
+              <div className="flex gap-1 flex-wrap justify-end">
+                <RowIcon label="Add media" icon={Image} onClick={() => onToggleMedia(question.id)} active={mediaOpen || Boolean(question.image_url)} />
+                {question.isGenerated && <RowIcon label="Refresh question" icon={busy ? Loader2 : RefreshCw} onClick={() => onRefresh(question)} disabled={busy} spin={busy} />}
+                {question.isGenerated && <RowIcon label="Reject question" icon={Ban} onClick={() => onRejectQuestion(question)} tone="danger" />}
+                {question.isGenerated && <RowIcon label="Reject category" icon={Tag} onClick={() => onRejectCategory(question)} tone="warning" />}
+                <RowIcon label="Remove" icon={X} onClick={() => onRemove(question.id)} />
+              </div>
+            </div>
+            {mediaOpen && <div onDragOver={(event) => event.preventDefault()} onDrop={(event) => onDropImage(event, question.id)} className="mt-3 rounded-md border border-dashed border-white/10 bg-zinc-950/40 p-3">
+              <div className="flex flex-col md:flex-row md:items-center gap-2">
+                {question.image_url && <img src={question.image_url} alt="Question media" className="h-16 w-16 object-cover rounded border border-white/10" />}
+                <Input value={question.image_url || ""} onChange={(e) => onUpdate(question.id, { image_url: e.target.value })} placeholder="Drop a photo here or paste image/media URL" className="bg-zinc-950/50 border-white/10 text-white h-9" />
+              </div>
+            </div>}
+          </div>
+        );
+      })}
+    </div>
+  );
 };
 
 const RowIcon = ({ label, icon: Icon, onClick, active, disabled, spin, tone }) => <Button title={label} aria-label={label} size="sm" variant="ghost" disabled={disabled} onClick={onClick} className={`h-8 w-8 p-0 text-zinc-500 ${active ? "text-[#71E0DC] bg-[#71E0DC]/10" : tone === "danger" ? "hover:text-red-300" : tone === "warning" ? "hover:text-amber-300" : "hover:text-white"}`}><Icon size={15} className={spin ? "animate-spin" : ""} /></Button>;
