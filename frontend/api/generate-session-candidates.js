@@ -28,11 +28,29 @@ const DIFFICULTY_PROFILES = {
   hard: { label: "Hard", guidance: "Challenging but fair. Prefer second-layer knowledge over household-name facts." },
   host_hard: {
     label: "Host Hard",
-    guidance: "Obscure but fair for a host who has used many questions since 2019. Avoid overused pub trivia, obvious capitals, first-president-style facts, basic Oscar trivia, and stale quiz-bank phrasing. Use interesting angles that feel satisfying when revealed.",
+    guidance: "Obscure but fair for a host who has used many questions since 2019. Avoid overused pub trivia, obvious capitals, first-president-style facts, basic Oscar trivia, stale quiz-bank phrasing, and facts that appear on every trivia list. Use interesting angles that feel satisfying when revealed.",
   },
 };
 
 const BROAD_CATEGORIES = ["Art", "Books", "Food & Drink", "Geography", "History", "Internet Culture", "Local Flavor", "Movies", "Music", "Nature", "Pop Culture", "Science", "Sports", "Television", "Theater", "Video Games", "Weird Science", "World Culture"];
+
+const BANNED_GENERIC_PATTERNS = [
+  /capital of/i,
+  /first president/i,
+  /largest planet/i,
+  /chemical symbol for water/i,
+  /author of harry potter/i,
+  /painted the mona lisa/i,
+  /red planet/i,
+  /highest mountain/i,
+  /longest river/i,
+  /fastest land animal/i,
+  /who wrote romeo and juliet/i,
+  /currency of japan/i,
+  /largest ocean/i,
+  /smallest country/i,
+  /academy award for best picture/i,
+];
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
@@ -51,6 +69,7 @@ export default async function handler(req, res) {
       approvedCategories = [],
       rejectedCategories = [],
       rejectedQuestions = [],
+      currentBatchQuestions = [],
     } = req.body || {};
 
     if (!sessionId || !questionType) return res.status(400).json({ error: "Missing sessionId or questionType" });
@@ -66,15 +85,43 @@ export default async function handler(req, res) {
     const cleanApprovedCategories = dedupeStrings(normalizeStringArray(approvedCategories));
     const cleanRejectedCategories = dedupeStrings(normalizeStringArray(rejectedCategories));
     const cleanExcludeCategories = dedupeStrings([...normalizeStringArray(excludeCategories), ...cleanRejectedCategories]);
-    const cleanRejectedQuestions = dedupeStrings(normalizeStringArray(rejectedQuestions));
+    const cleanRejectedQuestions = dedupeStrings([...normalizeStringArray(rejectedQuestions), ...normalizeStringArray(currentBatchQuestions)]);
     const existingQuestions = avoidDuplicates || excludeUsed ? await fetchExistingQuestions() : [];
     const existingFingerprints = new Set(existingQuestions.map((q) => fingerprint(q.question_text)));
     const existingAnswerPairs = new Set(existingQuestions.map((q) => answerPairFingerprint(q.question_text, q.correct_answer)));
+    const existingAnswers = new Set(existingQuestions.map((q) => answerFingerprint(q.correct_answer)).filter(Boolean));
     const rejectedQuestionFingerprints = new Set(cleanRejectedQuestions.map(fingerprint));
+    const rejectedAnswerFingerprints = new Set(cleanRejectedQuestions.map(answerFingerprint).filter(Boolean));
 
-    const prompt = buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, existingQuestions, excludeUsed, avoidDuplicates, includeImagePrompt });
+    const prompt = buildPrompt({
+      config,
+      safeCount,
+      difficultyKey,
+      difficultyProfile,
+      cleanTheme,
+      cleanExcludeCategories,
+      cleanApprovedCategories,
+      existingQuestions,
+      excludeUsed,
+      avoidDuplicates,
+      includeImagePrompt,
+    });
     const parsed = await requestCandidates(prompt);
-    const validation = normalizeCandidates({ candidates: parsed.candidates, config, questionType: normalizedQuestionType, difficultyKey, cleanExcludeCategories, cleanApprovedCategories, existingFingerprints, existingAnswerPairs, rejectedQuestionFingerprints, avoidDuplicates, includeImagePrompt });
+    const validation = normalizeCandidates({
+      candidates: parsed.candidates,
+      config,
+      questionType: normalizedQuestionType,
+      difficultyKey,
+      cleanExcludeCategories,
+      cleanApprovedCategories,
+      existingFingerprints,
+      existingAnswerPairs,
+      existingAnswers,
+      rejectedQuestionFingerprints,
+      rejectedAnswerFingerprints,
+      avoidDuplicates,
+      includeImagePrompt,
+    });
 
     return res.status(200).json({ candidates: validation.candidates.slice(0, safeCount), rejected: validation.rejected, requested: safeCount });
   } catch (error) {
@@ -108,13 +155,14 @@ function dedupeStrings(values) {
 }
 
 function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, existingQuestions, excludeUsed, avoidDuplicates, includeImagePrompt }) {
-  const overGenerateCount = Math.min(20, Math.max(safeCount + 5, Math.ceil(safeCount * 2)));
+  const overGenerateCount = Math.min(30, Math.max(safeCount + 8, Math.ceil(safeCount * 2.5)));
   const approvedCategoryText = cleanApprovedCategories.length ? `Use only these pre-approved categories. The category field must exactly match one of these names: ${cleanApprovedCategories.join(", ")}.` : `Use varied broad categories such as: ${BROAD_CATEGORIES.join(", ")}.`;
   const excludedCategoryText = cleanExcludeCategories.length ? `Do not use these rejected or avoided categories: ${cleanExcludeCategories.join(", ")}.` : "";
   const themeText = cleanTheme ? `Theme/vibe/category guidance: ${cleanTheme}. Stay useful to that direction, but avoid repetitive question angles.` : "";
-  const duplicateExamples = existingQuestions.slice(0, 80).map((q) => `- ${q.question_text}${q.correct_answer ? ` Answer: ${q.correct_answer}` : ""}`).join("\n");
-  const duplicateText = avoidDuplicates && duplicateExamples ? `Avoid duplicating, lightly rewording, or using the same answer-angle as these existing questions:\n${duplicateExamples}` : "";
-  const usedText = excludeUsed ? "Prefer questions that feel new for a host who has been running weekly trivia since 2019." : "";
+  const duplicateExamples = existingQuestions.slice(0, 180).map((q) => `- ${q.question_text}${q.correct_answer ? ` Answer: ${q.correct_answer}` : ""}`).join("\n");
+  const duplicateText = avoidDuplicates && duplicateExamples ? `Avoid duplicating, lightly rewording, using the same answer, or using the same answer-angle as these existing and past-session questions:\n${duplicateExamples}` : "";
+  const usedText = excludeUsed ? "Assume the host has already used years of common trivia. Do not use standard listicle facts or classroom facts unless the angle is unusually fresh." : "";
+  const noveltySeed = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const imagePromptField = includeImagePrompt ? ',\n      "image_prompt": "A concise visual clue idea that does not reveal the answer"' : ',\n      "image_prompt": ""';
   const imagePromptRule = includeImagePrompt
     ? "- image_prompt must describe a useful generated or uploaded visual clue for this question. It must not reveal the answer, include readable text, or require logos/copyrighted screenshots."
@@ -122,6 +170,9 @@ function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, clea
 
   return `
 Generate exactly ${overGenerateCount} ${config.label} trivia question candidates so the app can keep the best ${safeCount}.
+
+Novelty seed: ${noveltySeed}
+Use the novelty seed to deliberately choose less-common subject matter and avoid repeating your usual examples.
 
 Host context:
 - The host runs live trivia and wants an assistant, not a generic question bank.
@@ -148,13 +199,19 @@ Use this exact shape:
   ]
 }
 
+Freshness rules:
+- Do not produce classic bar-trivia staples or their reworded cousins.
+- Avoid these angles entirely: capitals, first presidents, tallest/highest/largest/longest records, basic planets, basic elements, basic Shakespeare, Mona Lisa, Harry Potter author, obvious Oscar winners, obvious Disney facts, and common holiday myths.
+- Prefer second-order facts: unusual origins, production details, regional names, near-misses, odd rules, forgotten firsts, surprising constraints, etymology, hidden design choices, or real-world quirks.
+- Ask yourself: "Would this feel fresh to someone who has hosted weekly trivia for years?" If not, replace it.
+
 Trivia host style:
 - ${config.roundGuidance}
 - Difficulty: ${difficultyProfile.label}. ${difficultyProfile.guidance}
 - Prefer obscure-but-fair, gettable, satisfying facts over generic quiz-bank material.
-- Avoid questions that are just "What is the capital of...", "Who was the first president...", basic Oscar winners, obvious Disney facts, or overused bar trivia.
 - ${approvedCategoryText}
 - Avoid repeated categories within this batch when possible.
+- Avoid repeating a correct answer anywhere in the batch.
 - Write concise, host-friendly question text that sounds natural when read aloud.
 - Avoid ambiguous answers, disputed facts, and answer wording that would cause scoring arguments.
 - fun_fact must be one short sentence that adds color without spoiling another question.
@@ -177,11 +234,13 @@ async function requestCandidates(prompt) {
     method: "POST",
     headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "gpt-4.1-mini",
-      temperature: 0.62,
+      model: process.env.OPENAI_GENERATOR_MODEL || "gpt-4.1",
+      temperature: 0.9,
+      presence_penalty: 0.45,
+      frequency_penalty: 0.35,
       response_format: { type: "json_object" },
       messages: [
-        { role: "system", content: "You are a careful, inventive trivia co-host for a weekly live trivia host. Return only valid JSON." },
+        { role: "system", content: "You are a careful, inventive trivia co-host for a weekly live trivia host. You avoid common quiz-bank questions and return only valid JSON." },
         { role: "user", content: prompt },
       ],
     }),
@@ -204,11 +263,12 @@ async function requestCandidates(prompt) {
   }
 }
 
-function normalizeCandidates({ candidates, config, questionType, difficultyKey, cleanExcludeCategories, cleanApprovedCategories, existingFingerprints, existingAnswerPairs, rejectedQuestionFingerprints, avoidDuplicates, includeImagePrompt }) {
+function normalizeCandidates({ candidates, config, questionType, difficultyKey, cleanExcludeCategories, cleanApprovedCategories, existingFingerprints, existingAnswerPairs, existingAnswers, rejectedQuestionFingerprints, rejectedAnswerFingerprints, avoidDuplicates, includeImagePrompt }) {
   const rejected = [];
   const accepted = [];
   const batchFingerprints = new Set();
   const batchAnswerPairs = new Set();
+  const batchAnswers = new Set();
   const excludedCategories = new Set(cleanExcludeCategories.map((category) => category.toLowerCase()));
   const approvedCategorySet = new Set(cleanApprovedCategories.map((category) => category.toLowerCase()));
 
@@ -224,33 +284,47 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
     const item = normalized.candidate;
     const itemFingerprint = fingerprint(item.question_text);
     const itemAnswerPair = answerPairFingerprint(item.question_text, item.correct_answer);
+    const itemAnswer = answerFingerprint(item.correct_answer);
     const categoryKey = item.category.toLowerCase();
 
+    if (isGenericQuestion(item.question_text)) {
+      rejected.push({ index, question: item.question_text, reason: "generic_overused_trivia_pattern" });
+      return;
+    }
     if (approvedCategorySet.size > 0 && !approvedCategorySet.has(categoryKey)) {
-      rejected.push({ index, reason: "not_approved_category" });
+      rejected.push({ index, question: item.question_text, reason: "not_approved_category" });
       return;
     }
     if (excludedCategories.has(categoryKey)) {
-      rejected.push({ index, reason: "excluded_category" });
+      rejected.push({ index, question: item.question_text, reason: "excluded_category" });
       return;
     }
     if (rejectedQuestionFingerprints.has(itemFingerprint)) {
-      rejected.push({ index, reason: "permanently_rejected_question" });
+      rejected.push({ index, question: item.question_text, reason: "permanently_rejected_question" });
+      return;
+    }
+    if (rejectedAnswerFingerprints.has(itemAnswer)) {
+      rejected.push({ index, question: item.question_text, reason: "rejected_answer_repeated" });
       return;
     }
     if (avoidDuplicates) {
       if (existingFingerprints.has(itemFingerprint) || batchFingerprints.has(itemFingerprint)) {
-        rejected.push({ index, reason: "duplicate_question" });
+        rejected.push({ index, question: item.question_text, reason: "duplicate_question" });
         return;
       }
       if (existingAnswerPairs.has(itemAnswerPair) || batchAnswerPairs.has(itemAnswerPair)) {
-        rejected.push({ index, reason: "duplicate_answer_angle" });
+        rejected.push({ index, question: item.question_text, reason: "duplicate_answer_angle" });
+        return;
+      }
+      if (itemAnswer && (existingAnswers.has(itemAnswer) || batchAnswers.has(itemAnswer))) {
+        rejected.push({ index, question: item.question_text, reason: "duplicate_correct_answer" });
         return;
       }
     }
 
     batchFingerprints.add(itemFingerprint);
     batchAnswerPairs.add(itemAnswerPair);
+    if (itemAnswer) batchAnswers.add(itemAnswer);
     accepted.push(item);
   });
 
@@ -294,6 +368,10 @@ function normalizeCandidate(candidate, config, questionType, difficultyKey, incl
   };
 }
 
+function isGenericQuestion(questionText) {
+  return BANNED_GENERIC_PATTERNS.some((pattern) => pattern.test(questionText));
+}
+
 function cleanText(value) {
   return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
 }
@@ -302,8 +380,12 @@ function fingerprint(value) {
   return cleanText(value).toLowerCase().replace(/[^a-z0-9\s]/g, "").split(" ").filter((word) => word && !STOP_WORDS.has(word)).sort().join(" ");
 }
 
+function answerFingerprint(answer) {
+  return cleanText(answer).toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
+}
+
 function answerPairFingerprint(questionText, answer) {
-  return `${fingerprint(questionText)}::${cleanText(answer).toLowerCase()}`;
+  return `${fingerprint(questionText)}::${answerFingerprint(answer)}`;
 }
 
 async function fetchExistingQuestions() {
@@ -311,14 +393,36 @@ async function fetchExistingQuestions() {
   const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.REACT_APP_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!supabaseUrl || !supabaseKey) return [];
 
+  const base = supabaseUrl.replace(/\/$/, "");
+  const headers = { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` };
+
   try {
-    const response = await fetch(`${supabaseUrl.replace(/\/$/, "")}/rest/v1/questions?select=question_text,correct_answer,category,question_type&limit=1000`, { headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` } });
-    if (!response.ok) return [];
-    const data = await response.json();
-    return Array.isArray(data) ? data : [];
-  } catch {
+    const [questionsResponse, sessionsResponse] = await Promise.all([
+      fetch(`${base}/rest/v1/questions?select=question_text,correct_answer,category,question_type&limit=2000`, { headers }),
+      fetch(`${base}/rest/v1/sessions?select=true_false_questions,multiple_choice_questions,written_questions,picture_questions&limit=1000`, { headers }),
+    ]);
+
+    const libraryQuestions = questionsResponse.ok ? await questionsResponse.json() : [];
+    const sessions = sessionsResponse.ok ? await sessionsResponse.json() : [];
+    const sessionQuestions = Array.isArray(sessions) ? sessions.flatMap(extractSessionQuestions) : [];
+
+    return [...(Array.isArray(libraryQuestions) ? libraryQuestions : []), ...sessionQuestions]
+      .map((q) => ({
+        question_text: cleanText(q.question_text || q.question),
+        correct_answer: cleanText(q.correct_answer || q.answer),
+        category: cleanText(q.category),
+        question_type: q.question_type || "written",
+      }))
+      .filter((q) => q.question_text);
+  } catch (error) {
+    console.error("Existing question fetch failed:", error);
     return [];
   }
+}
+
+function extractSessionQuestions(session) {
+  return [session?.true_false_questions, session?.multiple_choice_questions, session?.written_questions, session?.picture_questions]
+    .flatMap((value) => (Array.isArray(value) ? value : []));
 }
 
 const STOP_WORDS = new Set(["a", "an", "and", "are", "as", "at", "be", "by", "did", "do", "does", "for", "from", "has", "have", "in", "is", "it", "its", "of", "on", "or", "that", "the", "this", "to", "was", "were", "what", "when", "where", "which", "who", "whom", "whose", "why", "with"]);
