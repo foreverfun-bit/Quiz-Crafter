@@ -1,4 +1,4 @@
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
@@ -43,9 +43,7 @@ module.exports = async function handler(req, res) {
     });
 
     const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data?.error?.message || "Image generation failed");
-    }
+    if (!response.ok) throw new Error(data?.error?.message || "Image generation failed");
 
     const b64 = data?.data?.[0]?.b64_json;
     if (!b64) throw new Error("No image was returned");
@@ -55,4 +53,4 @@ module.exports = async function handler(req, res) {
     console.error("generate-question-image error:", error);
     return res.status(500).json({ error: error.message || "Failed to generate image" });
   }
-};
+}
