@@ -12,9 +12,11 @@ import {
   Sparkles,
   Tags,
   Trophy,
+  Users,
 } from "lucide-react";
 
 const STORAGE_BASE = process.env.REACT_APP_SUPABASE_URL ? `${process.env.REACT_APP_SUPABASE_URL}/storage/v1/object/public/` : "";
+const DEFAULT_PUBLIC_SITE = "https://quizcrafter.com";
 
 const typeMeta = {
   true_false: { label: "True/False", short: "T/F", icon: CheckCircle, color: "text-[#71E0DC]" },
@@ -28,6 +30,13 @@ const arrayConfig = [
   { key: "written_questions", type: "written" },
   { key: "picture_questions", type: "written" },
 ];
+
+const getPublicOrigin = () => {
+  if (process.env.REACT_APP_PUBLIC_SITE_URL) return process.env.REACT_APP_PUBLIC_SITE_URL.replace(/\/$/, "");
+  if (typeof window === "undefined") return "";
+  if (window.location.hostname.endsWith("vercel.app")) return DEFAULT_PUBLIC_SITE;
+  return window.location.origin;
+};
 
 const buildStorageUrl = (path) => {
   if (!path) return "";
@@ -116,6 +125,13 @@ const readPresentState = (sessionId) => {
   }
 };
 
+const hasPresentationStarted = (presentState, currentIndex) => {
+  if (presentState.gameStarted) return true;
+  if (presentState.timerEndAt) return true;
+  if (presentState.showAnswer || presentState.showFunFact) return true;
+  return Number(currentIndex || 0) > 0;
+};
+
 const PresentSession = () => {
   const { id } = useParams();
   const [session, setSession] = useState(null);
@@ -153,9 +169,19 @@ const PresentSession = () => {
   const currentRound = rounds.find((round) => currentIndex >= round.startIndex && currentIndex < round.startIndex + round.questions.length);
   const mode = presentState.mode || "question";
   const sessionName = presentState.sessionName || session?.name || session?.session_name || "Trivia Session";
+  const joinUrl = presentState.joinUrl || `${getPublicOrigin()}/join?session=${id}`;
+  const showLobby = !hasPresentationStarted(presentState, currentIndex);
 
   if (loading) {
     return <div className="min-h-screen bg-[#09090B] flex items-center justify-center"><Loader2 className="text-[#71E0DC] animate-spin" size={42} /></div>;
+  }
+
+  if (showLobby && session) {
+    return (
+      <div className="min-h-screen bg-[#09090B] text-white overflow-hidden" data-testid="present-session-page">
+        <LobbyView sessionName={sessionName} joinUrl={joinUrl} players={presentState.players || []} />
+      </div>
+    );
   }
 
   if (!session || !currentQuestion) {
@@ -187,6 +213,33 @@ const PresentSession = () => {
             <QuestionView question={currentQuestion} index={currentIndex} total={questions.length} showAnswer={presentState.showAnswer} showFunFact={presentState.showFunFact} />
           )}
         </main>
+      </div>
+    </div>
+  );
+};
+
+const LobbyView = ({ sessionName, joinUrl, players }) => {
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=320x320&margin=12&data=${encodeURIComponent(joinUrl)}`;
+  const playerCount = players.length;
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-8 text-center">
+      <div className="w-full max-w-5xl">
+        <p className="text-[#71E0DC] font-semibold tracking-wide uppercase text-sm mb-3">{sessionName}</p>
+        <h1 className="text-5xl lg:text-8xl font-black leading-none mb-8">Join Trivia</h1>
+        <div className="flex justify-center mb-7">
+          <div className="rounded-2xl bg-white p-4 shadow-2xl shadow-[#71E0DC]/10">
+            <img src={qrUrl} alt="Player join QR code" className="h-72 w-72 lg:h-80 lg:w-80" />
+          </div>
+        </div>
+        <p className="text-xl lg:text-2xl text-zinc-300 mb-3">Scan to play from your phone</p>
+        <p className="mx-auto max-w-4xl break-all text-lg lg:text-2xl font-semibold text-[#71E0DC]">{joinUrl}</p>
+        <div className="mt-8 inline-flex items-center gap-3 rounded-full border border-white/10 bg-white/5 px-6 py-3 text-zinc-200">
+          <Users size={20} className="text-[#71E0DC]" />
+          <span>{playerCount} {playerCount === 1 ? "team" : "teams"} joined</span>
+          <span className="text-zinc-500">·</span>
+          <span>Waiting for host to start</span>
+        </div>
       </div>
     </div>
   );
