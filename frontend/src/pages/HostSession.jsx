@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { QRCodeSVG } from "qrcode.react";
 import { supabase } from "../lib/supabase";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
@@ -9,6 +10,7 @@ import {
   CheckCircle,
   ChevronLeft,
   ChevronRight,
+  Copy,
   Eye,
   EyeOff,
   ExternalLink,
@@ -23,6 +25,8 @@ import {
   Tags,
   Trash2,
   Trophy,
+  Users,
+  Wifi,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -79,8 +83,7 @@ const getRoundName = (question, fallbackOrder = 1) => {
   if (question?.round_name) return question.round_name;
   if (question?.round_title) return question.round_title;
   if (question?.round && Number.isNaN(Number(question.round))) return question.round;
-  const order = getRoundOrder(question, fallbackOrder);
-  return `Round ${order}`;
+  return `Round ${getRoundOrder(question, fallbackOrder)}`;
 };
 
 const flattenSession = (session) => {
@@ -105,10 +108,7 @@ const flattenSession = (session) => {
     });
   });
 
-  return entries.sort((a, b) => {
-    if (a.roundOrder !== b.roundOrder) return a.roundOrder - b.roundOrder;
-    return a.sourceOrder - b.sourceOrder;
-  });
+  return entries.sort((a, b) => a.roundOrder !== b.roundOrder ? a.roundOrder - b.roundOrder : a.sourceOrder - b.sourceOrder);
 };
 
 const makeRounds = (questions) => {
@@ -132,6 +132,7 @@ const readStoredLeaderboard = (sessionId) => {
 const HostSession = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const liveChannelRef = useRef(null);
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -142,6 +143,9 @@ const HostSession = () => {
   const [leaderboard, setLeaderboard] = useState(() => readStoredLeaderboard(id));
   const [teamName, setTeamName] = useState("");
   const [teamScore, setTeamScore] = useState("");
+  const [players, setPlayers] = useState([]);
+  const [answers, setAnswers] = useState([]);
+  const [liveStatus, setLiveStatus] = useState("connecting");
 
   useEffect(() => {
     const loadSession = async () => {
@@ -162,31 +166,63 @@ const HostSession = () => {
     loadSession();
   }, [id, navigate]);
 
+  useEffect(() => {
+    const channel = supabase.channel(`quiz-crafter-live-${id}`, { config: { broadcast: { self: false } } });
+    liveChannelRef.current = channel;
+
+    channel
+      .on("broadcast", { event: "player_join" }, ({ payload }) => {
+        if (!payload?.playerId) return;
+        setPlayers((current) => current.some((player) => player.id === payload.playerId) ? current : [...current, { id: payload.playerId, name: payload.playerName || "Team", joinedAt: payload.joinedAt }]);
+        setLeaderboard((teams) => teams.some((team) => team.id === payload.playerId) ? teams : [...teams, { id: payload.playerId, name: payload.playerName || "Team", score: 0 }]);
+      })
+      .on("broadcast", { event: "answer_submit" }, ({ payload }) => {
+        if (!payload?.playerId) return;
+        setAnswers((current) => {
+          const filtered = current.filter((answer) => !(answer.playerId === payload.playerId && answer.questionIndex === payload.questionIndex));
+          return [...filtered, payload];
+        });
+      })
+      .subscribe((status) => setLiveStatus(status === "SUBSCRIBED" ? "live" : "connecting"));
+
+    return () => {
+      supabase.removeChannel(channel);
+      liveChannelRef.current = null;
+    };
+  }, [id]);
+
   const questions = useMemo(() => flattenSession(session), [session]);
   const rounds = useMemo(() => makeRounds(questions), [questions]);
   const currentQuestion = questions[currentIndex] || null;
   const currentRound = rounds.find((round) => currentIndex >= round.startIndex && currentIndex < round.startIndex + round.questions.length);
+  const currentAnswers = answers.filter((answer) => answer.questionIndex === currentIndex).sort((a, b) => String(a.submittedAt).localeCompare(String(b.submittedAt)));
   const progress = questions.length ? Math.round(((currentIndex + 1) / questions.length) * 100) : 0;
   const sessionName = session?.name || session?.session_name || "Trivia Session";
+  const joinUrl = typeof window !== "undefined" ? `${window.location.origin}/join?session=${id}` : `/join?session=${id}`;
 
   useEffect(() => {
     localStorage.setItem(`quiz-crafter-leaderboard-${id}`, JSON.stringify(leaderboard));
   }, [id, leaderboard]);
 
   useEffect(() => {
-    if (!session || !questions.length) return;
+    if (!session || !questions.length || !currentQuestion) return;
+    const publicQuestion = { ...currentQuestion, answer: showAnswer ? currentQuestion.answer : "" };
     const state = {
       sessionId: id,
       sessionName,
       mode: presentMode,
       currentIndex,
+      currentQuestion: publicQuestion,
       showAnswer,
       showFunFact,
       leaderboard,
+      players,
       updatedAt: new Date().toISOString(),
     };
+
     localStorage.setItem(`quiz-crafter-present-state-${id}`, JSON.stringify(state));
-  }, [id, session, sessionName, questions.length, currentIndex, showAnswer, showFunFact, presentMode, leaderboard]);
+    liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: state });
+  }, [id, session, sessionName, questions.length, currentQuestion, currentIndex, showAnswer, showFunFact, presentMode, leaderboard, players]);
 
   const goToQuestion = (index) => {
     if (index < 0 || index >= questions.length) return;
@@ -196,8 +232,14 @@ const HostSession = () => {
     setPresentMode("question");
   };
 
-  const openPresentation = () => {
-    window.open(`/present-session/${id}`, "_blank", "noopener,noreferrer");
+  const openPresentation = () => window.open(`/present-session/${id}`, "_blank", "noopener,noreferrer");
+  const copyJoinLink = async () => {
+    try {
+      await navigator.clipboard.writeText(joinUrl);
+      toast.success("Join link copied");
+    } catch {
+      toast.error("Could not copy link");
+    }
   };
 
   const addTeam = () => {
@@ -213,13 +255,9 @@ const HostSession = () => {
     setLeaderboard((teams) => teams.map((team) => team.id === teamId ? { ...team, score: Number(team.score || 0) + amount } : team));
   };
 
-  const removeTeam = (teamId) => {
-    setLeaderboard((teams) => teams.filter((team) => team.id !== teamId));
-  };
+  const removeTeam = (teamId) => setLeaderboard((teams) => teams.filter((team) => team.id !== teamId));
 
-  if (loading) {
-    return <div className="min-h-screen bg-[#09090B] flex items-center justify-center"><Loader2 className="text-[#71E0DC] animate-spin" size={34} /></div>;
-  }
+  if (loading) return <div className="min-h-screen bg-[#09090B] flex items-center justify-center"><Loader2 className="text-[#71E0DC] animate-spin" size={34} /></div>;
 
   if (!session || !currentQuestion) {
     return (
@@ -242,10 +280,11 @@ const HostSession = () => {
               <Button variant="ghost" onClick={() => navigate(`/session/${id}`)} className="text-zinc-400 hover:text-white h-9 w-9 p-0" aria-label="Back to session"><ArrowLeft size={18} /></Button>
               <div className="min-w-0">
                 <h1 className="font-bold truncate">{sessionName}</h1>
-                <p className="text-xs text-zinc-500">Hosting view · {questions.length} questions</p>
+                <p className="text-xs text-zinc-500">Hosting view · {questions.length} questions · {players.length} players</p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap justify-end">
+              <Badge className={liveStatus === "live" ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/20" : "bg-zinc-800 text-zinc-300"}><Wifi size={13} className="mr-1" />{liveStatus === "live" ? "Live" : "Connecting"}</Badge>
               <Badge className="bg-zinc-800 text-zinc-300">{currentIndex + 1} / {questions.length}</Badge>
               <Button variant="outline" onClick={openPresentation} className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />Presentation</Button>
               <Button variant="outline" onClick={() => setFocusMode(true)} className="border-white/10 text-zinc-300 hover:text-white"><Maximize2 size={16} className="mr-2" />Focus</Button>
@@ -263,20 +302,9 @@ const HostSession = () => {
           </div>
         )}
 
-        <div className={focusMode ? "flex-1 flex items-center" : "grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-5"}>
+        <div className={focusMode ? "flex-1 flex items-center" : "grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-5"}>
           <main className="w-full">
-            {!focusMode && (
-              <PresentationControls
-                mode={presentMode}
-                setMode={setPresentMode}
-                showAnswer={showAnswer}
-                setShowAnswer={setShowAnswer}
-                showFunFact={showFunFact}
-                setShowFunFact={setShowFunFact}
-                hasFunFact={Boolean(currentQuestion.funFact)}
-              />
-            )}
-
+            {!focusMode && <PresentationControls mode={presentMode} setMode={setPresentMode} showAnswer={showAnswer} setShowAnswer={setShowAnswer} showFunFact={showFunFact} setShowFunFact={setShowFunFact} hasFunFact={Boolean(currentQuestion.funFact)} />}
             <QuestionStage question={currentQuestion} index={currentIndex} total={questions.length} roundName={currentRound?.name} showAnswer={showAnswer} showFunFact={showFunFact} focusMode={focusMode} />
 
             <div className="mt-4 flex items-center justify-between gap-3 flex-wrap">
@@ -290,49 +318,9 @@ const HostSession = () => {
           </main>
 
           {!focusMode && <aside className="space-y-3">
-            <LeaderboardPanel
-              leaderboard={leaderboard}
-              teamName={teamName}
-              teamScore={teamScore}
-              setTeamName={setTeamName}
-              setTeamScore={setTeamScore}
-              addTeam={addTeam}
-              adjustScore={adjustScore}
-              removeTeam={removeTeam}
-              showLeaderboard={() => setPresentMode("leaderboard")}
-            />
-
-            <Card className="glass-card">
-              <CardContent className="p-3">
-                <div className="flex items-center gap-2 mb-3 text-white font-semibold"><MonitorPlay size={18} className="text-[#71E0DC]" />Run Sheet</div>
-                <div className="space-y-4 max-h-[540px] overflow-y-auto pr-1">
-                  {rounds.map((round) => (
-                    <section key={round.key}>
-                      <button type="button" onClick={() => goToQuestion(round.startIndex)} className="w-full flex items-center justify-between text-left mb-2 px-2 py-1 rounded hover:bg-white/5">
-                        <span className="text-sm font-bold text-white">{round.name}</span>
-                        <Badge className="bg-zinc-800 text-zinc-300">{round.questions.length}</Badge>
-                      </button>
-                      <div className="space-y-1">
-                        {round.questions.map((question, localIndex) => {
-                          const absoluteIndex = round.startIndex + localIndex;
-                          const active = absoluteIndex === currentIndex;
-                          return (
-                            <button key={question.id} type="button" onClick={() => goToQuestion(absoluteIndex)} className={`w-full text-left rounded-md px-2 py-2 border transition-colors ${active ? "border-[#71E0DC]/50 bg-[#71E0DC]/10" : "border-white/5 bg-zinc-950/40 hover:bg-zinc-900"}`}>
-                              <div className="flex items-center gap-2 mb-1">
-                                <span className="text-xs text-zinc-500 font-mono">#{localIndex + 1}</span>
-                                <QuestionBadge type={question.type} />
-                                {question.imageUrl && <Image size={12} className="text-amber-300" />}
-                              </div>
-                              <p className="text-xs text-zinc-300 line-clamp-2">{question.questionText}</p>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </section>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
+            <PhonePlayPanel joinUrl={joinUrl} copyJoinLink={copyJoinLink} players={players} answers={currentAnswers} adjustScore={adjustScore} setMode={setPresentMode} />
+            <LeaderboardPanel leaderboard={leaderboard} teamName={teamName} teamScore={teamScore} setTeamName={setTeamName} setTeamScore={setTeamScore} addTeam={addTeam} adjustScore={adjustScore} removeTeam={removeTeam} showLeaderboard={() => setPresentMode("leaderboard")} />
+            <RunSheet rounds={rounds} currentIndex={currentIndex} goToQuestion={goToQuestion} />
           </aside>}
         </div>
       </div>
@@ -341,56 +329,75 @@ const HostSession = () => {
 };
 
 const PresentationControls = ({ mode, setMode, showAnswer, setShowAnswer, showFunFact, setShowFunFact, hasFunFact }) => (
-  <Card className="glass-card mb-4">
-    <CardContent className="p-3 flex items-center justify-between gap-3 flex-wrap">
-      <div className="flex items-center gap-2 flex-wrap">
-        <Button size="sm" onClick={() => setMode("question")} className={mode === "question" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><MonitorPlay size={15} className="mr-2" />Question</Button>
-        <Button size="sm" onClick={() => setMode("categories")} className={mode === "categories" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><Tags size={15} className="mr-2" />Round Categories</Button>
-        <Button size="sm" onClick={() => setMode("leaderboard")} className={mode === "leaderboard" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><Trophy size={15} className="mr-2" />Leaderboard</Button>
+  <Card className="glass-card mb-4"><CardContent className="p-3 flex items-center justify-between gap-3 flex-wrap">
+    <div className="flex items-center gap-2 flex-wrap">
+      <Button size="sm" onClick={() => setMode("question")} className={mode === "question" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><MonitorPlay size={15} className="mr-2" />Question</Button>
+      <Button size="sm" onClick={() => setMode("categories")} className={mode === "categories" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><Tags size={15} className="mr-2" />Round Categories</Button>
+      <Button size="sm" onClick={() => setMode("leaderboard")} className={mode === "leaderboard" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><Trophy size={15} className="mr-2" />Leaderboard</Button>
+    </div>
+    <div className="flex items-center gap-2 flex-wrap">
+      <Button size="sm" variant="outline" onClick={() => setShowAnswer((value) => !value)} className="border-white/10 text-zinc-300 hover:text-white">{showAnswer ? <EyeOff size={15} className="mr-2" /> : <Eye size={15} className="mr-2" />}{showAnswer ? "Hide Answer" : "Show Answer"}</Button>
+      <Button size="sm" variant="outline" onClick={() => setShowFunFact((value) => !value)} disabled={!hasFunFact} className="border-white/10 text-zinc-300 hover:text-white disabled:opacity-50"><Sparkles size={15} className="mr-2" />{showFunFact ? "Hide Fun Fact" : "Show Fun Fact"}</Button>
+    </div>
+  </CardContent></Card>
+);
+
+const PhonePlayPanel = ({ joinUrl, copyJoinLink, players, answers, adjustScore, setMode }) => (
+  <Card className="glass-card"><CardContent className="p-3">
+    <div className="flex items-center justify-between gap-2 mb-3">
+      <div className="flex items-center gap-2 text-white font-semibold"><Users size={18} className="text-[#71E0DC]" />Phone Play</div>
+      <Button size="sm" variant="outline" onClick={copyJoinLink} className="h-8 border-white/10 text-zinc-300 hover:text-white"><Copy size={14} className="mr-1" />Copy</Button>
+    </div>
+    <div className="grid grid-cols-[116px_1fr] gap-3 items-center mb-3">
+      <div className="rounded-lg bg-white p-2"><QRCodeSVG value={joinUrl} size={100} /></div>
+      <div className="min-w-0">
+        <p className="text-xs text-zinc-500 mb-1">Players scan or open:</p>
+        <p className="text-xs text-[#71E0DC] break-all">{joinUrl}</p>
       </div>
-      <div className="flex items-center gap-2 flex-wrap">
-        <Button size="sm" variant="outline" onClick={() => setShowAnswer((value) => !value)} className="border-white/10 text-zinc-300 hover:text-white">{showAnswer ? <EyeOff size={15} className="mr-2" /> : <Eye size={15} className="mr-2" />}{showAnswer ? "Hide Answer" : "Show Answer"}</Button>
-        <Button size="sm" variant="outline" onClick={() => setShowFunFact((value) => !value)} disabled={!hasFunFact} className="border-white/10 text-zinc-300 hover:text-white disabled:opacity-50"><Sparkles size={15} className="mr-2" />{showFunFact ? "Hide Fun Fact" : "Show Fun Fact"}</Button>
-      </div>
-    </CardContent>
-  </Card>
+    </div>
+    <div className="grid grid-cols-2 gap-2 mb-3">
+      <div className="rounded-md bg-zinc-950/70 border border-white/10 p-2"><p className="text-xs text-zinc-500">Players</p><p className="text-xl font-black">{players.length}</p></div>
+      <div className="rounded-md bg-zinc-950/70 border border-white/10 p-2"><p className="text-xs text-zinc-500">Answers</p><p className="text-xl font-black">{answers.length}</p></div>
+    </div>
+    <Button size="sm" onClick={() => setMode("leaderboard")} className="w-full mb-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-100"><Trophy size={14} className="mr-2" />Show Leaderboard</Button>
+    <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+      {answers.map((answer) => (
+        <div key={`${answer.playerId}-${answer.questionIndex}`} className="rounded-md border border-white/10 bg-zinc-950/60 p-2">
+          <div className="flex items-center justify-between gap-2 mb-1"><span className="font-semibold text-sm truncate">{answer.playerName}</span><Button size="sm" onClick={() => adjustScore(answer.playerId, 1)} className="h-7 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">+1</Button></div>
+          <p className="text-sm text-zinc-300 break-words">{answer.answer}</p>
+        </div>
+      ))}
+      {!answers.length && <p className="text-xs text-zinc-500 text-center py-3">Answers for the current question will appear here.</p>}
+    </div>
+  </CardContent></Card>
 );
 
 const LeaderboardPanel = ({ leaderboard, teamName, teamScore, setTeamName, setTeamScore, addTeam, adjustScore, removeTeam, showLeaderboard }) => {
   const sorted = [...leaderboard].sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
-
   return (
-    <Card className="glass-card">
-      <CardContent className="p-3">
-        <div className="flex items-center justify-between gap-2 mb-3">
-          <div className="flex items-center gap-2 text-white font-semibold"><Trophy size={18} className="text-amber-300" />Leaderboard</div>
-          <Button size="sm" variant="outline" onClick={showLeaderboard} className="h-8 border-white/10 text-zinc-300 hover:text-white">Show</Button>
-        </div>
-        <div className="grid grid-cols-[1fr_76px_36px] gap-2 mb-3">
-          <input value={teamName} onChange={(event) => setTeamName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && addTeam()} placeholder="Team name" className="h-9 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
-          <input value={teamScore} onChange={(event) => setTeamScore(event.target.value)} onKeyDown={(event) => event.key === "Enter" && addTeam()} placeholder="Score" type="number" className="h-9 rounded-md bg-zinc-950 border border-white/10 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
-          <Button onClick={addTeam} className="h-9 w-9 p-0 gradient-btn" aria-label="Add team"><Plus size={16} /></Button>
-        </div>
-        <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-          {sorted.map((team) => (
-            <div key={team.id} className="rounded-md border border-white/10 bg-zinc-950/60 p-2">
-              <div className="flex items-center justify-between gap-2 mb-2">
-                <span className="font-semibold text-sm truncate">{team.name}</span>
-                <span className="font-black text-[#71E0DC]">{Number(team.score || 0)}</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <Button size="sm" onClick={() => adjustScore(team.id, -1)} className="h-7 flex-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200">-1</Button>
-                <Button size="sm" onClick={() => adjustScore(team.id, 1)} className="h-7 flex-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200">+1</Button>
-                <Button size="sm" variant="outline" onClick={() => removeTeam(team.id)} className="h-7 w-8 p-0 border-white/10 text-zinc-400 hover:text-red-300" aria-label="Remove team"><Trash2 size={13} /></Button>
-              </div>
-            </div>
-          ))}
-          {!sorted.length && <p className="text-xs text-zinc-500 text-center py-3">Add teams here to show a leaderboard on the presentation screen.</p>}
-        </div>
-      </CardContent>
-    </Card>
+    <Card className="glass-card"><CardContent className="p-3">
+      <div className="flex items-center justify-between gap-2 mb-3"><div className="flex items-center gap-2 text-white font-semibold"><Trophy size={18} className="text-amber-300" />Leaderboard</div><Button size="sm" variant="outline" onClick={showLeaderboard} className="h-8 border-white/10 text-zinc-300 hover:text-white">Show</Button></div>
+      <div className="grid grid-cols-[1fr_76px_36px] gap-2 mb-3">
+        <input value={teamName} onChange={(event) => setTeamName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && addTeam()} placeholder="Team name" className="h-9 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
+        <input value={teamScore} onChange={(event) => setTeamScore(event.target.value)} onKeyDown={(event) => event.key === "Enter" && addTeam()} placeholder="Score" type="number" className="h-9 rounded-md bg-zinc-950 border border-white/10 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
+        <Button onClick={addTeam} className="h-9 w-9 p-0 gradient-btn" aria-label="Add team"><Plus size={16} /></Button>
+      </div>
+      <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+        {sorted.map((team) => <div key={team.id} className="rounded-md border border-white/10 bg-zinc-950/60 p-2"><div className="flex items-center justify-between gap-2 mb-2"><span className="font-semibold text-sm truncate">{team.name}</span><span className="font-black text-[#71E0DC]">{Number(team.score || 0)}</span></div><div className="flex items-center gap-1"><Button size="sm" onClick={() => adjustScore(team.id, -1)} className="h-7 flex-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200">-1</Button><Button size="sm" onClick={() => adjustScore(team.id, 1)} className="h-7 flex-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200">+1</Button><Button size="sm" variant="outline" onClick={() => removeTeam(team.id)} className="h-7 w-8 p-0 border-white/10 text-zinc-400 hover:text-red-300" aria-label="Remove team"><Trash2 size={13} /></Button></div></div>)}
+        {!sorted.length && <p className="text-xs text-zinc-500 text-center py-3">Teams will appear here when players join from their phones.</p>}
+      </div>
+    </CardContent></Card>
   );
 };
+
+const RunSheet = ({ rounds, currentIndex, goToQuestion }) => (
+  <Card className="glass-card"><CardContent className="p-3">
+    <div className="flex items-center gap-2 mb-3 text-white font-semibold"><MonitorPlay size={18} className="text-[#71E0DC]" />Run Sheet</div>
+    <div className="space-y-4 max-h-[420px] overflow-y-auto pr-1">
+      {rounds.map((round) => <section key={round.key}><button type="button" onClick={() => goToQuestion(round.startIndex)} className="w-full flex items-center justify-between text-left mb-2 px-2 py-1 rounded hover:bg-white/5"><span className="text-sm font-bold text-white">{round.name}</span><Badge className="bg-zinc-800 text-zinc-300">{round.questions.length}</Badge></button><div className="space-y-1">{round.questions.map((question, localIndex) => { const absoluteIndex = round.startIndex + localIndex; const active = absoluteIndex === currentIndex; return <button key={question.id} type="button" onClick={() => goToQuestion(absoluteIndex)} className={`w-full text-left rounded-md px-2 py-2 border transition-colors ${active ? "border-[#71E0DC]/50 bg-[#71E0DC]/10" : "border-white/5 bg-zinc-950/40 hover:bg-zinc-900"}`}><div className="flex items-center gap-2 mb-1"><span className="text-xs text-zinc-500 font-mono">#{localIndex + 1}</span><QuestionBadge type={question.type} />{question.imageUrl && <Image size={12} className="text-amber-300" />}</div><p className="text-xs text-zinc-300 line-clamp-2">{question.questionText}</p></button>; })}</div></section>)}
+    </div>
+  </CardContent></Card>
+);
 
 const QuestionBadge = ({ type }) => {
   const meta = typeMeta[type] || typeMeta.written;
@@ -404,49 +411,15 @@ const QuestionStage = ({ question, index, total, roundName, showAnswer, showFunF
   const imageUrl = buildStorageUrl(question.imageUrl);
 
   return (
-    <Card className={`glass-card overflow-hidden ${focusMode ? "w-full" : ""}`}>
-      <CardContent className={focusMode ? "p-8 lg:p-12" : "p-5 lg:p-7"}>
-        <div className="flex items-center justify-between gap-3 flex-wrap mb-6">
-          <div className="flex items-center gap-2 flex-wrap">
-            <Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20">{roundName || "Round"}</Badge>
-            <Badge variant="outline" className="border-zinc-700 text-zinc-300">{question.category}</Badge>
-            <Badge className="bg-zinc-800 text-zinc-300"><Icon size={13} className={`mr-1 ${meta.color}`} />{meta.label}</Badge>
-          </div>
-          <span className="text-zinc-500 font-mono text-sm">{index + 1} / {total}</span>
-        </div>
-
-        {imageUrl && <div className="mb-6 flex justify-center"><img src={imageUrl} alt="Question" className="max-h-[42vh] max-w-full rounded-lg border border-white/10 object-contain" /></div>}
-
-        <h2 className={`${focusMode ? "text-4xl lg:text-6xl" : "text-2xl lg:text-4xl"} font-black leading-tight text-white text-center mb-8`}>{question.questionText}</h2>
-
-        {question.type === "true_false" && (
-          <div className="grid grid-cols-2 gap-4 max-w-xl mx-auto mb-6">
-            <div className="rounded-lg border-2 border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-center font-bold py-5 text-2xl">True</div>
-            <div className="rounded-lg border-2 border-red-500/30 bg-red-500/10 text-red-300 text-center font-bold py-5 text-2xl">False</div>
-          </div>
-        )}
-
-        {question.type === "multiple_choice" && question.options.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-3xl mx-auto mb-6">
-            {question.options.map((option, optionIndex) => <div key={optionIndex} className="rounded-lg border border-white/10 bg-zinc-900/80 px-4 py-3 text-zinc-200 text-lg">{option}</div>)}
-          </div>
-        )}
-
-        {showAnswer && (
-          <div className="mt-8 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-5 text-center">
-            <p className="text-zinc-400 text-sm uppercase tracking-wider mb-1">Answer</p>
-            <p className={`${focusMode ? "text-4xl" : "text-2xl"} font-bold text-emerald-300`}>{question.answer}</p>
-          </div>
-        )}
-
-        {showFunFact && question.funFact && (
-          <div className="mt-5 rounded-lg border border-[#AEB2EF]/30 bg-[#AEB2EF]/10 p-5 text-center">
-            <div className="flex items-center justify-center gap-2 text-[#AEB2EF] font-bold mb-2"><Sparkles size={18} />Fun Fact</div>
-            <p className="text-zinc-300 max-w-3xl mx-auto">{question.funFact}</p>
-          </div>
-        )}
-      </CardContent>
-    </Card>
+    <Card className={`glass-card overflow-hidden ${focusMode ? "w-full" : ""}`}><CardContent className={focusMode ? "p-8 lg:p-12" : "p-5 lg:p-7"}>
+      <div className="flex items-center justify-between gap-3 flex-wrap mb-6"><div className="flex items-center gap-2 flex-wrap"><Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20">{roundName || "Round"}</Badge><Badge variant="outline" className="border-zinc-700 text-zinc-300">{question.category}</Badge><Badge className="bg-zinc-800 text-zinc-300"><Icon size={13} className={`mr-1 ${meta.color}`} />{meta.label}</Badge></div><span className="text-zinc-500 font-mono text-sm">{index + 1} / {total}</span></div>
+      {imageUrl && <div className="mb-6 flex justify-center"><img src={imageUrl} alt="Question" className="max-h-[42vh] max-w-full rounded-lg border border-white/10 object-contain" /></div>}
+      <h2 className={`${focusMode ? "text-4xl lg:text-6xl" : "text-2xl lg:text-4xl"} font-black leading-tight text-white text-center mb-8`}>{question.questionText}</h2>
+      {question.type === "true_false" && <div className="grid grid-cols-2 gap-4 max-w-xl mx-auto mb-6"><div className="rounded-lg border-2 border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-center font-bold py-5 text-2xl">True</div><div className="rounded-lg border-2 border-red-500/30 bg-red-500/10 text-red-300 text-center font-bold py-5 text-2xl">False</div></div>}
+      {question.type === "multiple_choice" && question.options.length > 0 && <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-3xl mx-auto mb-6">{question.options.map((option, optionIndex) => <div key={optionIndex} className="rounded-lg border border-white/10 bg-zinc-900/80 px-4 py-3 text-zinc-200 text-lg">{option}</div>)}</div>}
+      {showAnswer && <div className="mt-8 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-5 text-center"><p className="text-zinc-400 text-sm uppercase tracking-wider mb-1">Answer</p><p className={`${focusMode ? "text-4xl" : "text-2xl"} font-bold text-emerald-300`}>{question.answer}</p></div>}
+      {showFunFact && question.funFact && <div className="mt-5 rounded-lg border border-[#AEB2EF]/30 bg-[#AEB2EF]/10 p-5 text-center"><div className="flex items-center justify-center gap-2 text-[#AEB2EF] font-bold mb-2"><Sparkles size={18} />Fun Fact</div><p className="text-zinc-300 max-w-3xl mx-auto">{question.funFact}</p></div>}
+    </CardContent></Card>
   );
 };
 
