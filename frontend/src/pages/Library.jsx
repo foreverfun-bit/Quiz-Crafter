@@ -29,6 +29,7 @@ const typeConfig = {
 
 const typeOrder = ["all", "true_false", "multiple_choice", "written", "picture"];
 const editableTypes = ["true_false", "multiple_choice", "written", "picture"];
+const USED_QUESTIONS_KEY = "quiz-crafter-used-question-ids";
 
 const parseOptions = (value) => {
   if (Array.isArray(value)) return value.map((item) => (typeof item === "string" ? item : item?.text || "")).filter(Boolean);
@@ -42,6 +43,30 @@ const parseOptions = (value) => {
 const optionsToString = (value) => parseOptions(value).join("; ");
 const formatType = (type) => typeConfig[type]?.label || "Question";
 const normalizeText = (value) => String(value || "").replace(/\s+/g, " ").trim();
+
+const readUsedIds = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(USED_QUESTIONS_KEY) || "[]");
+    return new Set(Array.isArray(parsed) ? parsed.map(String) : []);
+  } catch {
+    return new Set();
+  }
+};
+
+const writeUsedIds = (ids) => {
+  localStorage.setItem(USED_QUESTIONS_KEY, JSON.stringify([...ids]));
+};
+
+const isQuestionMarkedUsed = (question, usedIds) => {
+  const id = String(question?.id || "");
+  return (
+    usedIds.has(id) ||
+    question?.is_used === true ||
+    question?.used === true ||
+    Boolean(question?.used_at) ||
+    Number(question?.times_used || 0) > 0
+  );
+};
 
 const toEditForm = (question) => ({
   category: question.category || "",
@@ -61,6 +86,7 @@ export default function Library() {
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState(null);
   const [savingId, setSavingId] = useState(null);
+  const [usedIds, setUsedIds] = useState(readUsedIds);
 
   useEffect(() => {
     fetchQuestions();
@@ -96,6 +122,8 @@ export default function Library() {
     );
   }, [questions]);
 
+  const usedCount = useMemo(() => questions.filter((question) => isQuestionMarkedUsed(question, usedIds)).length, [questions, usedIds]);
+
   const filteredQuestions = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
 
@@ -109,6 +137,33 @@ export default function Library() {
         .some((value) => String(value).toLowerCase().includes(query));
     });
   }, [activeType, questions, searchQuery]);
+
+  const toggleUsed = async (question) => {
+    const id = String(question.id);
+    const next = new Set(usedIds);
+    const willBeUsed = !isQuestionMarkedUsed(question, usedIds);
+    if (willBeUsed) next.add(id);
+    else next.delete(id);
+
+    setUsedIds(next);
+    writeUsedIds(next);
+    setQuestions((prev) => prev.map((item) => item.id === question.id ? { ...item, is_used_local: willBeUsed } : item));
+
+    // If a matching column exists in Supabase, keep it in sync. If not, local storage still drives the app today.
+    const possiblePayloads = [
+      { is_used: willBeUsed },
+      { used: willBeUsed },
+      { used_at: willBeUsed ? new Date().toISOString() : null },
+    ];
+
+    for (const payload of possiblePayloads) {
+      const { error } = await supabase.from("questions").update(payload).eq("id", question.id);
+      if (!error) break;
+      if (!/schema cache|column|could not find/i.test(error.message || "")) break;
+    }
+
+    toast.success(willBeUsed ? "Marked used" : "Marked unused");
+  };
 
   const startEditing = (question) => {
     setEditingId(question.id);
@@ -187,6 +242,7 @@ export default function Library() {
             Question <span className="gradient-text">Library</span>
           </h1>
           <p className="text-zinc-500">Browse and edit saved questions from imports, generated sets, and custom writing.</p>
+          <p className="text-zinc-600 text-sm mt-1">{usedCount} marked used</p>
         </div>
         <Button onClick={fetchQuestions} variant="outline" className="border-zinc-700 text-zinc-300 hover:text-white">
           Refresh
@@ -257,7 +313,7 @@ export default function Library() {
                   onCancel={cancelEditing}
                 />
               ) : (
-                <QuestionCard key={question.id} question={question} onEdit={() => startEditing(question)} />
+                <QuestionCard key={question.id} question={question} used={isQuestionMarkedUsed(question, usedIds)} onEdit={() => startEditing(question)} onToggleUsed={() => toggleUsed(question)} />
               );
             })}
           </div>
@@ -267,14 +323,14 @@ export default function Library() {
   );
 }
 
-const QuestionCard = ({ question, onEdit }) => {
+const QuestionCard = ({ question, used, onEdit, onToggleUsed }) => {
   const type = question.question_type || "written";
   const config = typeConfig[type] || typeConfig.written;
   const Icon = config.icon;
   const options = parseOptions(question.incorrect_answers);
 
   return (
-    <Card className="bg-zinc-900/70 border-white/10">
+    <Card className={`bg-zinc-900/70 border-white/10 ${used ? "opacity-75" : ""}`}>
       <CardContent className="p-5 space-y-4">
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-center gap-2 flex-wrap">
@@ -282,11 +338,17 @@ const QuestionCard = ({ question, onEdit }) => {
               <Icon size={13} className={`mr-1 ${config.color}`} />
               {formatType(type)}
             </Badge>
+            {used && <Badge className="bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">Used</Badge>}
             {question.image_url && <Badge className="bg-amber-500/10 text-amber-300 border border-amber-500/20">Image</Badge>}
           </div>
-          <Button size="sm" variant="outline" onClick={onEdit} className="border-zinc-700 text-zinc-300 hover:text-white">
-            <Pencil size={14} className="mr-2" />Edit
-          </Button>
+          <div className="flex gap-2 flex-wrap justify-end">
+            <Button size="sm" variant="outline" onClick={onToggleUsed} className={used ? "border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/10" : "border-zinc-700 text-zinc-300 hover:text-white"}>
+              <CheckCircle size={14} className="mr-2" />{used ? "Used" : "Mark Used"}
+            </Button>
+            <Button size="sm" variant="outline" onClick={onEdit} className="border-zinc-700 text-zinc-300 hover:text-white">
+              <Pencil size={14} className="mr-2" />Edit
+            </Button>
+          </div>
         </div>
 
         <div>
