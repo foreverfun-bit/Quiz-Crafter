@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { QRCodeSVG } from "qrcode.react";
 import { supabase } from "../lib/supabase";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
@@ -15,6 +14,7 @@ import {
   EyeOff,
   ExternalLink,
   Image,
+  Link,
   List,
   Loader2,
   Maximize2,
@@ -348,12 +348,9 @@ const PhonePlayPanel = ({ joinUrl, copyJoinLink, players, answers, adjustScore, 
       <div className="flex items-center gap-2 text-white font-semibold"><Users size={18} className="text-[#71E0DC]" />Phone Play</div>
       <Button size="sm" variant="outline" onClick={copyJoinLink} className="h-8 border-white/10 text-zinc-300 hover:text-white"><Copy size={14} className="mr-1" />Copy</Button>
     </div>
-    <div className="grid grid-cols-[116px_1fr] gap-3 items-center mb-3">
-      <div className="rounded-lg bg-white p-2"><QRCodeSVG value={joinUrl} size={100} /></div>
-      <div className="min-w-0">
-        <p className="text-xs text-zinc-500 mb-1">Players scan or open:</p>
-        <p className="text-xs text-[#71E0DC] break-all">{joinUrl}</p>
-      </div>
+    <div className="rounded-lg border border-[#71E0DC]/20 bg-[#71E0DC]/10 p-3 mb-3">
+      <div className="flex items-center gap-2 text-[#71E0DC] font-semibold mb-2"><Link size={16} />Player join link</div>
+      <p className="text-xs text-zinc-200 break-all">{joinUrl}</p>
     </div>
     <div className="grid grid-cols-2 gap-2 mb-3">
       <div className="rounded-md bg-zinc-950/70 border border-white/10 p-2"><p className="text-xs text-zinc-500">Players</p><p className="text-xl font-black">{players.length}</p></div>
