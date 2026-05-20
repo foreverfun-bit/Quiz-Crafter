@@ -4,10 +4,11 @@ import { supabase } from "../lib/supabase";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent } from "../components/ui/card";
-import { CheckCircle, Loader2, Send, Smartphone, Tags, Timer, Trophy } from "lucide-react";
+import { CheckCircle, Loader2, Send, Tags, Timer, Trophy } from "lucide-react";
 import { toast } from "sonner";
 
 const makePlayerId = () => `player-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const BRAND_LOGO_SRC = process.env.REACT_APP_BRAND_LOGO_URL || "/forever-fun-logo.png";
 
 const arrayConfig = [
   { key: "true_false_questions", type: "true_false" },
@@ -159,16 +160,27 @@ const PlayerSession = () => {
   );
 };
 
-const BrandMark = () => <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full border border-[#71E0DC]/30 bg-gradient-to-br from-[#71E0DC] to-[#AEB2EF] text-zinc-950 shadow-lg shadow-[#71E0DC]/10"><div className="text-center leading-none"><div className="text-xs font-black uppercase tracking-wide">Quiz</div><div className="text-lg font-black">Crafter</div></div></div>;
+const BrandMark = () => {
+  const [logoFailed, setLogoFailed] = useState(false);
+
+  if (!logoFailed) {
+    return (
+      <div className="mx-auto mb-4 flex justify-center">
+        <img src={BRAND_LOGO_SRC} alt="Forever Fun Events" onError={() => setLogoFailed(true)} className="h-28 w-28 rounded-full bg-white object-contain p-2" />
+      </div>
+    );
+  }
+
+  return <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full border border-[#71E0DC]/30 bg-white text-zinc-950 shadow-lg shadow-[#71E0DC]/10"><div className="text-center leading-none"><div className="text-base font-black">Forever</div><div className="text-xl font-black">Fun</div></div></div>;
+};
 
 const JoinScreen = ({ name, setName, joinGame, sessionName, roundCategories }) => (
   <div className="min-h-screen bg-[#09090B] text-white flex items-center justify-center p-4">
     <div className="w-full max-w-sm">
       <div className="text-center mb-6">
         <BrandMark />
-        <p className="text-[#71E0DC] text-xs font-bold uppercase tracking-wide mb-1">Forever Fun Trivia</p>
+        <p className="text-[#71E0DC] text-sm font-bold uppercase tracking-wide mb-2">{sessionName}</p>
         <h1 className="text-3xl font-black">Join Trivia</h1>
-        <p className="text-zinc-500 mt-1">{sessionName}</p>
       </div>
       <RoundCategoryCard roundCategories={roundCategories} compact />
       <Card className="glass-card mt-4"><CardContent className="p-5 space-y-4"><div><label className="text-zinc-400 text-sm block mb-1.5">Team Name</label><input value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && joinGame()} placeholder="Enter team name" maxLength={32} className="w-full h-12 rounded-lg bg-zinc-950 border border-white/10 px-3 text-white text-lg outline-none focus:border-[#71E0DC]/60" autoFocus /></div><Button onClick={joinGame} className="w-full h-12 gradient-btn text-base font-bold">Join Game</Button></CardContent></Card>
@@ -179,7 +191,7 @@ const JoinScreen = ({ name, setName, joinGame, sessionName, roundCategories }) =
 const PlayerLobby = ({ sessionName, connected, roundCategories }) => (
   <div className="w-full max-w-md text-center">
     <BrandMark />
-    <p className="text-[#71E0DC] text-xs font-bold uppercase tracking-wide mb-1">Forever Fun Trivia</p>
+    <p className="text-[#71E0DC] text-sm font-bold uppercase tracking-wide mb-2">{sessionName}</p>
     <h1 className="text-3xl font-black">You&apos;re In</h1>
     <p className="text-zinc-500 mt-1 mb-5">{connected ? "Waiting for the host to start." : "Connecting to the host screen."}</p>
     <RoundCategoryCard roundCategories={roundCategories} />
