@@ -20,6 +20,7 @@ import JoinGame from "./pages/JoinGame";
 import HostControl from "./pages/HostControl";
 import HostSession from "./pages/HostSession";
 import PresentSession from "./pages/PresentSession";
+import PlayerSession from "./pages/PlayerSession";
 import PresentView from "./pages/PresentView";
 import PlayerView from "./pages/PlayerView";
 import { GameHistory } from "./pages/GameHistory";
@@ -282,6 +283,7 @@ function App() {
             <Route path="/reset-data" element={<ProtectedRoute><AppLayout><ResetData /></AppLayout></ProtectedRoute>} />
 
             <Route path="/join" element={<JoinGame />} />
+            <Route path="/play-session/:id" element={<PlayerSession />} />
             <Route path="/play/:gameId" element={<PlayerView />} />
             <Route path="/present/:code" element={<PresentView />} />
             <Route path="/host/:gameId" element={<ProtectedRoute><HostControl /></ProtectedRoute>} />
