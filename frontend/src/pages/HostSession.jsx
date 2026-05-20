@@ -74,7 +74,9 @@ const parseOptions = (value) => {
     try {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) return parsed.map((item) => (typeof item === "string" ? item : item?.text)).filter(Boolean);
-    } catch {}
+    } catch {
+      // Fall through to semicolon parsing.
+    }
   }
   return raw.split(";").map((item) => item.trim()).filter(Boolean);
 };
@@ -98,8 +100,8 @@ const flattenSession = (session) => {
   const entries = arrayConfig.flatMap(({ key, type }) => {
     const questions = Array.isArray(session?.[key]) ? session[key] : [];
     return questions.map((question, index) => {
-      const roundOrder = getRoundOrder(question, 1);
       const questionType = normalizeType(question, type);
+      const roundOrder = getRoundOrder(question, 1);
       return {
         id: `${key}-${index}`,
         category: question.category || "General",
@@ -115,6 +117,7 @@ const flattenSession = (session) => {
       };
     });
   });
+
   return entries.sort((a, b) => a.roundOrder !== b.roundOrder ? a.roundOrder - b.roundOrder : a.sourceOrder - b.sourceOrder);
 };
 
@@ -122,14 +125,18 @@ const makeRounds = (questions) => {
   const groups = new Map();
   questions.forEach((question, index) => {
     const key = `${question.roundOrder}-${question.roundName}`;
-    if (!groups.has(key)) groups.set(key, { key, name: question.roundName, order: question.roundOrder, startIndex: index, questions: [] });
+    if (!groups.has(key)) groups.set(key, { key, name: question.roundName, startIndex: index, questions: [] });
     groups.get(key).questions.push(question);
   });
   return [...groups.values()];
 };
 
 const readStoredLeaderboard = (sessionId) => {
-  try { return JSON.parse(localStorage.getItem(`quiz-crafter-leaderboard-${sessionId}`) || "[]"); } catch { return []; }
+  try {
+    return JSON.parse(localStorage.getItem(`quiz-crafter-leaderboard-${sessionId}`) || "[]");
+  } catch {
+    return [];
+  }
 };
 
 const getDefaultPoints = (question) => POINTS_BY_TYPE[question?.type] || 100;
@@ -261,7 +268,12 @@ const HostSession = () => {
   const resetTimer = () => setTimerEndAt(null);
   const openPresentation = () => window.open(`/present-session/${id}`, "_blank", "noopener,noreferrer");
   const copyJoinLink = async () => {
-    try { await navigator.clipboard.writeText(joinUrl); toast.success("Join link copied"); } catch { toast.error("Could not copy link"); }
+    try {
+      await navigator.clipboard.writeText(joinUrl);
+      toast.success("Join link copied");
+    } catch {
+      toast.error("Could not copy link");
+    }
   };
 
   const addTeam = () => {
@@ -277,7 +289,9 @@ const HostSession = () => {
   const removeTeam = (teamId) => setLeaderboard((teams) => teams.filter((team) => team.id !== teamId));
 
   if (loading) return <div className="min-h-screen bg-[#09090B] flex items-center justify-center"><Loader2 className="text-[#71E0DC] animate-spin" size={34} /></div>;
-  if (!session || !currentQuestion) return <div className="min-h-screen bg-[#09090B] flex items-center justify-center p-6 text-center"><div><p className="text-white text-2xl font-bold mb-2">No questions to host</p><p className="text-zinc-500 mb-4">Add questions to this session first.</p><Button onClick={() => navigate(`/session/${id}`)} className="gradient-btn">Back to Session</Button></div></div>;
+  if (!session || !currentQuestion) {
+    return <div className="min-h-screen bg-[#09090B] flex items-center justify-center p-6 text-center"><div><p className="text-white text-2xl font-bold mb-2">No questions to host</p><p className="text-zinc-500 mb-4">Add questions to this session first.</p><Button onClick={() => navigate(`/session/${id}`)} className="gradient-btn">Back to Session</Button></div></div>;
+  }
 
   return <div className="min-h-screen bg-[#09090B] text-white" data-testid="host-session-page">
     {!focusMode && <TopBar navigate={navigate} id={id} sessionName={sessionName} questions={questions} players={players} currentIndex={currentIndex} liveStatus={liveStatus} openPresentation={openPresentation} setFocusMode={setFocusMode} progress={progress} />}
@@ -302,7 +316,10 @@ const PresentationControls = ({ mode, setMode, showAnswer, setShowAnswer, showFu
 
 const HostSettings = ({ pointsPerQuestion, setPointsPerQuestion, wagerMode, setWagerMode, timerSeconds, setTimerSeconds, timeRemaining, startTimer, resetTimer }) => <Card className="glass-card mb-4"><CardContent className="p-3 grid grid-cols-1 md:grid-cols-[1fr_1fr_auto_auto_auto] gap-2 items-end"><label className="text-xs text-zinc-400">Points<input type="number" min="0" value={pointsPerQuestion} onChange={(event) => setPointsPerQuestion(event.target.value)} className="mt-1 w-full h-9 rounded-md bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><label className="text-xs text-zinc-400">Timer seconds<input type="number" min="5" value={timerSeconds} onChange={(event) => setTimerSeconds(event.target.value)} className="mt-1 w-full h-9 rounded-md bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><Button onClick={() => setWagerMode((value) => !value)} className={wagerMode ? "h-9 bg-purple-500/20 text-purple-200 border border-purple-500/30 hover:bg-purple-500/30" : "h-9 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}>Wager {wagerMode ? "On" : "Off"}</Button><Button onClick={startTimer} className="h-9 gradient-btn"><Play size={15} className="mr-2" />Start Timer</Button><Button variant="outline" onClick={resetTimer} className="h-9 border-white/10 text-zinc-300 hover:text-white"><RotateCcw size={15} className="mr-2" />{timeRemaining === null ? "Clear" : `${timeRemaining}s`}</Button></CardContent></Card>;
 
-const PhonePlayPanel = ({ joinUrl, copyJoinLink, players, answers, adjustScore, pointsPerQuestion, wagerMode, setMode }) => <Card className="glass-card"><CardContent className="p-3"><div className="flex items-center justify-between gap-2 mb-3"><div className="flex items-center gap-2 text-white font-semibold"><Users size={18} className="text-[#71E0DC]" />Phone Play</div><Button size="sm" variant="outline" onClick={copyJoinLink} className="h-8 border-white/10 text-zinc-300 hover:text-white"><Copy size={14} className="mr-1" />Copy</Button></div><div className="rounded-lg border border-[#71E0DC]/20 bg-[#71E0DC]/10 p-3 mb-3"><div className="flex items-center gap-2 text-[#71E0DC] font-semibold mb-2"><Link size={16} />Player join link</div><p className="text-xs text-zinc-200 break-all">{joinUrl}</p></div><div className="grid grid-cols-2 gap-2 mb-3"><div className="rounded-md bg-zinc-950/70 border border-white/10 p-2"><p className="text-xs text-zinc-500">Players</p><p className="text-xl font-black">{players.length}</p></div><div className="rounded-md bg-zinc-950/70 border border-white/10 p-2"><p className="text-xs text-zinc-500">Answers</p><p className="text-xl font-black">{answers.length}</p></div></div><Button size="sm" onClick={() => setMode("leaderboard")} className="w-full mb-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-100"><Trophy size={14} className="mr-2" />Show Leaderboard</Button><div className="space-y-2 max-h-48 overflow-y-auto pr-1">{answers.map((answer) => { const award = wagerMode && Number(answer.wagerAmount) > 0 ? Number(answer.wagerAmount) : pointsPerQuestion; return <div key={`${answer.playerId}-${answer.questionIndex}`} className="rounded-md border border-white/10 bg-zinc-950/60 p-2"><div className="flex items-center justify-between gap-2 mb-1"><span className="font-semibold text-sm truncate">{answer.playerName}</span><Button size="sm" onClick={() => adjustScore(answer.playerId, award)} className="h-7 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">+{award}</Button></div>{answer.wagerMode && <p className="text-xs text-purple-300 mb-1">Wager: {answer.wagerAmount}</p>}<p className="text-sm text-zinc-300 break-words">{answer.answer}</p></div>; })}{!answers.length && <p className="text-xs text-zinc-500 text-center py-3">Answers for the current question will appear here.</p>}</div></CardContent></Card>;
+const PhonePlayPanel = ({ joinUrl, copyJoinLink, players, answers, adjustScore, pointsPerQuestion, wagerMode, setMode }) => {
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=132x132&margin=8&data=${encodeURIComponent(joinUrl)}`;
+  return <Card className="glass-card"><CardContent className="p-3"><div className="flex items-center justify-between gap-2 mb-3"><div className="flex items-center gap-2 text-white font-semibold"><Users size={18} className="text-[#71E0DC]" />Phone Play</div><Button size="sm" variant="outline" onClick={copyJoinLink} className="h-8 border-white/10 text-zinc-300 hover:text-white"><Copy size={14} className="mr-1" />Copy</Button></div><div className="grid grid-cols-[132px_1fr] gap-3 items-center rounded-lg border border-[#71E0DC]/20 bg-[#71E0DC]/10 p-3 mb-3"><div className="bg-white rounded-md p-1"><img src={qrUrl} alt="Player join QR code" className="w-[124px] h-[124px]" /></div><div className="min-w-0"><div className="flex items-center gap-2 text-[#71E0DC] font-semibold mb-2"><Link size={16} />Player join link</div><p className="text-xs text-zinc-200 break-all">{joinUrl}</p></div></div><div className="grid grid-cols-2 gap-2 mb-3"><div className="rounded-md bg-zinc-950/70 border border-white/10 p-2"><p className="text-xs text-zinc-500">Players</p><p className="text-xl font-black">{players.length}</p></div><div className="rounded-md bg-zinc-950/70 border border-white/10 p-2"><p className="text-xs text-zinc-500">Answers</p><p className="text-xl font-black">{answers.length}</p></div></div><Button size="sm" onClick={() => setMode("leaderboard")} className="w-full mb-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-100"><Trophy size={14} className="mr-2" />Show Leaderboard</Button><div className="space-y-2 max-h-48 overflow-y-auto pr-1">{answers.map((answer) => { const award = wagerMode && Number(answer.wagerAmount) > 0 ? Number(answer.wagerAmount) : pointsPerQuestion; return <div key={`${answer.playerId}-${answer.questionIndex}`} className="rounded-md border border-white/10 bg-zinc-950/60 p-2"><div className="flex items-center justify-between gap-2 mb-1"><span className="font-semibold text-sm truncate">{answer.playerName}</span><Button size="sm" onClick={() => adjustScore(answer.playerId, award)} className="h-7 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">+{award}</Button></div>{answer.wagerMode && <p className="text-xs text-purple-300 mb-1">Wager: {answer.wagerAmount}</p>}<p className="text-sm text-zinc-300 break-words">{answer.answer}</p></div>; })}{!answers.length && <p className="text-xs text-zinc-500 text-center py-3">Answers for the current question will appear here.</p>}</div></CardContent></Card>;
+};
 
 const LeaderboardPanel = ({ leaderboard, teamName, teamScore, setTeamName, setTeamScore, addTeam, adjustScore, removeTeam, showLeaderboard }) => { const sorted = [...leaderboard].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)); return <Card className="glass-card"><CardContent className="p-3"><div className="flex items-center justify-between gap-2 mb-3"><div className="flex items-center gap-2 text-white font-semibold"><Trophy size={18} className="text-amber-300" />Leaderboard</div><Button size="sm" variant="outline" onClick={showLeaderboard} className="h-8 border-white/10 text-zinc-300 hover:text-white">Show</Button></div><div className="grid grid-cols-[1fr_76px_36px] gap-2 mb-3"><input value={teamName} onChange={(event) => setTeamName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && addTeam()} placeholder="Team name" className="h-9 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" /><input value={teamScore} onChange={(event) => setTeamScore(event.target.value)} onKeyDown={(event) => event.key === "Enter" && addTeam()} placeholder="Score" type="number" className="h-9 rounded-md bg-zinc-950 border border-white/10 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" /><Button onClick={addTeam} className="h-9 w-9 p-0 gradient-btn" aria-label="Add team"><Plus size={16} /></Button></div><div className="space-y-2 max-h-48 overflow-y-auto pr-1">{sorted.map((team) => <div key={team.id} className="rounded-md border border-white/10 bg-zinc-950/60 p-2"><div className="flex items-center justify-between gap-2 mb-2"><span className="font-semibold text-sm truncate">{team.name}</span><span className="font-black text-[#71E0DC]">{Number(team.score || 0)}</span></div><div className="flex items-center gap-1"><Button size="sm" onClick={() => adjustScore(team.id, -1)} className="h-7 flex-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200">-1</Button><Button size="sm" onClick={() => adjustScore(team.id, 1)} className="h-7 flex-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200">+1</Button><Button size="sm" variant="outline" onClick={() => removeTeam(team.id)} className="h-7 w-8 p-0 border-white/10 text-zinc-400 hover:text-red-300" aria-label="Remove team"><Trash2 size={13} /></Button></div></div>)}{!sorted.length && <p className="text-xs text-zinc-500 text-center py-3">Teams will appear here when players join from their phones.</p>}</div></CardContent></Card>; };
 
