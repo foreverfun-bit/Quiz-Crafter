@@ -19,32 +19,13 @@ const getStoredPlayer = (sessionId) => {
 
 const PlayerSession = () => {
   const { id } = useParams();
-  const [session, setSession] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [name, setName] = useState("");
   const [player, setPlayer] = useState(() => getStoredPlayer(id));
   const [hostState, setHostState] = useState(null);
   const [answer, setAnswer] = useState("");
   const [submitted, setSubmitted] = useState(null);
+  const [connected, setConnected] = useState(false);
   const channelRef = useRef(null);
-
-  useEffect(() => {
-    const loadSession = async () => {
-      setLoading(true);
-      try {
-        const response = await fetch(`/api/public-session?id=${encodeURIComponent(id)}`);
-        const body = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(body.error || "Session not found");
-        setSession(body.session || null);
-      } catch (error) {
-        toast.error(error.message || "Unable to load game");
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadSession();
-  }, [id]);
 
   useEffect(() => {
     if (!player) return undefined;
@@ -61,7 +42,9 @@ const PlayerSession = () => {
         });
       })
       .subscribe((status) => {
-        if (status === "SUBSCRIBED") {
+        const isConnected = status === "SUBSCRIBED";
+        setConnected(isConnected);
+        if (isConnected) {
           channel.send({
             type: "broadcast",
             event: "player_join",
@@ -79,6 +62,7 @@ const PlayerSession = () => {
   const currentQuestion = hostState?.currentQuestion || null;
   const leaderboard = useMemo(() => [...(hostState?.leaderboard || [])].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)), [hostState]);
   const myScore = leaderboard.find((team) => team.id === player?.id)?.score || 0;
+  const sessionName = hostState?.sessionName || "Trivia Session";
 
   const joinGame = () => {
     const trimmed = name.trim();
@@ -112,14 +96,6 @@ const PlayerSession = () => {
     toast.success("Answer submitted");
   };
 
-  if (loading) {
-    return <div className="min-h-screen bg-[#09090B] flex items-center justify-center"><Loader2 className="text-[#71E0DC] animate-spin" size={34} /></div>;
-  }
-
-  if (!session) {
-    return <div className="min-h-screen bg-[#09090B] text-white flex items-center justify-center p-5 text-center"><p>Game not found.</p></div>;
-  }
-
   if (!player) {
     return (
       <div className="min-h-screen bg-[#09090B] text-white flex items-center justify-center p-4">
@@ -129,7 +105,7 @@ const PlayerSession = () => {
               <Smartphone className="text-zinc-950" size={32} />
             </div>
             <h1 className="text-3xl font-black">Join Trivia</h1>
-            <p className="text-zinc-500 mt-1">{session.name || session.session_name || "Trivia Session"}</p>
+            <p className="text-zinc-500 mt-1">Enter your team name</p>
           </div>
           <Card className="glass-card">
             <CardContent className="p-5 space-y-4">
@@ -150,7 +126,7 @@ const PlayerSession = () => {
       <header className="px-4 py-3 border-b border-white/10 flex items-center justify-between gap-3 bg-zinc-950/80 sticky top-0 z-10">
         <div className="min-w-0">
           <p className="font-bold truncate">{player.name}</p>
-          <p className="text-xs text-zinc-500 truncate">{session.name || session.session_name || "Trivia Session"}</p>
+          <p className="text-xs text-zinc-500 truncate">{sessionName}</p>
         </div>
         <Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20">{Number(myScore)} pts</Badge>
       </header>
@@ -160,7 +136,7 @@ const PlayerSession = () => {
           <div className="text-center">
             <Loader2 className="mx-auto mb-4 text-[#71E0DC] animate-spin" size={34} />
             <h2 className="text-2xl font-black mb-1">You’re in</h2>
-            <p className="text-zinc-500">Waiting for the host to start.</p>
+            <p className="text-zinc-500">{connected ? "Waiting for the host to start." : "Connecting to the host screen."}</p>
           </div>
         )}
 
@@ -184,9 +160,7 @@ const PlayerSession = () => {
           </div>
         )}
 
-        {hostState && hostState.mode !== "leaderboard" && !currentQuestion && (
-          <div className="text-center"><p className="text-zinc-400">Waiting for the next question.</p></div>
-        )}
+        {hostState && hostState.mode !== "leaderboard" && !currentQuestion && <div className="text-center"><p className="text-zinc-400">Waiting for the next question.</p></div>}
 
         {hostState && hostState.mode !== "leaderboard" && currentQuestion && (
           <div className="w-full max-w-md">
@@ -234,9 +208,7 @@ const AnswerForm = ({ question, answer, setAnswer, submitAnswer }) => {
   if (question.type === "multiple_choice" && question.options?.length) {
     return (
       <div className="space-y-3">
-        {question.options.map((option, index) => (
-          <Button key={index} onClick={() => submitAnswer(option)} className="w-full min-h-14 whitespace-normal text-left justify-start bg-zinc-900 border border-white/10 text-white hover:bg-zinc-800 px-4 py-3">{option}</Button>
-        ))}
+        {question.options.map((option, index) => <Button key={index} onClick={() => submitAnswer(option)} className="w-full min-h-14 whitespace-normal text-left justify-start bg-zinc-900 border border-white/10 text-white hover:bg-zinc-800 px-4 py-3">{option}</Button>)}
       </div>
     );
   }
