@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
+import { QRCodeCanvas } from "qrcode.react";
 import { supabase } from "../lib/supabase";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent } from "../components/ui/card";
@@ -16,7 +17,7 @@ import {
 } from "lucide-react";
 
 const STORAGE_BASE = process.env.REACT_APP_SUPABASE_URL ? `${process.env.REACT_APP_SUPABASE_URL}/storage/v1/object/public/` : "";
-const DEFAULT_PUBLIC_SITE = "https://quizcrafter.com";
+const DEFAULT_PUBLIC_SITE = "https://quizcrafter.fun";
 
 const typeMeta = {
   true_false: { label: "True/False", short: "T/F", icon: CheckCircle, color: "text-[#71E0DC]" },
@@ -219,7 +220,6 @@ const PresentSession = () => {
 };
 
 const LobbyView = ({ sessionName, joinUrl, players }) => {
-  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=320x320&margin=12&data=${encodeURIComponent(joinUrl)}`;
   const playerCount = players.length;
 
   return (
@@ -229,7 +229,7 @@ const LobbyView = ({ sessionName, joinUrl, players }) => {
         <h1 className="text-5xl lg:text-8xl font-black leading-none mb-8">Join Trivia</h1>
         <div className="flex justify-center mb-7">
           <div className="rounded-2xl bg-white p-4 shadow-2xl shadow-[#71E0DC]/10">
-            <img src={qrUrl} alt="Player join QR code" className="h-72 w-72 lg:h-80 lg:w-80" />
+            <QRCodeCanvas value={joinUrl} size={320} marginSize={2} level="M" className="h-72 w-72 lg:h-80 lg:w-80" />
           </div>
         </div>
         <p className="text-xl lg:text-2xl text-zinc-300 mb-3">Scan to play from your phone</p>
