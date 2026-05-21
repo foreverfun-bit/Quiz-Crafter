@@ -1,0 +1,63 @@
+name: Codex Email Only Updates Patch
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  patch:
+    if: contains(github.event.issue.title, 'codex-run-email-only-updates')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Simplify updates to email only
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const replaceRequired = (text, from, to, label) => {
+            if (!text.includes(from)) throw new Error(`Missing ${label}`);
+            return text.replace(from, to);
+          };
+
+          let player = fs.readFileSync('frontend/src/pages/PlayerSession.jsx', 'utf8');
+          player = replaceRequired(player,
+            '    if (updatePreference === "email" && !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(contact)) return toast.error("Enter a valid email address");\n    if (updatePreference === "text" && contact.replace(/\\D/g, "").length < 10) return toast.error("Enter a valid phone number");\n    const nextPlayer = { id: makePlayerId(), name: trimmed.slice(0, 32), updatePreference, updateContact: updatePreference === "none" ? "" : contact };',
+            '    if (updatePreference === "email" && !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(contact)) return toast.error("Enter a valid email address");\n    const nextPlayer = { id: makePlayerId(), name: trimmed.slice(0, 32), updatePreference, updateContact: updatePreference === "none" ? "" : contact };',
+            'remove text validation');
+          player = replaceRequired(player,
+            '<p className="text-xs text-zinc-500">Clues, cancellations, schedule changes, and other trivia night updates.</p></div><div className="grid grid-cols-3 gap-2"><button type="button" onClick={() => setUpdatePreference("none")} className={`h-10 rounded-md border text-sm font-bold ${updatePreference === "none" ? "border-[#71E0DC]/60 bg-[#71E0DC]/15 text-[#71E0DC]" : "border-white/10 bg-zinc-900 text-zinc-300"}`}>No</button><button type="button" onClick={() => setUpdatePreference("email")} className={`h-10 rounded-md border text-sm font-bold ${updatePreference === "email" ? "border-[#71E0DC]/60 bg-[#71E0DC]/15 text-[#71E0DC]" : "border-white/10 bg-zinc-900 text-zinc-300"}`}>Email</button><button type="button" onClick={() => setUpdatePreference("text")} className={`h-10 rounded-md border text-sm font-bold ${updatePreference === "text" ? "border-[#71E0DC]/60 bg-[#71E0DC]/15 text-[#71E0DC]" : "border-white/10 bg-zinc-900 text-zinc-300"}`}>Text</button></div>{updatePreference !== "none" && <input value={updateContact} onChange={(event) => setUpdateContact(event.target.value)} onKeyDown={(event) => event.key === "Enter" && joinGame()} placeholder={updatePreference === "email" ? "Email address" : "Phone number"} inputMode={updatePreference === "email" ? "email" : "tel"} className="w-full h-11 rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" />}</div>',
+            '<p className="text-xs text-zinc-500">Clues, cancellations, schedule changes, and other trivia night updates.</p></div><div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => setUpdatePreference("none")} className={`h-10 rounded-md border text-sm font-bold ${updatePreference === "none" ? "border-[#71E0DC]/60 bg-[#71E0DC]/15 text-[#71E0DC]" : "border-white/10 bg-zinc-900 text-zinc-300"}`}>No thanks</button><button type="button" onClick={() => setUpdatePreference("email")} className={`h-10 rounded-md border text-sm font-bold ${updatePreference === "email" ? "border-[#71E0DC]/60 bg-[#71E0DC]/15 text-[#71E0DC]" : "border-white/10 bg-zinc-900 text-zinc-300"}`}>Email me</button></div>{updatePreference === "email" && <input value={updateContact} onChange={(event) => setUpdateContact(event.target.value)} onKeyDown={(event) => event.key === "Enter" && joinGame()} placeholder="Email address" inputMode="email" className="w-full h-11 rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" />}</div>',
+            'join screen update choice');
+          fs.writeFileSync('frontend/src/pages/PlayerSession.jsx', player);
+
+          let host = fs.readFileSync('frontend/src/pages/HostSession.jsx', 'utf8');
+          host = replaceRequired(host, '  Phone,\n', '', 'phone import');
+          host = replaceRequired(host,
+            '  const emailPlayers = players.filter((player) => player.updatePreference === "email" && player.updateContact);\n  const textPlayers = players.filter((player) => player.updatePreference === "text" && player.updateContact);',
+            '  const emailPlayers = players.filter((player) => player.updatePreference === "email" && player.updateContact);',
+            'text player filter');
+          host = replaceRequired(host,
+            '<Badge className="bg-zinc-800 text-zinc-300">{emailPlayers.length + textPlayers.length} opted in</Badge>',
+            '<Badge className="bg-zinc-800 text-zinc-300">{emailPlayers.length} opted in</Badge>',
+            'opted in count');
+          host = replaceRequired(host,
+            '<div className="mt-3 grid grid-cols-2 gap-2"><Button size="sm" variant="outline" onClick={() => copyContacts(emailPlayers, "email")} className="border-white/10 text-zinc-300 hover:text-white"><Mail size={14} className="mr-1" />Emails ({emailPlayers.length})</Button><Button size="sm" variant="outline" onClick={() => copyContacts(textPlayers, "text")} className="border-white/10 text-zinc-300 hover:text-white"><Phone size={14} className="mr-1" />Texts ({textPlayers.length})</Button></div><p className="mt-2 text-[11px] text-zinc-500">In-app updates go to connected phones now. Email/text contacts are collected here for host follow-up.</p>',
+            '<div className="mt-3"><Button size="sm" variant="outline" onClick={() => copyContacts(emailPlayers, "email")} className="w-full border-white/10 text-zinc-300 hover:text-white"><Mail size={14} className="mr-1" />Copy emails ({emailPlayers.length})</Button></div><p className="mt-2 text-[11px] text-zinc-500">In-app updates go to connected phones now. Email contacts are collected here for host follow-up.</p>',
+            'email-only contact buttons');
+          fs.writeFileSync('frontend/src/pages/HostSession.jsx', host);
+          NODE
+      - name: Commit changes
+        run: |
+          git config user.name "codex-bot"
+          git config user.email "codex-bot@users.noreply.github.com"
+          git add frontend/src/pages/PlayerSession.jsx frontend/src/pages/HostSession.jsx
+          git commit -m "Limit host updates to email opt-ins" || exit 0
+          git push
+      - name: Close trigger issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.update({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, state: 'closed' });
