@@ -73,6 +73,7 @@ const PlayerSession = () => {
   const [updateContact, setUpdateContact] = useState("");
   const [hostUpdate, setHostUpdate] = useState(null);
   const [feedbackByQuestion, setFeedbackByQuestion] = useState({});
+  const [feedbackByCategory, setFeedbackByCategory] = useState({});
   const [submitted, setSubmitted] = useState(null);
   const [connected, setConnected] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -132,6 +133,12 @@ const PlayerSession = () => {
   const pointsPerQuestion = Number(hostState?.pointsPerQuestion || 1);
   const wagerMode = Boolean(hostState?.wagerMode);
   const gameStarted = hasGameStarted(hostState);
+  const activeRoundCategories = useMemo(() => {
+    const roundName = currentQuestion?.roundName;
+    if (!roundName) return [];
+    const matchedRound = roundCategories.find((round) => round.name === roundName);
+    return matchedRound?.categories || [];
+  }, [currentQuestion?.roundName, roundCategories]);
 
   useEffect(() => {
     setWagerAmount("");
@@ -152,7 +159,15 @@ const PlayerSession = () => {
     const key = String(hostState.currentIndex);
     setFeedbackByQuestion((current) => ({ ...current, [key]: sentiment }));
     channelRef.current?.send({ type: "broadcast", event: "feedback_submit", payload: { playerId: player.id, playerName: player.name, sentiment, questionIndex: hostState.currentIndex, questionId: currentQuestion.id, questionText: currentQuestion.questionText, category: currentQuestion.category || "Uncategorized", roundName: currentQuestion.roundName || "Round", submittedAt: new Date().toISOString() } });
-    toast.success(sentiment === "like" ? "Marked as liked" : "Marked as disliked");
+    toast.success(sentiment === "like" ? "Question liked" : "Question disliked");
+  };
+
+  const submitCategoryFeedback = (category, sentiment) => {
+    if (!player || !hostState || !category) return;
+    const key = `${hostState.currentIndex}-${category}`;
+    setFeedbackByCategory((current) => ({ ...current, [key]: sentiment }));
+    channelRef.current?.send({ type: "broadcast", event: "category_feedback_submit", payload: { playerId: player.id, playerName: player.name, sentiment, category, questionIndex: hostState.currentIndex, roundName: currentQuestion?.roundName || "Round", submittedAt: new Date().toISOString() } });
+    toast.success(sentiment === "like" ? "Category liked" : "Category disliked");
   };
 
   const submitAnswer = (value) => {
@@ -180,8 +195,9 @@ const PlayerSession = () => {
         {!gameStarted && <PlayerLobby sessionName={sessionName} connected={connected} roundCategories={roundCategories} branding={branding} />}
         {hostUpdate && <HostUpdateBanner update={hostUpdate} onDismiss={() => setHostUpdate(null)} />}
         {gameStarted && hostState?.mode === "leaderboard" && <LeaderboardView leaderboard={leaderboard} playerId={player.id} />}
-        {gameStarted && hostState && hostState.mode !== "leaderboard" && !currentQuestion && <div className="text-center"><p className="text-zinc-400">Waiting for the next question.</p></div>}
-        {gameStarted && hostState && hostState.mode !== "leaderboard" && currentQuestion && <div className="w-full max-w-md"><div className="text-center mb-5"><div className="flex items-center justify-center gap-2 flex-wrap mb-3"><Badge className="bg-zinc-800 text-zinc-300">{currentQuestion.roundName || "Round"} · {currentQuestion.category}</Badge>{wagerMode && <Badge className="bg-purple-500/15 text-purple-300 border border-purple-500/20">Bonus Wager</Badge>}{timeRemaining !== null && <Badge className={timeRemaining === 0 ? "bg-red-500/15 text-red-300 border border-red-500/20" : "bg-[#AEB2EF]/15 text-[#AEB2EF] border border-[#AEB2EF]/20"}><Timer size={13} className="mr-1" />{timeRemaining}s</Badge>}</div><h2 className="text-2xl font-black leading-tight">{currentQuestion.questionText}</h2><FeedbackButtons selected={feedbackByQuestion[String(hostState.currentIndex)]} onSelect={submitFeedback} category={currentQuestion.category} /></div>{hostState.showAnswer ? <Card className="border-emerald-500/30 bg-emerald-500/10"><CardContent className="p-5 text-center"><p className="text-zinc-400 text-sm uppercase tracking-wide mb-1">Answer</p><p className="text-3xl font-black text-emerald-300">{currentQuestion.answer}</p>{hostState.showFunFact && currentQuestion.funFact && <p className="text-zinc-300 mt-3">{currentQuestion.funFact}</p>}</CardContent></Card> : submitted?.questionIndex === hostState.currentIndex ? <Card className="glass-card"><CardContent className="p-6 text-center"><CheckCircle className="mx-auto text-emerald-300 mb-3" size={42} /><h3 className="text-2xl font-black mb-1">Answer Locked</h3><p className="text-zinc-400">You answered: <span className="text-white font-bold">{submitted.answer}</span></p>{submitted.wagerMode && <p className="text-purple-300 font-bold mt-2">Wager: {submitted.wagerAmount}</p>}</CardContent></Card> : !acceptingAnswers ? <Card className="border-red-500/30 bg-red-500/10"><CardContent className="p-6 text-center"><Timer className="mx-auto text-red-300 mb-3" size={42} /><h3 className="text-2xl font-black">Time&apos;s Up</h3><p className="text-zinc-400 mt-1">Waiting for the answer reveal.</p></CardContent></Card> : <AnswerForm question={currentQuestion} answer={answer} setAnswer={setAnswer} submitAnswer={submitAnswer} wagerMode={wagerMode} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} />}</div>}
+        {gameStarted && hostState?.mode === "categories" && <RoundIntroFeedback roundName={currentQuestion?.roundName || "Round"} categories={activeRoundCategories} selectedByCategory={feedbackByCategory} currentIndex={hostState.currentIndex} onSelect={submitCategoryFeedback} />}
+        {gameStarted && hostState && hostState.mode !== "leaderboard" && hostState.mode !== "categories" && !currentQuestion && <div className="text-center"><p className="text-zinc-400">Waiting for the next question.</p></div>}
+        {gameStarted && hostState && hostState.mode !== "leaderboard" && hostState.mode !== "categories" && currentQuestion && <div className="w-full max-w-md"><div className="text-center mb-5"><div className="flex items-center justify-center gap-2 flex-wrap mb-3"><Badge className="bg-zinc-800 text-zinc-300">{currentQuestion.roundName || "Round"} · {currentQuestion.category}</Badge>{wagerMode && <Badge className="bg-purple-500/15 text-purple-300 border border-purple-500/20">Bonus Wager</Badge>}{timeRemaining !== null && <Badge className={timeRemaining === 0 ? "bg-red-500/15 text-red-300 border border-red-500/20" : "bg-[#AEB2EF]/15 text-[#AEB2EF] border border-[#AEB2EF]/20"}><Timer size={13} className="mr-1" />{timeRemaining}s</Badge>}</div><h2 className="text-2xl font-black leading-tight">{currentQuestion.questionText}</h2><FeedbackButtons selected={feedbackByQuestion[String(hostState.currentIndex)]} onSelect={submitFeedback} /></div>{hostState.showAnswer ? <Card className="border-emerald-500/30 bg-emerald-500/10"><CardContent className="p-5 text-center"><p className="text-zinc-400 text-sm uppercase tracking-wide mb-1">Answer</p><p className="text-3xl font-black text-emerald-300">{currentQuestion.answer}</p>{hostState.showFunFact && currentQuestion.funFact && <p className="text-zinc-300 mt-3">{currentQuestion.funFact}</p>}</CardContent></Card> : submitted?.questionIndex === hostState.currentIndex ? <Card className="glass-card"><CardContent className="p-6 text-center"><CheckCircle className="mx-auto text-emerald-300 mb-3" size={42} /><h3 className="text-2xl font-black mb-1">Answer Locked</h3><p className="text-zinc-400">You answered: <span className="text-white font-bold">{submitted.answer}</span></p>{submitted.wagerMode && <p className="text-purple-300 font-bold mt-2">Wager: {submitted.wagerAmount}</p>}</CardContent></Card> : !acceptingAnswers ? <Card className="border-red-500/30 bg-red-500/10"><CardContent className="p-6 text-center"><Timer className="mx-auto text-red-300 mb-3" size={42} /><h3 className="text-2xl font-black">Time&apos;s Up</h3><p className="text-zinc-400 mt-1">Waiting for the answer reveal.</p></CardContent></Card> : <AnswerForm question={currentQuestion} answer={answer} setAnswer={setAnswer} submitAnswer={submitAnswer} wagerMode={wagerMode} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} />}</div>}
       </main>
     </div>
   );
@@ -268,9 +284,25 @@ const RoundCategoryCard = ({ roundCategories, compact = false }) => (
   </Card>
 );
 
-const FeedbackButtons = ({ selected, onSelect, category }) => (
+const RoundIntroFeedback = ({ roundName, categories, selectedByCategory, currentIndex, onSelect }) => (
+  <div className="w-full max-w-md text-center">
+    <Tags className="mx-auto text-[#71E0DC] mb-3" size={38} />
+    <p className="text-[#71E0DC] text-sm font-bold uppercase tracking-wide mb-2">Round Info</p>
+    <h2 className="text-3xl font-black mb-2">{roundName}</h2>
+    <p className="text-zinc-500 mb-5">Rate the categories separately from the questions.</p>
+    <div className="space-y-3 text-left">
+      {categories.map((category) => {
+        const selected = selectedByCategory[`${currentIndex}-${category}`];
+        return <div key={category} className="rounded-xl border border-white/10 bg-zinc-950/70 p-3"><p className="font-bold text-white mb-2">{category}</p><div className="grid grid-cols-2 gap-2"><Button type="button" onClick={() => onSelect(category, "like")} className={selected === "like" ? "bg-emerald-500/25 text-emerald-200 border border-emerald-500/40 hover:bg-emerald-500/30" : "bg-zinc-900 text-zinc-200 border border-white/10 hover:bg-zinc-800"}>Like Category</Button><Button type="button" onClick={() => onSelect(category, "dislike")} className={selected === "dislike" ? "bg-red-500/25 text-red-200 border border-red-500/40 hover:bg-red-500/30" : "bg-zinc-900 text-zinc-200 border border-white/10 hover:bg-zinc-800"}>Dislike Category</Button></div></div>;
+      })}
+      {!categories.length && <p className="text-sm text-zinc-500 text-center rounded-xl border border-white/10 bg-zinc-950/70 p-4">Categories will appear when this round has categories saved.</p>}
+    </div>
+  </div>
+);
+
+const FeedbackButtons = ({ selected, onSelect }) => (
   <div className="mt-4 rounded-xl border border-white/10 bg-zinc-950/60 p-3 text-left">
-    <p className="text-xs text-zinc-500 mb-2">Help the host learn what players enjoy. This rates both the question and its category{category ? `: ${category}` : ""}.</p>
+    <p className="text-xs text-zinc-500 mb-2">Rate this question for the host.</p>
     <div className="grid grid-cols-2 gap-2">
       <Button type="button" onClick={() => onSelect("like")} className={selected === "like" ? "bg-emerald-500/25 text-emerald-200 border border-emerald-500/40 hover:bg-emerald-500/30" : "bg-zinc-900 text-zinc-200 border border-white/10 hover:bg-zinc-800"}>Like</Button>
       <Button type="button" onClick={() => onSelect("dislike")} className={selected === "dislike" ? "bg-red-500/25 text-red-200 border border-red-500/40 hover:bg-red-500/30" : "bg-zinc-900 text-zinc-200 border border-white/10 hover:bg-zinc-800"}>Dislike</Button>
