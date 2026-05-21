@@ -23,6 +23,7 @@ import PresentSession from "./pages/PresentSession";
 import PlayerSession from "./pages/PlayerSession";
 import PresentView from "./pages/PresentView";
 import PlayerView from "./pages/PlayerView";
+import HostTools from "./pages/HostTools";
 import { GameHistory } from "./pages/GameHistory";
 import GameHistoryDetail from "./pages/GameHistory";
 
@@ -288,6 +289,7 @@ function App() {
             <Route path="/present/:code" element={<PresentView />} />
             <Route path="/host/:gameId" element={<ProtectedRoute><HostControl /></ProtectedRoute>} />
             <Route path="/game-history" element={<ProtectedRoute><AppLayout><GameHistory /></AppLayout></ProtectedRoute>} />
+            <Route path="/host-tools" element={<ProtectedRoute><AppLayout><HostTools /></AppLayout></ProtectedRoute>} />
             <Route path="/game-history/:historyId" element={<ProtectedRoute><AppLayout><GameHistoryDetail /></AppLayout></ProtectedRoute>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
