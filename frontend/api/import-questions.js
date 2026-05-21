@@ -171,7 +171,7 @@ function normalizeRecord(record) {
   const wrongAnswers = unique(record.incorrect_answers || [], correctAnswer);
   const roundName = clean(record.round_name || record.category) || "Imported";
   const base = {
-    category: clean(record.category) || roundName,
+    category: clean(record.category),
     round_name: roundName,
     round_order: Number.isFinite(Number(record.round_order)) ? Number(record.round_order) : getRoundSortValue(roundName, record.source_order || 0),
     source_order: Number.isFinite(Number(record.source_order)) ? Number(record.source_order) : 0,
@@ -216,7 +216,7 @@ function normalizeCrowdpurrRows(rows) {
     const questionType = detectQuestionType(rawType, parsedCorrect.text, wrongAnswers, imageUrl);
 
     return normalizeRecord({
-      category: "Imported",
+      category: "",
       round_name: "Imported",
       round_order: 1,
       source_order: index + 1,
@@ -235,7 +235,7 @@ function normalizeObjectRows(rows, requestedSource) {
     const question = getValue(row, ["Question", "Question Text", "Prompt", "Trivia Question", "Question Title", "Text"]);
     const correctAnswer = getValue(row, ["Correct Answer(s)", "Correct Answer", "Answer", "Correct", "Correct Option", "Right Answer"]);
     const roundName = getValue(row, ["Round", "Round Name", "RoundName", "Round Title", "Game Round"]);
-    const category = getValue(row, ["Category", "Topic", "Subject", "Tags"]) || roundName;
+    const category = getValue(row, ["Category", "Topic", "Subject", "Tags"]);
     const rawType = getValue(row, ["Question Type", "Type", "Format", "Kind"]);
     const funFact = getValue(row, ["Question Note", "Fun Fact", "Explanation", "Fact", "Notes"]);
     const imageUrl = getValue(row, ["Question Image URL", "Image URL", "Image", "Picture", "Media URL"]);
@@ -257,10 +257,10 @@ function normalizeObjectRows(rows, requestedSource) {
     const wrongAnswers = unique(optionValues.flatMap(splitAnswers), correctAnswer);
     const questionType = detectQuestionType(rawType, correctAnswer, wrongAnswers, imageUrl);
     const fallbackRoundName = requestedSource === "trivianow" ? "TriviaNow" : "Imported";
-    const finalRoundName = roundName || category || fallbackRoundName;
+    const finalRoundName = roundName || fallbackRoundName;
 
     return normalizeRecord({
-      category: category || finalRoundName,
+      category,
       round_name: finalRoundName,
       round_order: explicitRoundOrder ? Number(explicitRoundOrder) : getRoundSortValue(finalRoundName, index + 1),
       source_order: explicitQuestionOrder ? Number(explicitQuestionOrder) : index + 1,
@@ -367,7 +367,7 @@ async function extractQuestionsWithAi(text) {
         { role: "system", content: "Extract trivia questions from messy PDF text. Return strict JSON only." },
         {
           role: "user",
-          content: `Extract up to 150 trivia questions from this text. Return {"questions":[{"category":"Imported","round_name":"Round 1","question_text":"...","correct_answer":"...","question_type":"true_false|multiple_choice|written|picture","incorrect_answers":["..."],"fun_fact":"..."}]}\n\nTEXT:\n${text.slice(0, 60000)}`,
+          content: `Extract up to 150 trivia questions from this text. Return {"questions":[{"category":"","round_name":"Round 1","question_text":"...","correct_answer":"...","question_type":"true_false|multiple_choice|written|picture","incorrect_answers":["..."],"fun_fact":"..."}]}\n\nTEXT:\n${text.slice(0, 60000)}`,
         },
       ],
     }),
@@ -388,13 +388,13 @@ function parseQuestionsFromText(text) {
     const line = lines[i];
     const inlineMatch = line.match(/^(?:q[:.)\-]?\s*)?(.*\?)\s*(?:a(?:nswer)?[:.)\-]\s*)(.+)$/i);
     if (inlineMatch) {
-      questions.push(normalizeRecord({ category: "PDF", round_name: "PDF", source_order: i + 1, question_text: inlineMatch[1], correct_answer: inlineMatch[2], question_type: "written", incorrect_answers: [] }));
+      questions.push(normalizeRecord({ category: "", round_name: "PDF", source_order: i + 1, question_text: inlineMatch[1], correct_answer: inlineMatch[2], question_type: "written", incorrect_answers: [] }));
       continue;
     }
 
     if (/\?$/.test(line) && lines[i + 1]) {
       const answerLine = lines[i + 1].replace(/^a(?:nswer)?[:.)\-]\s*/i, "");
-      questions.push(normalizeRecord({ category: "PDF", round_name: "PDF", source_order: i + 1, question_text: line, correct_answer: answerLine, question_type: "written", incorrect_answers: [] }));
+      questions.push(normalizeRecord({ category: "", round_name: "PDF", source_order: i + 1, question_text: line, correct_answer: answerLine, question_type: "written", incorrect_answers: [] }));
       i += 1;
     }
   }
@@ -437,12 +437,37 @@ function describeQuestion(question, reason) {
   return {
     row: question.source_order || null,
     round: question.round_name || question.category || "Imported",
-    category: question.category || "Imported",
+    category: question.category || "",
     type: question.question_type || "written",
     question: question.question_text || "Untitled question",
     answer: question.correct_answer || "",
     reason,
   };
+}
+
+async function insertQuestionWithUsedFallback(supabase, question, userId) {
+  const basePayload = { ...stripQuestionMetadata(question), user_id: userId };
+  Object.keys(basePayload).forEach((key) => {
+    if (basePayload[key] === undefined || basePayload[key] === null) delete basePayload[key];
+  });
+
+  const usedPayloads = [
+    { is_used: true, used_at: new Date().toISOString(), times_used: 1 },
+    { is_used: true },
+    { used: true },
+    {},
+  ];
+
+  let lastError = null;
+  for (const extra of usedPayloads) {
+    const payload = { ...basePayload, ...extra };
+    const { error } = await supabase.from("questions").insert(payload);
+    if (!error) return;
+    lastError = error;
+    if (!/schema cache|column|Could not find/i.test(error.message || "")) throw error;
+  }
+
+  throw lastError;
 }
 
 async function importQuestions({ questions, userId, filename }) {
@@ -469,13 +494,7 @@ async function importQuestions({ questions, userId, filename }) {
         continue;
       }
 
-      const payload = { ...stripQuestionMetadata(question), user_id: userId };
-      Object.keys(payload).forEach((key) => {
-        if (payload[key] === undefined || payload[key] === "") delete payload[key];
-      });
-
-      const { error: insertError } = await supabase.from("questions").insert(payload);
-      if (insertError) throw insertError;
+      await insertQuestionWithUsedFallback(supabase, question, userId);
       imported += 1;
     } catch (error) {
       const reason = error.message || "Question import failed";
