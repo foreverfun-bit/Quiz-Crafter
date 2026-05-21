@@ -542,7 +542,7 @@ const BuildSession = () => {
                 <CardTitle className="text-white flex items-center gap-2"><Layers size={20} className="text-[#71E0DC]" />{activeRound.name}</CardTitle>
                 <CardDescription className="text-zinc-500">{activeRoundQuestions.length} question{activeRoundQuestions.length === 1 ? "" : "s"} selected</CardDescription>
               </div>
-              <BuilderToolbar showWriteForm={showWriteForm} setShowWriteForm={setShowWriteForm} showLibrary={showLibrary} onBrowseLibrary={handleBrowseLibrary} generateType={generateType} setGenerateType={setGenerateType} generateCount={generateCount} setGenerateCount={setGenerateCount} includeImageIdeas={includeImageIdeas} setIncludeImageIdeas={setIncludeImageIdeas} generating={generating} onGenerate={handleGenerateForRound} />
+              <BuilderToolbar showWriteForm={showWriteForm} setShowWriteForm={setShowWriteForm} onBrowseLibrary={handleBrowseLibrary} generateType={generateType} setGenerateType={setGenerateType} generateCount={generateCount} setGenerateCount={setGenerateCount} includeImageIdeas={includeImageIdeas} setIncludeImageIdeas={setIncludeImageIdeas} generating={generating} onGenerate={handleGenerateForRound} />
             </div>
           </CardHeader>
           <CardContent className="p-4">
@@ -643,7 +643,63 @@ const RoundDropdown = ({ rounds, activeRoundId, menuOpen, setMenuOpen, onSelect,
   );
 };
 
-const BuilderToolbar = ({ showWriteForm, setShowWriteForm, showLibrary, onBrowseLibrary, generateType, setGenerateType, generateCount, setGenerateCount, includeImageIdeas, setIncludeImageIdeas, generating, onGenerate }) => <div className="flex items-center gap-2 flex-wrap"><IconAction label="Create" active={showWriteForm} onClick={() => setShowWriteForm((value) => !value)} icon={Pencil} /><IconAction label="Browse" active={showLibrary} onClick={onBrowseLibrary} icon={List} /><div className="h-10 flex items-center gap-2 rounded-md bg-zinc-950/50 border border-white/10 px-2"><select value={generateType} onChange={(e) => setGenerateType(e.target.value)} className="h-8 bg-transparent text-white text-sm outline-none"><option value="true_false">T/F</option><option value="multiple_choice">MC</option><option value="written">Written</option></select><Input value={generateCount} onChange={(e) => setGenerateCount(e.target.value)} className="w-12 h-7 bg-zinc-900 border-white/10 text-white text-center px-1" /></div><label className="h-10 flex items-center gap-2 rounded-md bg-zinc-950/50 border border-white/10 px-3 text-xs text-zinc-300"><input type="checkbox" checked={includeImageIdeas} onChange={(e) => setIncludeImageIdeas(e.target.checked)} className="accent-[#71E0DC]" />Image ideas</label><Button onClick={onGenerate} disabled={generating} className="gradient-btn h-10">{generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles size={16} className="mr-2" />}Generate</Button></div>;
+const BuilderToolbar = ({ setShowWriteForm, onBrowseLibrary, generateType, setGenerateType, generateCount, setGenerateCount, includeImageIdeas, setIncludeImageIdeas, generating, onGenerate }) => {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const openFreeForm = () => {
+    setShowWriteForm(true);
+    setMenuOpen(false);
+  };
+  const openLibrary = () => {
+    onBrowseLibrary();
+    setMenuOpen(false);
+  };
+  const generateNow = () => {
+    onGenerate();
+    setMenuOpen(false);
+  };
+
+  return (
+    <div className="relative z-10">
+      <Button type="button" onClick={() => setMenuOpen((value) => !value)} className="gradient-btn h-10 px-4">
+        <Plus size={17} className="mr-2" />New Question
+        <ChevronDown size={16} className={`ml-2 transition-transform ${menuOpen ? "rotate-180" : ""}`} />
+      </Button>
+
+      {menuOpen && (
+        <div className="absolute right-0 top-12 w-[320px] rounded-xl border border-white/10 bg-zinc-950/95 shadow-2xl shadow-black/50 p-2">
+          <p className="px-3 py-2 text-xs text-zinc-500">Add Question</p>
+          <div className="rounded-lg border border-[#71E0DC]/20 bg-[#71E0DC]/5 p-3 space-y-3">
+            <div className="flex items-center gap-2 text-white font-semibold text-sm"><Sparkles size={16} className="text-[#71E0DC]" />Generate with AI</div>
+            <div className="grid grid-cols-[1fr_72px] gap-2">
+              <select value={generateType} onChange={(e) => setGenerateType(e.target.value)} className="h-9 rounded-md bg-zinc-950/70 border border-white/10 text-white px-3 text-sm">
+                <option value="true_false">True/False</option>
+                <option value="multiple_choice">Multiple Choice</option>
+                <option value="written">Written Answer</option>
+              </select>
+              <Input value={generateCount} onChange={(e) => setGenerateCount(e.target.value)} className="h-9 bg-zinc-950/70 border-white/10 text-white text-center" />
+            </div>
+            <label className="flex items-center gap-2 text-xs text-zinc-300">
+              <input type="checkbox" checked={includeImageIdeas} onChange={(e) => setIncludeImageIdeas(e.target.checked)} className="accent-[#71E0DC]" />
+              Include image ideas
+            </label>
+            <Button onClick={generateNow} disabled={generating} className="w-full gradient-btn h-9">
+              {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles size={16} className="mr-2" />}Generate
+            </Button>
+          </div>
+
+          <div className="my-2 h-px bg-white/10" />
+          <button type="button" onClick={openLibrary} className="w-full rounded-lg px-3 py-2 text-left text-zinc-300 hover:bg-zinc-900/70 hover:text-white">
+            <div className="flex items-center gap-3"><List size={18} /><div><p className="text-sm font-semibold">Library</p><p className="text-xs text-zinc-500">Browse unused saved questions.</p></div></div>
+          </button>
+          <button type="button" onClick={openFreeForm} className="w-full rounded-lg px-3 py-2 text-left text-zinc-300 hover:bg-zinc-900/70 hover:text-white">
+            <div className="flex items-center gap-3"><Pencil size={18} /><div><p className="text-sm font-semibold">Free Form</p><p className="text-xs text-zinc-500">Write a question from scratch.</p></div></div>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const IconAction = ({ label, icon: Icon, onClick, active }) => <Button title={label} aria-label={label} variant="outline" type="button" onClick={onClick} className={`h-10 w-10 p-0 border-white/10 ${active ? "bg-[#71E0DC]/15 text-[#71E0DC]" : "bg-zinc-950/50 text-zinc-300 hover:text-white"}`}><Icon size={18} /></Button>;
 const FreeWriteForm = ({ form, setForm, categories, onSubmit, onCancel }) => { const updateWrong = (index, value) => setForm((prev) => ({ ...prev, incorrect_answers: prev.incorrect_answers.map((answer, i) => (i === index ? value : answer)) })); const handleDrop = async (event) => { event.preventDefault(); const file = event.dataTransfer.files?.[0]; if (!file || !file.type.startsWith("image/")) return; const dataUrl = await fileToDataUrl(file); setForm((prev) => ({ ...prev, image_url: dataUrl })); }; return <div className="mb-5 rounded-md border border-[#71E0DC]/20 bg-zinc-950/40 p-4 space-y-4"><div className="grid grid-cols-1 md:grid-cols-[160px_1fr_1fr] gap-3"><select value={form.question_type} onChange={(e) => setForm((prev) => ({ ...prev, question_type: e.target.value }))} className="h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3"><option value="written">Free Response</option><option value="true_false">True/False</option><option value="multiple_choice">Multiple Choice</option></select><Input value={form.category} onChange={(e) => setForm((prev) => ({ ...prev, category: e.target.value }))} placeholder={categories[0] || "Category"} list="approved-category-list" className="bg-zinc-950/50 border-white/10 text-white" /><Input value={form.image_url} onChange={(e) => setForm((prev) => ({ ...prev, image_url: e.target.value }))} placeholder="Image or media URL" className="bg-zinc-950/50 border-white/10 text-white" /></div><datalist id="approved-category-list">{categories.map((category) => <option key={category} value={category} />)}</datalist><Textarea value={form.question_text} onChange={(e) => setForm((prev) => ({ ...prev, question_text: e.target.value }))} placeholder="Question" className="bg-zinc-950/50 border-white/10 text-white min-h-[86px]" /><Input value={form.correct_answer} onChange={(e) => setForm((prev) => ({ ...prev, correct_answer: e.target.value }))} placeholder="Correct answer" className="bg-zinc-950/50 border-white/10 text-white" />{form.question_type === "multiple_choice" && <div className="grid grid-cols-1 md:grid-cols-3 gap-2">{form.incorrect_answers.map((answer, index) => <Input key={index} value={answer} onChange={(e) => updateWrong(index, e.target.value)} placeholder={`Wrong answer ${index + 1}`} className="bg-zinc-950/50 border-white/10 text-white" />)}</div>}<Input value={form.fun_fact} onChange={(e) => setForm((prev) => ({ ...prev, fun_fact: e.target.value }))} placeholder="Fun fact" className="bg-zinc-950/50 border-white/10 text-white" /><div onDragOver={(event) => event.preventDefault()} onDrop={handleDrop} className="rounded-md border border-dashed border-white/10 bg-zinc-950/40 p-3 text-sm text-zinc-500">Drop a photo here or paste a media URL above. Pictures are optional for every question.</div><div className="flex justify-end gap-2"><Button variant="outline" onClick={onCancel} className="border-zinc-700 text-zinc-400">Cancel</Button><Button onClick={onSubmit} className="gradient-btn"><Plus size={16} className="mr-2" />Create Question</Button></div></div>; };
 const SelectedRoundList = ({ questions, expandedMediaIds, actionQuestionId, onToggleMedia, onDropImage, onRemove, onUpdate, onRefresh, onRejectQuestion, onRejectCategory }) => { if (!questions.length) return <div className="min-h-[260px] flex items-center justify-center text-center"><div><p className="text-2xl font-bold text-white mb-1">No Questions</p><p className="text-zinc-500">Create, browse, or generate questions for this round.</p></div></div>; return <div className="space-y-2">{questions.map((question, index) => { const mediaOpen = expandedMediaIds.has(String(question.id)); const busy = String(actionQuestionId) === String(question.id); return <div key={question.id} className="rounded-md bg-zinc-950/40 border border-white/10 p-3"><div className="flex items-start gap-3"><span className="text-zinc-500 text-sm font-mono mt-0.5 w-6 text-right">{index + 1}</span><div className="flex-1 min-w-0"><QuestionMeta question={question} /><p className="text-white text-sm mt-1 leading-relaxed">{question.question_text}</p><p className="text-zinc-500 text-xs mt-1">Answer: <span className="text-emerald-400">{question.correct_answer}</span></p>{question.image_prompt && <p className="text-amber-200 text-xs mt-1">Image idea: {question.image_prompt}</p>}{question.image_url && <p className="text-amber-300 text-xs mt-1">Media attached</p>}</div><div className="flex gap-1 flex-wrap justify-end"><RowIcon label="Add media" icon={Image} onClick={() => onToggleMedia(question.id)} active={mediaOpen || Boolean(question.image_url)} />{question.isGenerated && <RowIcon label="Refresh question" icon={busy ? Loader2 : RefreshCw} onClick={() => onRefresh(question)} disabled={busy} spin={busy} />}{question.isGenerated && <RowIcon label="Reject question" icon={Ban} onClick={() => onRejectQuestion(question)} tone="danger" />}{question.isGenerated && <RowIcon label="Reject category" icon={Tag} onClick={() => onRejectCategory(question)} tone="warning" />}<RowIcon label="Remove" icon={X} onClick={() => onRemove(question.id)} /></div></div>{mediaOpen && <div onDragOver={(event) => event.preventDefault()} onDrop={(event) => onDropImage(event, question.id)} className="mt-3 rounded-md border border-dashed border-white/10 bg-zinc-950/40 p-3"><div className="flex flex-col md:flex-row md:items-center gap-2">{question.image_url && <img src={question.image_url} alt="Question media" className="h-16 w-16 object-cover rounded border border-white/10" />}<Input value={question.image_url || ""} onChange={(e) => onUpdate(question.id, { image_url: e.target.value })} placeholder="Drop a photo here or paste image/media URL" className="bg-zinc-950/50 border-white/10 text-white h-9" /></div></div>}</div>; })}</div>; };
