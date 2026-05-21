@@ -14,6 +14,7 @@ import {
   Ban,
   Check,
   CheckCircle,
+  ChevronDown,
   Image,
   Layers,
   List,
@@ -69,6 +70,7 @@ const parseAnswerOptions = (value) => {
 const normalizeText = (value) => String(value || "").replace(/\s+/g, " ").trim();
 const fingerprint = (value) => normalizeText(value).toLowerCase().replace(/[^a-z0-9]/g, "");
 const cleanList = (values) => values.map((value) => normalizeText(value)).filter(Boolean);
+
 const readUsedIds = () => {
   try {
     const parsed = JSON.parse(localStorage.getItem(USED_QUESTIONS_KEY) || "[]");
@@ -77,8 +79,10 @@ const readUsedIds = () => {
     return new Set();
   }
 };
+
 const writeUsedIds = (ids) => localStorage.setItem(USED_QUESTIONS_KEY, JSON.stringify([...ids]));
 const isQuestionMarkedUsed = (question, usedIds) => usedIds.has(String(question?.id || "")) || question?.is_used === true || question?.used === true || Boolean(question?.used_at) || Number(question?.times_used || 0) > 0;
+
 const normalizeType = (question, fallbackType = "written") => {
   const type = question?.question_type || fallbackType || "written";
   return type === "true_false" || type === "multiple_choice" || type === "written" ? type : "written";
@@ -181,6 +185,7 @@ const BuildSession = () => {
   const [sessionName, setSessionName] = useState(savedState?.sessionName || "");
   const [rounds, setRounds] = useState(savedState?.rounds || defaultRounds);
   const [activeRoundId, setActiveRoundId] = useState(savedState?.activeRoundId || (savedState?.rounds?.[0]?.id || "round-1"));
+  const [roundMenuOpen, setRoundMenuOpen] = useState(false);
   const [questions, setQuestions] = useState([]);
   const [usedFingerprints, setUsedFingerprints] = useState(new Set());
   const [usedQuestionIds, setUsedQuestionIds] = useState(readUsedIds);
@@ -219,6 +224,7 @@ const BuildSession = () => {
   };
 
   const scrollToLibrary = () => window.setTimeout(() => document.getElementById("build-session-library")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+
   const handleBrowseLibrary = () => {
     setUsedQuestionIds(readUsedIds());
     setShowLibrary(true);
@@ -313,6 +319,7 @@ const BuildSession = () => {
 
   const removeFromRound = (roundId, questionId) => setRounds((prev) => prev.map((round) => round.id === roundId ? { ...round, questionIds: (round.questionIds || []).filter((id) => String(id) !== String(questionId)) } : round));
   const updateQuestion = (questionId, patch) => setQuestions((prev) => prev.map((question) => String(question.id) === String(questionId) ? normalizeQuestion({ ...question, ...patch }, question.question_type) : question));
+
   const toggleMedia = (questionId) => setExpandedMediaIds((prev) => {
     const next = new Set(prev);
     const key = String(questionId);
@@ -526,7 +533,7 @@ const BuildSession = () => {
       </Card>
 
       <div className="space-y-5">
-        <RoundStrip rounds={rounds} activeRoundId={activeRoundId} onSelect={setActiveRoundId} onRename={handleRenameRound} onDelete={handleDeleteRound} onAdd={handleAddRound} />
+        <RoundDropdown rounds={rounds} activeRoundId={activeRoundId} menuOpen={roundMenuOpen} setMenuOpen={setRoundMenuOpen} onSelect={setActiveRoundId} onRename={handleRenameRound} onDelete={handleDeleteRound} onAdd={handleAddRound} />
 
         <Card className="glass-card overflow-hidden">
           <CardHeader className="pb-3 border-b border-white/10">
@@ -575,7 +582,67 @@ const BuildSession = () => {
 };
 
 const Field = ({ label, children }) => <div className="space-y-2"><Label className="text-zinc-300">{label}</Label>{children}</div>;
-const RoundStrip = ({ rounds, activeRoundId, onSelect, onRename, onDelete, onAdd }) => { const activeRound = rounds.find((round) => round.id === activeRoundId) || rounds[0]; return <Card className="glass-card"><CardContent className="p-3"><div className="flex items-center gap-2 overflow-x-auto pb-1">{rounds.map((round) => { const active = round.id === activeRoundId; return <button key={round.id} type="button" onClick={() => onSelect(round.id)} className={`flex items-center gap-2 h-10 px-3 rounded-md border text-sm font-semibold whitespace-nowrap transition-all ${active ? "border-[#71E0DC]/50 bg-[#71E0DC]/10 text-white" : "border-white/10 bg-zinc-950/40 text-zinc-400 hover:text-white"}`}><span>{round.name}</span><Badge className="bg-zinc-800 text-zinc-300">{round.questionIds?.length || 0}</Badge></button>; })}<Button size="sm" onClick={onAdd} className="h-10 w-10 p-0 gradient-btn flex-shrink-0"><Plus size={16} /></Button></div>{activeRound && <div className="mt-3 flex items-center gap-2"><Input value={activeRound.name} onChange={(e) => onRename(activeRound.id, e.target.value)} className="h-9 max-w-xs bg-zinc-950/50 border-white/10 text-white text-sm" /><Button title="Delete round" aria-label="Delete round" size="sm" variant="outline" onClick={() => onDelete(activeRound.id)} className="h-9 border-zinc-700 text-zinc-400 hover:text-red-300"><Trash2 size={14} /></Button></div>}</CardContent></Card>; };
+
+const RoundDropdown = ({ rounds, activeRoundId, menuOpen, setMenuOpen, onSelect, onRename, onDelete, onAdd }) => {
+  const [manageOpen, setManageOpen] = useState(false);
+  const activeRound = rounds.find((round) => round.id === activeRoundId) || rounds[0];
+  const activeIndex = Math.max(0, rounds.findIndex((round) => round.id === activeRound?.id));
+  return (
+    <div className="relative z-20 flex items-center gap-2">
+      <Button type="button" onClick={() => setMenuOpen((value) => !value)} className="h-10 bg-[#0E3765] hover:bg-[#124575] border border-[#71E0DC]/20 text-[#AEEBFF] px-3 shadow-lg shadow-black/20">
+        <span className="font-semibold truncate max-w-[190px]">{activeRound?.name || "Select Round"}</span>
+        <Badge className="ml-2 bg-zinc-950/60 text-zinc-200 border border-white/10">{activeRound?.questionIds?.length || 0}</Badge>
+        <ChevronDown size={16} className={`ml-2 transition-transform ${menuOpen ? "rotate-180" : ""}`} />
+      </Button>
+
+      {menuOpen && (
+        <div className="absolute left-0 top-12 w-[300px] rounded-xl border border-white/10 bg-zinc-950/95 shadow-2xl shadow-black/50 p-2">
+          <p className="px-3 py-2 text-xs text-zinc-500">Rounds</p>
+          <div className="space-y-1">
+            {rounds.map((round, index) => {
+              const active = round.id === activeRoundId;
+              return (
+                <button key={round.id} type="button" onClick={() => { onSelect(round.id); setMenuOpen(false); }} className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${active ? "border-white/20 bg-zinc-900 text-white" : "border-transparent text-zinc-300 hover:bg-zinc-900/70 hover:text-white"}`}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold">{round.name}</p>
+                      <p className="text-xs text-zinc-500">Round {index + 1}</p>
+                    </div>
+                    <Badge className="bg-zinc-800 text-zinc-300">{round.questionIds?.length || 0}</Badge>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="my-2 h-px bg-white/10" />
+          <button type="button" onClick={() => setManageOpen((value) => !value)} className="w-full rounded-lg px-3 py-2 text-left text-zinc-300 hover:bg-zinc-900/70 hover:text-white">
+            <div className="flex items-center gap-3">
+              <Pencil size={18} className="text-zinc-300" />
+              <div>
+                <p className="text-sm font-semibold">Manage Rounds</p>
+                <p className="text-xs text-zinc-500">Rename, add, or delete rounds.</p>
+              </div>
+            </div>
+          </button>
+
+          {manageOpen && activeRound && (
+            <div className="mt-2 rounded-lg border border-white/10 bg-zinc-900/80 p-2 space-y-2">
+              <Label className="text-xs text-zinc-500">Selected Round</Label>
+              <div className="flex items-center gap-2">
+                <Input value={activeRound.name} onChange={(e) => onRename(activeRound.id, e.target.value)} className="h-9 bg-zinc-950/70 border-white/10 text-white text-sm" />
+                <Button title="Delete round" aria-label="Delete round" size="sm" variant="outline" onClick={() => onDelete(activeRound.id)} className="h-9 w-9 p-0 border-zinc-700 text-zinc-400 hover:text-red-300"><Trash2 size={14} /></Button>
+              </div>
+              <Button type="button" onClick={onAdd} className="w-full h-9 gradient-btn"><Plus size={15} className="mr-2" />Add Round</Button>
+              <p className="text-[11px] text-zinc-500">Currently editing Round {activeIndex + 1}.</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const BuilderToolbar = ({ showWriteForm, setShowWriteForm, showLibrary, onBrowseLibrary, generateType, setGenerateType, generateCount, setGenerateCount, includeImageIdeas, setIncludeImageIdeas, generating, onGenerate }) => <div className="flex items-center gap-2 flex-wrap"><IconAction label="Create" active={showWriteForm} onClick={() => setShowWriteForm((value) => !value)} icon={Pencil} /><IconAction label="Browse" active={showLibrary} onClick={onBrowseLibrary} icon={List} /><div className="h-10 flex items-center gap-2 rounded-md bg-zinc-950/50 border border-white/10 px-2"><select value={generateType} onChange={(e) => setGenerateType(e.target.value)} className="h-8 bg-transparent text-white text-sm outline-none"><option value="true_false">T/F</option><option value="multiple_choice">MC</option><option value="written">Written</option></select><Input value={generateCount} onChange={(e) => setGenerateCount(e.target.value)} className="w-12 h-7 bg-zinc-900 border-white/10 text-white text-center px-1" /></div><label className="h-10 flex items-center gap-2 rounded-md bg-zinc-950/50 border border-white/10 px-3 text-xs text-zinc-300"><input type="checkbox" checked={includeImageIdeas} onChange={(e) => setIncludeImageIdeas(e.target.checked)} className="accent-[#71E0DC]" />Image ideas</label><Button onClick={onGenerate} disabled={generating} className="gradient-btn h-10">{generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles size={16} className="mr-2" />}Generate</Button></div>;
 const IconAction = ({ label, icon: Icon, onClick, active }) => <Button title={label} aria-label={label} variant="outline" type="button" onClick={onClick} className={`h-10 w-10 p-0 border-white/10 ${active ? "bg-[#71E0DC]/15 text-[#71E0DC]" : "bg-zinc-950/50 text-zinc-300 hover:text-white"}`}><Icon size={18} /></Button>;
 const FreeWriteForm = ({ form, setForm, categories, onSubmit, onCancel }) => { const updateWrong = (index, value) => setForm((prev) => ({ ...prev, incorrect_answers: prev.incorrect_answers.map((answer, i) => (i === index ? value : answer)) })); const handleDrop = async (event) => { event.preventDefault(); const file = event.dataTransfer.files?.[0]; if (!file || !file.type.startsWith("image/")) return; const dataUrl = await fileToDataUrl(file); setForm((prev) => ({ ...prev, image_url: dataUrl })); }; return <div className="mb-5 rounded-md border border-[#71E0DC]/20 bg-zinc-950/40 p-4 space-y-4"><div className="grid grid-cols-1 md:grid-cols-[160px_1fr_1fr] gap-3"><select value={form.question_type} onChange={(e) => setForm((prev) => ({ ...prev, question_type: e.target.value }))} className="h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3"><option value="written">Free Response</option><option value="true_false">True/False</option><option value="multiple_choice">Multiple Choice</option></select><Input value={form.category} onChange={(e) => setForm((prev) => ({ ...prev, category: e.target.value }))} placeholder={categories[0] || "Category"} list="approved-category-list" className="bg-zinc-950/50 border-white/10 text-white" /><Input value={form.image_url} onChange={(e) => setForm((prev) => ({ ...prev, image_url: e.target.value }))} placeholder="Image or media URL" className="bg-zinc-950/50 border-white/10 text-white" /></div><datalist id="approved-category-list">{categories.map((category) => <option key={category} value={category} />)}</datalist><Textarea value={form.question_text} onChange={(e) => setForm((prev) => ({ ...prev, question_text: e.target.value }))} placeholder="Question" className="bg-zinc-950/50 border-white/10 text-white min-h-[86px]" /><Input value={form.correct_answer} onChange={(e) => setForm((prev) => ({ ...prev, correct_answer: e.target.value }))} placeholder="Correct answer" className="bg-zinc-950/50 border-white/10 text-white" />{form.question_type === "multiple_choice" && <div className="grid grid-cols-1 md:grid-cols-3 gap-2">{form.incorrect_answers.map((answer, index) => <Input key={index} value={answer} onChange={(e) => updateWrong(index, e.target.value)} placeholder={`Wrong answer ${index + 1}`} className="bg-zinc-950/50 border-white/10 text-white" />)}</div>}<Input value={form.fun_fact} onChange={(e) => setForm((prev) => ({ ...prev, fun_fact: e.target.value }))} placeholder="Fun fact" className="bg-zinc-950/50 border-white/10 text-white" /><div onDragOver={(event) => event.preventDefault()} onDrop={handleDrop} className="rounded-md border border-dashed border-white/10 bg-zinc-950/40 p-3 text-sm text-zinc-500">Drop a photo here or paste a media URL above. Pictures are optional for every question.</div><div className="flex justify-end gap-2"><Button variant="outline" onClick={onCancel} className="border-zinc-700 text-zinc-400">Cancel</Button><Button onClick={onSubmit} className="gradient-btn"><Plus size={16} className="mr-2" />Create Question</Button></div></div>; };
