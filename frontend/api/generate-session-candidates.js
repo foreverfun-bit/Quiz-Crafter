@@ -52,6 +52,21 @@ const BANNED_GENERIC_PATTERNS = [
   /academy award for best picture/i,
 ];
 
+const BANNED_WEAK_CLUE_PATTERNS = [
+  /^what is the name of/i,
+  /^who is the person/i,
+  /^which (actor|actress|artist|athlete|band|city|country|movie|song|team)/i,
+  /famous for being/i,
+  /is best known for/i,
+  /went viral/i,
+  /iconic/i,
+  /legendary/i,
+  /beloved/i,
+  /in what year/i,
+  /what year did/i,
+  /according to (guinness|wikipedia)/i,
+];
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
@@ -235,6 +250,16 @@ Freshness rules:
 - Prefer second-order facts: unusual origins, production details, regional names, near-misses, odd rules, forgotten firsts, surprising constraints, etymology, hidden design choices, or real-world quirks.
 - Ask yourself: "Would this feel fresh to someone who has hosted weekly trivia for years?" If not, replace it.
 
+Clue-writing rules:
+- Treat question_text as a live trivia clue, not a search prompt or database title.
+- Every clue needs at least one gettable anchor before the ask: a time period, medium, region, role, product, lyric/plot/object detail, rule, material, or comparison that gives a strong team a path to the answer.
+- Prefer "because of X, this Y..." or "after X, which Y..." shapes over bare "What is the name of..." wording.
+- Do not ask for tiny-name recall unless the clue includes a widely recognizable work, event, constraint, or context.
+- Do not make the correct answer obvious by repeating a distinctive title, slogan, nickname, or unique phrase from the answer in the clue.
+- Avoid year-only clues, vague popularity claims, and "best known for" clues. They feel recycled and are hard to score.
+- Multiple-choice clues should be answerable before seeing choices; the options should help confirm, not be the only clue path.
+- Written clues should include two useful anchors when the answer is a person, niche place, brand, or title.
+
 Trivia host style:
 - ${config.roundGuidance}
 - Difficulty: ${difficultyProfile.label}. ${difficultyProfile.guidance}
@@ -243,6 +268,7 @@ Trivia host style:
 - Avoid repeating a correct answer anywhere in the batch.
 - If more than one locked category is active, balance the candidates across those locked categories.
 - Write concise, host-friendly question text that sounds natural when read aloud.
+- Keep question_text to one sentence when possible, and usually 18-34 words. Longer clues are okay only when the extra context creates a fairer clue path.
 - Avoid ambiguous answers, disputed facts, and answer wording that would cause scoring arguments.
 - fun_fact must be one short sentence that adds color without spoiling another question.
 - ${config.answerRule}
@@ -363,6 +389,10 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
       rejected.push({ index, question: item.question_text, reason: "generic_overused_trivia_pattern" });
       return;
     }
+    if (isWeakClue(item.question_text, item.correct_answer, questionType)) {
+      rejected.push({ index, question: item.question_text, reason: "weak_or_giveaway_clue" });
+      return;
+    }
     if (lockedCategorySet.size > 0 && !lockedCategorySet.has(itemCategoryKey)) {
       rejected.push({ index, question: item.question_text, reason: "not_locked_category" });
       return;
@@ -449,6 +479,20 @@ function normalizeCandidate(candidate, config, questionType, difficultyKey, incl
 
 function isGenericQuestion(questionText) {
   return BANNED_GENERIC_PATTERNS.some((pattern) => pattern.test(questionText));
+}
+
+function isWeakClue(questionText, correctAnswer, questionType) {
+  const cleanQuestion = cleanText(questionText);
+  const lowerQuestion = cleanQuestion.toLowerCase();
+  const lowerAnswer = cleanText(correctAnswer).toLowerCase();
+  const words = cleanQuestion.split(/\s+/).filter(Boolean);
+  const answerTokens = lowerAnswer.split(/\s+/).filter((token) => token.length >= 5);
+
+  if (words.length < 8 && questionType !== "true_false") return true;
+  if (BANNED_WEAK_CLUE_PATTERNS.some((pattern) => pattern.test(cleanQuestion))) return true;
+  if (answerTokens.some((token) => lowerQuestion.includes(token))) return true;
+
+  return false;
 }
 
 function cleanText(value) {
