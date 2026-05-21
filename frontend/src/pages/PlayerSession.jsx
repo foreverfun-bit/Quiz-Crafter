@@ -185,14 +185,14 @@ const PlayerSession = () => {
   };
 
   if (!player) {
-    return <JoinScreen name={name} setName={setName} joinGame={joinGame} sessionName={sessionName} roundCategories={roundCategories} branding={branding} updatePreference={updatePreference} setUpdatePreference={setUpdatePreference} updateContact={updateContact} setUpdateContact={setUpdateContact} />;
+    return <JoinScreen name={name} setName={setName} joinGame={joinGame} sessionName={sessionName} branding={branding} updatePreference={updatePreference} setUpdatePreference={setUpdatePreference} updateContact={updateContact} setUpdateContact={setUpdateContact} />;
   }
 
   return (
     <div className="min-h-screen bg-[#09090B] text-white flex flex-col" data-testid="player-session-page">
       <header className="px-4 py-3 border-b border-white/10 flex items-center justify-between gap-3 bg-zinc-950/80 sticky top-0 z-10"><div className="min-w-0"><p className="font-bold truncate">{player.name}</p><p className="text-xs text-zinc-500 truncate">{sessionName}</p></div><div className="flex items-center gap-2"><Badge className={wagerMode ? "bg-purple-500/15 text-purple-300 border border-purple-500/20" : "bg-amber-400/15 text-amber-200 border border-amber-400/20"}>{wagerMode ? "Wager" : `${pointsPerQuestion} pts`}</Badge><Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20">{Number(myScore)} pts</Badge></div></header>
       <main className="flex-1 flex items-center justify-center p-4">
-        {!gameStarted && <PlayerLobby sessionName={sessionName} connected={connected} roundCategories={roundCategories} branding={branding} />}
+        {!gameStarted && <PlayerLobby sessionName={sessionName} connected={connected} branding={branding} />}
         {hostUpdate && <HostUpdateBanner update={hostUpdate} onDismiss={() => setHostUpdate(null)} />}
         {gameStarted && hostState?.mode === "leaderboard" && <LeaderboardView leaderboard={leaderboard} playerId={player.id} />}
         {gameStarted && hostState?.mode === "categories" && <RoundIntroFeedback roundName={currentQuestion?.roundName || "Round"} categories={activeRoundCategories} selectedByCategory={feedbackByCategory} currentIndex={hostState.currentIndex} onSelect={submitCategoryFeedback} />}
@@ -224,7 +224,7 @@ const QuizCrafterBadge = () => (
   </div>
 );
 
-const JoinScreen = ({ name, setName, joinGame, sessionName, roundCategories, branding, updatePreference, setUpdatePreference, updateContact, setUpdateContact }) => (
+const JoinScreen = ({ name, setName, joinGame, sessionName, branding, updatePreference, setUpdatePreference, updateContact, setUpdateContact }) => (
   <div className="min-h-screen bg-[#09090B] text-white flex items-center justify-center p-4">
     <div className="w-full max-w-sm">
       <div className="text-center mb-6">
@@ -234,7 +234,6 @@ const JoinScreen = ({ name, setName, joinGame, sessionName, roundCategories, bra
         <h1 className="text-3xl font-black">Join Trivia</h1>
         <QuizCrafterBadge />
       </div>
-      <RoundCategoryCard roundCategories={roundCategories} compact />
       <Card className="glass-card mt-4"><CardContent className="p-5 space-y-4"><div><label className="text-zinc-400 text-sm block mb-1.5">Team Name</label><input value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && joinGame()} placeholder="Enter team name" maxLength={32} className="w-full h-12 rounded-lg bg-zinc-950 border border-white/10 px-3 text-white text-lg outline-none focus:border-[#71E0DC]/60" autoFocus /></div><div className="rounded-lg border border-white/10 bg-zinc-950/60 p-3 space-y-3"><div><p className="text-sm font-bold text-white">Would you like updates from the host?</p><p className="text-xs text-zinc-500">Clues, cancellations, schedule changes, and other trivia night updates.</p></div><div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => setUpdatePreference("none")} className={`h-10 rounded-md border text-sm font-bold ${updatePreference === "none" ? "border-[#71E0DC]/60 bg-[#71E0DC]/15 text-[#71E0DC]" : "border-white/10 bg-zinc-900 text-zinc-300"}`}>No thanks</button><button type="button" onClick={() => setUpdatePreference("email")} className={`h-10 rounded-md border text-sm font-bold ${updatePreference === "email" ? "border-[#71E0DC]/60 bg-[#71E0DC]/15 text-[#71E0DC]" : "border-white/10 bg-zinc-900 text-zinc-300"}`}>Email me</button></div>{updatePreference === "email" && <input value={updateContact} onChange={(event) => setUpdateContact(event.target.value)} onKeyDown={(event) => event.key === "Enter" && joinGame()} placeholder="Email address" inputMode="email" className="w-full h-11 rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" />}</div><Button onClick={joinGame} className="w-full h-12 gradient-btn text-base font-bold">Join Game</Button></CardContent></Card>
     </div>
   </div>
@@ -252,36 +251,15 @@ const HostUpdateBanner = ({ update, onDismiss }) => (
   </div>
 );
 
-const PlayerLobby = ({ sessionName, connected, roundCategories, branding }) => (
+const PlayerLobby = ({ sessionName, connected, branding }) => (
   <div className="w-full max-w-md text-center">
     <HostBrandMark branding={branding} />
     <p className="text-zinc-400 text-xs font-bold uppercase tracking-wide mb-1">{branding.name}</p>
     <p className="text-[#71E0DC] text-sm font-bold uppercase tracking-wide mb-2">{sessionName}</p>
     <h1 className="text-3xl font-black">You&apos;re In</h1>
     <p className="text-zinc-500 mt-1 mb-5">{connected ? "Waiting for the host to start." : "Connecting to the host screen."}</p>
-    <RoundCategoryCard roundCategories={roundCategories} />
     <QuizCrafterBadge />
   </div>
-);
-
-const RoundCategoryCard = ({ roundCategories, compact = false }) => (
-  <Card className="glass-card text-left">
-    <CardContent className={compact ? "p-4" : "p-5"}>
-      <div className="flex items-center gap-2 mb-3 text-white font-bold"><Tags size={18} className="text-[#71E0DC]" />Round Categories</div>
-      <div className="space-y-3">
-        {roundCategories.map((round) => (
-          <div key={round.key}>
-            <p className="text-sm font-bold text-zinc-200 mb-2">{round.name}</p>
-            <div className="flex flex-wrap gap-2">
-              {round.categories.map((category) => <Badge key={`${round.key}-${category}`} className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20">{category}</Badge>)}
-              {!round.categories.length && <span className="text-xs text-zinc-500">Categories coming soon.</span>}
-            </div>
-          </div>
-        ))}
-        {!roundCategories.length && <p className="text-sm text-zinc-500">Categories will appear when the host opens the session.</p>}
-      </div>
-    </CardContent>
-  </Card>
 );
 
 const RoundIntroFeedback = ({ roundName, categories, selectedByCategory, currentIndex, onSelect }) => (
