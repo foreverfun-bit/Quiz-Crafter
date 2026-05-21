@@ -1,0 +1,61 @@
+name: Patch Build Session Reorder Controls
+
+on:
+  push:
+    paths:
+      - .github/workflows/patch-build-session-reorder.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Add reorder and move controls
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = 'frontend/src/pages/BuildSession.jsx';
+          let content = fs.readFileSync(path, 'utf8');
+          const before = content;
+
+          content = content.replace(
+            'import { Ban, Check, CheckCircle, ChevronDown, Image, Layers, Link, List, Loader2, MessageSquare, Pencil, Plus, RefreshCw, Save, Search, Sparkles, Tag, Trash2, Upload, X } from "lucide-react";',
+            'import { ArrowDown, ArrowUp, Ban, Check, CheckCircle, ChevronDown, Image, Layers, Link, List, Loader2, MessageSquare, Pencil, Plus, RefreshCw, Save, Search, Sparkles, Tag, Trash2, Upload, X } from "lucide-react";'
+          );
+
+          content = content.replace(
+            'const removeFromRound = (roundId, questionId) => setRounds((prev) => prev.map((round) => round.id === roundId ? { ...round, questionIds: (round.questionIds || []).filter((id) => String(id) !== String(questionId)) } : round));\n  const updateQuestion =',
+            'const removeFromRound = (roundId, questionId) => setRounds((prev) => prev.map((round) => round.id === roundId ? { ...round, questionIds: (round.questionIds || []).filter((id) => String(id) !== String(questionId)) } : round));\n  const moveQuestionWithinRound = (roundId, questionId, direction) => setRounds((prev) => prev.map((round) => { if (round.id !== roundId) return round; const ids = [...(round.questionIds || [])]; const index = ids.findIndex((id) => String(id) === String(questionId)); const nextIndex = index + direction; if (index < 0 || nextIndex < 0 || nextIndex >= ids.length) return round; [ids[index], ids[nextIndex]] = [ids[nextIndex], ids[index]]; return { ...round, questionIds: ids }; }));\n  const moveQuestionToRound = (questionId, targetRoundId) => { if (!targetRoundId || targetRoundId === activeRound.id) return; setRounds((prev) => prev.map((round) => { const ids = (round.questionIds || []).filter((id) => String(id) !== String(questionId)); if (round.id === targetRoundId) ids.push(questionId); return { ...round, questionIds: ids }; })); };\n  const updateQuestion ='
+          );
+
+          content = content.replace(
+            '<SelectedRoundList questions={activeRoundQuestions} mediaQuestionId={mediaQuestionId} actionQuestionId={actionQuestionId} onOpenMedia={setMediaQuestionId} onCloseMedia={() => setMediaQuestionId(null)} onRemove={(questionId) => removeFromRound(activeRound.id, questionId)} onUpdate={updateQuestion} onRefresh={handleRefreshGenerated} onRejectQuestion={handleRejectQuestion} onRejectCategory={handleRejectCategory} />',
+            '<SelectedRoundList questions={activeRoundQuestions} rounds={rounds} activeRoundId={activeRound.id} mediaQuestionId={mediaQuestionId} actionQuestionId={actionQuestionId} onOpenMedia={setMediaQuestionId} onCloseMedia={() => setMediaQuestionId(null)} onMoveWithinRound={moveQuestionWithinRound} onMoveToRound={moveQuestionToRound} onRemove={(questionId) => removeFromRound(activeRound.id, questionId)} onUpdate={updateQuestion} onRefresh={handleRefreshGenerated} onRejectQuestion={handleRejectQuestion} onRejectCategory={handleRejectCategory} />'
+          );
+
+          content = content.replace(
+            'const SelectedRoundList = ({ questions, mediaQuestionId, actionQuestionId, onOpenMedia, onRemove, onRefresh, onRejectQuestion, onRejectCategory }) => { if (!questions.length) return <div className="min-h-[260px] flex items-center justify-center text-center"><div><p className="text-2xl font-bold text-white mb-1">No Questions</p><p className="text-zinc-500">Create, browse, or generate questions for this round.</p></div></div>; return <div className="space-y-2">{questions.map((question, index) => { const busy = String(actionQuestionId) === String(question.id); return <div key={question.id} className="rounded-md bg-zinc-950/40 border border-white/10 p-3"><div className="flex items-start gap-3"><span className="text-zinc-500 text-sm font-mono mt-0.5 w-6 text-right">{index + 1}</span><div className="flex-1 min-w-0"><QuestionMeta question={question} /><p className="text-white text-sm mt-1 leading-relaxed">{question.question_text}</p><p className="text-zinc-500 text-xs mt-1">Answer: <span className="text-emerald-400">{question.correct_answer}</span></p>{question.image_prompt && <p className="text-amber-200 text-xs mt-1">Image idea: {question.image_prompt}</p>}{question.image_url && <p className="text-amber-300 text-xs mt-1">Media attached: {normalizeImageTiming(question.image_timing) === "after_answer" ? "after answer" : "before answer"}</p>}</div><div className="flex gap-1 flex-wrap justify-end"><RowIcon label="Add media" icon={Image} onClick={() => onOpenMedia(question.id)} active={String(mediaQuestionId) === String(question.id) || Boolean(question.image_url)} />{question.isGenerated && <RowIcon label="Refresh question" icon={busy ? Loader2 : RefreshCw} onClick={() => onRefresh(question)} disabled={busy} spin={busy} />}{question.isGenerated && <RowIcon label="Reject question" icon={Ban} onClick={() => onRejectQuestion(question)} tone="danger" />}{question.isGenerated && <RowIcon label="Reject category" icon={Tag} onClick={() => onRejectCategory(question)} tone="warning" />}<RowIcon label="Remove" icon={X} onClick={() => onRemove(question.id)} /></div></div></div>; })}</div>; };',
+            'const SelectedRoundList = ({ questions, rounds, activeRoundId, mediaQuestionId, actionQuestionId, onOpenMedia, onMoveWithinRound, onMoveToRound, onRemove, onRefresh, onRejectQuestion, onRejectCategory }) => { if (!questions.length) return <div className="min-h-[260px] flex items-center justify-center text-center"><div><p className="text-2xl font-bold text-white mb-1">No Questions</p><p className="text-zinc-500">Create, browse, or generate questions for this round.</p></div></div>; return <div className="space-y-2">{questions.map((question, index) => { const busy = String(actionQuestionId) === String(question.id); const otherRounds = rounds.filter((round) => round.id !== activeRoundId); return <div key={question.id} className="rounded-md bg-zinc-950/40 border border-white/10 p-3"><div className="flex items-start gap-3"><span className="text-zinc-500 text-sm font-mono mt-0.5 w-6 text-right">{index + 1}</span><div className="flex-1 min-w-0"><QuestionMeta question={question} /><p className="text-white text-sm mt-1 leading-relaxed">{question.question_text}</p><p className="text-zinc-500 text-xs mt-1">Answer: <span className="text-emerald-400">{question.correct_answer}</span></p>{question.image_prompt && <p className="text-amber-200 text-xs mt-1">Image idea: {question.image_prompt}</p>}{question.image_url && <p className="text-amber-300 text-xs mt-1">Media attached: {normalizeImageTiming(question.image_timing) === "after_answer" ? "after answer" : "before answer"}</p>}</div><div className="flex gap-1 flex-wrap justify-end items-start"><RowIcon label="Move up" icon={ArrowUp} onClick={() => onMoveWithinRound(activeRoundId, question.id, -1)} disabled={index === 0} /><RowIcon label="Move down" icon={ArrowDown} onClick={() => onMoveWithinRound(activeRoundId, question.id, 1)} disabled={index === questions.length - 1} />{otherRounds.length > 0 && <select aria-label="Move question to round" value="" onChange={(e) => { onMoveToRound(question.id, e.target.value); e.target.value = ""; }} className="h-8 rounded-md bg-zinc-950/70 border border-white/10 text-zinc-300 px-2 text-xs"><option value="">Move to...</option>{otherRounds.map((round) => <option key={round.id} value={round.id}>{round.name}</option>)}</select>}<RowIcon label="Add media" icon={Image} onClick={() => onOpenMedia(question.id)} active={String(mediaQuestionId) === String(question.id) || Boolean(question.image_url)} />{question.isGenerated && <RowIcon label="Refresh question" icon={busy ? Loader2 : RefreshCw} onClick={() => onRefresh(question)} disabled={busy} spin={busy} />}{question.isGenerated && <RowIcon label="Reject question" icon={Ban} onClick={() => onRejectQuestion(question)} tone="danger" />}{question.isGenerated && <RowIcon label="Reject category" icon={Tag} onClick={() => onRejectCategory(question)} tone="warning" />}<RowIcon label="Remove" icon={X} onClick={() => onRemove(question.id)} /></div></div></div>; })}</div>; };'
+          );
+
+          if (content === before) {
+            console.error('BuildSession reorder patch found no matching text.');
+            process.exit(1);
+          }
+          fs.writeFileSync(path, content);
+          NODE
+      - name: Commit patch
+        run: |
+          if git diff --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/src/pages/BuildSession.jsx
+          git commit -m "Add build session question reorder controls"
+          git push
