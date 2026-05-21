@@ -1,0 +1,42 @@
+name: Patch Build Session Library Visibility
+
+on:
+  push:
+    paths:
+      - .github/workflows/patch-build-session-library.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Close library until button press
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = 'frontend/src/pages/BuildSession.jsx';
+          let content = fs.readFileSync(path, 'utf8');
+          const before = content;
+          content = content.replace('const [showLibrary, setShowLibrary] = useState(true);', 'const [showLibrary, setShowLibrary] = useState(false);');
+          content = content.replace('setShowWriteForm(false); setShowLibrary(true); toast.success("Session cleared");', 'setShowWriteForm(false); setShowLibrary(false); toast.success("Session cleared");');
+          if (content === before) {
+            console.log('No BuildSession library visibility changes needed.');
+            process.exit(0);
+          }
+          fs.writeFileSync(path, content);
+          NODE
+      - name: Commit patch
+        run: |
+          if git diff --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/src/pages/BuildSession.jsx
+          git commit -m "Close build session library by default"
+          git push
