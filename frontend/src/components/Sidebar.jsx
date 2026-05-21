@@ -10,7 +10,7 @@ import {
   X,
   History,
   Trophy,
-  Megaphone,
+  MessageSquare,
   PencilLine,
   Trash2,
 } from "lucide-react";
@@ -32,7 +32,7 @@ const Sidebar = ({ isOpen, onClose }) => {
     { path: "/build", icon: PlusCircle, label: "Build Session" },
     { path: "/past-sessions", icon: History, label: "Past Sessions" },
     { path: "/game-history", icon: Trophy, label: "Game History" },
-    { path: "/host-tools", icon: Megaphone, label: "Host Tools" },
+    { path: "/host-tools", icon: MessageSquare, label: "Host Tools" },
     { path: "/import", icon: Upload, label: "Import CSV" },
     { path: "/reset-data", icon: Trash2, label: "Reset Data", danger: true },
   ];
