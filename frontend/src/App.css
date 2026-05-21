@@ -151,6 +151,16 @@
   background: rgba(113, 224, 220, 0.1);
 }
 
+#build-session-library {
+  display: none;
+}
+
+body:has(button[aria-label="Library"]:focus) #build-session-library,
+body:has(#build-session-library:focus-within) #build-session-library,
+body:has(#build-session-library:hover) #build-session-library {
+  display: block;
+}
+
 /* Loading spinner */
 .spinner {
   width: 40px;
