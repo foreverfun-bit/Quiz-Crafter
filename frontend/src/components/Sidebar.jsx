@@ -47,13 +47,12 @@ const Sidebar = ({ isOpen, onClose }) => {
       <aside className={`sidebar ${isOpen ? "open" : ""}`}>
         <div className="h-full flex flex-col">
           <div className="p-6 flex items-center justify-between">
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 min-w-0">
               <img
-                src="https://customer-assets.emergentagent.com/job_trivia-forge-2/artifacts/pdn53z7h_4ever-full-gradient.svg"
-                alt="4EVER Trivia"
-                className="w-10 h-10"
+                src="/quiz-crafter-logo.svg"
+                alt="Quiz Crafter"
+                className="h-12 w-40 object-contain object-left"
               />
-              <span className="text-xl font-bold gradient-text">Quiz Crafter</span>
             </div>
             <button
               onClick={onClose}
