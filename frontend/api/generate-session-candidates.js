@@ -112,7 +112,7 @@ export default async function handler(req, res) {
       includeImagePrompt,
     });
     const parsed = await requestCandidates(prompt);
-    const validation = normalizeCandidates({
+    const validationInput = {
       candidates: parsed.candidates,
       config,
       questionType: normalizedQuestionType,
@@ -127,7 +127,16 @@ export default async function handler(req, res) {
       rejectedAnswerFingerprints,
       avoidDuplicates,
       includeImagePrompt,
-    });
+    };
+    let validation = normalizeCandidates(validationInput);
+
+    if (!validation.candidates.length && Array.isArray(parsed.candidates) && parsed.candidates.length) {
+      validation = normalizeCandidates({
+        ...validationInput,
+        cleanApprovedCategories: [],
+        avoidDuplicates: false,
+      });
+    }
 
     return res.status(200).json({ candidates: validation.candidates.slice(0, safeCount), rejected: validation.rejected, requested: safeCount });
   } catch (error) {
@@ -161,7 +170,11 @@ function dedupeStrings(values) {
 }
 
 function containsCategory(categories, category) {
-  return categories.some((item) => item.toLowerCase() === String(category || "").toLowerCase());
+  return categories.some((item) => categoryKey(item) === categoryKey(category));
+}
+
+function categoryKey(value) {
+  return cleanText(value).toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt }) {
@@ -170,7 +183,7 @@ function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, clea
   const approvedCategoryText = cleanLockedCategories.length
     ? lockedCategoryText
     : cleanApprovedCategories.length
-      ? `Use only these pre-approved categories. The category field must exactly match one of these names: ${cleanApprovedCategories.join(", ")}.`
+      ? `Use these pre-approved categories first. The category field should exactly match one of these names unless the user typed a specific category in the current request: ${cleanApprovedCategories.join(", ")}.`
       : `Use varied broad categories such as: ${BROAD_CATEGORIES.join(", ")}.`;
   const excludedCategoryText = cleanExcludeCategories.length ? `Do not use these rejected or avoided categories: ${cleanExcludeCategories.join(", ")}.` : "";
   const themeText = cleanTheme ? `Theme/vibe/category guidance: ${cleanTheme}. Stay useful to that direction, but avoid repetitive question angles.` : "";
@@ -247,10 +260,10 @@ ${duplicateText}
 }
 
 function buildStyleExamples(existingQuestions, questionType, approvedCategories) {
-  const approvedSet = new Set(approvedCategories.map((category) => category.toLowerCase()));
+  const approvedSet = new Set(approvedCategories.map(categoryKey));
   const libraryQuestions = existingQuestions.filter((q) => q.source === "library");
   const matchingType = libraryQuestions.filter((q) => q.question_type === questionType);
-  const matchingApproved = matchingType.filter((q) => !approvedSet.size || approvedSet.has(q.category.toLowerCase()));
+  const matchingApproved = matchingType.filter((q) => !approvedSet.size || approvedSet.has(categoryKey(q.category)));
   const candidates = matchingApproved.length >= 8 ? matchingApproved : matchingType.length >= 8 ? matchingType : libraryQuestions;
   return sampleStable(candidates.filter((q) => q.question_text && q.correct_answer), 24);
 }
@@ -327,9 +340,9 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
   const batchFingerprints = new Set();
   const batchAnswerPairs = new Set();
   const batchAnswers = new Set();
-  const excludedCategories = new Set(cleanExcludeCategories.map((category) => category.toLowerCase()));
-  const approvedCategorySet = new Set(cleanApprovedCategories.map((category) => category.toLowerCase()));
-  const lockedCategorySet = new Set(cleanLockedCategories.map((category) => category.toLowerCase()));
+  const excludedCategories = new Set(cleanExcludeCategories.map(categoryKey));
+  const approvedCategorySet = new Set(cleanApprovedCategories.map(categoryKey));
+  const lockedCategorySet = new Set(cleanLockedCategories.map(categoryKey));
 
   if (!Array.isArray(candidates)) throw new Error("No candidates returned");
 
@@ -344,21 +357,21 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
     const itemFingerprint = fingerprint(item.question_text);
     const itemAnswerPair = answerPairFingerprint(item.question_text, item.correct_answer);
     const itemAnswer = answerFingerprint(item.correct_answer);
-    const categoryKey = item.category.toLowerCase();
+    const itemCategoryKey = categoryKey(item.category);
 
     if (isGenericQuestion(item.question_text)) {
       rejected.push({ index, question: item.question_text, reason: "generic_overused_trivia_pattern" });
       return;
     }
-    if (lockedCategorySet.size > 0 && !lockedCategorySet.has(categoryKey)) {
+    if (lockedCategorySet.size > 0 && !lockedCategorySet.has(itemCategoryKey)) {
       rejected.push({ index, question: item.question_text, reason: "not_locked_category" });
       return;
     }
-    if (approvedCategorySet.size > 0 && !approvedCategorySet.has(categoryKey)) {
+    if (approvedCategorySet.size > 0 && !approvedCategorySet.has(itemCategoryKey)) {
       rejected.push({ index, question: item.question_text, reason: "not_approved_category" });
       return;
     }
-    if (excludedCategories.has(categoryKey)) {
+    if (excludedCategories.has(itemCategoryKey)) {
       rejected.push({ index, question: item.question_text, reason: "excluded_category" });
       return;
     }
@@ -399,21 +412,24 @@ function normalizeCandidate(candidate, config, questionType, difficultyKey, incl
 
   const category = cleanText(candidate.category);
   const questionText = cleanText(candidate.question_text);
-  const correctAnswer = cleanText(candidate.correct_answer);
+  let correctAnswer = cleanText(candidate.correct_answer);
   const funFact = cleanText(candidate.fun_fact);
   const imagePrompt = includeImagePrompt ? cleanText(candidate.image_prompt) : "";
   const incorrectAnswers = Array.isArray(candidate.incorrect_answers) ? candidate.incorrect_answers.map(cleanText).filter(Boolean) : [];
 
   if (!category || !questionText || !correctAnswer) return { ok: false, reason: "missing_required_text" };
-  if (config.incorrectCount === 0 && incorrectAnswers.length !== 0) return { ok: false, reason: "unexpected_incorrect_answers" };
+
+  if (questionType === "true_false") {
+    const normalizedAnswer = correctAnswer.toLowerCase();
+    if (normalizedAnswer !== "true" && normalizedAnswer !== "false") return { ok: false, reason: "invalid_true_false_answer" };
+    correctAnswer = normalizedAnswer === "true" ? "True" : "False";
+  }
 
   if (config.incorrectCount > 0) {
     const uniqueIncorrect = [...new Set(incorrectAnswers.map((answer) => answer.trim()))];
     const duplicatesCorrect = uniqueIncorrect.some((answer) => answer.toLowerCase() === correctAnswer.toLowerCase());
     if (uniqueIncorrect.length !== config.incorrectCount || duplicatesCorrect) return { ok: false, reason: "invalid_multiple_choice_answers" };
   }
-
-  if (questionType === "true_false" && !["True", "False"].includes(correctAnswer)) return { ok: false, reason: "invalid_true_false_answer" };
 
   return {
     ok: true,
