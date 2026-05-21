@@ -43,7 +43,7 @@ const buildStorageUrl = (path) => {
 };
 
 const emptyQuestionForType = (type, roundName = "Imported Session", order = 1) => ({
-  category: "Imported",
+  category: "",
   round_name: roundName,
   round_order: 1,
   source_order: order,
@@ -307,7 +307,7 @@ const SessionDetail = () => {
     try {
       const cleaned = {
         true_false_questions: editableQuestions.true_false_questions.map((q, index) => ({
-          category: q.category || "Imported",
+          category: q.category || "",
           round_name: getRoundName(q, 1),
           round_order: getRoundOrder(q, 1),
           source_order: getSourceOrder(q, index + 1),
@@ -320,7 +320,7 @@ const SessionDetail = () => {
           image_url: q.image_url || "",
         })),
         multiple_choice_questions: editableQuestions.multiple_choice_questions.map((q, index) => ({
-          category: q.category || "Imported",
+          category: q.category || "",
           round_name: getRoundName(q, 1),
           round_order: getRoundOrder(q, 1),
           source_order: getSourceOrder(q, index + 1),
@@ -333,7 +333,7 @@ const SessionDetail = () => {
           image_url: q.image_url || "",
         })),
         written_questions: editableQuestions.written_questions.map((q, index) => ({
-          category: q.category || "Imported",
+          category: q.category || "",
           round_name: getRoundName(q, 1),
           round_order: getRoundOrder(q, 1),
           source_order: getSourceOrder(q, index + 1),
@@ -346,7 +346,7 @@ const SessionDetail = () => {
           image_url: q.image_url || "",
         })),
         picture_questions: editableQuestions.picture_questions.map((q, index) => ({
-          category: q.category || "Imported",
+          category: q.category || "",
           round_name: getRoundName(q, 1),
           round_order: getRoundOrder(q, 1),
           source_order: getSourceOrder(q, index + 1),
@@ -574,6 +574,13 @@ const SessionDetail = () => {
   );
 };
 
+const EditField = ({ label, children }) => (
+  <label className="block">
+    <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">{label}</span>
+    {children}
+  </label>
+);
+
 const SessionQuestionCard = ({ entry, index, canEdit, onUpdate, onMove, onRemove }) => {
   const { question, storageType, importedIndex } = entry;
   const type = normalizeType(question);
@@ -583,14 +590,20 @@ const SessionQuestionCard = ({ entry, index, canEdit, onUpdate, onMove, onRemove
     <Card className="bg-zinc-900/50 border-white/10" data-testid={`session-question-${entry.roundOrder}-${index}`}>
       <CardContent className="p-4">
         <div className="flex items-start justify-between gap-4 mb-3">
-          <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-end gap-2 flex-wrap">
             {canEdit ? (
               <>
-                <Input value={question.category || ""} onChange={(e) => onUpdate(storageType, importedIndex, "category", e.target.value)} placeholder="Category" className="w-40 bg-zinc-950/50 border-white/10 text-white" />
-                <select value={type} onChange={(e) => onMove(storageType, importedIndex, e.target.value)} className="h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3">
-                  {questionTypes.map((qt) => <option key={qt.value} value={qt.value}>{qt.label}</option>)}
-                </select>
-                <Input value={question.round_name || entry.roundName || ""} onChange={(e) => onUpdate(storageType, importedIndex, "round_name", e.target.value)} placeholder="Round name" className="w-44 bg-zinc-950/50 border-white/10 text-white" />
+                <EditField label="Round">
+                  <Input value={question.round_name || entry.roundName || ""} onChange={(e) => onUpdate(storageType, importedIndex, "round_name", e.target.value)} placeholder="Round name" className="w-44 bg-zinc-950/50 border-white/10 text-white" />
+                </EditField>
+                <EditField label="Question Type">
+                  <select value={type} onChange={(e) => onMove(storageType, importedIndex, e.target.value)} className="h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3">
+                    {questionTypes.map((qt) => <option key={qt.value} value={qt.value}>{qt.label}</option>)}
+                  </select>
+                </EditField>
+                <EditField label="Category">
+                  <Input value={question.category || ""} onChange={(e) => onUpdate(storageType, importedIndex, "category", e.target.value)} placeholder="Add category later" className="w-44 bg-zinc-950/50 border-white/10 text-white" />
+                </EditField>
               </>
             ) : (
               <>
@@ -612,21 +625,35 @@ const SessionQuestionCard = ({ entry, index, canEdit, onUpdate, onMove, onRemove
 
         {canEdit ? (
           <div className="space-y-3">
-            <textarea value={question.question_text || ""} onChange={(e) => onUpdate(storageType, importedIndex, "question_text", e.target.value)} placeholder="Question text" className="w-full min-h-[90px] rounded-md bg-zinc-950/50 border border-white/10 text-white p-3" />
+            <EditField label="Question">
+              <textarea value={question.question_text || ""} onChange={(e) => onUpdate(storageType, importedIndex, "question_text", e.target.value)} placeholder="Question text" className="w-full min-h-[90px] rounded-md bg-zinc-950/50 border border-white/10 text-white p-3" />
+            </EditField>
             {type === "true_false" ? (
-              <select value={question.correct_answer || "True"} onChange={(e) => onUpdate(storageType, importedIndex, "correct_answer", e.target.value)} className="h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3">
-                <option value="True">True</option>
-                <option value="False">False</option>
-              </select>
+              <EditField label="Correct Answer">
+                <select value={question.correct_answer || "True"} onChange={(e) => onUpdate(storageType, importedIndex, "correct_answer", e.target.value)} className="h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3">
+                  <option value="True">True</option>
+                  <option value="False">False</option>
+                </select>
+              </EditField>
             ) : (
-              <Input value={question.correct_answer || ""} onChange={(e) => onUpdate(storageType, importedIndex, "correct_answer", e.target.value)} placeholder="Correct answer" className="bg-zinc-950/50 border-white/10 text-white" />
+              <EditField label="Correct Answer">
+                <Input value={question.correct_answer || ""} onChange={(e) => onUpdate(storageType, importedIndex, "correct_answer", e.target.value)} placeholder="Correct answer" className="bg-zinc-950/50 border-white/10 text-white" />
+              </EditField>
             )}
-            <Input value={question.image_url || ""} onChange={(e) => onUpdate(storageType, importedIndex, "image_url", e.target.value)} placeholder="Question image/media URL" className="bg-zinc-950/50 border-white/10 text-white" />
-            <Input value={question.correct_answer_image || ""} onChange={(e) => onUpdate(storageType, importedIndex, "correct_answer_image", e.target.value)} placeholder="Correct answer image URL" className="bg-zinc-950/50 border-white/10 text-white" />
+            <EditField label="Question Image / Media URL">
+              <Input value={question.image_url || ""} onChange={(e) => onUpdate(storageType, importedIndex, "image_url", e.target.value)} placeholder="Optional image/media URL" className="bg-zinc-950/50 border-white/10 text-white" />
+            </EditField>
+            <EditField label="Correct Answer Image URL">
+              <Input value={question.correct_answer_image || ""} onChange={(e) => onUpdate(storageType, importedIndex, "correct_answer_image", e.target.value)} placeholder="Optional correct answer image URL" className="bg-zinc-950/50 border-white/10 text-white" />
+            </EditField>
             {(type === "multiple_choice" || type === "picture") && (
-              <textarea value={question.incorrect_answers || ""} onChange={(e) => onUpdate(storageType, importedIndex, "incorrect_answers", e.target.value)} placeholder='Incorrect answers JSON or semicolon list' className="w-full min-h-[90px] rounded-md bg-zinc-950/50 border border-white/10 text-white p-3" />
+              <EditField label="Incorrect Answers">
+                <textarea value={question.incorrect_answers || ""} onChange={(e) => onUpdate(storageType, importedIndex, "incorrect_answers", e.target.value)} placeholder="Incorrect answers JSON or semicolon list" className="w-full min-h-[90px] rounded-md bg-zinc-950/50 border border-white/10 text-white p-3" />
+              </EditField>
             )}
-            <textarea value={question.fun_fact || ""} onChange={(e) => onUpdate(storageType, importedIndex, "fun_fact", e.target.value)} placeholder="Fun fact" className="w-full min-h-[70px] rounded-md bg-zinc-950/50 border border-white/10 text-white p-3" />
+            <EditField label="Fun Fact">
+              <textarea value={question.fun_fact || ""} onChange={(e) => onUpdate(storageType, importedIndex, "fun_fact", e.target.value)} placeholder="Fun fact" className="w-full min-h-[70px] rounded-md bg-zinc-950/50 border border-white/10 text-white p-3" />
+            </EditField>
           </div>
         ) : (
           <>
