@@ -4,11 +4,12 @@ import { supabase } from "../lib/supabase";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent } from "../components/ui/card";
-import { CheckCircle, Loader2, Send, Tags, Timer, Trophy } from "lucide-react";
+import { CheckCircle, Send, Tags, Timer, Trophy } from "lucide-react";
 import { toast } from "sonner";
 
 const makePlayerId = () => `player-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-const BRAND_LOGO_SRC = process.env.REACT_APP_BRAND_LOGO_URL || "/forever-fun-logo.png";
+const DEFAULT_HOST_LOGO_SRC = process.env.REACT_APP_BRAND_LOGO_URL || "/forever-fun-logo.png";
+const QUIZ_CRAFTER_LOGO_SRC = "/quiz-crafter-logo.svg";
 
 const arrayConfig = [
   { key: "true_false_questions", type: "true_false" },
@@ -28,6 +29,11 @@ const getRoundName = (question, fallbackOrder = 1) => {
   if (question?.round && Number.isNaN(Number(question.round))) return question.round;
   return `Round ${getRoundOrder(question, fallbackOrder)}`;
 };
+
+const getSessionBranding = (session) => ({
+  name: session?.host_brand_name || session?.brand_name || session?.company_name || session?.venue_name || "Forever Fun Events",
+  logoUrl: session?.host_logo_url || session?.brand_logo_url || session?.logo_url || DEFAULT_HOST_LOGO_SRC,
+});
 
 const buildRoundCategories = (session) => {
   const groups = new Map();
@@ -109,6 +115,7 @@ const PlayerSession = () => {
   const currentQuestion = hostState?.currentQuestion || null;
   const leaderboard = useMemo(() => [...(hostState?.leaderboard || [])].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)), [hostState]);
   const roundCategories = useMemo(() => buildRoundCategories(session), [session]);
+  const branding = useMemo(() => getSessionBranding(session), [session]);
   const myScore = leaderboard.find((team) => team.id === player?.id)?.score || 0;
   const sessionName = hostState?.sessionName || session?.name || session?.session_name || "Trivia Session";
   const timeRemaining = hostState?.timerEndAt ? Math.max(0, Math.ceil((new Date(hostState.timerEndAt).getTime() - now) / 1000)) : null;
@@ -144,14 +151,14 @@ const PlayerSession = () => {
   };
 
   if (!player) {
-    return <JoinScreen name={name} setName={setName} joinGame={joinGame} sessionName={sessionName} roundCategories={roundCategories} />;
+    return <JoinScreen name={name} setName={setName} joinGame={joinGame} sessionName={sessionName} roundCategories={roundCategories} branding={branding} />;
   }
 
   return (
     <div className="min-h-screen bg-[#09090B] text-white flex flex-col" data-testid="player-session-page">
       <header className="px-4 py-3 border-b border-white/10 flex items-center justify-between gap-3 bg-zinc-950/80 sticky top-0 z-10"><div className="min-w-0"><p className="font-bold truncate">{player.name}</p><p className="text-xs text-zinc-500 truncate">{sessionName}</p></div><div className="flex items-center gap-2"><Badge className={wagerMode ? "bg-purple-500/15 text-purple-300 border border-purple-500/20" : "bg-amber-400/15 text-amber-200 border border-amber-400/20"}>{wagerMode ? "Wager" : `${pointsPerQuestion} pts`}</Badge><Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20">{Number(myScore)} pts</Badge></div></header>
       <main className="flex-1 flex items-center justify-center p-4">
-        {!gameStarted && <PlayerLobby sessionName={sessionName} connected={connected} roundCategories={roundCategories} />}
+        {!gameStarted && <PlayerLobby sessionName={sessionName} connected={connected} roundCategories={roundCategories} branding={branding} />}
         {gameStarted && hostState?.mode === "leaderboard" && <LeaderboardView leaderboard={leaderboard} playerId={player.id} />}
         {gameStarted && hostState && hostState.mode !== "leaderboard" && !currentQuestion && <div className="text-center"><p className="text-zinc-400">Waiting for the next question.</p></div>}
         {gameStarted && hostState && hostState.mode !== "leaderboard" && currentQuestion && <div className="w-full max-w-md"><div className="text-center mb-5"><div className="flex items-center justify-center gap-2 flex-wrap mb-3"><Badge className="bg-zinc-800 text-zinc-300">{currentQuestion.roundName || "Round"} · {currentQuestion.category}</Badge>{wagerMode && <Badge className="bg-purple-500/15 text-purple-300 border border-purple-500/20">Bonus Wager</Badge>}{timeRemaining !== null && <Badge className={timeRemaining === 0 ? "bg-red-500/15 text-red-300 border border-red-500/20" : "bg-[#AEB2EF]/15 text-[#AEB2EF] border border-[#AEB2EF]/20"}><Timer size={13} className="mr-1" />{timeRemaining}s</Badge>}</div><h2 className="text-2xl font-black leading-tight">{currentQuestion.questionText}</h2></div>{hostState.showAnswer ? <Card className="border-emerald-500/30 bg-emerald-500/10"><CardContent className="p-5 text-center"><p className="text-zinc-400 text-sm uppercase tracking-wide mb-1">Answer</p><p className="text-3xl font-black text-emerald-300">{currentQuestion.answer}</p>{hostState.showFunFact && currentQuestion.funFact && <p className="text-zinc-300 mt-3">{currentQuestion.funFact}</p>}</CardContent></Card> : submitted?.questionIndex === hostState.currentIndex ? <Card className="glass-card"><CardContent className="p-6 text-center"><CheckCircle className="mx-auto text-emerald-300 mb-3" size={42} /><h3 className="text-2xl font-black mb-1">Answer Locked</h3><p className="text-zinc-400">You answered: <span className="text-white font-bold">{submitted.answer}</span></p>{submitted.wagerMode && <p className="text-purple-300 font-bold mt-2">Wager: {submitted.wagerAmount}</p>}</CardContent></Card> : !acceptingAnswers ? <Card className="border-red-500/30 bg-red-500/10"><CardContent className="p-6 text-center"><Timer className="mx-auto text-red-300 mb-3" size={42} /><h3 className="text-2xl font-black">Time&apos;s Up</h3><p className="text-zinc-400 mt-1">Waiting for the answer reveal.</p></CardContent></Card> : <AnswerForm question={currentQuestion} answer={answer} setAnswer={setAnswer} submitAnswer={submitAnswer} wagerMode={wagerMode} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} />}</div>}
@@ -160,27 +167,36 @@ const PlayerSession = () => {
   );
 };
 
-const BrandMark = () => {
+const HostBrandMark = ({ branding }) => {
   const [logoFailed, setLogoFailed] = useState(false);
 
-  if (!logoFailed) {
+  if (branding.logoUrl && !logoFailed) {
     return (
       <div className="mx-auto mb-4 flex justify-center">
-        <img src={BRAND_LOGO_SRC} alt="Forever Fun Events" onError={() => setLogoFailed(true)} className="h-28 w-28 rounded-full bg-white object-contain p-2" />
+        <img src={branding.logoUrl} alt={branding.name} onError={() => setLogoFailed(true)} className="h-28 w-28 rounded-full bg-white object-contain p-2" />
       </div>
     );
   }
 
-  return <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full border border-[#71E0DC]/30 bg-white text-zinc-950 shadow-lg shadow-[#71E0DC]/10"><div className="text-center leading-none"><div className="text-base font-black">Forever</div><div className="text-xl font-black">Fun</div></div></div>;
+  return <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full border border-[#71E0DC]/30 bg-white text-zinc-950 shadow-lg shadow-[#71E0DC]/10"><div className="text-center leading-none"><div className="text-base font-black">{branding.name.split(" ")[0] || "Trivia"}</div><div className="text-xl font-black">Host</div></div></div>;
 };
 
-const JoinScreen = ({ name, setName, joinGame, sessionName, roundCategories }) => (
+const QuizCrafterBadge = () => (
+  <div className="mt-4 flex items-center justify-center gap-2 text-[11px] uppercase tracking-wide text-zinc-500">
+    <span>Powered by</span>
+    <img src={QUIZ_CRAFTER_LOGO_SRC} alt="Quiz Crafter" className="h-5 w-24 object-contain" />
+  </div>
+);
+
+const JoinScreen = ({ name, setName, joinGame, sessionName, roundCategories, branding }) => (
   <div className="min-h-screen bg-[#09090B] text-white flex items-center justify-center p-4">
     <div className="w-full max-w-sm">
       <div className="text-center mb-6">
-        <BrandMark />
+        <HostBrandMark branding={branding} />
+        <p className="text-zinc-400 text-xs font-bold uppercase tracking-wide mb-1">{branding.name}</p>
         <p className="text-[#71E0DC] text-sm font-bold uppercase tracking-wide mb-2">{sessionName}</p>
         <h1 className="text-3xl font-black">Join Trivia</h1>
+        <QuizCrafterBadge />
       </div>
       <RoundCategoryCard roundCategories={roundCategories} compact />
       <Card className="glass-card mt-4"><CardContent className="p-5 space-y-4"><div><label className="text-zinc-400 text-sm block mb-1.5">Team Name</label><input value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && joinGame()} placeholder="Enter team name" maxLength={32} className="w-full h-12 rounded-lg bg-zinc-950 border border-white/10 px-3 text-white text-lg outline-none focus:border-[#71E0DC]/60" autoFocus /></div><Button onClick={joinGame} className="w-full h-12 gradient-btn text-base font-bold">Join Game</Button></CardContent></Card>
@@ -188,13 +204,15 @@ const JoinScreen = ({ name, setName, joinGame, sessionName, roundCategories }) =
   </div>
 );
 
-const PlayerLobby = ({ sessionName, connected, roundCategories }) => (
+const PlayerLobby = ({ sessionName, connected, roundCategories, branding }) => (
   <div className="w-full max-w-md text-center">
-    <BrandMark />
+    <HostBrandMark branding={branding} />
+    <p className="text-zinc-400 text-xs font-bold uppercase tracking-wide mb-1">{branding.name}</p>
     <p className="text-[#71E0DC] text-sm font-bold uppercase tracking-wide mb-2">{sessionName}</p>
     <h1 className="text-3xl font-black">You&apos;re In</h1>
     <p className="text-zinc-500 mt-1 mb-5">{connected ? "Waiting for the host to start." : "Connecting to the host screen."}</p>
     <RoundCategoryCard roundCategories={roundCategories} />
+    <QuizCrafterBadge />
   </div>
 );
 
