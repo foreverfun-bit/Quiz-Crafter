@@ -3,7 +3,7 @@ import { supabase } from "../lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
-import { Bot, Copy, ExternalLink, Mail, MessageSquare, Send, Share2, Sparkles, ThumbsDown, ThumbsUp, Users } from "lucide-react";
+import { Copy, ExternalLink, Mail, MessageSquare, Send, Sparkles, ThumbsDown, ThumbsUp, Users } from "lucide-react";
 import { toast } from "sonner";
 
 const SOCIAL_STORAGE_KEY = "quiz-crafter-social-links";
@@ -196,7 +196,7 @@ const HostTools = () => {
           </Card>
 
           <Card className="glass-card">
-            <CardHeader><CardTitle className="text-white flex items-center gap-2"><Bot className="text-[#71E0DC]" /> AI Clue Assistant</CardTitle></CardHeader>
+            <CardHeader><CardTitle className="text-white flex items-center gap-2"><Sparkles className="text-[#71E0DC]" /> AI Clue Assistant</CardTitle></CardHeader>
             <CardContent className="space-y-4">
               <textarea value={aiDirection} onChange={(event) => setAiDirection(event.target.value)} className="min-h-20 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" />
               <Button onClick={generateClues} disabled={generating || !selectedSession} className="gradient-btn">{generating ? <Sparkles className="mr-2 animate-spin" size={16} /> : <Sparkles className="mr-2" size={16} />}Draft Punny Clues</Button>
@@ -205,7 +205,7 @@ const HostTools = () => {
           </Card>
 
           <Card className="glass-card">
-            <CardHeader><CardTitle className="text-white flex items-center gap-2"><Share2 className="text-[#71E0DC]" /> Social Media</CardTitle></CardHeader>
+            <CardHeader><CardTitle className="text-white flex items-center gap-2"><ExternalLink className="text-[#71E0DC]" /> Social Media</CardTitle></CardHeader>
             <CardContent className="space-y-4">
               <textarea value={socialPost} onChange={(event) => setSocialPost(event.target.value)} placeholder="Social post text..." className="min-h-28 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" />
               <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
@@ -256,7 +256,7 @@ const summarizeFeedback = (items, labelKey) => Object.values(items.reduce((group
 
 const FeedbackCard = ({ title, rows, empty }) => (
   <Card className="glass-card">
-    <CardHeader><CardTitle className="text-white flex items-center gap-2"><Sparkles className="text-[#71E0DC]" />{title}</CardTitle></CardHeader>
+    <CardHeader><CardTitle className="text-white flex items-center gap-2"><Sparkles className="text-[#71E0DC] />{title}</CardTitle></CardHeader>
     <CardContent className="space-y-2 max-h-[520px] overflow-y-auto">
       {rows.map((row) => <div key={row.label} className="rounded-lg border border-white/10 bg-zinc-950/60 p-3"><p className="text-sm font-semibold text-zinc-200 mb-2 line-clamp-2">{row.label}</p><div className="grid grid-cols-2 gap-2"><div className="rounded-md bg-emerald-500/10 border border-emerald-500/20 p-2 text-center"><ThumbsUp className="mx-auto text-emerald-300 mb-1" size={16} /><p className="text-xl font-black text-emerald-300">{row.likes}</p></div><div className="rounded-md bg-red-500/10 border border-red-500/20 p-2 text-center"><ThumbsDown className="mx-auto text-red-300 mb-1" size={16} /><p className="text-xl font-black text-red-300">{row.dislikes}</p></div></div></div>)}
       {!rows.length && <p className="text-sm text-zinc-500 text-center py-8">{empty}</p>}
