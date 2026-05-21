@@ -23,7 +23,6 @@ import {
   MonitorPlay,
   Play,
   Plus,
-  Phone,
   RotateCcw,
   Sparkles,
   Tags,
@@ -349,7 +348,6 @@ const PhonePlayPanel = ({ joinUrl, copyJoinLink, players, answers, adjustScore, 
 
 const HostUpdatesPanel = ({ players, message, setMessage, sendUpdate }) => {
   const emailPlayers = players.filter((player) => player.updatePreference === "email" && player.updateContact);
-  const textPlayers = players.filter((player) => player.updatePreference === "text" && player.updateContact);
   const copyContacts = async (items, label) => {
     if (!items.length) return toast.error(`No ${label} contacts yet`);
     try {
@@ -360,7 +358,7 @@ const HostUpdatesPanel = ({ players, message, setMessage, sendUpdate }) => {
     }
   };
 
-  return <Card className="glass-card"><CardContent className="p-3"><div className="flex items-center justify-between gap-2 mb-3"><div className="flex items-center gap-2 text-white font-semibold"><MessageSquare size={18} className="text-[#AEB2EF]" />Host Updates</div><Badge className="bg-zinc-800 text-zinc-300">{emailPlayers.length + textPlayers.length} opted in</Badge></div><textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Type a clue, cancellation, or update for players..." className="min-h-24 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" /><Button onClick={sendUpdate} disabled={!message.trim()} className="mt-2 w-full gradient-btn"><SendIconLabel />Send In-App Update</Button><div className="mt-3 grid grid-cols-2 gap-2"><Button size="sm" variant="outline" onClick={() => copyContacts(emailPlayers, "email")} className="border-white/10 text-zinc-300 hover:text-white"><Mail size={14} className="mr-1" />Emails ({emailPlayers.length})</Button><Button size="sm" variant="outline" onClick={() => copyContacts(textPlayers, "text")} className="border-white/10 text-zinc-300 hover:text-white"><Phone size={14} className="mr-1" />Texts ({textPlayers.length})</Button></div><p className="mt-2 text-[11px] text-zinc-500">In-app updates go to connected phones now. Email/text contacts are collected here for host follow-up.</p></CardContent></Card>;
+  return <Card className="glass-card"><CardContent className="p-3"><div className="flex items-center justify-between gap-2 mb-3"><div className="flex items-center gap-2 text-white font-semibold"><MessageSquare size={18} className="text-[#AEB2EF]" />Host Updates</div><Badge className="bg-zinc-800 text-zinc-300">{emailPlayers.length} opted in</Badge></div><textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Type a clue, cancellation, or update for players..." className="min-h-24 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" /><Button onClick={sendUpdate} disabled={!message.trim()} className="mt-2 w-full gradient-btn"><SendIconLabel />Send In-App Update</Button><div className="mt-3"><Button size="sm" variant="outline" onClick={() => copyContacts(emailPlayers, "email")} className="w-full border-white/10 text-zinc-300 hover:text-white"><Mail size={14} className="mr-1" />Copy emails ({emailPlayers.length})</Button></div><p className="mt-2 text-[11px] text-zinc-500">In-app updates go to connected phones now. Email contacts are collected here for host follow-up.</p></CardContent></Card>;
 };
 
 const SendIconLabel = () => <><MessageSquare size={15} className="mr-2" /></>;
