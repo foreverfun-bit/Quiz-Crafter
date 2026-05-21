@@ -72,6 +72,7 @@ const PlayerSession = () => {
   const [updatePreference, setUpdatePreference] = useState("none");
   const [updateContact, setUpdateContact] = useState("");
   const [hostUpdate, setHostUpdate] = useState(null);
+  const [feedbackByQuestion, setFeedbackByQuestion] = useState({});
   const [submitted, setSubmitted] = useState(null);
   const [connected, setConnected] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -146,6 +147,14 @@ const PlayerSession = () => {
     setPlayer(nextPlayer);
   };
 
+  const submitFeedback = (sentiment) => {
+    if (!player || !currentQuestion || !hostState) return;
+    const key = String(hostState.currentIndex);
+    setFeedbackByQuestion((current) => ({ ...current, [key]: sentiment }));
+    channelRef.current?.send({ type: "broadcast", event: "feedback_submit", payload: { playerId: player.id, playerName: player.name, sentiment, questionIndex: hostState.currentIndex, questionId: currentQuestion.id, questionText: currentQuestion.questionText, category: currentQuestion.category || "Uncategorized", roundName: currentQuestion.roundName || "Round", submittedAt: new Date().toISOString() } });
+    toast.success(sentiment === "like" ? "Marked as liked" : "Marked as disliked");
+  };
+
   const submitAnswer = (value) => {
     if (!acceptingAnswers) return toast.error("Time is up");
     const finalAnswer = String(value || answer).trim();
@@ -172,7 +181,7 @@ const PlayerSession = () => {
         {hostUpdate && <HostUpdateBanner update={hostUpdate} onDismiss={() => setHostUpdate(null)} />}
         {gameStarted && hostState?.mode === "leaderboard" && <LeaderboardView leaderboard={leaderboard} playerId={player.id} />}
         {gameStarted && hostState && hostState.mode !== "leaderboard" && !currentQuestion && <div className="text-center"><p className="text-zinc-400">Waiting for the next question.</p></div>}
-        {gameStarted && hostState && hostState.mode !== "leaderboard" && currentQuestion && <div className="w-full max-w-md"><div className="text-center mb-5"><div className="flex items-center justify-center gap-2 flex-wrap mb-3"><Badge className="bg-zinc-800 text-zinc-300">{currentQuestion.roundName || "Round"} · {currentQuestion.category}</Badge>{wagerMode && <Badge className="bg-purple-500/15 text-purple-300 border border-purple-500/20">Bonus Wager</Badge>}{timeRemaining !== null && <Badge className={timeRemaining === 0 ? "bg-red-500/15 text-red-300 border border-red-500/20" : "bg-[#AEB2EF]/15 text-[#AEB2EF] border border-[#AEB2EF]/20"}><Timer size={13} className="mr-1" />{timeRemaining}s</Badge>}</div><h2 className="text-2xl font-black leading-tight">{currentQuestion.questionText}</h2></div>{hostState.showAnswer ? <Card className="border-emerald-500/30 bg-emerald-500/10"><CardContent className="p-5 text-center"><p className="text-zinc-400 text-sm uppercase tracking-wide mb-1">Answer</p><p className="text-3xl font-black text-emerald-300">{currentQuestion.answer}</p>{hostState.showFunFact && currentQuestion.funFact && <p className="text-zinc-300 mt-3">{currentQuestion.funFact}</p>}</CardContent></Card> : submitted?.questionIndex === hostState.currentIndex ? <Card className="glass-card"><CardContent className="p-6 text-center"><CheckCircle className="mx-auto text-emerald-300 mb-3" size={42} /><h3 className="text-2xl font-black mb-1">Answer Locked</h3><p className="text-zinc-400">You answered: <span className="text-white font-bold">{submitted.answer}</span></p>{submitted.wagerMode && <p className="text-purple-300 font-bold mt-2">Wager: {submitted.wagerAmount}</p>}</CardContent></Card> : !acceptingAnswers ? <Card className="border-red-500/30 bg-red-500/10"><CardContent className="p-6 text-center"><Timer className="mx-auto text-red-300 mb-3" size={42} /><h3 className="text-2xl font-black">Time&apos;s Up</h3><p className="text-zinc-400 mt-1">Waiting for the answer reveal.</p></CardContent></Card> : <AnswerForm question={currentQuestion} answer={answer} setAnswer={setAnswer} submitAnswer={submitAnswer} wagerMode={wagerMode} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} />}</div>}
+        {gameStarted && hostState && hostState.mode !== "leaderboard" && currentQuestion && <div className="w-full max-w-md"><div className="text-center mb-5"><div className="flex items-center justify-center gap-2 flex-wrap mb-3"><Badge className="bg-zinc-800 text-zinc-300">{currentQuestion.roundName || "Round"} · {currentQuestion.category}</Badge>{wagerMode && <Badge className="bg-purple-500/15 text-purple-300 border border-purple-500/20">Bonus Wager</Badge>}{timeRemaining !== null && <Badge className={timeRemaining === 0 ? "bg-red-500/15 text-red-300 border border-red-500/20" : "bg-[#AEB2EF]/15 text-[#AEB2EF] border border-[#AEB2EF]/20"}><Timer size={13} className="mr-1" />{timeRemaining}s</Badge>}</div><h2 className="text-2xl font-black leading-tight">{currentQuestion.questionText}</h2><FeedbackButtons selected={feedbackByQuestion[String(hostState.currentIndex)]} onSelect={submitFeedback} category={currentQuestion.category} /></div>{hostState.showAnswer ? <Card className="border-emerald-500/30 bg-emerald-500/10"><CardContent className="p-5 text-center"><p className="text-zinc-400 text-sm uppercase tracking-wide mb-1">Answer</p><p className="text-3xl font-black text-emerald-300">{currentQuestion.answer}</p>{hostState.showFunFact && currentQuestion.funFact && <p className="text-zinc-300 mt-3">{currentQuestion.funFact}</p>}</CardContent></Card> : submitted?.questionIndex === hostState.currentIndex ? <Card className="glass-card"><CardContent className="p-6 text-center"><CheckCircle className="mx-auto text-emerald-300 mb-3" size={42} /><h3 className="text-2xl font-black mb-1">Answer Locked</h3><p className="text-zinc-400">You answered: <span className="text-white font-bold">{submitted.answer}</span></p>{submitted.wagerMode && <p className="text-purple-300 font-bold mt-2">Wager: {submitted.wagerAmount}</p>}</CardContent></Card> : !acceptingAnswers ? <Card className="border-red-500/30 bg-red-500/10"><CardContent className="p-6 text-center"><Timer className="mx-auto text-red-300 mb-3" size={42} /><h3 className="text-2xl font-black">Time&apos;s Up</h3><p className="text-zinc-400 mt-1">Waiting for the answer reveal.</p></CardContent></Card> : <AnswerForm question={currentQuestion} answer={answer} setAnswer={setAnswer} submitAnswer={submitAnswer} wagerMode={wagerMode} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} />}</div>}
       </main>
     </div>
   );
@@ -257,6 +266,16 @@ const RoundCategoryCard = ({ roundCategories, compact = false }) => (
       </div>
     </CardContent>
   </Card>
+);
+
+const FeedbackButtons = ({ selected, onSelect, category }) => (
+  <div className="mt-4 rounded-xl border border-white/10 bg-zinc-950/60 p-3 text-left">
+    <p className="text-xs text-zinc-500 mb-2">Help the host learn what players enjoy. This rates both the question and its category{category ? `: ${category}` : ""}.</p>
+    <div className="grid grid-cols-2 gap-2">
+      <Button type="button" onClick={() => onSelect("like")} className={selected === "like" ? "bg-emerald-500/25 text-emerald-200 border border-emerald-500/40 hover:bg-emerald-500/30" : "bg-zinc-900 text-zinc-200 border border-white/10 hover:bg-zinc-800"}>Like</Button>
+      <Button type="button" onClick={() => onSelect("dislike")} className={selected === "dislike" ? "bg-red-500/25 text-red-200 border border-red-500/40 hover:bg-red-500/30" : "bg-zinc-900 text-zinc-200 border border-white/10 hover:bg-zinc-800"}>Dislike</Button>
+    </div>
+  </div>
 );
 
 const LeaderboardView = ({ leaderboard, playerId }) => <div className="w-full max-w-md"><div className="text-center mb-5"><Trophy className="mx-auto text-amber-300 mb-2" size={38} /><h2 className="text-3xl font-black">Leaderboard</h2></div><div className="space-y-2">{leaderboard.map((team, index) => <div key={team.id || team.name} className={`flex items-center justify-between gap-3 rounded-lg border px-4 py-3 ${team.id === playerId ? "border-[#71E0DC]/50 bg-[#71E0DC]/10" : "border-white/10 bg-zinc-950/70"}`}><div className="flex items-center gap-3 min-w-0"><span className="font-black text-zinc-500">#{index + 1}</span><span className="font-bold truncate">{team.name}</span></div><span className="font-black text-[#71E0DC]">{Number(team.score || 0)}</span></div>)}</div></div>;
