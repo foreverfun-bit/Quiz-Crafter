@@ -1,0 +1,29 @@
+name: Codex Run Inline Round Script
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  patch:
+    if: contains(github.event.issue.title, 'codex-run-inline-round-script')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run edit script
+        run: python .github/scripts/inline_round_editor.py
+      - name: Commit changes
+        run: |
+          git config user.name "codex-bot"
+          git config user.email "codex-bot@users.noreply.github.com"
+          git add frontend/src/pages/BuildSession.jsx
+          git commit -m "Move round editor under selected round" || exit 0
+          git push
+      - name: Close trigger issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.update({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, state: 'closed' });
