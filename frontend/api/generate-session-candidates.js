@@ -28,7 +28,7 @@ const DIFFICULTY_PROFILES = {
   hard: { label: "Hard", guidance: "Challenging but fair. Prefer second-layer knowledge over household-name facts." },
   host_hard: {
     label: "Host Hard",
-    guidance: "Obscure but fair for a host who has used many questions since 2019. Avoid overused pub trivia, obvious capitals, first-president-style facts, basic Oscar trivia, stale quiz-bank phrasing, and facts that appear on every trivia list. Use interesting angles that feel satisfying when revealed.",
+    guidance: "Fresh and host-worthy, but not punishing. Avoid overused pub trivia and basic quiz-bank facts, but keep the question answerable by a strong mixed trivia team or reasonably guessable from the wording. Aim for satisfying 40-60% solve-rate questions, not stumpers that depend on tiny-name recall.",
   },
 };
 
@@ -89,6 +89,7 @@ export default async function handler(req, res) {
     const cleanExcludeCategories = dedupeStrings([...normalizeStringArray(excludeCategories), ...cleanRejectedCategories].filter((category) => !containsCategory(cleanLockedCategories, category)));
     const cleanRejectedQuestions = dedupeStrings([...normalizeStringArray(rejectedQuestions), ...normalizeStringArray(currentBatchQuestions)]);
     const existingQuestions = avoidDuplicates || excludeUsed ? await fetchExistingQuestions() : [];
+    const styleExamples = buildStyleExamples(existingQuestions, normalizedQuestionType, cleanApprovedCategories);
     const existingFingerprints = new Set(existingQuestions.map((q) => fingerprint(q.question_text)));
     const existingAnswerPairs = new Set(existingQuestions.map((q) => answerPairFingerprint(q.question_text, q.correct_answer)));
     const existingAnswers = new Set(existingQuestions.map((q) => answerFingerprint(q.correct_answer)).filter(Boolean));
@@ -105,6 +106,7 @@ export default async function handler(req, res) {
       cleanApprovedCategories,
       cleanLockedCategories,
       existingQuestions,
+      styleExamples,
       excludeUsed,
       avoidDuplicates,
       includeImagePrompt,
@@ -162,7 +164,7 @@ function containsCategory(categories, category) {
   return categories.some((item) => item.toLowerCase() === String(category || "").toLowerCase());
 }
 
-function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, existingQuestions, excludeUsed, avoidDuplicates, includeImagePrompt }) {
+function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt }) {
   const overGenerateCount = Math.min(30, Math.max(safeCount + 8, Math.ceil(safeCount * 2.5)));
   const lockedCategoryText = cleanLockedCategories.length ? `Locked categories are active. The category field must exactly match one of these locked categories: ${cleanLockedCategories.join(", ")}. Generate all candidates inside these locked categories until the host unlocks them.` : "";
   const approvedCategoryText = cleanLockedCategories.length
@@ -172,9 +174,11 @@ function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, clea
       : `Use varied broad categories such as: ${BROAD_CATEGORIES.join(", ")}.`;
   const excludedCategoryText = cleanExcludeCategories.length ? `Do not use these rejected or avoided categories: ${cleanExcludeCategories.join(", ")}.` : "";
   const themeText = cleanTheme ? `Theme/vibe/category guidance: ${cleanTheme}. Stay useful to that direction, but avoid repetitive question angles.` : "";
-  const duplicateExamples = existingQuestions.slice(0, 180).map((q) => `- ${q.question_text}${q.correct_answer ? ` Answer: ${q.correct_answer}` : ""}`).join("\n");
+  const styleText = styleExamples.length ? `Use these saved library questions as calibration for the host's style and difficulty. Match the readability, category feel, and answerability. Do not copy, lightly rewrite, reuse their answers, or generate the same topic angles:\n${styleExamples.map(formatStyleExample).join("\n")}` : "";
+  const duplicateExamples = existingQuestions.slice(0, 120).map((q) => `- ${q.question_text}${q.correct_answer ? ` Answer: ${q.correct_answer}` : ""}`).join("\n");
   const duplicateText = avoidDuplicates && duplicateExamples ? `Avoid duplicating, lightly rewording, using the same answer, or using the same answer-angle as these existing and past-session questions:\n${duplicateExamples}` : "";
   const usedText = excludeUsed ? "Assume the host has already used years of common trivia. Do not use standard listicle facts or classroom facts unless the angle is unusually fresh." : "";
+  const hostHardText = difficultyKey === "host_hard" ? "Host Hard calibration: make these feel like the host's stronger library questions, not encyclopedia deep cuts. Prefer recognizable subjects with a fresh angle over obscure subjects with no clue path." : "";
   const noveltySeed = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const imagePromptField = includeImagePrompt ? ',\n      "image_prompt": "A concise visual clue idea that does not reveal the answer"' : ',\n      "image_prompt": ""';
   const imagePromptRule = includeImagePrompt
@@ -233,11 +237,52 @@ Trivia host style:
 - image_url must be "".
 - difficulty must be "${difficultyKey}".
 ${imagePromptRule}
+${hostHardText}
+${styleText}
 ${themeText}
 ${excludedCategoryText}
 ${usedText}
 ${duplicateText}
 `.trim();
+}
+
+function buildStyleExamples(existingQuestions, questionType, approvedCategories) {
+  const approvedSet = new Set(approvedCategories.map((category) => category.toLowerCase()));
+  const libraryQuestions = existingQuestions.filter((q) => q.source === "library");
+  const matchingType = libraryQuestions.filter((q) => q.question_type === questionType);
+  const matchingApproved = matchingType.filter((q) => !approvedSet.size || approvedSet.has(q.category.toLowerCase()));
+  const candidates = matchingApproved.length >= 8 ? matchingApproved : matchingType.length >= 8 ? matchingType : libraryQuestions;
+  return sampleStable(candidates.filter((q) => q.question_text && q.correct_answer), 24);
+}
+
+function sampleStable(items, limit) {
+  const seen = new Set();
+  return items
+    .filter((item) => {
+      const key = fingerprint(item.question_text);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => scoreStyleExample(b) - scoreStyleExample(a))
+    .slice(0, limit);
+}
+
+function scoreStyleExample(question) {
+  let score = 0;
+  if (question.source === "library") score += 8;
+  if (question.category) score += 2;
+  if (question.fun_fact) score += 2;
+  const length = cleanText(question.question_text).length;
+  if (length >= 45 && length <= 180) score += 3;
+  if (question.question_type === "multiple_choice" || question.question_type === "true_false" || question.question_type === "written") score += 1;
+  return score;
+}
+
+function formatStyleExample(q) {
+  const parts = [`- [${q.category || "Uncategorized"} / ${q.question_type || "written"}] ${q.question_text}`, `Answer: ${q.correct_answer}`];
+  if (q.fun_fact) parts.push(`Fun fact style: ${q.fun_fact}`);
+  return parts.join(" ");
 }
 
 async function requestCandidates(prompt) {
@@ -248,12 +293,12 @@ async function requestCandidates(prompt) {
     headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model: process.env.OPENAI_GENERATOR_MODEL || "gpt-4.1",
-      temperature: 0.9,
-      presence_penalty: 0.45,
-      frequency_penalty: 0.35,
+      temperature: 0.82,
+      presence_penalty: 0.35,
+      frequency_penalty: 0.3,
       response_format: { type: "json_object" },
       messages: [
-        { role: "system", content: "You are a careful, inventive trivia co-host for a weekly live trivia host. You avoid common quiz-bank questions and return only valid JSON." },
+        { role: "system", content: "You are a careful, inventive trivia co-host for a weekly live trivia host. You learn from the host's saved library style, avoid common quiz-bank questions, and return only valid JSON." },
         { role: "user", content: prompt },
       ],
     }),
@@ -416,7 +461,7 @@ async function fetchExistingQuestions() {
 
   try {
     const [questionsResponse, sessionsResponse] = await Promise.all([
-      fetch(`${base}/rest/v1/questions?select=question_text,correct_answer,category,question_type&limit=2000`, { headers }),
+      fetch(`${base}/rest/v1/questions?select=question_text,correct_answer,category,question_type,fun_fact&limit=2000`, { headers }),
       fetch(`${base}/rest/v1/sessions?select=true_false_questions,multiple_choice_questions,written_questions,picture_questions&limit=1000`, { headers }),
     ]);
 
@@ -424,18 +469,27 @@ async function fetchExistingQuestions() {
     const sessions = sessionsResponse.ok ? await sessionsResponse.json() : [];
     const sessionQuestions = Array.isArray(sessions) ? sessions.flatMap(extractSessionQuestions) : [];
 
-    return [...(Array.isArray(libraryQuestions) ? libraryQuestions : []), ...sessionQuestions]
+    return [
+      ...(Array.isArray(libraryQuestions) ? libraryQuestions.map((q) => ({ ...q, source: "library" })) : []),
+      ...sessionQuestions.map((q) => ({ ...q, source: "session" })),
+    ]
       .map((q) => ({
         question_text: cleanText(q.question_text || q.question),
         correct_answer: cleanText(q.correct_answer || q.answer),
         category: cleanText(q.category),
-        question_type: q.question_type || "written",
+        question_type: normalizeFetchedType(q.question_type),
+        fun_fact: cleanText(q.fun_fact),
+        source: q.source || "library",
       }))
       .filter((q) => q.question_text);
   } catch (error) {
     console.error("Existing question fetch failed:", error);
     return [];
   }
+}
+
+function normalizeFetchedType(value) {
+  return value === "true_false" || value === "multiple_choice" || value === "written" ? value : "written";
 }
 
 function extractSessionQuestions(session) {
