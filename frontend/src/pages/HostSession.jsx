@@ -96,6 +96,17 @@ const getRoundName = (question, fallbackOrder = 1) => {
   return `Round ${getRoundOrder(question, fallbackOrder)}`;
 };
 
+const getRoundMetadata = (session) => {
+  const raw = session?.round_descriptions || session?.rounds_metadata || session?.rounds || [];
+  return Array.isArray(raw) ? raw : [];
+};
+
+const getRoundDescription = (session, roundOrder, roundName) => {
+  const metadata = getRoundMetadata(session);
+  const match = metadata.find((round) => Number(round.order || round.round_order) === Number(roundOrder) || String(round.name || round.round_name || "").toLowerCase() === String(roundName || "").toLowerCase());
+  return match?.description || match?.round_description || "";
+};
+
 const flattenSession = (session) => {
   const entries = arrayConfig.flatMap(({ key, type }) => {
     const questions = Array.isArray(session?.[key]) ? session[key] : [];
@@ -114,6 +125,7 @@ const flattenSession = (session) => {
         roundName: getRoundName(question, roundOrder),
         roundOrder,
         sourceOrder: getSourceOrder(question, index + 1),
+        roundDescription: question.round_description || getRoundDescription(session, roundOrder, getRoundName(question, roundOrder)),
       };
     });
   });
@@ -125,7 +137,7 @@ const makeRounds = (questions) => {
   const groups = new Map();
   questions.forEach((question, index) => {
     const key = `${question.roundOrder}-${question.roundName}`;
-    if (!groups.has(key)) groups.set(key, { key, name: question.roundName, startIndex: index, questions: [] });
+    if (!groups.has(key)) groups.set(key, { key, name: question.roundName, description: question.roundDescription || "", startIndex: index, questions: [] });
     groups.get(key).questions.push(question);
   });
   return [...groups.values()];
@@ -312,7 +324,7 @@ const HostSession = () => {
 
 const TopBar = ({ navigate, id, sessionName, questions, players, currentIndex, liveStatus, openPresentation, setFocusMode, progress }) => <div className="border-b border-white/10 bg-zinc-950/80 sticky top-0 z-20"><div className="max-w-7xl mx-auto px-4 lg:px-6 py-3 flex items-center justify-between gap-3"><div className="flex items-center gap-3 min-w-0"><Button variant="ghost" onClick={() => navigate(`/session/${id}`)} className="text-zinc-400 hover:text-white h-9 w-9 p-0" aria-label="Back to session"><ArrowLeft size={18} /></Button><div className="min-w-0"><h1 className="font-bold truncate">{sessionName}</h1><p className="text-xs text-zinc-500">Hosting view · {questions.length} questions · {players.length} players</p></div></div><div className="flex items-center gap-2 flex-wrap justify-end"><Badge className={liveStatus === "live" ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/20" : "bg-zinc-800 text-zinc-300"}><Wifi size={13} className="mr-1" />{liveStatus === "live" ? "Live" : "Connecting"}</Badge><Badge className="bg-zinc-800 text-zinc-300">{currentIndex + 1} / {questions.length}</Badge><Button variant="outline" onClick={openPresentation} className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />Presentation</Button><Button variant="outline" onClick={() => setFocusMode(true)} className="border-white/10 text-zinc-300 hover:text-white"><Maximize2 size={16} className="mr-2" />Focus</Button></div></div><div className="h-1 bg-zinc-900"><div className="h-1 bg-gradient-to-r from-[#71E0DC] to-[#AEB2EF] transition-all" style={{ width: `${progress}%` }} /></div></div>;
 
-const PresentationControls = ({ mode, setMode, showAnswer, setShowAnswer, showFunFact, setShowFunFact, hasFunFact }) => <Card className="glass-card mb-4"><CardContent className="p-3 flex items-center justify-between gap-3 flex-wrap"><div className="flex items-center gap-2 flex-wrap"><Button size="sm" onClick={() => setMode("question")} className={mode === "question" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><MonitorPlay size={15} className="mr-2" />Question</Button><Button size="sm" onClick={() => setMode("categories")} className={mode === "categories" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><Tags size={15} className="mr-2" />Round Categories</Button><Button size="sm" onClick={() => setMode("leaderboard")} className={mode === "leaderboard" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><Trophy size={15} className="mr-2" />Leaderboard</Button></div><div className="flex items-center gap-2 flex-wrap"><Button size="sm" variant="outline" onClick={() => setShowAnswer((value) => !value)} className="border-white/10 text-zinc-300 hover:text-white">{showAnswer ? <EyeOff size={15} className="mr-2" /> : <Eye size={15} className="mr-2" />}{showAnswer ? "Hide Answer" : "Show Answer"}</Button><Button size="sm" variant="outline" onClick={() => setShowFunFact((value) => !value)} disabled={!hasFunFact} className="border-white/10 text-zinc-300 hover:text-white disabled:opacity-50"><Sparkles size={15} className="mr-2" />{showFunFact ? "Hide Fun Fact" : "Show Fun Fact"}</Button></div></CardContent></Card>;
+const PresentationControls = ({ mode, setMode, showAnswer, setShowAnswer, showFunFact, setShowFunFact, hasFunFact }) => <Card className="glass-card mb-4"><CardContent className="p-3 flex items-center justify-between gap-3 flex-wrap"><div className="flex items-center gap-2 flex-wrap"><Button size="sm" onClick={() => setMode("question")} className={mode === "question" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><MonitorPlay size={15} className="mr-2" />Question</Button><Button size="sm" onClick={() => setMode("categories")} className={mode === "categories" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><Tags size={15} className="mr-2" />Round Intro</Button><Button size="sm" onClick={() => setMode("leaderboard")} className={mode === "leaderboard" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><Trophy size={15} className="mr-2" />Leaderboard</Button></div><div className="flex items-center gap-2 flex-wrap"><Button size="sm" variant="outline" onClick={() => setShowAnswer((value) => !value)} className="border-white/10 text-zinc-300 hover:text-white">{showAnswer ? <EyeOff size={15} className="mr-2" /> : <Eye size={15} className="mr-2" />}{showAnswer ? "Hide Answer" : "Show Answer"}</Button><Button size="sm" variant="outline" onClick={() => setShowFunFact((value) => !value)} disabled={!hasFunFact} className="border-white/10 text-zinc-300 hover:text-white disabled:opacity-50"><Sparkles size={15} className="mr-2" />{showFunFact ? "Hide Fun Fact" : "Show Fun Fact"}</Button></div></CardContent></Card>;
 
 const HostSettings = ({ pointsPerQuestion, setPointsPerQuestion, wagerMode, setWagerMode, timerSeconds, setTimerSeconds, timeRemaining, startTimer, resetTimer }) => <Card className="glass-card mb-4"><CardContent className="p-3 grid grid-cols-1 md:grid-cols-[1fr_1fr_auto_auto_auto] gap-2 items-end"><label className="text-xs text-zinc-400">Points<input type="number" min="0" value={pointsPerQuestion} onChange={(event) => setPointsPerQuestion(event.target.value)} className="mt-1 w-full h-9 rounded-md bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><label className="text-xs text-zinc-400">Timer seconds<input type="number" min="5" value={timerSeconds} onChange={(event) => setTimerSeconds(event.target.value)} className="mt-1 w-full h-9 rounded-md bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><Button onClick={() => setWagerMode((value) => !value)} className={wagerMode ? "h-9 bg-purple-500/20 text-purple-200 border border-purple-500/30 hover:bg-purple-500/30" : "h-9 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}>Wager {wagerMode ? "On" : "Off"}</Button><Button onClick={startTimer} className="h-9 gradient-btn"><Play size={15} className="mr-2" />Start Timer</Button><Button variant="outline" onClick={resetTimer} className="h-9 border-white/10 text-zinc-300 hover:text-white"><RotateCcw size={15} className="mr-2" />{timeRemaining === null ? "Clear" : `${timeRemaining}s`}</Button></CardContent></Card>;
 

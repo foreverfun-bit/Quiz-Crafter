@@ -80,6 +80,17 @@ const getRoundName = (question, fallbackOrder = 1) => {
   return `Round ${getRoundOrder(question, fallbackOrder)}`;
 };
 
+const getRoundMetadata = (session) => {
+  const raw = session?.round_descriptions || session?.rounds_metadata || session?.rounds || [];
+  return Array.isArray(raw) ? raw : [];
+};
+
+const getRoundDescription = (session, roundOrder, roundName) => {
+  const metadata = getRoundMetadata(session);
+  const match = metadata.find((round) => Number(round.order || round.round_order) === Number(roundOrder) || String(round.name || round.round_name || "").toLowerCase() === String(roundName || "").toLowerCase());
+  return match?.description || match?.round_description || "";
+};
+
 const flattenSession = (session) => {
   const entries = arrayConfig.flatMap(({ key, type }) => {
     const questions = Array.isArray(session?.[key]) ? session[key] : [];
@@ -98,6 +109,7 @@ const flattenSession = (session) => {
         roundName: getRoundName(question, roundOrder),
         roundOrder,
         sourceOrder: getSourceOrder(question, index + 1),
+        roundDescription: question.round_description || getRoundDescription(session, roundOrder, getRoundName(question, roundOrder)),
       };
     });
   });
@@ -112,7 +124,7 @@ const makeRounds = (questions) => {
   const groups = new Map();
   questions.forEach((question, index) => {
     const key = `${question.roundOrder}-${question.roundName}`;
-    if (!groups.has(key)) groups.set(key, { key, name: question.roundName, order: question.roundOrder, startIndex: index, questions: [] });
+    if (!groups.has(key)) groups.set(key, { key, name: question.roundName, description: question.roundDescription || "", order: question.roundOrder, startIndex: index, questions: [] });
     groups.get(key).questions.push(question);
   });
   return [...groups.values()];
@@ -202,7 +214,7 @@ const PresentSession = () => {
         <header className="flex items-center justify-between gap-4 border-b border-white/10 pb-5">
           <div>
             <p className="text-[#71E0DC] font-semibold tracking-wide uppercase text-sm">{sessionName}</p>
-            <h1 className="text-3xl lg:text-5xl font-black mt-1">{mode === "categories" ? "Round Categories" : mode === "leaderboard" ? "Leaderboard" : currentRound?.name || "Question"}</h1>
+            <h1 className="text-3xl lg:text-5xl font-black mt-1">{mode === "categories" ? "Round Intro" : mode === "leaderboard" ? "Leaderboard" : currentRound?.name || "Question"}</h1>
           </div>
           <Badge className="bg-white/10 text-zinc-200 border border-white/10 text-base px-4 py-2">{currentRound?.name || "Round"}</Badge>
         </header>
@@ -260,6 +272,8 @@ const CategoriesView = ({ round, rounds }) => {
                 <h2 className="text-4xl font-black">{round?.name || "Round"}</h2>
               </div>
             </div>
+            {round?.description && <p className="text-2xl lg:text-3xl text-zinc-200 leading-relaxed mb-8">{round.description}</p>}
+            <p className="text-zinc-400 uppercase tracking-wider text-sm font-semibold mb-3">Round Categories</p>
             <div className="flex flex-wrap gap-4">
               {categories.map((category) => (
                 <div key={category} className="rounded-lg border border-[#71E0DC]/30 bg-[#71E0DC]/10 px-6 py-4 text-2xl font-bold text-[#71E0DC]">{category}</div>
