@@ -69,6 +69,9 @@ const PlayerSession = () => {
   const [hostState, setHostState] = useState(null);
   const [answer, setAnswer] = useState("");
   const [wagerAmount, setWagerAmount] = useState("");
+  const [updatePreference, setUpdatePreference] = useState("none");
+  const [updateContact, setUpdateContact] = useState("");
+  const [hostUpdate, setHostUpdate] = useState(null);
   const [submitted, setSubmitted] = useState(null);
   const [connected, setConnected] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -99,11 +102,16 @@ const PlayerSession = () => {
           return previous.questionIndex === payload?.currentIndex ? previous : null;
         });
       })
+      .on("broadcast", { event: "host_update" }, ({ payload }) => {
+        if (!payload?.message) return;
+        setHostUpdate(payload);
+        toast.info("Host update received");
+      })
       .subscribe((status) => {
         const isConnected = status === "SUBSCRIBED";
         setConnected(isConnected);
         if (isConnected) {
-          channel.send({ type: "broadcast", event: "player_join", payload: { playerId: player.id, playerName: player.name, joinedAt: new Date().toISOString() } });
+          channel.send({ type: "broadcast", event: "player_join", payload: { playerId: player.id, playerName: player.name, updatePreference: player.updatePreference || "none", updateContact: player.updateContact || "", joinedAt: new Date().toISOString() } });
         }
       });
     return () => {
@@ -130,8 +138,11 @@ const PlayerSession = () => {
 
   const joinGame = () => {
     const trimmed = name.trim();
+    const contact = updateContact.trim();
     if (!trimmed) return toast.error("Enter a team name");
-    const nextPlayer = { id: makePlayerId(), name: trimmed.slice(0, 32) };
+    if (updatePreference === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact)) return toast.error("Enter a valid email address");
+    if (updatePreference === "text" && contact.replace(/\D/g, "").length < 10) return toast.error("Enter a valid phone number");
+    const nextPlayer = { id: makePlayerId(), name: trimmed.slice(0, 32), updatePreference, updateContact: updatePreference === "none" ? "" : contact };
     sessionStorage.setItem(`quiz-crafter-player-${id}`, JSON.stringify(nextPlayer));
     setPlayer(nextPlayer);
   };
@@ -151,7 +162,7 @@ const PlayerSession = () => {
   };
 
   if (!player) {
-    return <JoinScreen name={name} setName={setName} joinGame={joinGame} sessionName={sessionName} roundCategories={roundCategories} branding={branding} />;
+    return <JoinScreen name={name} setName={setName} joinGame={joinGame} sessionName={sessionName} roundCategories={roundCategories} branding={branding} updatePreference={updatePreference} setUpdatePreference={setUpdatePreference} updateContact={updateContact} setUpdateContact={setUpdateContact} />;
   }
 
   return (
@@ -159,6 +170,7 @@ const PlayerSession = () => {
       <header className="px-4 py-3 border-b border-white/10 flex items-center justify-between gap-3 bg-zinc-950/80 sticky top-0 z-10"><div className="min-w-0"><p className="font-bold truncate">{player.name}</p><p className="text-xs text-zinc-500 truncate">{sessionName}</p></div><div className="flex items-center gap-2"><Badge className={wagerMode ? "bg-purple-500/15 text-purple-300 border border-purple-500/20" : "bg-amber-400/15 text-amber-200 border border-amber-400/20"}>{wagerMode ? "Wager" : `${pointsPerQuestion} pts`}</Badge><Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20">{Number(myScore)} pts</Badge></div></header>
       <main className="flex-1 flex items-center justify-center p-4">
         {!gameStarted && <PlayerLobby sessionName={sessionName} connected={connected} roundCategories={roundCategories} branding={branding} />}
+        {hostUpdate && <HostUpdateBanner update={hostUpdate} onDismiss={() => setHostUpdate(null)} />}
         {gameStarted && hostState?.mode === "leaderboard" && <LeaderboardView leaderboard={leaderboard} playerId={player.id} />}
         {gameStarted && hostState && hostState.mode !== "leaderboard" && !currentQuestion && <div className="text-center"><p className="text-zinc-400">Waiting for the next question.</p></div>}
         {gameStarted && hostState && hostState.mode !== "leaderboard" && currentQuestion && <div className="w-full max-w-md"><div className="text-center mb-5"><div className="flex items-center justify-center gap-2 flex-wrap mb-3"><Badge className="bg-zinc-800 text-zinc-300">{currentQuestion.roundName || "Round"} · {currentQuestion.category}</Badge>{wagerMode && <Badge className="bg-purple-500/15 text-purple-300 border border-purple-500/20">Bonus Wager</Badge>}{timeRemaining !== null && <Badge className={timeRemaining === 0 ? "bg-red-500/15 text-red-300 border border-red-500/20" : "bg-[#AEB2EF]/15 text-[#AEB2EF] border border-[#AEB2EF]/20"}><Timer size={13} className="mr-1" />{timeRemaining}s</Badge>}</div><h2 className="text-2xl font-black leading-tight">{currentQuestion.questionText}</h2></div>{hostState.showAnswer ? <Card className="border-emerald-500/30 bg-emerald-500/10"><CardContent className="p-5 text-center"><p className="text-zinc-400 text-sm uppercase tracking-wide mb-1">Answer</p><p className="text-3xl font-black text-emerald-300">{currentQuestion.answer}</p>{hostState.showFunFact && currentQuestion.funFact && <p className="text-zinc-300 mt-3">{currentQuestion.funFact}</p>}</CardContent></Card> : submitted?.questionIndex === hostState.currentIndex ? <Card className="glass-card"><CardContent className="p-6 text-center"><CheckCircle className="mx-auto text-emerald-300 mb-3" size={42} /><h3 className="text-2xl font-black mb-1">Answer Locked</h3><p className="text-zinc-400">You answered: <span className="text-white font-bold">{submitted.answer}</span></p>{submitted.wagerMode && <p className="text-purple-300 font-bold mt-2">Wager: {submitted.wagerAmount}</p>}</CardContent></Card> : !acceptingAnswers ? <Card className="border-red-500/30 bg-red-500/10"><CardContent className="p-6 text-center"><Timer className="mx-auto text-red-300 mb-3" size={42} /><h3 className="text-2xl font-black">Time&apos;s Up</h3><p className="text-zinc-400 mt-1">Waiting for the answer reveal.</p></CardContent></Card> : <AnswerForm question={currentQuestion} answer={answer} setAnswer={setAnswer} submitAnswer={submitAnswer} wagerMode={wagerMode} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} />}</div>}
@@ -188,7 +200,7 @@ const QuizCrafterBadge = () => (
   </div>
 );
 
-const JoinScreen = ({ name, setName, joinGame, sessionName, roundCategories, branding }) => (
+const JoinScreen = ({ name, setName, joinGame, sessionName, roundCategories, branding, updatePreference, setUpdatePreference, updateContact, setUpdateContact }) => (
   <div className="min-h-screen bg-[#09090B] text-white flex items-center justify-center p-4">
     <div className="w-full max-w-sm">
       <div className="text-center mb-6">
@@ -199,7 +211,19 @@ const JoinScreen = ({ name, setName, joinGame, sessionName, roundCategories, bra
         <QuizCrafterBadge />
       </div>
       <RoundCategoryCard roundCategories={roundCategories} compact />
-      <Card className="glass-card mt-4"><CardContent className="p-5 space-y-4"><div><label className="text-zinc-400 text-sm block mb-1.5">Team Name</label><input value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && joinGame()} placeholder="Enter team name" maxLength={32} className="w-full h-12 rounded-lg bg-zinc-950 border border-white/10 px-3 text-white text-lg outline-none focus:border-[#71E0DC]/60" autoFocus /></div><Button onClick={joinGame} className="w-full h-12 gradient-btn text-base font-bold">Join Game</Button></CardContent></Card>
+      <Card className="glass-card mt-4"><CardContent className="p-5 space-y-4"><div><label className="text-zinc-400 text-sm block mb-1.5">Team Name</label><input value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && joinGame()} placeholder="Enter team name" maxLength={32} className="w-full h-12 rounded-lg bg-zinc-950 border border-white/10 px-3 text-white text-lg outline-none focus:border-[#71E0DC]/60" autoFocus /></div><div className="rounded-lg border border-white/10 bg-zinc-950/60 p-3 space-y-3"><div><p className="text-sm font-bold text-white">Would you like updates from the host?</p><p className="text-xs text-zinc-500">Clues, cancellations, schedule changes, and other trivia night updates.</p></div><div className="grid grid-cols-3 gap-2"><button type="button" onClick={() => setUpdatePreference("none")} className={`h-10 rounded-md border text-sm font-bold ${updatePreference === "none" ? "border-[#71E0DC]/60 bg-[#71E0DC]/15 text-[#71E0DC]" : "border-white/10 bg-zinc-900 text-zinc-300"}`}>No</button><button type="button" onClick={() => setUpdatePreference("email")} className={`h-10 rounded-md border text-sm font-bold ${updatePreference === "email" ? "border-[#71E0DC]/60 bg-[#71E0DC]/15 text-[#71E0DC]" : "border-white/10 bg-zinc-900 text-zinc-300"}`}>Email</button><button type="button" onClick={() => setUpdatePreference("text")} className={`h-10 rounded-md border text-sm font-bold ${updatePreference === "text" ? "border-[#71E0DC]/60 bg-[#71E0DC]/15 text-[#71E0DC]" : "border-white/10 bg-zinc-900 text-zinc-300"}`}>Text</button></div>{updatePreference !== "none" && <input value={updateContact} onChange={(event) => setUpdateContact(event.target.value)} onKeyDown={(event) => event.key === "Enter" && joinGame()} placeholder={updatePreference === "email" ? "Email address" : "Phone number"} inputMode={updatePreference === "email" ? "email" : "tel"} className="w-full h-11 rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" />}</div><Button onClick={joinGame} className="w-full h-12 gradient-btn text-base font-bold">Join Game</Button></CardContent></Card>
+    </div>
+  </div>
+);
+
+const HostUpdateBanner = ({ update, onDismiss }) => (
+  <div className="fixed inset-x-4 top-20 z-30 mx-auto max-w-md rounded-xl border border-[#71E0DC]/30 bg-zinc-950/95 p-4 shadow-2xl shadow-black/50">
+    <div className="flex items-start justify-between gap-3">
+      <div>
+        <p className="text-xs font-bold uppercase tracking-wide text-[#71E0DC]">Host Update</p>
+        <p className="mt-1 text-sm text-white whitespace-pre-wrap">{update.message}</p>
+      </div>
+      <button type="button" onClick={onDismiss} className="rounded-md border border-white/10 px-2 py-1 text-xs text-zinc-300 hover:text-white">Close</button>
     </div>
   </div>
 );

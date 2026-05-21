@@ -16,12 +16,14 @@ import {
   Image,
   Link,
   List,
+  Mail,
   Loader2,
   Maximize2,
   MessageSquare,
   MonitorPlay,
   Play,
   Plus,
+  Phone,
   RotateCcw,
   Sparkles,
   Tags,
@@ -169,6 +171,7 @@ const HostSession = () => {
   const [teamScore, setTeamScore] = useState("");
   const [players, setPlayers] = useState([]);
   const [answers, setAnswers] = useState([]);
+  const [hostUpdateMessage, setHostUpdateMessage] = useState("");
   const [liveStatus, setLiveStatus] = useState("connecting");
   const [pointsPerQuestion, setPointsPerQuestion] = useState(25);
   const [wagerMode, setWagerMode] = useState(false);
@@ -205,7 +208,10 @@ const HostSession = () => {
     channel
       .on("broadcast", { event: "player_join" }, ({ payload }) => {
         if (!payload?.playerId) return;
-        setPlayers((current) => current.some((player) => player.id === payload.playerId) ? current : [...current, { id: payload.playerId, name: payload.playerName || "Team", joinedAt: payload.joinedAt }]);
+        setPlayers((current) => {
+          const nextPlayer = { id: payload.playerId, name: payload.playerName || "Team", updatePreference: payload.updatePreference || "none", updateContact: payload.updateContact || "", joinedAt: payload.joinedAt };
+          return current.some((player) => player.id === payload.playerId) ? current.map((player) => player.id === payload.playerId ? { ...player, ...nextPlayer } : player) : [...current, nextPlayer];
+        });
         setLeaderboard((teams) => teams.some((team) => team.id === payload.playerId) ? teams : [...teams, { id: payload.playerId, name: payload.playerName || "Team", score: 0 }]);
       })
       .on("broadcast", { event: "answer_submit" }, ({ payload }) => {
@@ -288,6 +294,14 @@ const HostSession = () => {
     }
   };
 
+  const sendHostUpdate = async () => {
+    const message = hostUpdateMessage.trim();
+    if (!message) return toast.error("Write an update first");
+    liveChannelRef.current?.send({ type: "broadcast", event: "host_update", payload: { message, sentAt: new Date().toISOString() } });
+    setHostUpdateMessage("");
+    toast.success("Update sent to connected players");
+  };
+
   const addTeam = () => {
     const name = teamName.trim();
     if (!name) return;
@@ -316,7 +330,7 @@ const HostSession = () => {
           <QuestionStage question={currentQuestion} index={currentIndex} total={questions.length} roundName={currentRound?.name} showAnswer={showAnswer} showFunFact={showFunFact} focusMode={focusMode} pointsPerQuestion={pointsPerQuestion} timeRemaining={timeRemaining} wagerMode={wagerMode} />
           <div className="mt-4 flex items-center justify-between gap-3 flex-wrap"><Button variant="outline" onClick={() => goToQuestion(currentIndex - 1)} disabled={currentIndex === 0} className="border-white/10 text-zinc-300 hover:text-white"><ChevronLeft size={18} className="mr-2" />Previous</Button><div className="flex gap-2 flex-wrap justify-end"><Button onClick={() => setShowAnswer((value) => !value)} className={showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700" : "gradient-btn"}>{showAnswer ? <EyeOff size={18} className="mr-2" /> : <Eye size={18} className="mr-2" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button><Button onClick={() => setShowFunFact((value) => !value)} disabled={!currentQuestion.funFact} className="bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-50"><Sparkles size={18} className="mr-2" />Fun Fact</Button><Button onClick={() => goToQuestion(currentIndex + 1)} disabled={currentIndex === questions.length - 1} className="bg-[#AEB2EF] text-zinc-950 hover:bg-[#AEB2EF]/90"><ChevronRight size={18} className="mr-2" />Next</Button></div></div>
         </main>
-        {!focusMode && <aside className="space-y-3"><PhonePlayPanel joinUrl={joinUrl} copyJoinLink={copyJoinLink} players={players} answers={currentAnswers} adjustScore={adjustScore} pointsPerQuestion={Number(pointsPerQuestion) || getDefaultPoints(currentQuestion)} wagerMode={wagerMode} setMode={setPresentMode} /><LeaderboardPanel leaderboard={leaderboard} teamName={teamName} teamScore={teamScore} setTeamName={setTeamName} setTeamScore={setTeamScore} addTeam={addTeam} adjustScore={adjustScore} removeTeam={removeTeam} showLeaderboard={() => setPresentMode("leaderboard")} /><RunSheet rounds={rounds} currentIndex={currentIndex} goToQuestion={goToQuestion} /></aside>}
+        {!focusMode && <aside className="space-y-3"><PhonePlayPanel joinUrl={joinUrl} copyJoinLink={copyJoinLink} players={players} answers={currentAnswers} adjustScore={adjustScore} pointsPerQuestion={Number(pointsPerQuestion) || getDefaultPoints(currentQuestion)} wagerMode={wagerMode} setMode={setPresentMode} /><HostUpdatesPanel players={players} message={hostUpdateMessage} setMessage={setHostUpdateMessage} sendUpdate={sendHostUpdate} /><LeaderboardPanel leaderboard={leaderboard} teamName={teamName} teamScore={teamScore} setTeamName={setTeamName} setTeamScore={setTeamScore} addTeam={addTeam} adjustScore={adjustScore} removeTeam={removeTeam} showLeaderboard={() => setPresentMode("leaderboard")} /><RunSheet rounds={rounds} currentIndex={currentIndex} goToQuestion={goToQuestion} /></aside>}
       </div>
     </div>
   </div>;
@@ -332,6 +346,24 @@ const PhonePlayPanel = ({ joinUrl, copyJoinLink, players, answers, adjustScore, 
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=132x132&margin=8&data=${encodeURIComponent(joinUrl)}`;
   return <Card className="glass-card"><CardContent className="p-3"><div className="flex items-center justify-between gap-2 mb-3"><div className="flex items-center gap-2 text-white font-semibold"><Users size={18} className="text-[#71E0DC]" />Phone Play</div><Button size="sm" variant="outline" onClick={copyJoinLink} className="h-8 border-white/10 text-zinc-300 hover:text-white"><Copy size={14} className="mr-1" />Copy</Button></div><div className="grid grid-cols-[132px_1fr] gap-3 items-center rounded-lg border border-[#71E0DC]/20 bg-[#71E0DC]/10 p-3 mb-3"><div className="bg-white rounded-md p-1"><img src={qrUrl} alt="Player join QR code" className="w-[124px] h-[124px]" /></div><div className="min-w-0"><div className="flex items-center gap-2 text-[#71E0DC] font-semibold mb-2"><Link size={16} />Player join link</div><p className="text-xs text-zinc-200 break-all">{joinUrl}</p></div></div><div className="grid grid-cols-2 gap-2 mb-3"><div className="rounded-md bg-zinc-950/70 border border-white/10 p-2"><p className="text-xs text-zinc-500">Players</p><p className="text-xl font-black">{players.length}</p></div><div className="rounded-md bg-zinc-950/70 border border-white/10 p-2"><p className="text-xs text-zinc-500">Answers</p><p className="text-xl font-black">{answers.length}</p></div></div><Button size="sm" onClick={() => setMode("leaderboard")} className="w-full mb-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-100"><Trophy size={14} className="mr-2" />Show Leaderboard</Button><div className="space-y-2 max-h-48 overflow-y-auto pr-1">{answers.map((answer) => { const award = wagerMode && Number(answer.wagerAmount) > 0 ? Number(answer.wagerAmount) : pointsPerQuestion; return <div key={`${answer.playerId}-${answer.questionIndex}`} className="rounded-md border border-white/10 bg-zinc-950/60 p-2"><div className="flex items-center justify-between gap-2 mb-1"><span className="font-semibold text-sm truncate">{answer.playerName}</span><Button size="sm" onClick={() => adjustScore(answer.playerId, award)} className="h-7 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">+{award}</Button></div>{answer.wagerMode && <p className="text-xs text-purple-300 mb-1">Wager: {answer.wagerAmount}</p>}<p className="text-sm text-zinc-300 break-words">{answer.answer}</p></div>; })}{!answers.length && <p className="text-xs text-zinc-500 text-center py-3">Answers for the current question will appear here.</p>}</div></CardContent></Card>;
 };
+
+const HostUpdatesPanel = ({ players, message, setMessage, sendUpdate }) => {
+  const emailPlayers = players.filter((player) => player.updatePreference === "email" && player.updateContact);
+  const textPlayers = players.filter((player) => player.updatePreference === "text" && player.updateContact);
+  const copyContacts = async (items, label) => {
+    if (!items.length) return toast.error(`No ${label} contacts yet`);
+    try {
+      await navigator.clipboard.writeText(items.map((player) => `${player.name}: ${player.updateContact}`).join("\n"));
+      toast.success(`${label} contacts copied`);
+    } catch {
+      toast.error("Could not copy contacts");
+    }
+  };
+
+  return <Card className="glass-card"><CardContent className="p-3"><div className="flex items-center justify-between gap-2 mb-3"><div className="flex items-center gap-2 text-white font-semibold"><MessageSquare size={18} className="text-[#AEB2EF]" />Host Updates</div><Badge className="bg-zinc-800 text-zinc-300">{emailPlayers.length + textPlayers.length} opted in</Badge></div><textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Type a clue, cancellation, or update for players..." className="min-h-24 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" /><Button onClick={sendUpdate} disabled={!message.trim()} className="mt-2 w-full gradient-btn"><SendIconLabel />Send In-App Update</Button><div className="mt-3 grid grid-cols-2 gap-2"><Button size="sm" variant="outline" onClick={() => copyContacts(emailPlayers, "email")} className="border-white/10 text-zinc-300 hover:text-white"><Mail size={14} className="mr-1" />Emails ({emailPlayers.length})</Button><Button size="sm" variant="outline" onClick={() => copyContacts(textPlayers, "text")} className="border-white/10 text-zinc-300 hover:text-white"><Phone size={14} className="mr-1" />Texts ({textPlayers.length})</Button></div><p className="mt-2 text-[11px] text-zinc-500">In-app updates go to connected phones now. Email/text contacts are collected here for host follow-up.</p></CardContent></Card>;
+};
+
+const SendIconLabel = () => <><MessageSquare size={15} className="mr-2" /></>;
 
 const LeaderboardPanel = ({ leaderboard, teamName, teamScore, setTeamName, setTeamScore, addTeam, adjustScore, removeTeam, showLeaderboard }) => { const sorted = [...leaderboard].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)); return <Card className="glass-card"><CardContent className="p-3"><div className="flex items-center justify-between gap-2 mb-3"><div className="flex items-center gap-2 text-white font-semibold"><Trophy size={18} className="text-amber-300" />Leaderboard</div><Button size="sm" variant="outline" onClick={showLeaderboard} className="h-8 border-white/10 text-zinc-300 hover:text-white">Show</Button></div><div className="grid grid-cols-[1fr_76px_36px] gap-2 mb-3"><input value={teamName} onChange={(event) => setTeamName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && addTeam()} placeholder="Team name" className="h-9 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" /><input value={teamScore} onChange={(event) => setTeamScore(event.target.value)} onKeyDown={(event) => event.key === "Enter" && addTeam()} placeholder="Score" type="number" className="h-9 rounded-md bg-zinc-950 border border-white/10 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" /><Button onClick={addTeam} className="h-9 w-9 p-0 gradient-btn" aria-label="Add team"><Plus size={16} /></Button></div><div className="space-y-2 max-h-48 overflow-y-auto pr-1">{sorted.map((team) => <div key={team.id} className="rounded-md border border-white/10 bg-zinc-950/60 p-2"><div className="flex items-center justify-between gap-2 mb-2"><span className="font-semibold text-sm truncate">{team.name}</span><span className="font-black text-[#71E0DC]">{Number(team.score || 0)}</span></div><div className="flex items-center gap-1"><Button size="sm" onClick={() => adjustScore(team.id, -1)} className="h-7 flex-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200">-1</Button><Button size="sm" onClick={() => adjustScore(team.id, 1)} className="h-7 flex-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200">+1</Button><Button size="sm" variant="outline" onClick={() => removeTeam(team.id)} className="h-7 w-8 p-0 border-white/10 text-zinc-400 hover:text-red-300" aria-label="Remove team"><Trash2 size={13} /></Button></div></div>)}{!sorted.length && <p className="text-xs text-zinc-500 text-center py-3">Teams will appear here when players join from their phones.</p>}</div></CardContent></Card>; };
 
