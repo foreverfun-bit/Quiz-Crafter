@@ -57,6 +57,7 @@ const emptyQuestionForType = (type, roundName = "Imported Session", order = 1) =
   incorrect_answers: type === "true_false" ? JSON.stringify([{ text: "False", image: null }]) : JSON.stringify([]),
   fun_fact: "",
   image_url: "",
+  image_timing: "initial",
 });
 
 const parseIncorrectAnswers = (value) => {
@@ -87,6 +88,8 @@ const normalizeType = (q) => {
   if (q.question_type === "true_false" || q.question_type === "multiple_choice" || q.question_type === "written") return q.question_type;
   return "written";
 };
+
+const normalizeImageTiming = (value) => value === "after_answer" || value === "after" ? "after_answer" : "initial";
 
 const safeDate = (value) => {
   if (!value) return "No date";
@@ -321,6 +324,7 @@ const SessionDetail = () => {
           incorrect_answers: JSON.stringify([{ text: q.correct_answer === "True" ? "False" : "True", image: null }]),
           fun_fact: q.fun_fact || "",
           image_url: q.image_url || "",
+          image_timing: normalizeImageTiming(q.image_timing || q.image_display_timing),
         })),
         multiple_choice_questions: editableQuestions.multiple_choice_questions.map((q, index) => ({
           category: q.category || "",
@@ -334,6 +338,7 @@ const SessionDetail = () => {
           incorrect_answers: q.incorrect_answers || JSON.stringify([]),
           fun_fact: q.fun_fact || "",
           image_url: q.image_url || "",
+          image_timing: normalizeImageTiming(q.image_timing || q.image_display_timing),
         })),
         written_questions: [...editableQuestions.written_questions, ...editableQuestions.picture_questions].map((q, index) => ({
           category: q.category || "",
@@ -347,6 +352,7 @@ const SessionDetail = () => {
           incorrect_answers: JSON.stringify([]),
           fun_fact: q.fun_fact || "",
           image_url: q.image_url || "",
+          image_timing: normalizeImageTiming(q.image_timing || q.image_display_timing),
         })),
         picture_questions: [],
       };
@@ -400,7 +406,7 @@ const SessionDetail = () => {
         const q = entry.question;
         text += `${index + 1}. [${q.category || "Uncategorized"}] ${q.question_text || ""}\n`;
         text += `   A: ${q.correct_answer || ""}\n`;
-        if (q.image_url) text += `   Image: ${q.image_url}\n`;
+        if (q.image_url) text += `   Image: ${q.image_url} (${normalizeImageTiming(q.image_timing || q.image_display_timing) === "after_answer" ? "after answer" : "before answer"})\n`;
         const incorrect = parseIncorrectAnswers(q.incorrect_answers);
         if (incorrect.length) text += `   Options: ${incorrect.map((a) => a.text).join(", ")}\n`;
         if (q.fun_fact) text += `   Fun Fact: ${q.fun_fact}\n`;
@@ -413,7 +419,7 @@ const SessionDetail = () => {
   };
 
   const handleExportCSV = async () => {
-    const header = ["round", "order", "type", "category", "question", "correct_answer", "incorrect_answers", "fun_fact", "image_url", "correct_answer_image"];
+    const header = ["round", "order", "type", "category", "question", "correct_answer", "incorrect_answers", "fun_fact", "image_url", "image_timing", "correct_answer_image"];
     const rows = getFlatEntries().map((entry) => {
       const q = entry.question;
       return {
@@ -426,6 +432,7 @@ const SessionDetail = () => {
         incorrect_answers: q?.incorrect_answers || "",
         fun_fact: q?.fun_fact || "",
         image_url: q?.image_url || "",
+        image_timing: normalizeImageTiming(q?.image_timing || q?.image_display_timing),
         correct_answer_image: q?.correct_answer_image || "",
       };
     });
@@ -584,7 +591,7 @@ const QuestionMeta = ({ question }) => {
         <Icon size={12} className={`mr-1 ${config.color}`} />
         {config.shortLabel}
       </Badge>
-      {question.image_url && <Badge className="bg-amber-500/10 text-amber-300 border border-amber-500/20 text-xs"><Image size={12} className="mr-1" />Media</Badge>}
+      {question.image_url && <Badge className="bg-amber-500/10 text-amber-300 border border-amber-500/20 text-xs"><Image size={12} className="mr-1" />{normalizeImageTiming(question.image_timing || question.image_display_timing) === "after_answer" ? "After" : "Before"}</Badge>}
     </div>
   );
 };
@@ -644,9 +651,13 @@ const SessionQuestionCard = ({ entry, index, canEdit, onUpdate, onMove, onRemove
               <Input value={question.correct_answer || ""} onChange={(e) => onUpdate(storageType, importedIndex, "correct_answer", e.target.value)} placeholder="Correct answer" className="bg-zinc-950/50 border-white/10 text-white" />
             </EditField>
           )}
-          <EditField label="Question Image / Media URL">
+          <div className="rounded-md border border-[#71E0DC]/20 bg-zinc-950/30 p-3 space-y-3">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+              <span className="text-sm font-medium text-zinc-300">Media</span>
+              <TimingButtons value={question.image_timing || question.image_display_timing} onChange={(value) => onUpdate(storageType, importedIndex, "image_timing", value)} />
+            </div>
             <Input value={question.image_url || ""} onChange={(e) => onUpdate(storageType, importedIndex, "image_url", e.target.value)} placeholder="Optional image/media URL" className="bg-zinc-950/50 border-white/10 text-white" />
-          </EditField>
+          </div>
           <EditField label="Correct Answer Image URL">
             <Input value={question.correct_answer_image || ""} onChange={(e) => onUpdate(storageType, importedIndex, "correct_answer_image", e.target.value)} placeholder="Optional correct answer image URL" className="bg-zinc-950/50 border-white/10 text-white" />
           </EditField>
@@ -666,7 +677,7 @@ const SessionQuestionCard = ({ entry, index, canEdit, onUpdate, onMove, onRemove
           {question.fun_fact && <p className="text-zinc-400 text-xs mb-2 leading-relaxed">{question.fun_fact}</p>}
           {question.image_url && (
             <div className="mb-3 rounded-md border border-[#71E0DC]/20 bg-zinc-950/30 p-3">
-              <p className="text-amber-300 text-xs mb-2">Media attached</p>
+              <p className="text-amber-300 text-xs mb-2">Media attached: {normalizeImageTiming(question.image_timing || question.image_display_timing) === "after_answer" ? "after answer" : "before answer"}</p>
               <img src={buildStorageUrl(question.image_url)} alt="Question" className="w-full max-w-xs rounded-md border border-white/10" data-testid={`session-question-image-${entry.roundOrder}-${index}`} />
             </div>
           )}
@@ -687,3 +698,14 @@ const SessionQuestionCard = ({ entry, index, canEdit, onUpdate, onMove, onRemove
 };
 
 export default SessionDetail;
+
+const TimingButtons = ({ value, onChange }) => (
+  <div className="inline-flex rounded-md bg-zinc-900 p-1">
+    <button type="button" onClick={() => onChange("initial")} className={`px-3 py-1.5 rounded text-xs font-semibold ${normalizeImageTiming(value) === "initial" ? "bg-zinc-600 text-white" : "text-zinc-400 hover:text-white"}`}>
+      Before Answer
+    </button>
+    <button type="button" onClick={() => onChange("after_answer")} className={`px-3 py-1.5 rounded text-xs font-semibold ${normalizeImageTiming(value) === "after_answer" ? "bg-zinc-600 text-white" : "text-zinc-400 hover:text-white"}`}>
+      After Answer
+    </button>
+  </div>
+);
