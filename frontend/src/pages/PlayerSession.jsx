@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent } from "../components/ui/card";
-import { CheckCircle, Send, Tags, Timer, Trophy } from "lucide-react";
+import { CheckCircle, Send, Tags, ThumbsDown, ThumbsUp, Timer, Trophy } from "lucide-react";
 import { toast } from "sonner";
 
 const makePlayerId = () => `player-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -132,6 +132,9 @@ const PlayerSession = () => {
   const acceptingAnswers = timeRemaining === null || timeRemaining > 0;
   const pointsPerQuestion = Number(hostState?.pointsPerQuestion || 1);
   const wagerMode = Boolean(hostState?.wagerMode);
+  const wagerLimit = Number(hostState?.wagerLimit || 0);
+  const effectiveWagerLimit = wagerMode ? Math.max(0, Math.min(wagerLimit || Number.POSITIVE_INFINITY, Number(myScore || 0))) : 0;
+  const wagerTiming = hostState?.wagerTiming === "after_answer" ? "after_answer" : "before_answer";
   const gameStarted = hasGameStarted(hostState);
   const activeRoundCategories = useMemo(() => {
     const roundName = currentQuestion?.roundName;
@@ -159,7 +162,7 @@ const PlayerSession = () => {
     const key = String(hostState.currentIndex);
     setFeedbackByQuestion((current) => ({ ...current, [key]: sentiment }));
     channelRef.current?.send({ type: "broadcast", event: "feedback_submit", payload: { playerId: player.id, playerName: player.name, sentiment, questionIndex: hostState.currentIndex, questionId: currentQuestion.id, questionText: currentQuestion.questionText, category: currentQuestion.category || "Uncategorized", roundName: currentQuestion.roundName || "Round", submittedAt: new Date().toISOString() } });
-    toast.success(sentiment === "like" ? "Question liked" : "Question disliked");
+    toast.success("Feedback saved");
   };
 
   const submitCategoryFeedback = (category, sentiment) => {
@@ -167,21 +170,36 @@ const PlayerSession = () => {
     const key = `${hostState.currentIndex}-${category}`;
     setFeedbackByCategory((current) => ({ ...current, [key]: sentiment }));
     channelRef.current?.send({ type: "broadcast", event: "category_feedback_submit", payload: { playerId: player.id, playerName: player.name, sentiment, category, questionIndex: hostState.currentIndex, roundName: currentQuestion?.roundName || "Round", submittedAt: new Date().toISOString() } });
-    toast.success(sentiment === "like" ? "Category liked" : "Category disliked");
+    toast.success("Feedback saved");
   };
 
   const submitAnswer = (value) => {
     if (!acceptingAnswers) return toast.error("Time is up");
     const finalAnswer = String(value || answer).trim();
     if (!finalAnswer || !player || !currentQuestion) return;
-    const wager = wagerMode ? Number(wagerAmount || 0) : 0;
-    if (wagerMode && wager <= 0) return toast.error("Enter a wager");
+    const shouldWagerBefore = wagerMode && wagerTiming !== "after_answer";
+    const wager = shouldWagerBefore ? Number(wagerAmount || 0) : 0;
+    if (shouldWagerBefore && wager <= 0) return toast.error("Enter a wager");
+    if (shouldWagerBefore && effectiveWagerLimit <= 0) return toast.error("You need points to wager");
+    if (shouldWagerBefore && wager > effectiveWagerLimit) return toast.error(`Wager up to ${effectiveWagerLimit}`);
     const awardedPoints = wagerMode ? wager : pointsPerQuestion;
-    const payload = { playerId: player.id, playerName: player.name, answer: finalAnswer, points: awardedPoints, wagerAmount: wager, wagerMode, questionIndex: hostState.currentIndex, questionId: currentQuestion.id, questionText: currentQuestion.questionText, submittedAt: new Date().toISOString() };
+    const payload = { playerId: player.id, playerName: player.name, answer: finalAnswer, points: awardedPoints, wagerAmount: wager, wagerMode, wagerLimit, wagerCap: effectiveWagerLimit, scoreAtWager: Number(myScore || 0), wagerTiming, questionIndex: hostState.currentIndex, questionId: currentQuestion.id, questionText: currentQuestion.questionText, submittedAt: new Date().toISOString() };
     channelRef.current?.send({ type: "broadcast", event: "answer_submit", payload });
     setSubmitted(payload);
     setAnswer("");
     toast.success("Answer submitted");
+  };
+
+  const submitWager = () => {
+    if (!submitted || !wagerMode || wagerTiming !== "after_answer") return;
+    const wager = Number(wagerAmount || 0);
+    if (wager <= 0) return toast.error("Enter a wager");
+    if (effectiveWagerLimit <= 0) return toast.error("You need points to wager");
+    if (wager > effectiveWagerLimit) return toast.error(`Wager up to ${effectiveWagerLimit}`);
+    const payload = { ...submitted, points: wager, wagerAmount: wager, wagerLimit, wagerCap: effectiveWagerLimit, scoreAtWager: Number(myScore || 0), wagerTiming, submittedAt: new Date().toISOString() };
+    channelRef.current?.send({ type: "broadcast", event: "answer_submit", payload });
+    setSubmitted(payload);
+    toast.success("Wager submitted");
   };
 
   if (!player) {
@@ -197,7 +215,7 @@ const PlayerSession = () => {
         {gameStarted && hostState?.mode === "leaderboard" && <LeaderboardView leaderboard={leaderboard} playerId={player.id} />}
         {gameStarted && hostState?.mode === "categories" && <RoundIntroFeedback roundName={currentQuestion?.roundName || "Round"} categories={activeRoundCategories} selectedByCategory={feedbackByCategory} currentIndex={hostState.currentIndex} onSelect={submitCategoryFeedback} />}
         {gameStarted && hostState && hostState.mode !== "leaderboard" && hostState.mode !== "categories" && !currentQuestion && <div className="text-center"><p className="text-zinc-400">Waiting for the next question.</p></div>}
-        {gameStarted && hostState && hostState.mode !== "leaderboard" && hostState.mode !== "categories" && currentQuestion && <div className="w-full max-w-md"><div className="text-center mb-5"><div className="flex items-center justify-center gap-2 flex-wrap mb-3"><Badge className="bg-zinc-800 text-zinc-300">{currentQuestion.roundName || "Round"} · {currentQuestion.category}</Badge>{wagerMode && <Badge className="bg-purple-500/15 text-purple-300 border border-purple-500/20">Bonus Wager</Badge>}{timeRemaining !== null && <Badge className={timeRemaining === 0 ? "bg-red-500/15 text-red-300 border border-red-500/20" : "bg-[#AEB2EF]/15 text-[#AEB2EF] border border-[#AEB2EF]/20"}><Timer size={13} className="mr-1" />{timeRemaining}s</Badge>}</div><h2 className="text-2xl font-black leading-tight">{currentQuestion.questionText}</h2><FeedbackButtons selected={feedbackByQuestion[String(hostState.currentIndex)]} onSelect={submitFeedback} /></div>{hostState.showAnswer ? <Card className="border-emerald-500/30 bg-emerald-500/10"><CardContent className="p-5 text-center"><p className="text-zinc-400 text-sm uppercase tracking-wide mb-1">Answer</p><p className="text-3xl font-black text-emerald-300">{currentQuestion.answer}</p>{hostState.showFunFact && currentQuestion.funFact && <p className="text-zinc-300 mt-3">{currentQuestion.funFact}</p>}</CardContent></Card> : submitted?.questionIndex === hostState.currentIndex ? <Card className="glass-card"><CardContent className="p-6 text-center"><CheckCircle className="mx-auto text-emerald-300 mb-3" size={42} /><h3 className="text-2xl font-black mb-1">Answer Locked</h3><p className="text-zinc-400">You answered: <span className="text-white font-bold">{submitted.answer}</span></p>{submitted.wagerMode && <p className="text-purple-300 font-bold mt-2">Wager: {submitted.wagerAmount}</p>}</CardContent></Card> : !acceptingAnswers ? <Card className="border-red-500/30 bg-red-500/10"><CardContent className="p-6 text-center"><Timer className="mx-auto text-red-300 mb-3" size={42} /><h3 className="text-2xl font-black">Time&apos;s Up</h3><p className="text-zinc-400 mt-1">Waiting for the answer reveal.</p></CardContent></Card> : <AnswerForm question={currentQuestion} answer={answer} setAnswer={setAnswer} submitAnswer={submitAnswer} wagerMode={wagerMode} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} />}</div>}
+        {gameStarted && hostState && hostState.mode !== "leaderboard" && hostState.mode !== "categories" && currentQuestion && <div className="w-full max-w-md"><div className="text-center mb-5"><div className="flex items-center justify-center gap-2 flex-wrap mb-3"><Badge className="bg-zinc-800 text-zinc-300">{currentQuestion.roundName || "Round"} Â· {currentQuestion.category}</Badge>{wagerMode && <Badge className="bg-purple-500/15 text-purple-300 border border-purple-500/20">Wager up to {effectiveWagerLimit}</Badge>}{timeRemaining !== null && <Badge className={timeRemaining === 0 ? "bg-red-500/15 text-red-300 border border-red-500/20" : "bg-[#AEB2EF]/15 text-[#AEB2EF] border border-[#AEB2EF]/20"}><Timer size={13} className="mr-1" />{timeRemaining}s</Badge>}</div><h2 className="text-2xl font-black leading-tight">{currentQuestion.questionText}</h2><FeedbackButtons selected={feedbackByQuestion[String(hostState.currentIndex)]} onSelect={submitFeedback} /></div>{hostState.showAnswer ? <Card className="border-emerald-500/30 bg-emerald-500/10"><CardContent className="p-5 text-center"><p className="text-zinc-400 text-sm uppercase tracking-wide mb-1">Answer</p><p className="text-3xl font-black text-emerald-300">{currentQuestion.answer}</p>{hostState.showFunFact && currentQuestion.funFact && <p className="text-zinc-300 mt-3">{currentQuestion.funFact}</p>}</CardContent></Card> : submitted?.questionIndex === hostState.currentIndex ? <Card className="glass-card"><CardContent className="p-6 text-center"><CheckCircle className="mx-auto text-emerald-300 mb-3" size={42} /><h3 className="text-2xl font-black mb-1">Answer Locked</h3><p className="text-zinc-400">You answered: <span className="text-white font-bold">{submitted.answer}</span></p>{submitted.wagerMode && wagerTiming === "after_answer" && !Number(submitted.wagerAmount) ? <div className="mt-4"><WagerInput wagerMode wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={effectiveWagerLimit} /><Button onClick={submitWager} className="w-full gradient-btn">Submit Wager</Button></div> : submitted.wagerMode && <p className="text-purple-300 font-bold mt-2">Wager: {submitted.wagerAmount}</p>}</CardContent></Card> : !acceptingAnswers ? <Card className="border-red-500/30 bg-red-500/10"><CardContent className="p-6 text-center"><Timer className="mx-auto text-red-300 mb-3" size={42} /><h3 className="text-2xl font-black">Time&apos;s Up</h3><p className="text-zinc-400 mt-1">Waiting for the answer reveal.</p></CardContent></Card> : <AnswerForm question={currentQuestion} answer={answer} setAnswer={setAnswer} submitAnswer={submitAnswer} wagerMode={wagerMode && wagerTiming !== "after_answer"} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={effectiveWagerLimit} />}</div>}
       </main>
     </div>
   );
@@ -271,31 +289,63 @@ const RoundIntroFeedback = ({ roundName, categories, selectedByCategory, current
     <div className="space-y-3 text-left">
       {categories.map((category) => {
         const selected = selectedByCategory[`${currentIndex}-${category}`];
-        return <div key={category} className="rounded-xl border border-white/10 bg-zinc-950/70 p-3"><p className="font-bold text-white mb-2">{category}</p><div className="grid grid-cols-2 gap-2"><Button type="button" onClick={() => onSelect(category, "like")} className={selected === "like" ? "bg-emerald-500/25 text-emerald-200 border border-emerald-500/40 hover:bg-emerald-500/30" : "bg-zinc-900 text-zinc-200 border border-white/10 hover:bg-zinc-800"}>Like Category</Button><Button type="button" onClick={() => onSelect(category, "dislike")} className={selected === "dislike" ? "bg-red-500/25 text-red-200 border border-red-500/40 hover:bg-red-500/30" : "bg-zinc-900 text-zinc-200 border border-white/10 hover:bg-zinc-800"}>Dislike Category</Button></div></div>;
+        return (
+          <div key={category} className="rounded-xl border border-white/10 bg-zinc-950/70 px-4 py-3.5">
+            <div className="flex items-center justify-between gap-4">
+              <p className="min-w-0 flex-1 text-xl font-black leading-tight text-white">{category}</p>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <FeedbackIconButton label={`Thumbs up for ${category}`} selected={selected === "like"} tone="like" icon={ThumbsUp} onClick={() => onSelect(category, "like")} />
+                <FeedbackIconButton label={`Thumbs down for ${category}`} selected={selected === "dislike"} tone="dislike" icon={ThumbsDown} onClick={() => onSelect(category, "dislike")} />
+              </div>
+            </div>
+          </div>
+        );
       })}
       {!categories.length && <p className="text-sm text-zinc-500 text-center rounded-xl border border-white/10 bg-zinc-950/70 p-4">Categories will appear when this round has categories saved.</p>}
     </div>
   </div>
 );
 
+const FeedbackIconButton = ({ label, selected, tone, icon: Icon, onClick }) => {
+  const selectedClass = tone === "like"
+    ? "text-[#71E0DC] ring-[#71E0DC]/55 shadow-[0_0_18px_rgba(113,224,220,0.22)]"
+    : "text-red-300 ring-red-400/45 shadow-[0_0_18px_rgba(248,113,113,0.16)]";
+  const hoverClass = tone === "like" ? "hover:text-[#71E0DC]" : "hover:text-red-300";
+
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      className={`inline-flex h-11 w-11 items-center justify-center rounded-full transition focus:outline-none focus:ring-2 focus:ring-[#71E0DC]/50 ${selected ? `bg-white/[0.03] ring-1 ${selectedClass}` : `bg-transparent text-zinc-500 hover:bg-white/[0.04] ${hoverClass}`}`}
+    >
+      <Icon size={30} strokeWidth={1.7} />
+    </button>
+  );
+};
+
 const FeedbackButtons = ({ selected, onSelect }) => (
-  <div className="mt-4 rounded-xl border border-white/10 bg-zinc-950/60 p-3 text-left">
-    <p className="text-xs text-zinc-500 mb-2">Rate this question for the host.</p>
-    <div className="grid grid-cols-2 gap-2">
-      <Button type="button" onClick={() => onSelect("like")} className={selected === "like" ? "bg-emerald-500/25 text-emerald-200 border border-emerald-500/40 hover:bg-emerald-500/30" : "bg-zinc-900 text-zinc-200 border border-white/10 hover:bg-zinc-800"}>Like</Button>
-      <Button type="button" onClick={() => onSelect("dislike")} className={selected === "dislike" ? "bg-red-500/25 text-red-200 border border-red-500/40 hover:bg-red-500/30" : "bg-zinc-900 text-zinc-200 border border-white/10 hover:bg-zinc-800"}>Dislike</Button>
+  <div className="fixed right-4 top-[7.25rem] z-20 flex items-center gap-2 rounded-full border border-white/10 bg-zinc-950/85 px-2.5 py-1.5 shadow-xl shadow-black/30 backdrop-blur">
+    <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-500">Rate</p>
+    <div className="flex items-center gap-1">
+      <FeedbackIconButton label="Thumbs up for this question" selected={selected === "like"} tone="like" icon={ThumbsUp} onClick={() => onSelect("like")} />
+      <FeedbackIconButton label="Thumbs down for this question" selected={selected === "dislike"} tone="dislike" icon={ThumbsDown} onClick={() => onSelect("dislike")} />
     </div>
   </div>
 );
 
 const LeaderboardView = ({ leaderboard, playerId }) => <div className="w-full max-w-md"><div className="text-center mb-5"><Trophy className="mx-auto text-amber-300 mb-2" size={38} /><h2 className="text-3xl font-black">Leaderboard</h2></div><div className="space-y-2">{leaderboard.map((team, index) => <div key={team.id || team.name} className={`flex items-center justify-between gap-3 rounded-lg border px-4 py-3 ${team.id === playerId ? "border-[#71E0DC]/50 bg-[#71E0DC]/10" : "border-white/10 bg-zinc-950/70"}`}><div className="flex items-center gap-3 min-w-0"><span className="font-black text-zinc-500">#{index + 1}</span><span className="font-bold truncate">{team.name}</span></div><span className="font-black text-[#71E0DC]">{Number(team.score || 0)}</span></div>)}</div></div>;
 
-const WagerInput = ({ wagerMode, wagerAmount, setWagerAmount }) => wagerMode ? <div className="mb-3"><label className="text-zinc-400 text-sm block mb-1.5">Wager</label><input value={wagerAmount} onChange={(event) => setWagerAmount(event.target.value)} type="number" min="1" inputMode="numeric" placeholder="Enter wager" className="w-full h-12 rounded-lg bg-zinc-950 border border-purple-500/30 px-3 text-white text-lg outline-none focus:border-purple-400" /></div> : null;
+const WagerInput = ({ wagerMode, wagerAmount, setWagerAmount, wagerLimit }) => wagerMode ? <div className="mb-3"><label className="text-zinc-400 text-sm block mb-1.5">Wager{wagerLimit ? ` up to ${wagerLimit}` : ""}</label><input value={wagerAmount} onChange={(event) => setWagerAmount(event.target.value)} type="number" min="1" max={wagerLimit || undefined} inputMode="numeric" placeholder="Enter wager" className="w-full h-12 rounded-lg bg-zinc-950 border border-purple-500/30 px-3 text-white text-lg outline-none focus:border-purple-400" /></div> : null;
 
-const AnswerForm = ({ question, answer, setAnswer, submitAnswer, wagerMode, wagerAmount, setWagerAmount }) => {
-  if (question.type === "true_false") return <><WagerInput wagerMode={wagerMode} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} /><div className="grid grid-cols-2 gap-3"><Button onClick={() => submitAnswer("True")} className="h-16 text-xl font-black bg-emerald-500/20 border-2 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30">True</Button><Button onClick={() => submitAnswer("False")} className="h-16 text-xl font-black bg-red-500/20 border-2 border-red-500/40 text-red-300 hover:bg-red-500/30">False</Button></div></>;
-  if (question.type === "multiple_choice" && question.options?.length) return <><WagerInput wagerMode={wagerMode} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} /><div className="space-y-3">{question.options.map((option, index) => <Button key={index} onClick={() => submitAnswer(option)} className="w-full min-h-14 whitespace-normal text-left justify-start bg-zinc-900 border border-white/10 text-white hover:bg-zinc-800 px-4 py-3">{option}</Button>)}</div></>;
-  return <><WagerInput wagerMode={wagerMode} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} /><div className="flex gap-2"><input value={answer} onChange={(event) => setAnswer(event.target.value)} onKeyDown={(event) => event.key === "Enter" && submitAnswer()} placeholder="Type your answer" className="min-w-0 flex-1 h-14 rounded-lg bg-zinc-950 border border-white/10 px-3 text-white text-lg outline-none focus:border-[#71E0DC]/60" autoFocus /><Button onClick={() => submitAnswer()} disabled={!answer.trim()} className="h-14 px-5 gradient-btn"><Send size={20} /></Button></div></>;
+const AnswerForm = ({ question, answer, setAnswer, submitAnswer, wagerMode, wagerAmount, setWagerAmount, wagerLimit }) => {
+  if (question.type === "true_false") return <><WagerInput wagerMode={wagerMode} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={wagerLimit} /><div className="grid grid-cols-2 gap-3"><Button onClick={() => submitAnswer("True")} className="h-16 text-xl font-black bg-emerald-500/20 border-2 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30">True</Button><Button onClick={() => submitAnswer("False")} className="h-16 text-xl font-black bg-red-500/20 border-2 border-red-500/40 text-red-300 hover:bg-red-500/30">False</Button></div></>;
+  if (question.type === "multiple_choice" && question.options?.length) return <><WagerInput wagerMode={wagerMode} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={wagerLimit} /><div className="space-y-3">{question.options.map((option, index) => <Button key={index} onClick={() => submitAnswer(option)} className="w-full min-h-14 whitespace-normal text-left justify-start bg-zinc-900 border border-white/10 text-white hover:bg-zinc-800 px-4 py-3">{option}</Button>)}</div></>;
+  return <><WagerInput wagerMode={wagerMode} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={wagerLimit} /><div className="flex gap-2"><input value={answer} onChange={(event) => setAnswer(event.target.value)} onKeyDown={(event) => event.key === "Enter" && submitAnswer()} placeholder="Type your answer" className="min-w-0 flex-1 h-14 rounded-lg bg-zinc-950 border border-white/10 px-3 text-white text-lg outline-none focus:border-[#71E0DC]/60" autoFocus /><Button onClick={() => submitAnswer()} disabled={!answer.trim()} className="h-14 px-5 gradient-btn"><Send size={20} /></Button></div></>;
 };
 
 export default PlayerSession;
+
+
+
