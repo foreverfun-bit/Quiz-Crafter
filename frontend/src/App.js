@@ -275,6 +275,7 @@ function App() {
             <Route path="/write-question" element={<ProtectedRoute><AppLayout><WriteQuestion /></AppLayout></ProtectedRoute>} />
             <Route path="/library" element={<ProtectedRoute><AppLayout><Library /></AppLayout></ProtectedRoute>} />
             <Route path="/build" element={<ProtectedRoute><AppLayout><BuildSession /></AppLayout></ProtectedRoute>} />
+            <Route path="/build/:sessionId" element={<ProtectedRoute><AppLayout><BuildSession /></AppLayout></ProtectedRoute>} />
             <Route path="/past-sessions" element={<ProtectedRoute><AppLayout><PastSessions /></AppLayout></ProtectedRoute>} />
             <Route path="/import" element={<ProtectedRoute><AppLayout><ImportCSV /></AppLayout></ProtectedRoute>} />
             <Route path="/session/:id" element={<ProtectedRoute><AppLayout><SessionDetail /></AppLayout></ProtectedRoute>} />
