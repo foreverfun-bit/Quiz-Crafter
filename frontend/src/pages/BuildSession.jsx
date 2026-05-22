@@ -115,6 +115,7 @@ const BuildSession = () => {
   const [editingSessionId, setEditingSessionId] = useState(sessionId || null);
 
   useEffect(() => { if (!sessionId) localStorage.setItem(BUILD_STORAGE_KEY, JSON.stringify({ sessionName, rounds, activeRoundId, theme, difficulty, typeFilter, generateType, generateCount, includeImageIdeas })); }, [sessionId, sessionName, rounds, activeRoundId, theme, difficulty, typeFilter, generateType, generateCount, includeImageIdeas]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { fetchBuilderData(); }, [sessionId]);
   const clearSavedState = () => { localStorage.removeItem(BUILD_STORAGE_KEY); localStorage.removeItem("trivia-flex-round-builder-state-v4"); localStorage.removeItem("trivia-flex-round-builder-state-v3"); localStorage.removeItem("trivia-flex-round-builder-state-v2"); };
   const scrollToLibrary = () => window.setTimeout(() => document.getElementById("build-session-library")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);

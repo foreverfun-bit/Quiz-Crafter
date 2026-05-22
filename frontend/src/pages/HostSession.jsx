@@ -266,7 +266,7 @@ const HostSession = () => {
     setWagerLimit(Number(currentQuestion.wagerLimit || 0));
     setWagerTiming(normalizeWagerTiming(currentQuestion.wagerTiming));
     setWagerMode(Number(currentQuestion.wagerLimit || 0) > 0);
-  }, [currentQuestion?.id]);
+  }, [currentQuestion]);
 
   useEffect(() => {
     localStorage.setItem(`quiz-crafter-leaderboard-${id}`, JSON.stringify(leaderboard));

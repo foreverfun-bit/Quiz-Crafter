@@ -149,6 +149,7 @@ const SessionDetail = () => {
 
   useEffect(() => {
     fetchSessionData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   const isImportedSession = !!session?.is_past;
