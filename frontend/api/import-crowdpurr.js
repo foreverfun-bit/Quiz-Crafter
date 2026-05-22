@@ -113,7 +113,7 @@ function detectQuestionType(rawType, correctAnswer, questionImage) {
   return "written";
 }
 
-function normalizeCrowdpurrArrayRow(row) {
+function normalizeCrowdpurrArrayRow(row, index = 0) {
   /*
     Crowdpurr column positions from export:
     A / 0 = Question
@@ -179,6 +179,9 @@ function normalizeCrowdpurrArrayRow(row) {
 
   return {
     category: "Imported",
+    round_name: "Imported",
+    round_order: 1,
+    source_order: index + 1,
     question_text: stripQuestionNumber(questionRaw),
     correct_answer: correctParsed.text,
     correct_answer_image: correctAnswerImage,
@@ -269,7 +272,7 @@ module.exports = async function handler(req, res) {
     });
 
     const normalizedQuestions = dataRows
-      .map(normalizeCrowdpurrArrayRow)
+      .map((row, index) => normalizeCrowdpurrArrayRow(row, index))
       .filter(Boolean);
 
     if (!normalizedQuestions.length) {
