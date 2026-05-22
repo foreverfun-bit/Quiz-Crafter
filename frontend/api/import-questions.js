@@ -145,15 +145,9 @@ function getRoundSortValue(value, fallback) {
 }
 
 function compareRoundNames(a, b) {
-  const roundA = Number.isFinite(a.round_order) ? a.round_order : getRoundSortValue(a.round_name || a.category, a.source_order || 0);
-  const roundB = Number.isFinite(b.round_order) ? b.round_order : getRoundSortValue(b.round_name || b.category, b.source_order || 0);
+  const roundA = Number.isFinite(a.round_order) ? a.round_order : getRoundSortValue(a.round_name, 1);
+  const roundB = Number.isFinite(b.round_order) ? b.round_order : getRoundSortValue(b.round_name, 1);
   if (roundA !== roundB) return roundA - roundB;
-
-  const nameCompare = clean(a.round_name || a.category).localeCompare(clean(b.round_name || b.category), undefined, {
-    numeric: true,
-    sensitivity: "base",
-  });
-  if (nameCompare !== 0) return nameCompare;
 
   return (a.source_order || 0) - (b.source_order || 0);
 }
@@ -169,11 +163,11 @@ function normalizeRecord(record) {
 
   let questionType = record.question_type || "written";
   const wrongAnswers = unique(record.incorrect_answers || [], correctAnswer);
-  const roundName = clean(record.round_name || record.category) || "Imported";
+  const roundName = clean(record.round_name) || "Imported";
   const base = {
     category: clean(record.category),
     round_name: roundName,
-    round_order: Number.isFinite(Number(record.round_order)) ? Number(record.round_order) : getRoundSortValue(roundName, record.source_order || 0),
+    round_order: Number.isFinite(Number(record.round_order)) ? Number(record.round_order) : getRoundSortValue(roundName, 1),
     source_order: Number.isFinite(Number(record.source_order)) ? Number(record.source_order) : 0,
   };
 
@@ -258,11 +252,16 @@ function normalizeObjectRows(rows, requestedSource) {
     const questionType = detectQuestionType(rawType, correctAnswer, wrongAnswers, imageUrl);
     const fallbackRoundName = requestedSource === "trivianow" ? "TriviaNow" : "Imported";
     const finalRoundName = roundName || fallbackRoundName;
+    const finalRoundOrder = explicitRoundOrder
+      ? Number(explicitRoundOrder)
+      : roundName
+        ? getRoundSortValue(finalRoundName, 1)
+        : 1;
 
     return normalizeRecord({
       category,
       round_name: finalRoundName,
-      round_order: explicitRoundOrder ? Number(explicitRoundOrder) : getRoundSortValue(finalRoundName, index + 1),
+      round_order: finalRoundOrder,
       source_order: explicitQuestionOrder ? Number(explicitQuestionOrder) : index + 1,
       question_text: stripQuestionNumber(question),
       correct_answer: correctAnswer,
