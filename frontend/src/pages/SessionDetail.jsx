@@ -133,6 +133,45 @@ const makeRoundGroups = (entries) => {
   return [...groups.values()];
 };
 
+const getLinkedLibraryId = (question) => question?.library_question_id || question?.library_id || question?.question_id || null;
+
+const getLibraryPayload = (question, type, userId) => ({
+  user_id: userId,
+  category: question.category || "General",
+  question_text: question.question_text || "",
+  question_type: normalizeType({ question_type: type || question.question_type }),
+  correct_answer: question.correct_answer || "",
+  incorrect_answers: type === "multiple_choice" || question.question_type === "multiple_choice" ? question.incorrect_answers || null : null,
+  fun_fact: question.fun_fact || null,
+  image_url: question.image_url || null,
+  image_timing: normalizeImageTiming(question.image_timing || question.image_display_timing),
+});
+
+const withSupportedPayloadFallbacks = (payload) => [
+  payload,
+  (({ image_timing, ...rest }) => rest)(payload),
+  (({ image_timing, image_url, ...rest }) => rest)(payload),
+  (({ image_timing, image_url, fun_fact, ...rest }) => rest)(payload),
+];
+
+const mergeLibraryQuestion = (sessionQuestion, libraryQuestion) => {
+  if (!libraryQuestion) return sessionQuestion;
+
+  return {
+    ...sessionQuestion,
+    library_question_id: libraryQuestion.id,
+    category: libraryQuestion.category || sessionQuestion.category || "",
+    question_text: libraryQuestion.question_text || sessionQuestion.question_text || "",
+    correct_answer: libraryQuestion.correct_answer || sessionQuestion.correct_answer || "",
+    correct_answer_image: libraryQuestion.correct_answer_image || sessionQuestion.correct_answer_image || "",
+    question_type: normalizeType(libraryQuestion),
+    incorrect_answers: libraryQuestion.incorrect_answers ?? sessionQuestion.incorrect_answers ?? null,
+    fun_fact: libraryQuestion.fun_fact || sessionQuestion.fun_fact || "",
+    image_url: libraryQuestion.image_url || sessionQuestion.image_url || "",
+    image_timing: normalizeImageTiming(libraryQuestion.image_timing || libraryQuestion.image_display_timing || sessionQuestion.image_timing || sessionQuestion.image_display_timing),
+  };
+};
+
 const SessionDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -205,7 +244,7 @@ const SessionDetail = () => {
       const { data: sessionData, error: sessionError } = await supabase.from("sessions").select("*").eq("id", id).single();
       if (sessionError) throw sessionError;
 
-      const importedArrays = normalizeImportedArrays(sessionData);
+      const importedArrays = await hydrateImportedArrays(normalizeImportedArrays(sessionData));
       setEditableSessionName(sessionData.name || sessionData.session_name || "Untitled Session");
       setEditableQuestions(importedArrays);
 
@@ -237,7 +276,7 @@ const SessionDetail = () => {
         questionMap = Object.fromEntries((questionData || []).map((q) => [q.id, q]));
       }
 
-      setSession(sessionData);
+      setSession({ ...sessionData, ...importedArrays });
       setRounds(roundData || []);
       setSlots(slotData);
       setQuestionsById(questionMap);
@@ -262,6 +301,83 @@ const SessionDetail = () => {
 
       return { ...prev, [key]: updated };
     });
+  };
+
+  const hydrateImportedArrays = async (arrays) => {
+    const linkedIds = [...new Set(Object.values(arrays).flatMap((items) => items.map(getLinkedLibraryId).filter(Boolean)))];
+    if (!linkedIds.length) return arrays;
+
+    const { data, error } = await supabase.from("questions").select("*").in("id", linkedIds);
+    if (error) {
+      console.warn("Could not hydrate session questions from library:", error.message);
+      return arrays;
+    }
+
+    const libraryById = Object.fromEntries((data || []).map((question) => [String(question.id), question]));
+    return Object.fromEntries(
+      Object.entries(arrays).map(([key, items]) => [
+        key,
+        items.map((question) => mergeLibraryQuestion(question, libraryById[String(getLinkedLibraryId(question))])),
+      ])
+    );
+  };
+
+  const saveLibraryQuestion = async ({ question, type, userId }) => {
+    const payload = getLibraryPayload(question, type, userId);
+    const linkedId = getLinkedLibraryId(question);
+    let targetId = linkedId;
+
+    if (!targetId) {
+      const { data: existing, error: lookupError } = await supabase
+        .from("questions")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("question_text", payload.question_text)
+        .limit(1)
+        .maybeSingle();
+
+      if (lookupError) throw lookupError;
+      targetId = existing?.id || null;
+    }
+
+    let saved = null;
+    let lastError = null;
+    for (const attempt of withSupportedPayloadFallbacks(payload)) {
+      const query = targetId
+        ? supabase.from("questions").update(attempt).eq("id", targetId)
+        : supabase.from("questions").insert(attempt);
+      const { data, error } = await query.select("id").single();
+      if (!error) {
+        saved = data;
+        break;
+      }
+      lastError = error;
+      if (!/schema cache|column|could not find/i.test(error.message || "")) throw error;
+    }
+
+    if (!saved?.id) throw lastError || new Error("Failed to sync question to library");
+    return { ...question, library_question_id: saved.id, image_timing: normalizeImageTiming(question.image_timing || question.image_display_timing) };
+  };
+
+  const syncImportedQuestionsToLibrary = async (cleaned) => {
+    const {
+      data: { session: authSession },
+    } = await supabase.auth.getSession();
+    const userId = authSession?.user?.id;
+    if (!userId) return cleaned;
+
+    const synced = {};
+    for (const [type, key] of Object.entries(arrayKeyByType)) {
+      synced[key] = [];
+      for (const question of cleaned[key] || []) {
+        if (!question.question_text || !question.correct_answer) {
+          synced[key].push(question);
+          continue;
+        }
+        synced[key].push(await saveLibraryQuestion({ question, type, userId }));
+      }
+    }
+    return synced;
   };
 
   const removeImportedQuestion = (type, index) => {
@@ -311,8 +427,9 @@ const SessionDetail = () => {
     setSavingImported(true);
 
     try {
-      const cleaned = {
+      let cleaned = {
         true_false_questions: editableQuestions.true_false_questions.map((q, index) => ({
+          library_question_id: getLinkedLibraryId(q),
           category: q.category || "",
           round_name: getRoundName(q, 1),
           round_order: getRoundOrder(q, 1),
@@ -327,6 +444,7 @@ const SessionDetail = () => {
           image_timing: normalizeImageTiming(q.image_timing || q.image_display_timing),
         })),
         multiple_choice_questions: editableQuestions.multiple_choice_questions.map((q, index) => ({
+          library_question_id: getLinkedLibraryId(q),
           category: q.category || "",
           round_name: getRoundName(q, 1),
           round_order: getRoundOrder(q, 1),
@@ -341,6 +459,7 @@ const SessionDetail = () => {
           image_timing: normalizeImageTiming(q.image_timing || q.image_display_timing),
         })),
         written_questions: [...editableQuestions.written_questions, ...editableQuestions.picture_questions].map((q, index) => ({
+          library_question_id: getLinkedLibraryId(q),
           category: q.category || "",
           round_name: getRoundName(q, 1),
           round_order: getRoundOrder(q, 1),
@@ -356,6 +475,8 @@ const SessionDetail = () => {
         })),
         picture_questions: [],
       };
+
+      cleaned = await syncImportedQuestionsToLibrary(cleaned);
 
       const finalName = editableSessionName || "Imported Session";
       const { error } = await supabase
