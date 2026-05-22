@@ -41,6 +41,7 @@ const parseOptions = (value) => {
 
 const optionsToString = (value) => parseOptions(value).join("; ");
 const normalizeType = (type) => (type === "true_false" || type === "multiple_choice" || type === "written" ? type : "written");
+const normalizeImageTiming = (value) => value === "after_answer" || value === "after" ? "after_answer" : "initial";
 const formatType = (type) => typeConfig[normalizeType(type)]?.label || "Question";
 const normalizeText = (value) => String(value || "").replace(/\s+/g, " ").trim();
 
@@ -76,6 +77,7 @@ const toEditForm = (question) => ({
   incorrect_answers: optionsToString(question.incorrect_answers),
   fun_fact: question.fun_fact || "",
   image_url: question.image_url || "",
+  image_timing: normalizeImageTiming(question.image_timing || question.image_display_timing),
 });
 
 export default function Library() {
@@ -205,6 +207,7 @@ export default function Library() {
             : null,
       fun_fact: normalizeText(editForm.fun_fact) || null,
       image_url: normalizeText(editForm.image_url) || null,
+      image_timing: normalizeImageTiming(editForm.image_timing),
     };
   };
 
@@ -217,6 +220,12 @@ export default function Library() {
       if (result.error && /image_url/i.test(result.error.message || "")) {
         const { image_url, ...withoutImage } = payload;
         payload = withoutImage;
+        result = await supabase.from("questions").update(payload).eq("id", questionId).select("*").single();
+      }
+
+      if (result.error && /image_timing|image_display_timing/i.test(result.error.message || "")) {
+        const { image_timing, ...withoutTiming } = payload;
+        payload = withoutTiming;
         result = await supabase.from("questions").update(payload).eq("id", questionId).select("*").single();
       }
 
@@ -345,7 +354,7 @@ const QuestionCard = ({ question, used, onEdit, onToggleUsed }) => {
           <p className="text-white text-sm mt-2 leading-relaxed">{question.question_text}</p>
           <p className="text-zinc-500 text-xs mt-1">Answer: <span className="text-emerald-400">{question.correct_answer}</span></p>
           {question.fun_fact && <p className="text-zinc-400 text-xs mt-1 leading-relaxed">{question.fun_fact}</p>}
-          {question.image_url && <p className="text-amber-300 text-xs mt-1">Media attached</p>}
+          {question.image_url && <p className="text-amber-300 text-xs mt-1">Media attached: {normalizeImageTiming(question.image_timing || question.image_display_timing) === "after_answer" ? "after answer" : "before answer"}</p>}
           {options.length > 0 && (
             <div className="flex gap-1 mt-2 flex-wrap">
               {options.map((option) => <span key={option} className="text-xs px-1.5 py-0.5 rounded bg-zinc-800/70 text-zinc-400">{option}</span>)}
@@ -389,10 +398,10 @@ const EditableQuestionCard = ({ form, saving, onChange, onSave, onCancel }) => (
     <div className="rounded-md border border-[#71E0DC]/20 bg-zinc-950/30 p-3 space-y-3">
       <div className="flex items-center justify-between gap-3">
         <span className="text-sm font-medium text-zinc-300">Media</span>
-        <Badge className="bg-zinc-800 text-zinc-400">Optional</Badge>
+        <TimingButtons value={form.image_timing} onChange={(value) => onChange("image_timing", value)} />
       </div>
       <Input value={form.image_url} onChange={(event) => onChange("image_url", event.target.value)} placeholder="Image or media URL" className="bg-zinc-950/50 border-white/10 text-white" />
-      {form.image_url && <p className="text-xs text-amber-300">Media will travel with this question, independent of question type.</p>}
+      {form.image_url && <p className="text-xs text-amber-300">Media will show {normalizeImageTiming(form.image_timing) === "after_answer" ? "after the answer is revealed" : "before the answer is revealed"}.</p>}
     </div>
 
     <div className="flex justify-end gap-2 pt-2">
@@ -411,4 +420,15 @@ const RowIcon = ({ label, icon: Icon, onClick, active }) => (
   <Button title={label} aria-label={label} size="sm" variant="ghost" onClick={onClick} className={`h-8 w-8 p-0 text-zinc-500 ${active ? "text-[#71E0DC] bg-[#71E0DC]/10" : "hover:text-white"}`}>
     <Icon size={15} />
   </Button>
+);
+
+const TimingButtons = ({ value, onChange }) => (
+  <div className="inline-flex rounded-md bg-zinc-900 p-1">
+    <button type="button" onClick={() => onChange("initial")} className={`px-3 py-1.5 rounded text-xs font-semibold ${normalizeImageTiming(value) === "initial" ? "bg-zinc-600 text-white" : "text-zinc-400 hover:text-white"}`}>
+      Before Answer
+    </button>
+    <button type="button" onClick={() => onChange("after_answer")} className={`px-3 py-1.5 rounded text-xs font-semibold ${normalizeImageTiming(value) === "after_answer" ? "bg-zinc-600 text-white" : "text-zinc-400 hover:text-white"}`}>
+      After Answer
+    </button>
+  </div>
 );
