@@ -445,6 +445,31 @@ function describeQuestion(question, reason) {
   };
 }
 
+function isMissingColumnError(error) {
+  return /schema cache|column|Could not find/i.test(error?.message || "");
+}
+
+async function markQuestionUsedWithFallback(supabase, questionId) {
+  const usedAt = new Date().toISOString();
+  const usedPayloads = [
+    { is_used: true, used_at: usedAt, times_used: 1 },
+    { is_used: true, used_at: usedAt },
+    { is_used: true },
+    { used: true },
+  ];
+
+  let lastError = null;
+  for (const payload of usedPayloads) {
+    const { error } = await supabase.from("questions").update(payload).eq("id", questionId);
+    if (!error) return true;
+    lastError = error;
+    if (!isMissingColumnError(error)) throw error;
+  }
+
+  console.warn("Could not mark existing imported question as used:", lastError?.message);
+  return false;
+}
+
 async function insertQuestionWithUsedFallback(supabase, question, userId) {
   const basePayload = { ...stripQuestionMetadata(question), user_id: userId };
   Object.keys(basePayload).forEach((key) => {
@@ -464,7 +489,7 @@ async function insertQuestionWithUsedFallback(supabase, question, userId) {
     const { error } = await supabase.from("questions").insert(payload);
     if (!error) return;
     lastError = error;
-    if (!/schema cache|column|Could not find/i.test(error.message || "")) throw error;
+    if (!isMissingColumnError(error)) throw error;
   }
 
   throw lastError;
@@ -486,11 +511,18 @@ async function importQuestions({ questions, userId, filename }) {
 
   for (const question of sortedQuestions) {
     try {
-      const { data: existing, error: lookupError } = await supabase.from("questions").select("id").eq("question_text", question.question_text).limit(1).maybeSingle();
+      const { data: existing, error: lookupError } = await supabase
+        .from("questions")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("question_text", question.question_text)
+        .limit(1)
+        .maybeSingle();
       if (lookupError) throw lookupError;
       if (existing?.id) {
+        await markQuestionUsedWithFallback(supabase, existing.id);
         skipped += 1;
-        skippedDetails.push(describeQuestion(question, "Already exists in your question library"));
+        skippedDetails.push(describeQuestion(question, "Already exists in your question library; marked used for this past session"));
         continue;
       }
 
