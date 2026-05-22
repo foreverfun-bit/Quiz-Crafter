@@ -107,7 +107,7 @@ const getRoundName = (question, fallbackOrder = 1) => {
 };
 
 const getRoundOrder = (question, fallbackOrder = 1) => Number(question?.round_order || question?.round_number || question?.round || fallbackOrder) || fallbackOrder;
-const getSourceOrder = (question, fallbackOrder = 1) => Number(question?.source_order || question?.question_order || question?.order || fallbackOrder) || fallbackOrder;
+const getSourceOrder = (question, fallbackOrder = 1) => Number(question?.import_order || question?.source_order || question?.question_order || question?.order || fallbackOrder) || fallbackOrder;
 
 const makeRoundGroups = (entries) => {
   const groups = new Map();
@@ -311,6 +311,7 @@ const SessionDetail = () => {
           round_name: getRoundName(q, 1),
           round_order: getRoundOrder(q, 1),
           source_order: getSourceOrder(q, index + 1),
+          import_order: getSourceOrder(q, index + 1),
           question_text: q.question_text || "",
           correct_answer: q.correct_answer || "True",
           correct_answer_image: q.correct_answer_image || "",
@@ -324,6 +325,7 @@ const SessionDetail = () => {
           round_name: getRoundName(q, 1),
           round_order: getRoundOrder(q, 1),
           source_order: getSourceOrder(q, index + 1),
+          import_order: getSourceOrder(q, index + 1),
           question_text: q.question_text || "",
           correct_answer: q.correct_answer || "",
           correct_answer_image: q.correct_answer_image || "",
@@ -337,6 +339,7 @@ const SessionDetail = () => {
           round_name: getRoundName(q, 1),
           round_order: getRoundOrder(q, 1),
           source_order: getSourceOrder(q, index + 1),
+          import_order: getSourceOrder(q, index + 1),
           question_text: q.question_text || "",
           correct_answer: q.correct_answer || "",
           correct_answer_image: q.correct_answer_image || "",
@@ -350,6 +353,7 @@ const SessionDetail = () => {
           round_name: getRoundName(q, 1),
           round_order: getRoundOrder(q, 1),
           source_order: getSourceOrder(q, index + 1),
+          import_order: getSourceOrder(q, index + 1),
           question_text: q.question_text || "",
           correct_answer: q.correct_answer || "",
           correct_answer_image: q.correct_answer_image || "",

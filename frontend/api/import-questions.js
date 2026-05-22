@@ -179,6 +179,7 @@ function normalizeRecord(record) {
     round_name: roundName,
     round_order: Number.isFinite(Number(record.round_order)) ? Number(record.round_order) : getRoundSortValue(roundName, record.source_order || 0),
     source_order: Number.isFinite(Number(record.source_order)) ? Number(record.source_order) : 0,
+    import_order: Number.isFinite(Number(record.import_order)) ? Number(record.import_order) : Number(record.source_order || 0),
   };
 
   if (questionType === "true_false") {
@@ -226,6 +227,7 @@ function normalizeCrowdpurrRows(rows) {
       round_name: "Imported",
       round_order: 1,
       source_order: index + 1,
+      import_order: index + 1,
       question_text: question,
       correct_answer: parsedCorrect.text,
       question_type: questionType,
@@ -238,6 +240,15 @@ function normalizeCrowdpurrRows(rows) {
 }
 
 function normalizeObjectRows(rows, requestedSource) {
+  const roundOrderByName = new Map();
+
+  const getStableRoundOrder = (roundName, explicitRoundOrder) => {
+    if (explicitRoundOrder) return getRoundSortValue(explicitRoundOrder, roundOrderByName.size + 1);
+    const key = compactKey(roundName || "Imported");
+    if (!roundOrderByName.has(key)) roundOrderByName.set(key, roundOrderByName.size + 1);
+    return roundOrderByName.get(key);
+  };
+
   return rows.map((row, index) => {
     const question = getValue(row, ["Question", "Question Text", "Prompt", "Trivia Question", "Question Title", "Text"]);
     const correctAnswer = getValue(row, ["Correct Answer(s)", "Correct Answer", "Answer", "Correct", "Correct Option", "Right Answer"]);
@@ -266,12 +277,14 @@ function normalizeObjectRows(rows, requestedSource) {
     const questionType = detectQuestionType(rawType, correctAnswer, wrongAnswers, imageUrl);
     const fallbackRoundName = requestedSource === "trivianow" ? "TriviaNow" : "Imported";
     const finalRoundName = roundName || fallbackRoundName;
+    const sourceOrder = explicitQuestionOrder ? getRoundSortValue(explicitQuestionOrder, index + 1) : index + 1;
 
     return normalizeRecord({
       category,
       round_name: finalRoundName,
-      round_order: explicitRoundOrder ? Number(explicitRoundOrder) : getRoundSortValue(finalRoundName, index + 1),
-      source_order: explicitQuestionOrder ? Number(explicitQuestionOrder) : index + 1,
+      round_order: getStableRoundOrder(finalRoundName, explicitRoundOrder),
+      source_order: sourceOrder,
+      import_order: index + 1,
       question_text: stripQuestionNumber(question),
       correct_answer: correctAnswer,
       question_type: questionType,
@@ -424,7 +437,7 @@ async function parseUploadedFile(file, requestedSource) {
 }
 
 function stripQuestionMetadata(question) {
-  const { round_name, round_order, source_order, source, has_image, ...dbQuestion } = question;
+  const { round_name, round_order, source_order, import_order, source, has_image, ...dbQuestion } = question;
   return dbQuestion;
 }
 
