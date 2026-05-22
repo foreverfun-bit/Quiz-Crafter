@@ -454,6 +454,43 @@ function describeQuestion(question, reason) {
   };
 }
 
+function sameQuestionIdentity(question, existing) {
+  return (
+    compactKey(question.correct_answer) === compactKey(existing.correct_answer) &&
+    clean(question.image_url) === clean(existing.image_url) &&
+    clean(question.correct_answer_image) === clean(existing.correct_answer_image)
+  );
+}
+
+async function findExistingImportedQuestion(supabase, question, userId) {
+  const selectVariants = [
+    "id, correct_answer, image_url, correct_answer_image",
+    "id, correct_answer, image_url",
+    "id, correct_answer",
+  ];
+
+  let lastError = null;
+  for (const columns of selectVariants) {
+    const { data, error } = await supabase
+      .from("questions")
+      .select(columns)
+      .eq("user_id", userId)
+      .eq("question_text", question.question_text)
+      .limit(25);
+
+    if (error) {
+      lastError = error;
+      if (/schema cache|column|Could not find/i.test(error.message || "")) continue;
+      throw error;
+    }
+
+    return (data || []).find((existing) => sameQuestionIdentity(question, existing)) || null;
+  }
+
+  if (lastError) throw lastError;
+  return null;
+}
+
 async function insertQuestionWithUsedFallback(supabase, question, userId) {
   const basePayload = { ...stripQuestionMetadata(question), user_id: userId };
   Object.keys(basePayload).forEach((key) => {
@@ -535,12 +572,11 @@ async function importQuestions({ questions, userId, filename }) {
 
   for (const question of sortedQuestions) {
     try {
-      const { data: existing, error: lookupError } = await supabase.from("questions").select("id").eq("user_id", userId).eq("question_text", question.question_text).limit(1).maybeSingle();
-      if (lookupError) throw lookupError;
+      const existing = await findExistingImportedQuestion(supabase, question, userId);
       if (existing?.id) {
         await updateExistingQuestionFromImport(supabase, question, existing.id);
         skipped += 1;
-        skippedDetails.push(describeQuestion(question, "Already exists in your question library; marked used and refreshed media when available"));
+        skippedDetails.push(describeQuestion(question, "Already exists in your question library with the same answer and media; marked used and refreshed media when available"));
         continue;
       }
 
