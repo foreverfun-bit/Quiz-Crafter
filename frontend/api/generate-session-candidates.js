@@ -33,6 +33,10 @@ const DIFFICULTY_PROFILES = {
 };
 
 const BROAD_CATEGORIES = ["Art", "Books", "Food & Drink", "Geography", "History", "Internet Culture", "Local Flavor", "Movies", "Music", "Nature", "Pop Culture", "Science", "Sports", "Television", "Theater", "Video Games", "Weird Science", "World Culture"];
+const EXISTING_QUESTIONS_CACHE_MS = 5 * 60 * 1000;
+const STYLE_EXAMPLE_LIMIT = 12;
+const DUPLICATE_EXAMPLE_LIMIT = 55;
+let existingQuestionsCache = { expiresAt: 0, data: null, pending: null };
 
 const BANNED_GENERIC_PATTERNS = [
   /capital of/i,
@@ -178,7 +182,7 @@ function categoryKey(value) {
 }
 
 function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt }) {
-  const overGenerateCount = Math.min(30, Math.max(safeCount + 8, Math.ceil(safeCount * 2.5)));
+  const overGenerateCount = Math.min(18, Math.max(safeCount + 4, Math.ceil(safeCount * 1.7)));
   const lockedCategoryText = cleanLockedCategories.length ? `Locked categories are active. The category field must exactly match one of these locked categories: ${cleanLockedCategories.join(", ")}. Generate all candidates inside these locked categories until the host unlocks them.` : "";
   const approvedCategoryText = cleanLockedCategories.length
     ? lockedCategoryText
@@ -188,7 +192,7 @@ function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, clea
   const excludedCategoryText = cleanExcludeCategories.length ? `Do not use these rejected or avoided categories: ${cleanExcludeCategories.join(", ")}.` : "";
   const themeText = cleanTheme ? `Theme/vibe/category guidance: ${cleanTheme}. Stay useful to that direction, but avoid repetitive question angles.` : "";
   const styleText = styleExamples.length ? `Use these saved library questions as calibration for the host's style and difficulty. Match the readability, category feel, and answerability. Do not copy, lightly rewrite, reuse their answers, or generate the same topic angles:\n${styleExamples.map(formatStyleExample).join("\n")}` : "";
-  const duplicateExamples = existingQuestions.slice(0, 120).map((q) => `- ${q.question_text}${q.correct_answer ? ` Answer: ${q.correct_answer}` : ""}`).join("\n");
+  const duplicateExamples = existingQuestions.slice(0, DUPLICATE_EXAMPLE_LIMIT).map((q) => `- ${q.question_text}${q.correct_answer ? ` Answer: ${q.correct_answer}` : ""}`).join("\n");
   const duplicateText = avoidDuplicates && duplicateExamples ? `Avoid duplicating, lightly rewording, using the same answer, or using the same answer-angle as these existing and past-session questions:\n${duplicateExamples}` : "";
   const usedText = excludeUsed ? "Assume the host has already used years of common trivia. Do not use standard listicle facts or classroom facts unless the angle is unusually fresh." : "";
   const hostHardText = difficultyKey === "host_hard" ? "Host Hard calibration: make these feel like the host's stronger library questions, not encyclopedia deep cuts. Prefer recognizable subjects with a fresh angle over obscure subjects with no clue path." : "";
@@ -265,7 +269,7 @@ function buildStyleExamples(existingQuestions, questionType, approvedCategories)
   const matchingType = libraryQuestions.filter((q) => q.question_type === questionType);
   const matchingApproved = matchingType.filter((q) => !approvedSet.size || approvedSet.has(categoryKey(q.category)));
   const candidates = matchingApproved.length >= 8 ? matchingApproved : matchingType.length >= 8 ? matchingType : libraryQuestions;
-  return sampleStable(candidates.filter((q) => q.question_text && q.correct_answer), 24);
+  return sampleStable(candidates.filter((q) => q.question_text && q.correct_answer), STYLE_EXAMPLE_LIMIT);
 }
 
 function sampleStable(items, limit) {
@@ -468,40 +472,54 @@ function answerPairFingerprint(questionText, answer) {
 }
 
 async function fetchExistingQuestions() {
+  const now = Date.now();
+  if (existingQuestionsCache.data && existingQuestionsCache.expiresAt > now) return existingQuestionsCache.data;
+  if (existingQuestionsCache.pending) return existingQuestionsCache.pending;
+
   const supabaseUrl = process.env.SUPABASE_URL || process.env.REACT_APP_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.REACT_APP_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!supabaseUrl || !supabaseKey) return [];
 
+  existingQuestionsCache.pending = fetchExistingQuestionsUncached(supabaseUrl, supabaseKey)
+    .then((data) => {
+      existingQuestionsCache = { data, expiresAt: Date.now() + EXISTING_QUESTIONS_CACHE_MS, pending: null };
+      return data;
+    })
+    .catch((error) => {
+      existingQuestionsCache.pending = null;
+      console.error("Existing question fetch failed:", error);
+      return existingQuestionsCache.data || [];
+    });
+
+  return existingQuestionsCache.pending;
+}
+
+async function fetchExistingQuestionsUncached(supabaseUrl, supabaseKey) {
   const base = supabaseUrl.replace(/\/$/, "");
   const headers = { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` };
 
-  try {
-    const [questionsResponse, sessionsResponse] = await Promise.all([
-      fetch(`${base}/rest/v1/questions?select=question_text,correct_answer,category,question_type,fun_fact&limit=2000`, { headers }),
-      fetch(`${base}/rest/v1/sessions?select=true_false_questions,multiple_choice_questions,written_questions,picture_questions&limit=1000`, { headers }),
-    ]);
+  const [questionsResponse, sessionsResponse] = await Promise.all([
+    fetch(`${base}/rest/v1/questions?select=question_text,correct_answer,category,question_type,fun_fact&order=created_at.desc&limit=1500`, { headers }),
+    fetch(`${base}/rest/v1/sessions?select=true_false_questions,multiple_choice_questions,written_questions,picture_questions&order=created_at.desc&limit=500`, { headers }),
+  ]);
 
-    const libraryQuestions = questionsResponse.ok ? await questionsResponse.json() : [];
-    const sessions = sessionsResponse.ok ? await sessionsResponse.json() : [];
-    const sessionQuestions = Array.isArray(sessions) ? sessions.flatMap(extractSessionQuestions) : [];
+  const libraryQuestions = questionsResponse.ok ? await questionsResponse.json() : [];
+  const sessions = sessionsResponse.ok ? await sessionsResponse.json() : [];
+  const sessionQuestions = Array.isArray(sessions) ? sessions.flatMap(extractSessionQuestions) : [];
 
-    return [
-      ...(Array.isArray(libraryQuestions) ? libraryQuestions.map((q) => ({ ...q, source: "library" })) : []),
-      ...sessionQuestions.map((q) => ({ ...q, source: "session" })),
-    ]
-      .map((q) => ({
-        question_text: cleanText(q.question_text || q.question),
-        correct_answer: cleanText(q.correct_answer || q.answer),
-        category: cleanText(q.category),
-        question_type: normalizeFetchedType(q.question_type),
-        fun_fact: cleanText(q.fun_fact),
-        source: q.source || "library",
-      }))
-      .filter((q) => q.question_text);
-  } catch (error) {
-    console.error("Existing question fetch failed:", error);
-    return [];
-  }
+  return [
+    ...(Array.isArray(libraryQuestions) ? libraryQuestions.map((q) => ({ ...q, source: "library" })) : []),
+    ...sessionQuestions.map((q) => ({ ...q, source: "session" })),
+  ]
+    .map((q) => ({
+      question_text: cleanText(q.question_text || q.question),
+      correct_answer: cleanText(q.correct_answer || q.answer),
+      category: cleanText(q.category),
+      question_type: normalizeFetchedType(q.question_type),
+      fun_fact: cleanText(q.fun_fact),
+      source: q.source || "library",
+    }))
+    .filter((q) => q.question_text);
 }
 
 function normalizeFetchedType(value) {
