@@ -126,6 +126,10 @@ function parseAnswerWithImage(value) {
   return { text: clean(text), image: clean(image) || null };
 }
 
+function firstImageUrl(...values) {
+  return values.map(clean).find((value) => /^https?:\/\//i.test(value) || /^data:image\//i.test(value)) || "";
+}
+
 function detectQuestionType(rawType, correctAnswer, wrongAnswers, imageUrl) {
   const type = compactKey(rawType);
   const answer = clean(correctAnswer).toLowerCase();
@@ -187,6 +191,7 @@ function normalizeRecord(record) {
       incorrect_answers: answer === "True" ? "False" : "True",
       fun_fact: clean(record.fun_fact) || null,
       image_url: clean(record.image_url) || null,
+      correct_answer_image: clean(record.correct_answer_image) || null,
     };
   }
 
@@ -200,6 +205,7 @@ function normalizeRecord(record) {
     incorrect_answers: questionType === "multiple_choice" ? wrongAnswers.join("; ") : null,
     fun_fact: clean(record.fun_fact) || null,
     image_url: clean(record.image_url) || null,
+    correct_answer_image: clean(record.correct_answer_image) || null,
   };
 }
 
@@ -209,7 +215,7 @@ function normalizeCrowdpurrRows(rows) {
   return dataRows.map((row, index) => {
     const question = stripQuestionNumber(row[0]);
     const rawType = clean(row[1]);
-    const imageUrl = clean(row[4]);
+    const imageUrl = firstImageUrl(row[4]);
     const funFact = clean(row[5]) || null;
     const parsedCorrect = parseAnswerWithImage(row[7]);
     const wrongAnswers = unique(row.slice(8).map((value) => parseAnswerWithImage(value).text), parsedCorrect.text);
@@ -226,6 +232,7 @@ function normalizeCrowdpurrRows(rows) {
       incorrect_answers: wrongAnswers,
       fun_fact: funFact,
       image_url: imageUrl,
+      correct_answer_image: parsedCorrect.image,
     });
   }).filter(Boolean);
 }
@@ -238,7 +245,8 @@ function normalizeObjectRows(rows, requestedSource) {
     const category = getValue(row, ["Category", "Topic", "Subject", "Tags"]);
     const rawType = getValue(row, ["Question Type", "Type", "Format", "Kind"]);
     const funFact = getValue(row, ["Question Note", "Fun Fact", "Explanation", "Fact", "Notes"]);
-    const imageUrl = getValue(row, ["Question Image URL", "Image URL", "Image", "Picture", "Media URL"]);
+    const imageUrl = firstImageUrl(getValue(row, ["Question Image URL", "Question Image", "Image URL", "Image", "Picture", "Photo", "Media URL", "Media", "Question Media"]));
+    const correctAnswerImage = firstImageUrl(getValue(row, ["Correct Answer Image URL", "Correct Answer Image", "Answer Image URL", "Answer Image", "Correct Image", "Correct Photo"]));
     const explicitRoundOrder = getValue(row, ["Round Order", "Round Number", "Round #", "Round No"]);
     const explicitQuestionOrder = getValue(row, ["Question Order", "Question Number", "Question #", "Order"]);
 
@@ -270,6 +278,7 @@ function normalizeObjectRows(rows, requestedSource) {
       incorrect_answers: wrongAnswers,
       fun_fact: funFact || null,
       image_url: imageUrl,
+      correct_answer_image: correctAnswerImage,
     });
   }).filter(Boolean);
 }
@@ -451,6 +460,11 @@ async function insertQuestionWithUsedFallback(supabase, question, userId) {
     if (basePayload[key] === undefined || basePayload[key] === null) delete basePayload[key];
   });
 
+  const mediaVariants = [
+    basePayload,
+    (({ correct_answer_image, ...rest }) => rest)(basePayload),
+    (({ correct_answer_image, image_url, ...rest }) => rest)(basePayload),
+  ];
   const usedPayloads = [
     { is_used: true, used_at: new Date().toISOString(), times_used: 1 },
     { is_used: true },
@@ -459,15 +473,50 @@ async function insertQuestionWithUsedFallback(supabase, question, userId) {
   ];
 
   let lastError = null;
-  for (const extra of usedPayloads) {
-    const payload = { ...basePayload, ...extra };
-    const { error } = await supabase.from("questions").insert(payload);
-    if (!error) return;
-    lastError = error;
-    if (!/schema cache|column|Could not find/i.test(error.message || "")) throw error;
+  for (const mediaPayload of mediaVariants) {
+    for (const extra of usedPayloads) {
+      const payload = { ...mediaPayload, ...extra };
+      const { error } = await supabase.from("questions").insert(payload);
+      if (!error) return;
+      lastError = error;
+      if (!/schema cache|column|Could not find/i.test(error.message || "")) throw error;
+    }
   }
 
   throw lastError;
+}
+
+async function updateExistingQuestionFromImport(supabase, question, existingId) {
+  const basePayload = {};
+  if (question.image_url) basePayload.image_url = question.image_url;
+  if (question.correct_answer_image) basePayload.correct_answer_image = question.correct_answer_image;
+  if (question.fun_fact) basePayload.fun_fact = question.fun_fact;
+
+  const mediaVariants = [
+    basePayload,
+    (({ correct_answer_image, ...rest }) => rest)(basePayload),
+    (({ correct_answer_image, image_url, ...rest }) => rest)(basePayload),
+  ];
+  const usedPayloads = [
+    { is_used: true, used_at: new Date().toISOString(), times_used: 1 },
+    { is_used: true },
+    { used: true },
+    {},
+  ];
+
+  let lastError = null;
+  for (const mediaPayload of mediaVariants) {
+    for (const extra of usedPayloads) {
+      const payload = { ...mediaPayload, ...extra };
+      if (!Object.keys(payload).length) return;
+      const { error } = await supabase.from("questions").update(payload).eq("id", existingId);
+      if (!error) return;
+      lastError = error;
+      if (!/schema cache|column|Could not find/i.test(error.message || "")) throw error;
+    }
+  }
+
+  if (lastError) throw lastError;
 }
 
 async function importQuestions({ questions, userId, filename }) {
@@ -486,11 +535,12 @@ async function importQuestions({ questions, userId, filename }) {
 
   for (const question of sortedQuestions) {
     try {
-      const { data: existing, error: lookupError } = await supabase.from("questions").select("id").eq("question_text", question.question_text).limit(1).maybeSingle();
+      const { data: existing, error: lookupError } = await supabase.from("questions").select("id").eq("user_id", userId).eq("question_text", question.question_text).limit(1).maybeSingle();
       if (lookupError) throw lookupError;
       if (existing?.id) {
+        await updateExistingQuestionFromImport(supabase, question, existing.id);
         skipped += 1;
-        skippedDetails.push(describeQuestion(question, "Already exists in your question library"));
+        skippedDetails.push(describeQuestion(question, "Already exists in your question library; marked used and refreshed media when available"));
         continue;
       }
 

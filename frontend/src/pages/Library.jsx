@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { Card, CardContent } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -43,6 +43,8 @@ const parseOptions = (value) => {
 const optionsToString = (value) => parseOptions(value).join("; ");
 const formatType = (type) => typeConfig[type]?.label || "Question";
 const normalizeText = (value) => String(value || "").replace(/\s+/g, " ").trim();
+const fingerprint = (value) => normalizeText(value).toLowerCase().replace(/[^a-z0-9]/g, "");
+const collectSessionQuestions = (session) => [session?.true_false_questions, session?.multiple_choice_questions, session?.written_questions, session?.picture_questions].flatMap((value) => (Array.isArray(value) ? value : []));
 
 const readUsedIds = () => {
   try {
@@ -87,6 +89,7 @@ export default function Library() {
   const [editForm, setEditForm] = useState(null);
   const [savingId, setSavingId] = useState(null);
   const [usedIds, setUsedIds] = useState(readUsedIds);
+  const [usedFingerprints, setUsedFingerprints] = useState(new Set());
 
   useEffect(() => {
     fetchQuestions();
@@ -95,13 +98,24 @@ export default function Library() {
   async function fetchQuestions() {
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from("questions")
-        .select("*")
-        .order("created_at", { ascending: false });
+      const [questionsResult, sessionsResult] = await Promise.all([
+        supabase.from("questions").select("*").order("created_at", { ascending: false }),
+        supabase.from("sessions").select("*"),
+      ]);
 
-      if (error) throw error;
-      setQuestions(data || []);
+      if (questionsResult.error) throw questionsResult.error;
+      if (sessionsResult.error) throw sessionsResult.error;
+
+      const sessionFingerprints = new Set();
+      (sessionsResult.data || []).forEach((session) => {
+        collectSessionQuestions(session).forEach((question) => {
+          const text = question?.question_text || question?.question;
+          if (text) sessionFingerprints.add(fingerprint(text));
+        });
+      });
+
+      setUsedFingerprints(sessionFingerprints);
+      setQuestions(questionsResult.data || []);
     } catch (error) {
       console.error("Library load error:", error);
       toast.error(error.message || "Failed to load library");
@@ -122,7 +136,8 @@ export default function Library() {
     );
   }, [questions]);
 
-  const usedCount = useMemo(() => questions.filter((question) => isQuestionMarkedUsed(question, usedIds)).length, [questions, usedIds]);
+  const isUsed = useCallback((question) => isQuestionMarkedUsed(question, usedIds) || usedFingerprints.has(fingerprint(question.question_text)), [usedIds, usedFingerprints]);
+  const usedCount = useMemo(() => questions.filter((question) => isUsed(question)).length, [questions, isUsed]);
 
   const filteredQuestions = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -313,7 +328,7 @@ export default function Library() {
                   onCancel={cancelEditing}
                 />
               ) : (
-                <QuestionCard key={question.id} question={question} used={isQuestionMarkedUsed(question, usedIds)} onEdit={() => startEditing(question)} onToggleUsed={() => toggleUsed(question)} />
+                <QuestionCard key={question.id} question={question} used={isUsed(question)} onEdit={() => startEditing(question)} onToggleUsed={() => toggleUsed(question)} />
               );
             })}
           </div>
