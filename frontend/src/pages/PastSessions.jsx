@@ -9,6 +9,7 @@ import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 import {
   Calendar,
   Eye,
+  Pencil,
   Trash2,
   FileText,
   Search,
@@ -295,6 +296,19 @@ const PastSessions = () => {
                       title="View"
                     >
                       <Eye size={14} />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-[#71E0DC] hover:text-white hover:bg-[#71E0DC]/10 px-2"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/build/${session.id}`);
+                      }}
+                      data-testid={`build-session-${index}`}
+                      title="Open in Builder"
+                    >
+                      <Pencil size={14} />
                     </Button>
                   </div>
                 </div>

@@ -498,6 +498,11 @@ const SessionDetail = () => {
               <Pencil className="mr-2" size={16} />Edit Session
             </Button>
           )}
+          {canEditArrays && !isEditingImported && (
+            <Button variant="outline" onClick={() => navigate(`/build/${id}`)} className="border-[#71E0DC]/40 text-[#71E0DC] hover:bg-[#71E0DC]/10">
+              <Pencil className="mr-2" size={16} />Open in Builder
+            </Button>
+          )}
 
           {canEditArrays && isEditingImported && (
             <>
