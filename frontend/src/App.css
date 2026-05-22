@@ -161,6 +161,25 @@ body:has(#build-session-library:hover) #build-session-library {
   display: block;
 }
 
+/* Player feedback buttons */
+[data-testid="player-session-page"] .grid.grid-cols-2.gap-2 > button {
+  font-size: 0;
+  line-height: 1;
+}
+
+[data-testid="player-session-page"] .grid.grid-cols-2.gap-2 > button::before {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+[data-testid="player-session-page"] .grid.grid-cols-2.gap-2 > button:first-child::before {
+  content: "\1F44D";
+}
+
+[data-testid="player-session-page"] .grid.grid-cols-2.gap-2 > button:last-child::before {
+  content: "\1F44E";
+}
+
 /* Loading spinner */
 .spinner {
   width: 40px;
