@@ -164,7 +164,7 @@ const Dashboard = () => {
         <Card className="glass-card">
           <CardContent className="p-5">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <PrimaryAction icon={PencilLine} label="Write a Question" detail="Draft one clean clue" onClick={() => navigate("/write-question")} />
+              <PrimaryAction icon={PencilLine} label="Create Questions" detail="Generate or write clues" onClick={() => navigate("/generate")} />
               <PrimaryAction icon={Library} label="Use Library" detail={`${unusedCount} unused questions`} onClick={() => navigate("/library")} />
               <PrimaryAction icon={Upload} label="Import Set" detail="CSV, PDF, or exports" onClick={() => navigate("/import")} />
             </div>

@@ -11,7 +11,6 @@ import {
   History,
   Trophy,
   MessageSquare,
-  PencilLine,
   Trash2,
   FolderOpen,
   Layers,
@@ -33,8 +32,7 @@ const Sidebar = ({ isOpen, onClose }) => {
       icon: Sparkles,
       paths: ["/generate", "/write-question", "/import"],
       links: [
-        { path: "/generate", icon: Sparkles, label: "Generate" },
-        { path: "/write-question", icon: PencilLine, label: "Write Question" },
+        { path: "/generate", icon: Sparkles, label: "Questions" },
         { path: "/import", icon: Upload, label: "Import" },
       ],
     },

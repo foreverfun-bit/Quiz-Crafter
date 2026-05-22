@@ -49,7 +49,7 @@ const readCategoryPrefs = () => {
   }
 };
 
-const WriteQuestion = () => {
+const WriteQuestion = ({ embedded = false }) => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [form, setForm] = useState(initialForm);
@@ -180,13 +180,15 @@ const WriteQuestion = () => {
   };
 
   return (
-    <div className="p-6 lg:p-8 max-w-6xl mx-auto animate-fade-in" data-testid="write-question-page">
+    <div className={embedded ? "animate-fade-in" : "p-6 lg:p-8 max-w-6xl mx-auto animate-fade-in"} data-testid="write-question-page">
+      {!embedded && (
       <div className="mb-8">
         <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">
           Write <span className="gradient-text">Custom Question</span>
         </h1>
         <p className="text-zinc-500">Choose a format, draft your rough idea, then let the app polish it with answers and a fun fact.</p>
       </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-[1.4fr_0.8fr] gap-6">
         <Card className="glass-card">

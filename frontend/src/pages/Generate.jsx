@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import axios from "axios";
 import { useAuth } from "../App";
+import WriteQuestion from "./WriteQuestion";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -111,8 +112,9 @@ const fileToDataUrl = (file) => new Promise((resolve, reject) => {
   reader.readAsDataURL(file);
 });
 
-const Generate = () => {
+const Generate = ({ initialCreateMode = "generate" }) => {
   const { user } = useAuth();
+  const [createMode, setCreateMode] = useState(initialCreateMode);
   const [mode, setMode] = useState("standard");
 
   const [difficulty, setDifficulty] = useState("host_hard");
@@ -530,12 +532,12 @@ const Generate = () => {
       <div className="flex items-start justify-between mb-6 gap-4 flex-wrap">
         <div>
           <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">
-            <span className="gradient-text">Generate</span> Questions
+            <span className="gradient-text">Create</span> Questions
           </h1>
-          <p className="text-zinc-500">Build fresh trivia candidates. Images are media you can attach to any question.</p>
+          <p className="text-zinc-500">Generate fresh batches or write one polished question from the same workspace.</p>
         </div>
 
-        {totalGenerated > 0 && (
+        {createMode === "generate" && totalGenerated > 0 && (
           <Button variant="outline" onClick={handleDiscardAll} className="border-zinc-700 text-zinc-400 hover:text-white hover:bg-zinc-800">
             <Trash2 size={16} className="mr-2" />
             Clear All
@@ -543,6 +545,17 @@ const Generate = () => {
         )}
       </div>
 
+      <div className="mb-6">
+        <div className="inline-flex rounded-lg bg-zinc-800/50 p-1 border border-white/10 flex-wrap mb-4">
+          <button onClick={() => setCreateMode("generate")} className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${createMode === "generate" ? "bg-gradient-to-r from-[#71E0DC] to-[#AEB2EF] text-zinc-900" : "text-zinc-400 hover:text-white"}`}><Sparkles size={14} className="inline mr-2" />AI Generator</button>
+          <button onClick={() => setCreateMode("write")} className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${createMode === "write" ? "bg-gradient-to-r from-[#71E0DC] to-[#AEB2EF] text-zinc-900" : "text-zinc-400 hover:text-white"}`}><MessageSquare size={14} className="inline mr-2" />Write Manually</button>
+        </div>
+      </div>
+
+      {createMode === "write" ? (
+        <WriteQuestion embedded />
+      ) : (
+      <>
       <div className="mb-6">
         <div className="inline-flex rounded-lg bg-zinc-800/50 p-1 border border-white/10 flex-wrap">
           <button onClick={() => setMode("standard")} className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === "standard" ? "bg-gradient-to-r from-[#71E0DC] to-[#AEB2EF] text-zinc-900" : "text-zinc-400 hover:text-white"}`}><Sparkles size={14} className="inline mr-2" />Full Show</button>
@@ -643,6 +656,8 @@ const Generate = () => {
             );
           })}
         </div>
+      )}
+      </>
       )}
     </div>
   );

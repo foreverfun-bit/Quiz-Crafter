@@ -272,7 +272,7 @@ function App() {
             <Route path="/login" element={<Login />} />
             <Route path="/" element={<ProtectedRoute><AppLayout><Dashboard /></AppLayout></ProtectedRoute>} />
             <Route path="/generate" element={<ProtectedRoute><AppLayout><Generate /></AppLayout></ProtectedRoute>} />
-            <Route path="/write-question" element={<ProtectedRoute><AppLayout><WriteQuestion /></AppLayout></ProtectedRoute>} />
+            <Route path="/write-question" element={<ProtectedRoute><AppLayout><Generate initialCreateMode="write" /></AppLayout></ProtectedRoute>} />
             <Route path="/library" element={<ProtectedRoute><AppLayout><Library /></AppLayout></ProtectedRoute>} />
             <Route path="/build" element={<ProtectedRoute><AppLayout><BuildSession /></AppLayout></ProtectedRoute>} />
             <Route path="/build/:sessionId" element={<ProtectedRoute><AppLayout><BuildSession /></AppLayout></ProtectedRoute>} />
