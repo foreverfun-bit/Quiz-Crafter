@@ -65,6 +65,29 @@ const parseOptions = (value) => {
   return raw.split(";").map((item) => item.trim()).filter(Boolean);
 };
 
+const optionKey = (value) => String(value || "").trim().toLowerCase();
+const seededSortValue = (seed, value) => {
+  const text = `${seed}|${value}`;
+  let hash = 0;
+  for (let i = 0; i < text.length; i += 1) hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
+  return Math.abs(hash);
+};
+const buildAnswerOptions = (question, questionType) => {
+  if (questionType === "true_false") return ["True", "False"];
+  if (questionType !== "multiple_choice") return parseOptions(question.incorrect_answers || question.options);
+  const answer = question.correct_answer || question.answer || "";
+  const options = [answer, ...parseOptions(question.incorrect_answers || question.options)].filter(Boolean);
+  const seen = new Set();
+  const uniqueOptions = options.filter((option) => {
+    const key = optionKey(option);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const seed = `${question.question_text || question.question || ""}|${answer}`;
+  return uniqueOptions.sort((a, b) => seededSortValue(seed, a) - seededSortValue(seed, b));
+};
+
 const normalizeType = (question, fallbackType = "written") => {
   const type = question?.question_type || fallbackType;
   if (type === "true_false" || type === "multiple_choice" || type === "written") return type;
@@ -104,7 +127,7 @@ const flattenSession = (session) => {
         answer: question.correct_answer || question.answer || "",
         funFact: question.fun_fact || "",
         imageUrl: question.image_url || "",
-        options: questionType === "true_false" ? ["True", "False"] : parseOptions(question.incorrect_answers || question.options),
+        options: buildAnswerOptions(question, questionType),
         type: questionType,
         roundName: getRoundName(question, roundOrder),
         roundOrder,
