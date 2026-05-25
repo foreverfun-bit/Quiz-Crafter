@@ -15,6 +15,8 @@ import {
 import {
   Sparkles,
   CheckCircle,
+  ArrowDown,
+  ArrowUp,
   List,
   MessageSquare,
   Loader2,
@@ -53,6 +55,9 @@ const difficultyLabels = {
   hard: "Hard",
   host_hard: "Host Hard",
 };
+
+const easierDifficulty = { host_hard: "medium", hard: "medium", medium: "easy", easy: "easy" };
+const harderDifficulty = { easy: "medium", medium: "hard", hard: "host_hard", host_hard: "host_hard" };
 
 const CATEGORY_PREF_KEY = "quiz-crafter-category-preferences";
 const REJECTED_AI_KEY = "quiz-crafter-rejected-ai-questions";
@@ -179,13 +184,13 @@ const Generate = ({ initialCreateMode = "generate" }) => {
     toast.success(`${cleanCategory} unlocked`);
   };
 
-  const callGenerateRoute = async ({ questionType, count, themeValue, excludeCategories = [], extraRejectedQuestions = [] }) => {
+  const callGenerateRoute = async ({ questionType, count, themeValue, excludeCategories = [], extraRejectedQuestions = [], difficultyOverride = null }) => {
     const preferences = getGenerationPreferences(extraRejectedQuestions);
 
     const { data } = await axios.post("/api/generate-session-candidates", {
       sessionId: `generate-${mode}`,
       questionType,
-      difficulty,
+      difficulty: difficultyOverride || difficulty,
       theme: themeValue,
       excludeUsed,
       avoidDuplicates,
@@ -288,6 +293,64 @@ const Generate = ({ initialCreateMode = "generate" }) => {
     } catch (error) {
       console.error("Refresh error:", error);
       toast.error(error.response?.data?.error || error.message || "Failed to refresh question");
+    } finally {
+      setRefreshingKey(null);
+    }
+  };
+
+  const handleAdjustDifficulty = async (type, index, direction) => {
+    const key = `${type}-${index}`;
+    const current = groupedCandidates[type]?.[index];
+    if (!current) return;
+
+    const targetDifficulty = direction === "easier" ? easierDifficulty[difficulty] || "medium" : harderDifficulty[difficulty] || "hard";
+    const difficultyInstruction = direction === "easier"
+      ? "Make a more accessible version of this same trivia idea. Keep it fresh, but add a clearer clue path and make the answer more gettable for a strong bar-trivia team."
+      : "Make a harder version of this same trivia idea. Keep it fair and not obscure for obscurity's sake, but require a stronger clue path or second-layer knowledge.";
+    const typeInstruction = type === "written"
+      ? "Because this is a written-answer question, make the answer especially fair to recall without options. Avoid exact-spelling traps."
+      : type === "multiple_choice"
+        ? "Because this is multiple choice, keep the wrong answers plausible and comparable."
+        : "Because this is true/false, keep the claim cleanly verifiable and not a coin flip.";
+
+    setRefreshingKey(`${key}-${direction}`);
+
+    try {
+      const generated = await callGenerateRoute({
+        questionType: type,
+        count: 1,
+        difficultyOverride: targetDifficulty,
+        themeValue: [
+          mode === "theme" ? roundThemeSubject : theme || "",
+          difficultyInstruction,
+          typeInstruction,
+          `Original category: ${current.category || "General"}`,
+          `Original question: ${current.question_text}`,
+          `Original answer: ${current.correct_answer}`,
+          current.fun_fact ? `Original fun fact: ${current.fun_fact}` : "",
+          "Return a replacement, not a duplicate. It may keep the same broad subject, but should be newly worded and calibrated to the requested difficulty.",
+        ].filter(Boolean).join("\n"),
+        extraRejectedQuestions: [candidateFingerprint(current)],
+      });
+
+      if (!generated.length) {
+        toast.error(`Could not make this ${direction}`);
+        return;
+      }
+
+      setGroupedCandidates((prev) => {
+        const updated = {
+          ...prev,
+          [type]: prev[type].map((candidate, i) => (i === index ? generated[0] : candidate)),
+        };
+        rememberGenerated(updated);
+        return updated;
+      });
+
+      toast.success(direction === "easier" ? "Made easier" : "Made harder");
+    } catch (error) {
+      console.error("Difficulty adjustment error:", error);
+      toast.error(error.response?.data?.error || error.message || `Failed to make question ${direction}`);
     } finally {
       setRefreshingKey(null);
     }
@@ -397,7 +460,10 @@ const Generate = ({ initialCreateMode = "generate" }) => {
 
   const renderQuestionCard = (candidate, type, index) => {
     const saveId = `${type}-${index}`;
-    const isRefreshing = refreshingKey === saveId;
+    const refreshBusy = refreshingKey === saveId;
+    const easierBusy = refreshingKey === `${saveId}-easier`;
+    const harderBusy = refreshingKey === `${saveId}-harder`;
+    const isBusy = refreshBusy || easierBusy || harderBusy;
     const categoryLocked = lockedCategories.some((item) => item.toLowerCase() === normalizeText(candidate.category).toLowerCase());
 
     return (
@@ -467,7 +533,7 @@ const Generate = ({ initialCreateMode = "generate" }) => {
           <div className="flex flex-wrap gap-2 mt-4">
             <Button
               size="sm"
-              disabled={savingKey === saveId || isRefreshing}
+              disabled={savingKey === saveId || isBusy}
               className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
               onClick={() => handleSaveToLibrary(candidate, type, index)}
             >
@@ -477,19 +543,41 @@ const Generate = ({ initialCreateMode = "generate" }) => {
             <Button
               size="sm"
               variant="outline"
-              disabled={isRefreshing || savingKey === saveId}
+              disabled={isBusy || savingKey === saveId}
               className="border-sky-500/30 text-sky-300 hover:bg-sky-500/10"
               onClick={() => handleRefreshQuestion(type, index)}
             >
-              {isRefreshing ? <Loader2 size={14} className="mr-2 animate-spin" /> : <RefreshCw size={14} className="mr-2" />}
+              {refreshBusy ? <Loader2 size={14} className="mr-2 animate-spin" /> : <RefreshCw size={14} className="mr-2" />}
               Refresh
+            </Button>
+
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={isBusy || savingKey === saveId}
+              className="border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/10"
+              onClick={() => handleAdjustDifficulty(type, index, "easier")}
+            >
+              {easierBusy ? <Loader2 size={14} className="mr-2 animate-spin" /> : <ArrowDown size={14} className="mr-2" />}
+              Easier
+            </Button>
+
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={isBusy || savingKey === saveId}
+              className="border-amber-500/30 text-amber-300 hover:bg-amber-500/10"
+              onClick={() => handleAdjustDifficulty(type, index, "harder")}
+            >
+              {harderBusy ? <Loader2 size={14} className="mr-2 animate-spin" /> : <ArrowUp size={14} className="mr-2" />}
+              Harder
             </Button>
 
             {candidate.category && (
               <Button
                 size="sm"
                 variant="outline"
-                disabled={isRefreshing || savingKey === saveId}
+                disabled={isBusy || savingKey === saveId}
                 className={categoryLocked ? "border-[#71E0DC]/40 text-[#71E0DC] bg-[#71E0DC]/10" : "border-[#71E0DC]/30 text-[#71E0DC] hover:bg-[#71E0DC]/10"}
                 onClick={() => categoryLocked ? handleUnlockCategory(candidate.category) : handleLockCategory(candidate.category)}
               >
@@ -501,7 +589,7 @@ const Generate = ({ initialCreateMode = "generate" }) => {
             <Button
               size="sm"
               variant="outline"
-              disabled={isRefreshing || savingKey === saveId}
+              disabled={isBusy || savingKey === saveId}
               className="border-red-500/30 text-red-300 hover:bg-red-500/10"
               onClick={() => handleDiscardQuestion(type, index)}
             >
@@ -513,7 +601,7 @@ const Generate = ({ initialCreateMode = "generate" }) => {
               <Button
                 size="sm"
                 variant="ghost"
-                disabled={isRefreshing || savingKey === saveId}
+                disabled={isBusy || savingKey === saveId}
                 className="text-zinc-400 hover:text-red-200 hover:bg-red-500/10"
                 onClick={() => handleRejectCategory(type, index)}
               >
