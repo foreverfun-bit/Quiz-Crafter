@@ -183,6 +183,8 @@ const readStoredLeaderboard = (sessionId) => {
 const getDefaultPoints = (question) => POINTS_BY_TYPE[question?.type] || 100;
 const getQuestionPoints = (question) => Number(question?.points ?? 0) > 0 ? Number(question.points) : getDefaultPoints(question);
 const answerKey = (answer) => `${answer.playerId}-${answer.questionIndex}`;
+const normalizeAnswerText = (value) => String(value || "").trim().toLowerCase().replace(/[’']/g, "'").replace(/[^a-z0-9]+/g, " ").trim();
+const isCorrectSubmission = (answer, question) => Boolean(question?.answer) && normalizeAnswerText(answer?.answer) === normalizeAnswerText(question.answer);
 const getTeamScore = (leaderboard, teamId) => Number(leaderboard.find((team) => team.id === teamId)?.score || 0);
 const getWagerAward = (answer, leaderboard, wagerLimit, previousPoints = 0) => {
   const requested = Math.max(0, Number(answer?.wagerAmount || 0));
@@ -382,7 +384,7 @@ const HostSession = () => {
     const team = leaderboard.find((item) => item.id === teamId) || players.find((item) => item.id === teamId);
     setScoreModal({ teamId, teamName: team?.name || context.playerName || "Team", currentScore: Number(team?.score || 0), adjustment: "", setTo: String(Number(team?.score || 0)), ...context });
   };
-  const markAnswer = (answer, status) => {
+  const markAnswer = (answer, status, options = {}) => {
     const key = answerKey(answer);
     const previous = gradedAnswers[key];
     const previousPoints = previous?.status === "correct" ? Number(previous.points || 0) : 0;
@@ -391,8 +393,20 @@ const HostSession = () => {
     const delta = nextPoints - previousPoints;
     if (delta) adjustScore(answer.playerId, delta);
     setGradedAnswers((current) => ({ ...current, [key]: { status, points: nextPoints, gradedAt: new Date().toISOString() } }));
-    toast.success(status === "correct" ? `Marked correct (+${delta || 0})` : previousPoints ? `Marked incorrect (-${previousPoints})` : "Marked incorrect");
+    if (!options.silent) toast.success(status === "correct" ? `Marked correct (+${delta || 0})` : previousPoints ? `Marked incorrect (-${previousPoints})` : "Marked incorrect");
   };
+
+  useEffect(() => {
+    if (!currentQuestion) return;
+    currentAnswers.forEach((answer) => {
+      const key = answerKey(answer);
+      if (gradedAnswers[key] || !isCorrectSubmission(answer, currentQuestion)) return;
+      if (wagerMode && wagerTiming === "after_answer" && !Number(answer.wagerAmount || 0)) return;
+      markAnswer(answer, "correct", { silent: true });
+    });
+  // markAnswer intentionally stays outside the deps so this effect only reacts to answer/game state changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentAnswers, currentQuestion, gradedAnswers, wagerMode, wagerTiming]);
 
   if (loading) return <div className="min-h-screen bg-[#09090B] flex items-center justify-center"><Loader2 className="text-[#71E0DC] animate-spin" size={34} /></div>;
   if (!session || !currentQuestion) {
