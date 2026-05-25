@@ -159,7 +159,72 @@ const BuildSession = () => {
   const handleRejectQuestion = (question) => { const nextRejectedAi = new Set(rejectedAi); nextRejectedAi.add(fingerprint(question.question_text)); setRejectedAi(nextRejectedAi); saveRejectedAi(nextRejectedAi); setQuestions((prev) => prev.filter((q) => String(q.id) !== String(question.id))); setRounds((prev) => prev.map((round) => ({ ...round, questionIds: (round.questionIds || []).filter((id) => String(id) !== String(question.id)) }))); toast.success("Question blocked from future AI suggestions"); };
   const handleRejectCategory = (question) => { if (!question.category) return; const approved = new Set(approvedCategories); const rejected = new Set(rejectedCategories); approved.delete(question.category); rejected.add(question.category); setApprovedCategories([...approved].sort((a, b) => a.localeCompare(b))); setRejectedCategories([...rejected].sort((a, b) => a.localeCompare(b))); saveLocalCategoryPrefs(approved, rejected); removeFromRound(activeRound.id, question.id); toast.success(`${question.category} moved to rejected categories`); };
   const handleClearSession = () => { clearSavedState(); setSessionName(""); setRounds(defaultRounds); setActiveRoundId("round-1"); setTheme(""); setTypeFilter("all"); setGenerateType("multiple_choice"); setShowWriteForm(false); setShowLibrary(false); toast.success("Session cleared"); };
-  const handleSave = async (goLive = false) => { if (!user?.id) return toast.error("You must be signed in"); const builtName = sessionName.trim() || `${new Date().toLocaleDateString()} Trivia`; if (!goLive) { localStorage.setItem(BUILD_STORAGE_KEY, JSON.stringify({ sessionName: builtName, rounds, activeRoundId, theme, difficulty, typeFilter, generateType, generateCount, includeImageIdeas })); setSessionName(builtName); toast.success("Build saved"); return; } const grouped = { true_false_questions: [], multiple_choice_questions: [], written_questions: [], picture_questions: [] }; const selectedLibraryIds = new Set(); const roundDescriptions = rounds.map((round, index) => ({ name: round.name, description: round.description || "", order: index + 1, categories: [...new Set((round.questionIds || []).map((id) => questionById.get(String(id))?.category).filter(Boolean))] })); rounds.forEach((round, roundIndex) => (round.questionIds || []).forEach((id, sourceOrder) => { const question = questionById.get(String(id)); if (!question) return; const questionId = String(question.id); if (!question.isGenerated && !questionId.startsWith("custom-") && !questionId.startsWith("session-")) selectedLibraryIds.add(questionId); const type = normalizeType(question); const sessionQuestion = toSessionQuestion(question, round, roundIndex, sourceOrder); if (type === "true_false") grouped.true_false_questions.push(sessionQuestion); else if (type === "multiple_choice") grouped.multiple_choice_questions.push(sessionQuestion); else grouped.written_questions.push(sessionQuestion); })); const total = Object.values(grouped).reduce((sum, items) => sum + items.length, 0); if (!total) return toast.error("Add at least one question before going live"); setSaving(true); try { const baseSessionPayload = { user_id: user.id, name: builtName, session_name: builtName, is_past: false, ...grouped }; let saveResult = editingSessionId ? await supabase.from("sessions").update({ ...baseSessionPayload, round_descriptions: roundDescriptions }).eq("id", editingSessionId).select("id").single() : await supabase.from("sessions").insert({ ...baseSessionPayload, round_descriptions: roundDescriptions }).select("id").single(); if (saveResult.error) saveResult = editingSessionId ? await supabase.from("sessions").update(baseSessionPayload).eq("id", editingSessionId).select("id").single() : await supabase.from("sessions").insert(baseSessionPayload).select("id").single(); if (saveResult.error) throw saveResult.error; const data = saveResult.data; setEditingSessionId(data.id); if (selectedLibraryIds.size > 0) { const nextUsedIds = new Set([...readUsedIds(), ...selectedLibraryIds]); writeUsedIds(nextUsedIds); setUsedQuestionIds(nextUsedIds); } clearSavedState(); toast.success("Session saved. Opening host screen."); navigate(`/host-session/${data.id}`); } catch (error) { console.error("Save built session error:", error); toast.error(error.message || "Failed to save session"); } finally { setSaving(false); } };
+  const handleSave = async (goLive = false) => {
+    if (!user?.id) return toast.error("You must be signed in");
+
+    const builtName = sessionName.trim() || `${new Date().toLocaleDateString()} Trivia`;
+    const grouped = { true_false_questions: [], multiple_choice_questions: [], written_questions: [], picture_questions: [] };
+    const selectedLibraryIds = new Set();
+    const roundDescriptions = rounds.map((round, index) => ({
+      name: round.name,
+      description: round.description || "",
+      order: index + 1,
+      categories: [...new Set((round.questionIds || []).map((id) => questionById.get(String(id))?.category).filter(Boolean))],
+    }));
+
+    rounds.forEach((round, roundIndex) => (round.questionIds || []).forEach((id, sourceOrder) => {
+      const question = questionById.get(String(id));
+      if (!question) return;
+      const questionId = String(question.id);
+      if (!question.isGenerated && !questionId.startsWith("custom-") && !questionId.startsWith("session-")) selectedLibraryIds.add(questionId);
+      const type = normalizeType(question);
+      const sessionQuestion = toSessionQuestion(question, round, roundIndex, sourceOrder);
+      if (type === "true_false") grouped.true_false_questions.push(sessionQuestion);
+      else if (type === "multiple_choice") grouped.multiple_choice_questions.push(sessionQuestion);
+      else grouped.written_questions.push(sessionQuestion);
+    }));
+
+    const total = Object.values(grouped).reduce((sum, items) => sum + items.length, 0);
+    if (goLive && !total) return toast.error("Add at least one question before going live");
+
+    setSaving(true);
+    try {
+      const baseSessionPayload = { user_id: user.id, name: builtName, session_name: builtName, is_past: false, ...grouped };
+      let saveResult = editingSessionId
+        ? await supabase.from("sessions").update({ ...baseSessionPayload, round_descriptions: roundDescriptions }).eq("id", editingSessionId).select("id").single()
+        : await supabase.from("sessions").insert({ ...baseSessionPayload, round_descriptions: roundDescriptions }).select("id").single();
+
+      if (saveResult.error) {
+        saveResult = editingSessionId
+          ? await supabase.from("sessions").update(baseSessionPayload).eq("id", editingSessionId).select("id").single()
+          : await supabase.from("sessions").insert(baseSessionPayload).select("id").single();
+      }
+      if (saveResult.error) throw saveResult.error;
+
+      const data = saveResult.data;
+      setEditingSessionId(data.id);
+      setSessionName(builtName);
+      clearSavedState();
+
+      if (goLive) {
+        if (selectedLibraryIds.size > 0) {
+          const nextUsedIds = new Set([...readUsedIds(), ...selectedLibraryIds]);
+          writeUsedIds(nextUsedIds);
+          setUsedQuestionIds(nextUsedIds);
+        }
+        toast.success("Session saved. Opening host screen.");
+        navigate(`/host-session/${data.id}`);
+      } else {
+        toast.success("Build saved");
+        if (!sessionId) navigate(`/build/${data.id}`, { replace: true });
+      }
+    } catch (error) {
+      console.error("Save built session error:", error);
+      toast.error(error.message || "Failed to save session");
+    } finally {
+      setSaving(false);
+    }
+  };
   const selectedTotal = rounds.reduce((sum, round) => sum + (round.questionIds?.length || 0), 0);
   if (loading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="text-[#71E0DC] animate-spin" size={32} /></div>;
 
