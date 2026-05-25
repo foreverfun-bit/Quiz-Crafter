@@ -30,6 +30,7 @@ const typeConfig = {
 const typeOrder = ["all", "true_false", "multiple_choice", "written", "picture"];
 const editableTypes = ["true_false", "multiple_choice", "written", "picture"];
 const USED_QUESTIONS_KEY = "quiz-crafter-used-question-ids";
+const UNUSED_QUESTIONS_KEY = "quiz-crafter-unused-question-ids";
 
 const parseOptions = (value) => {
   if (Array.isArray(value)) return value.map((item) => (typeof item === "string" ? item : item?.text || "")).filter(Boolean);
@@ -55,8 +56,21 @@ const readUsedIds = () => {
   }
 };
 
+const readUnusedIds = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(UNUSED_QUESTIONS_KEY) || "[]");
+    return new Set(Array.isArray(parsed) ? parsed.map(String) : []);
+  } catch {
+    return new Set();
+  }
+};
+
 const writeUsedIds = (ids) => {
   localStorage.setItem(USED_QUESTIONS_KEY, JSON.stringify([...ids]));
+};
+
+const writeUnusedIds = (ids) => {
+  localStorage.setItem(UNUSED_QUESTIONS_KEY, JSON.stringify([...ids]));
 };
 
 const isQuestionMarkedUsed = (question, usedIds) => {
@@ -89,6 +103,7 @@ export default function Library() {
   const [editForm, setEditForm] = useState(null);
   const [savingId, setSavingId] = useState(null);
   const [usedIds, setUsedIds] = useState(readUsedIds);
+  const [unusedIds, setUnusedIds] = useState(readUnusedIds);
   const [usedFingerprints, setUsedFingerprints] = useState(new Set());
 
   useEffect(() => {
@@ -136,7 +151,11 @@ export default function Library() {
     );
   }, [questions]);
 
-  const isUsed = useCallback((question) => isQuestionMarkedUsed(question, usedIds) || usedFingerprints.has(fingerprint(question.question_text)), [usedIds, usedFingerprints]);
+  const isUsed = useCallback((question) => {
+    const id = String(question?.id || "");
+    if (unusedIds.has(id)) return false;
+    return isQuestionMarkedUsed(question, usedIds) || usedFingerprints.has(fingerprint(question.question_text));
+  }, [unusedIds, usedIds, usedFingerprints]);
   const usedCount = useMemo(() => questions.filter((question) => isUsed(question)).length, [questions, isUsed]);
 
   const filteredQuestions = useMemo(() => {
@@ -155,18 +174,37 @@ export default function Library() {
 
   const toggleUsed = async (question) => {
     const id = String(question.id);
-    const next = new Set(usedIds);
-    const willBeUsed = !isQuestionMarkedUsed(question, usedIds);
-    if (willBeUsed) next.add(id);
-    else next.delete(id);
+    const nextUsed = new Set(usedIds);
+    const nextUnused = new Set(unusedIds);
+    const willBeUsed = !isUsed(question);
 
-    setUsedIds(next);
-    writeUsedIds(next);
-    setQuestions((prev) => prev.map((item) => item.id === question.id ? { ...item, is_used_local: willBeUsed } : item));
+    if (willBeUsed) {
+      nextUsed.add(id);
+      nextUnused.delete(id);
+    } else {
+      nextUsed.delete(id);
+      nextUnused.add(id);
+    }
 
-    // If a matching column exists in Supabase, keep it in sync. If not, local storage still drives the app today.
+    setUsedIds(nextUsed);
+    setUnusedIds(nextUnused);
+    writeUsedIds(nextUsed);
+    writeUnusedIds(nextUnused);
+    setQuestions((prev) => prev.map((item) => item.id === question.id ? {
+      ...item,
+      is_used: willBeUsed,
+      used: willBeUsed,
+      used_at: willBeUsed ? (item.used_at || new Date().toISOString()) : null,
+      times_used: willBeUsed ? Math.max(1, Number(item.times_used || 0)) : 0,
+    } : item));
+
+    // If matching columns exist in Supabase, keep them in sync. Local override still wins in the UI.
     const possiblePayloads = [
+      { is_used: willBeUsed, used: willBeUsed, used_at: willBeUsed ? new Date().toISOString() : null, times_used: willBeUsed ? 1 : 0 },
+      { is_used: willBeUsed, used_at: willBeUsed ? new Date().toISOString() : null, times_used: willBeUsed ? 1 : 0 },
+      { is_used: willBeUsed, used_at: willBeUsed ? new Date().toISOString() : null },
       { is_used: willBeUsed },
+      { used: willBeUsed, used_at: willBeUsed ? new Date().toISOString() : null },
       { used: willBeUsed },
       { used_at: willBeUsed ? new Date().toISOString() : null },
     ];
