@@ -148,14 +148,14 @@ const Generate = ({ initialCreateMode = "generate" }) => {
     setGroupedCandidates(emptyGroupedCandidates);
   };
 
-  const getGenerationPreferences = (extraRejectedQuestions = []) => {
+  const getGenerationPreferences = (extraRejectedQuestions = [], lockedCategoriesOverride = null) => {
     const prefs = readCategoryPrefs();
     const rejectedQuestions = [...readJsonArray(REJECTED_AI_KEY), ...extraRejectedQuestions];
 
     return {
       approvedCategories: cleanList(prefs.approved),
       rejectedCategories: cleanList(prefs.rejected),
-      lockedCategories: cleanList(lockedCategories),
+      lockedCategories: cleanList(lockedCategoriesOverride || lockedCategories),
       rejectedQuestions: cleanList(rejectedQuestions),
     };
   };
@@ -184,8 +184,8 @@ const Generate = ({ initialCreateMode = "generate" }) => {
     toast.success(`${cleanCategory} unlocked`);
   };
 
-  const callGenerateRoute = async ({ questionType, count, themeValue, excludeCategories = [], extraRejectedQuestions = [], difficultyOverride = null }) => {
-    const preferences = getGenerationPreferences(extraRejectedQuestions);
+  const callGenerateRoute = async ({ questionType, count, themeValue, excludeCategories = [], extraRejectedQuestions = [], difficultyOverride = null, lockedCategoriesOverride = null }) => {
+    const preferences = getGenerationPreferences(extraRejectedQuestions, lockedCategoriesOverride);
 
     const { data } = await axios.post("/api/generate-session-candidates", {
       sessionId: `generate-${mode}`,
@@ -328,9 +328,10 @@ const Generate = ({ initialCreateMode = "generate" }) => {
           `Original question: ${current.question_text}`,
           `Original answer: ${current.correct_answer}`,
           current.fun_fact ? `Original fun fact: ${current.fun_fact}` : "",
-          "Return a replacement, not a duplicate. It may keep the same broad subject, but should be newly worded and calibrated to the requested difficulty.",
+          `Return a replacement in the exact same category: ${current.category || "General"}. Preserve the core trivia idea and only recalibrate the clue path and difficulty.`,
         ].filter(Boolean).join("\n"),
         extraRejectedQuestions: [candidateFingerprint(current)],
+        lockedCategoriesOverride: current.category ? [current.category] : null,
       });
 
       if (!generated.length) {
@@ -341,7 +342,7 @@ const Generate = ({ initialCreateMode = "generate" }) => {
       setGroupedCandidates((prev) => {
         const updated = {
           ...prev,
-          [type]: prev[type].map((candidate, i) => (i === index ? generated[0] : candidate)),
+          [type]: prev[type].map((candidate, i) => (i === index ? { ...generated[0], category: current.category || generated[0].category } : candidate)),
         };
         rememberGenerated(updated);
         return updated;
@@ -752,3 +753,4 @@ const Generate = ({ initialCreateMode = "generate" }) => {
 };
 
 export default Generate;
+
