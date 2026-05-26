@@ -18,13 +18,13 @@ function safeQuestions(value) {
 
 function fallbackClues(sessionName, questions, direction) {
   const categories = [...new Set(questions.map((question) => question.category).filter(Boolean))].slice(0, 4);
-  const categoryText = categories.length ? ` Expect a little ${categories.join(", ")} energy.` : "";
+  const categoryText = categories.length ? ` You might want to brush up on ${categories.map((category) => category.toLowerCase()).join(", ")}... or at least bring a teammate who does.` : "";
   const name = sessionName || "Trivia Night";
   const tone = direction ? ` ${direction}` : "";
 
   return {
-    update: `${name} hint: tonight's set has some sneaky clue paths, a few satisfying reveals, and no free answers in this message.${categoryText}${tone}`,
-    social_post: `${name} is coming in hot. Study broadly, trust your table, and keep an eye out for the clue hiding in plain sight.${categoryText}`,
+    update: `Ready for another round? Tonight's clues are feeling sneaky in all the right ways.${categoryText}${tone}`,
+    social_post: `Grab your sharpest teammates and maybe one wildly specific fact you did not think you needed. ${name} is coming in with clue paths, curveballs, and a few "wait, I know this" moments. See you soon!`,
   };
 }
 
@@ -59,7 +59,7 @@ async function handler(req, res) {
           {
             role: "system",
             content:
-              "You write teaser clues and social posts for a live trivia host. Be playful, modern, and useful, but never reveal answers or make the actual questions solvable from the teaser alone. Return strict JSON only.",
+              "You write Facebook-style teaser clues for Forever Fun trivia nights. Match Julie's host voice: warm, playful, lightly punny, conversational, and a little mischievous. The teaser should hint at several question topics through sideways clues, wordplay, and everyday references without naming answers or making questions solvable. Return strict JSON only.",
           },
           {
             role: "user",
@@ -73,8 +73,26 @@ async function handler(req, res) {
                 "Do not include answers.",
                 "Do not quote exact question wording.",
                 "Do not mention internal tools or AI.",
-                "Use category-level hints, wordplay, and vibe.",
-                "Keep it suitable for a trivia host posting before or during an event.",
+                "Do not list category names plainly unless the host explicitly asks for that.",
+                "Write like a real social post from a local trivia host, not like ad copy.",
+                "Use 3-6 indirect clue nods from the actual session questions.",
+                "Prefer playful setups like 'you might want to...', 'brush up on...', 'grab your...', 'if you have ever...', 'ready for...'.",
+                "Use puns and connective tissue, but keep it readable and natural.",
+                "The social_post can be 2-5 sentences. The update should be shorter, 1-2 sentences.",
+                "A few emojis are okay if they fit, but do not overload them.",
+                "End the social post with a friendly invite such as 'See you tonight!' or similar when natural.",
+              ],
+              style_examples: [
+                "If you want your score to really shine, just apply a little highlighter. While you're at it, pay attention to what's holding the story together, leave no unique patterns behind, and watch out for anything that might flag your visit. See you soon for high stakes and higher scores!",
+                "Grab your Bluetooth headsets and call Drew Barrymore's ex-husband, because it's going to get unreal in here tonight!",
+                "Hey Trivia Fans! Want a head start? You might want to brush up on the fluffy layers that make a quilt cozy, rare birds that only the best golfers ever score, fun nicknames, and why a doctor's needle might already make you smarter than you think. See you this week!",
+                "Ready for another round of trivia? This week is going to be a blast, literally. If you want to stay ahead, look into a snack with an explosive history, keep your Tax Day crunch under control, and remember you do not want to B stuck in last place.",
+              ],
+              avoid: [
+                "Generic phrases like 'test your knowledge' or 'join us for fun trivia'.",
+                "Obvious category list posts.",
+                "Explaining the clue mechanics.",
+                "Overly polished marketing language.",
               ],
               session_name: sessionName,
               host_direction: direction,
