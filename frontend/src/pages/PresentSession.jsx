@@ -96,6 +96,11 @@ const normalizeType = (question, fallbackType = "written") => {
 
 const getRoundOrder = (question, fallbackOrder = 1) => Number(question?.round_order || question?.round_number || question?.round || fallbackOrder) || fallbackOrder;
 const getSourceOrder = (question, fallbackOrder = 1) => Number(question?.import_order || question?.source_order || question?.question_order || question?.order || fallbackOrder) || fallbackOrder;
+const normalizeImageTiming = (value) => {
+  const normalized = String(value || "").toLowerCase();
+  if (["after", "after_answer", "post", "reveal"].includes(normalized)) return "after_answer";
+  return "initial";
+};
 const getRoundName = (question, fallbackOrder = 1) => {
   if (question?.round_name) return question.round_name;
   if (question?.round_title) return question.round_title;
@@ -127,6 +132,7 @@ const flattenSession = (session) => {
         answer: question.correct_answer || question.answer || "",
         funFact: question.fun_fact || "",
         imageUrl: question.image_url || "",
+        imageTiming: normalizeImageTiming(question.image_timing || question.image_display_timing || question.media_timing || question.mediaTiming),
         options: buildAnswerOptions(question, questionType),
         type: questionType,
         roundName: getRoundName(question, roundOrder),
@@ -198,10 +204,31 @@ const PresentSession = () => {
     };
   }, [id]);
 
+  useEffect(() => {
+    const channel = supabase.channel(`quiz-crafter-live-${id}`, { config: { broadcast: { self: false } } });
+    channel
+      .on("broadcast", { event: "host_state" }, ({ payload }) => {
+        if (!payload) return;
+        setPresentState(payload);
+        try {
+          localStorage.setItem(`quiz-crafter-present-state-${id}`, JSON.stringify(payload));
+        } catch {
+          // The live broadcast still updates this screen if browser storage is unavailable.
+        }
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [id]);
+
   const questions = useMemo(() => flattenSession(session), [session]);
   const rounds = useMemo(() => makeRounds(questions), [questions]);
   const currentIndex = Math.min(Math.max(Number(presentState.currentIndex || 0), 0), Math.max(questions.length - 1, 0));
-  const currentQuestion = questions[currentIndex] || null;
+  const savedQuestion = questions[currentIndex] || null;
+  const liveQuestion = presentState.currentQuestion && Number(presentState.currentIndex || 0) === currentIndex ? presentState.currentQuestion : null;
+  const currentQuestion = liveQuestion ? { ...savedQuestion, ...liveQuestion } : savedQuestion;
   const currentRound = rounds.find((round) => currentIndex >= round.startIndex && currentIndex < round.startIndex + round.questions.length);
   const mode = presentState.mode || "question";
   const introRound = mode === "categories" && presentState.introRound?.key ? (rounds.find((round) => round.key === presentState.introRound.key) || presentState.introRound) : currentRound;
@@ -356,6 +383,7 @@ const QuestionView = ({ question, index, total, showAnswer, showFunFact }) => {
   const meta = typeMeta[question.type] || typeMeta.written;
   const Icon = meta.icon;
   const imageUrl = buildStorageUrl(question.imageUrl);
+  const shouldShowImage = Boolean(imageUrl) && (question.imageTiming !== "after_answer" || showAnswer);
 
   return (
     <div className="w-full max-w-6xl">
@@ -365,12 +393,12 @@ const QuestionView = ({ question, index, total, showAnswer, showFunFact }) => {
             <div className="flex items-center gap-2 flex-wrap">
               <Badge variant="outline" className="border-zinc-700 text-zinc-300 text-base px-4 py-2">{question.category}</Badge>
               <Badge className="bg-zinc-800 text-zinc-300 text-base px-4 py-2"><Icon size={16} className={`mr-2 ${meta.color}`} />{meta.label}</Badge>
-              {imageUrl && <Badge className="bg-amber-400/15 text-amber-200 border border-amber-400/20 text-base px-4 py-2"><Image size={16} className="mr-2" />Media</Badge>}
+              {imageUrl && <Badge className="bg-amber-400/15 text-amber-200 border border-amber-400/20 text-base px-4 py-2"><Image size={16} className="mr-2" />{question.imageTiming === "after_answer" ? "Reveal Media" : "Media"}</Badge>}
             </div>
             <span className="text-zinc-500 font-mono text-lg">{index + 1} / {total}</span>
           </div>
 
-          {imageUrl && <div className="mb-8 flex justify-center"><img src={imageUrl} alt="Question" className="max-h-[44vh] max-w-full rounded-lg border border-white/10 object-contain" /></div>}
+          {shouldShowImage && <div className="mb-8 flex justify-center"><img src={imageUrl} alt="Question" className="max-h-[44vh] max-w-full rounded-lg border border-white/10 object-contain" /></div>}
 
           <h2 className="text-4xl lg:text-7xl font-black leading-tight text-white text-center mb-10">{question.questionText}</h2>
 
