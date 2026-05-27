@@ -1,5 +1,5 @@
 import { supabase } from "./lib/supabase";
-import { useState, useEffect, createContext, useContext } from "react";
+import { Component, useState, useEffect, createContext, useContext } from "react";
 import "@/App.css";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Toaster, toast } from "sonner";
@@ -106,6 +106,47 @@ const AppLayout = ({ children }) => {
     </div>
   );
 };
+
+class BuildErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error) {
+    console.error("Build screen crashed:", error);
+  }
+
+  handleRetry = () => {
+    this.setState({ hasError: false });
+    window.location.reload();
+  };
+
+  handleResetAndRetry = () => {
+    ["trivia-flex-round-builder-state-v5", "trivia-flex-round-builder-state-v4", "trivia-flex-round-builder-state-v3", "trivia-flex-round-builder-state-v2"].forEach((key) => localStorage.removeItem(key));
+    this.handleRetry();
+  };
+
+  render() {
+    if (!this.state.hasError) return this.props.children;
+    return (
+      <div className="p-4 lg:p-6 max-w-3xl mx-auto min-h-[70vh] flex items-center">
+        <div className="w-full rounded-xl border border-white/10 bg-zinc-950/80 p-6 shadow-2xl shadow-black/30">
+          <h1 className="text-2xl font-bold text-white mb-2">Build Session Had Trouble Loading</h1>
+          <p className="text-zinc-400 mb-5">The builder ran into a saved-state issue. Retry first; if it keeps happening, clear the temporary build cache and reload the builder.</p>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={this.handleRetry} className="rounded-md bg-[#71E0DC] px-4 py-2 text-sm font-semibold text-zinc-950 hover:bg-[#AEEBFF]">Retry</button>
+            <button type="button" onClick={this.handleResetAndRetry} className="rounded-md border border-white/10 bg-zinc-900 px-4 py-2 text-sm font-semibold text-white hover:bg-zinc-800">Clear Build Cache</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+}
 
 function App() {
   const [user, setUser] = useState(null);
@@ -274,8 +315,8 @@ function App() {
             <Route path="/generate" element={<ProtectedRoute><AppLayout><Generate /></AppLayout></ProtectedRoute>} />
             <Route path="/write-question" element={<ProtectedRoute><AppLayout><Generate initialCreateMode="write" /></AppLayout></ProtectedRoute>} />
             <Route path="/library" element={<ProtectedRoute><AppLayout><Library /></AppLayout></ProtectedRoute>} />
-            <Route path="/build" element={<ProtectedRoute><AppLayout><BuildSession /></AppLayout></ProtectedRoute>} />
-            <Route path="/build/:sessionId" element={<ProtectedRoute><AppLayout><BuildSession /></AppLayout></ProtectedRoute>} />
+            <Route path="/build" element={<ProtectedRoute><AppLayout><BuildErrorBoundary><BuildSession /></BuildErrorBoundary></AppLayout></ProtectedRoute>} />
+            <Route path="/build/:sessionId" element={<ProtectedRoute><AppLayout><BuildErrorBoundary><BuildSession /></BuildErrorBoundary></AppLayout></ProtectedRoute>} />
             <Route path="/past-sessions" element={<ProtectedRoute><AppLayout><PastSessions /></AppLayout></ProtectedRoute>} />
             <Route path="/import" element={<ProtectedRoute><AppLayout><ImportCSV /></AppLayout></ProtectedRoute>} />
             <Route path="/session/:id" element={<ProtectedRoute><AppLayout><SessionDetail /></AppLayout></ProtectedRoute>} />
