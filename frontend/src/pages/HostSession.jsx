@@ -20,9 +20,11 @@ import {
   Maximize2,
   MessageSquare,
   MonitorPlay,
+  Palette,
   Play,
   Plus,
   RotateCcw,
+  Save,
   Sparkles,
   Tags,
   Timer,
@@ -37,6 +39,7 @@ import { toast } from "sonner";
 const STORAGE_BASE = process.env.REACT_APP_SUPABASE_URL ? `${process.env.REACT_APP_SUPABASE_URL}/storage/v1/object/public/` : "";
 const DEFAULT_PUBLIC_SITE = "https://quizcrafter.com";
 const POINTS_BY_TYPE = { true_false: 25, multiple_choice: 50, written: 100 };
+const DEFAULT_BRANDING = { name: "Forever Fun Events", logoUrl: "/forever-fun-logo.png", primaryColor: "#71E0DC", accentColor: "#AEB2EF" };
 
 const typeMeta = {
   true_false: { label: "True/False", short: "T/F", icon: CheckCircle, color: "text-[#71E0DC]" },
@@ -65,6 +68,24 @@ const buildStorageUrl = (path) => {
   if (!STORAGE_BASE) return value;
   return `${STORAGE_BASE}${value.replace(/^\/+/, "")}`;
 };
+const hostBrandingKey = (sessionId) => `quiz-crafter-host-branding-${sessionId}`;
+const sanitizeHexColor = (value, fallback) => /^#[0-9a-f]{6}$/i.test(String(value || "")) ? value : fallback;
+const getSessionBranding = (session) => ({
+  name: session?.host_brand_name || session?.brand_name || session?.company_name || session?.venue_name || DEFAULT_BRANDING.name,
+  logoUrl: session?.host_logo_url || session?.brand_logo_url || session?.logo_url || DEFAULT_BRANDING.logoUrl,
+  primaryColor: sanitizeHexColor(session?.host_primary_color || session?.primary_color, DEFAULT_BRANDING.primaryColor),
+  accentColor: sanitizeHexColor(session?.host_accent_color || session?.accent_color, DEFAULT_BRANDING.accentColor),
+});
+const readStoredBranding = (sessionId, session = null) => {
+  try {
+    const stored = JSON.parse(localStorage.getItem(hostBrandingKey(sessionId)) || "null");
+    return stored ? { ...getSessionBranding(session), ...stored, primaryColor: sanitizeHexColor(stored.primaryColor, DEFAULT_BRANDING.primaryColor), accentColor: sanitizeHexColor(stored.accentColor, DEFAULT_BRANDING.accentColor) } : getSessionBranding(session);
+  } catch {
+    return getSessionBranding(session);
+  }
+};
+const writeStoredBranding = (sessionId, branding) => localStorage.setItem(hostBrandingKey(sessionId), JSON.stringify(branding));
+const fileToDataUrl = (file) => new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file); });
 
 const parseOptions = (value) => {
   if (!value) return [];
@@ -225,6 +246,8 @@ const HostSession = () => {
   const [timerSeconds, setTimerSeconds] = useState(30);
   const [timerEndAt, setTimerEndAt] = useState(null);
   const [now, setNow] = useState(Date.now());
+  const [customizeOpen, setCustomizeOpen] = useState(false);
+  const [branding, setBranding] = useState(() => readStoredBranding(id));
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 500);
@@ -238,6 +261,7 @@ const HostSession = () => {
         const { data, error } = await supabase.from("sessions").select("*").eq("id", id).single();
         if (error) throw error;
         setSession(data);
+        setBranding(readStoredBranding(id, data));
       } catch (error) {
         console.error("Host session load error:", error);
         toast.error(error.message || "Failed to load session");
@@ -325,11 +349,12 @@ const HostSession = () => {
       timerEndAt,
       timeRemaining,
       acceptingAnswers,
+      branding,
       updatedAt: new Date().toISOString(),
     };
     localStorage.setItem(`quiz-crafter-present-state-${id}`, JSON.stringify(state));
     liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: state });
-  }, [id, session, sessionName, questions.length, currentQuestion, currentIndex, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, leaderboard, players, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerEndAt, timeRemaining, acceptingAnswers]);
+  }, [id, session, sessionName, questions.length, currentQuestion, currentIndex, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, leaderboard, players, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerEndAt, timeRemaining, acceptingAnswers, branding]);
 
   const goToQuestion = (index) => {
     if (index < 0 || index >= questions.length) return;
@@ -371,6 +396,29 @@ const HostSession = () => {
       toast.success("Join link copied");
     } catch {
       toast.error("Could not copy link");
+    }
+  };
+  const saveBranding = async (nextBranding) => {
+    const cleanBranding = {
+      name: nextBranding.name?.trim() || DEFAULT_BRANDING.name,
+      logoUrl: nextBranding.logoUrl?.trim() || "",
+      primaryColor: sanitizeHexColor(nextBranding.primaryColor, DEFAULT_BRANDING.primaryColor),
+      accentColor: sanitizeHexColor(nextBranding.accentColor, DEFAULT_BRANDING.accentColor),
+    };
+    setBranding(cleanBranding);
+    writeStoredBranding(id, cleanBranding);
+    try {
+      const { error } = await supabase.from("sessions").update({
+        host_brand_name: cleanBranding.name,
+        host_logo_url: cleanBranding.logoUrl,
+        host_primary_color: cleanBranding.primaryColor,
+        host_accent_color: cleanBranding.accentColor,
+      }).eq("id", id);
+      if (error && !String(error.message || "").includes("column")) throw error;
+      toast.success("Host branding saved");
+    } catch (error) {
+      console.error("Save host branding error:", error);
+      toast.success("Host branding saved on this device");
     }
   };
 
@@ -420,15 +468,17 @@ const HostSession = () => {
     return <div className="min-h-screen bg-[#09090B] flex items-center justify-center p-6 text-center"><div><p className="text-white text-2xl font-bold mb-2">No questions to host</p><p className="text-zinc-500 mb-4">Add questions to this session first.</p><Button onClick={() => navigate(`/session/${id}`)} className="gradient-btn">Back to Session</Button></div></div>;
   }
 
-  return <div className="min-h-screen bg-[#09090B] text-white" data-testid="host-session-page">
-    {!focusMode && <TopBar navigate={navigate} id={id} sessionName={sessionName} questions={questions} players={players} currentIndex={currentIndex} liveStatus={liveStatus} openPresentation={openPresentation} setFocusMode={setFocusMode} progress={progress} />}
+  const brandStyle = { "--host-primary": branding.primaryColor, "--host-accent": branding.accentColor };
+  return <div className="min-h-screen bg-[#09090B] text-white" data-testid="host-session-page" style={brandStyle}>
+    {!focusMode && <TopBar navigate={navigate} id={id} sessionName={sessionName} questions={questions} players={players} currentIndex={currentIndex} liveStatus={liveStatus} openPresentation={openPresentation} setFocusMode={setFocusMode} progress={progress} branding={branding} customizeOpen={customizeOpen} setCustomizeOpen={setCustomizeOpen} />}
     <div className={`max-w-7xl mx-auto p-4 lg:p-6 ${focusMode ? "min-h-screen flex flex-col" : ""}`}>
       {focusMode && <div className="flex justify-between items-center mb-4"><Badge className="bg-zinc-800 text-zinc-300">{currentRound?.name || "Round"} - {currentIndex + 1} / {questions.length}</Badge><Button variant="outline" onClick={() => setFocusMode(false)} className="border-white/10 text-zinc-300 hover:text-white">Exit Focus</Button></div>}
       <div className={focusMode ? "flex-1 flex items-center" : "grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-5"}>
         <main className="w-full">
-          {!focusMode && <PresentationControls mode={presentMode} setMode={releaseMode} rounds={rounds} currentIndex={currentIndex} currentRound={currentRound} introRoundKey={introRound?.key || introRoundKey} setIntroRoundKey={setIntroRoundKey} showAnswer={showAnswer} toggleAnswer={toggleAnswer} showFunFact={showFunFact} toggleFunFact={toggleFunFact} hasFunFact={Boolean(currentQuestion.funFact)} />}
+          {!focusMode && <PresentationControls mode={presentMode} setMode={releaseMode} rounds={rounds} currentIndex={currentIndex} currentRound={currentRound} introRoundKey={introRound?.key || introRoundKey} setIntroRoundKey={setIntroRoundKey} showAnswer={showAnswer} toggleAnswer={toggleAnswer} showFunFact={showFunFact} toggleFunFact={toggleFunFact} hasFunFact={Boolean(currentQuestion.funFact)} customizeOpen={customizeOpen} setCustomizeOpen={setCustomizeOpen} />}
+          {!focusMode && customizeOpen && <HostCustomizePanel branding={branding} onSave={saveBranding} onClose={() => setCustomizeOpen(false)} />}
           <HostSettings pointsPerQuestion={pointsPerQuestion} setPointsPerQuestion={setPointsPerQuestion} wagerMode={wagerMode} setWagerMode={setWagerMode} wagerLimit={wagerLimit} setWagerLimit={setWagerLimit} wagerTiming={wagerTiming} setWagerTiming={setWagerTiming} timerSeconds={timerSeconds} setTimerSeconds={setTimerSeconds} timeRemaining={timeRemaining} startTimer={startTimer} resetTimer={resetTimer} />
-          <QuestionStage question={currentQuestion} index={currentIndex} total={questions.length} roundName={currentRound?.name} showAnswer={showAnswer} showFunFact={showFunFact} focusMode={focusMode} pointsPerQuestion={pointsPerQuestion} timeRemaining={timeRemaining} wagerMode={wagerMode} wagerLimit={wagerLimit} wagerTiming={wagerTiming} />
+          <QuestionStage question={currentQuestion} index={currentIndex} total={questions.length} roundName={currentRound?.name} showAnswer={showAnswer} showFunFact={showFunFact} focusMode={focusMode} pointsPerQuestion={pointsPerQuestion} timeRemaining={timeRemaining} wagerMode={wagerMode} wagerLimit={wagerLimit} wagerTiming={wagerTiming} branding={branding} />
           <div className="mt-4 flex items-center justify-between gap-3 flex-wrap"><Button variant="outline" onClick={() => goToQuestion(currentIndex - 1)} disabled={currentIndex === 0} className="border-white/10 text-zinc-300 hover:text-white"><ChevronLeft size={18} className="mr-2" />Previous</Button><div className="flex gap-2 flex-wrap justify-end"><Button onClick={toggleAnswer} className={showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700" : "gradient-btn"}>{showAnswer ? <EyeOff size={18} className="mr-2" /> : <Eye size={18} className="mr-2" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button><Button onClick={toggleFunFact} disabled={!currentQuestion.funFact} className="bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-50"><Sparkles size={18} className="mr-2" />Fun Fact</Button><Button onClick={() => goToQuestion(currentIndex + 1)} disabled={currentIndex === questions.length - 1} className="bg-[#AEB2EF] text-zinc-950 hover:bg-[#AEB2EF]/90"><ChevronRight size={18} className="mr-2" />Next</Button></div></div>
         </main>
         {!focusMode && <aside className="space-y-3"><PhonePlayPanel joinUrl={joinUrl} copyJoinLink={copyJoinLink} players={players} answers={currentAnswers} leaderboard={leaderboard} gradedAnswers={gradedAnswers} markAnswer={markAnswer} openScoreModal={openScoreModal} pointsPerQuestion={Number(pointsPerQuestion) || getDefaultPoints(currentQuestion)} wagerMode={wagerMode} wagerLimit={wagerLimit} setMode={releaseMode} /><LeaderboardPanel leaderboard={leaderboard} teamName={teamName} teamScore={teamScore} setTeamName={setTeamName} setTeamScore={setTeamScore} addTeam={addTeam} adjustScore={adjustScore} openScoreModal={openScoreModal} removeTeam={removeTeam} showLeaderboard={() => releaseMode("leaderboard")} /><RunSheet rounds={rounds} currentIndex={currentIndex} goToQuestion={goToQuestion} /></aside>}
@@ -438,9 +488,9 @@ const HostSession = () => {
   </div>;
 };
 
-const TopBar = ({ navigate, id, sessionName, questions, players, currentIndex, liveStatus, openPresentation, setFocusMode, progress }) => <div className="border-b border-white/10 bg-zinc-950/80 sticky top-0 z-20"><div className="max-w-7xl mx-auto px-4 lg:px-6 py-3 flex items-center justify-between gap-3"><div className="flex items-center gap-3 min-w-0"><Button variant="ghost" onClick={() => navigate(`/session/${id}`)} className="text-zinc-400 hover:text-white h-9 w-9 p-0" aria-label="Back to session"><ArrowLeft size={18} /></Button><div className="min-w-0"><h1 className="font-bold truncate">{sessionName}</h1><p className="text-xs text-zinc-500">Hosting view - {questions.length} questions - {players.length} players</p></div></div><div className="flex items-center gap-2 flex-wrap justify-end"><Badge className={liveStatus === "live" ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/20" : "bg-zinc-800 text-zinc-300"}><Wifi size={13} className="mr-1" />{liveStatus === "live" ? "Live" : "Connecting"}</Badge><Badge className="bg-zinc-800 text-zinc-300">{currentIndex + 1} / {questions.length}</Badge><Button variant="outline" onClick={openPresentation} className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />Presentation</Button><Button variant="outline" onClick={() => setFocusMode(true)} className="border-white/10 text-zinc-300 hover:text-white"><Maximize2 size={16} className="mr-2" />Focus</Button></div></div><div className="h-1 bg-zinc-900"><div className="h-1 bg-gradient-to-r from-[#71E0DC] to-[#AEB2EF] transition-all" style={{ width: `${progress}%` }} /></div></div>;
+const TopBar = ({ navigate, id, sessionName, questions, players, currentIndex, liveStatus, openPresentation, setFocusMode, progress, branding, customizeOpen, setCustomizeOpen }) => <div className="border-b border-white/10 bg-zinc-950/80 sticky top-0 z-20"><div className="max-w-7xl mx-auto px-4 lg:px-6 py-3 flex items-center justify-between gap-3"><div className="flex items-center gap-3 min-w-0"><Button variant="ghost" onClick={() => navigate(`/session/${id}`)} className="text-zinc-400 hover:text-white h-9 w-9 p-0" aria-label="Back to session"><ArrowLeft size={18} /></Button>{branding?.logoUrl && <img src={branding.logoUrl} alt={branding.name || "Host logo"} className="h-10 w-10 rounded-md bg-white object-contain p-1" />}<div className="min-w-0"><p className="text-xs font-bold uppercase tracking-wide" style={{ color: "var(--host-primary)" }}>{branding?.name || "Host"}</p><h1 className="font-bold truncate">{sessionName}</h1><p className="text-xs text-zinc-500">Hosting view - {questions.length} questions - {players.length} players</p></div></div><div className="flex items-center gap-2 flex-wrap justify-end"><Badge className={liveStatus === "live" ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/20" : "bg-zinc-800 text-zinc-300"}><Wifi size={13} className="mr-1" />{liveStatus === "live" ? "Live" : "Connecting"}</Badge><Badge className="bg-zinc-800 text-zinc-300">{currentIndex + 1} / {questions.length}</Badge><Button variant="outline" onClick={() => setCustomizeOpen((value) => !value)} className={customizeOpen ? "border-white/10 text-zinc-950 hover:opacity-90" : "border-white/10 text-zinc-300 hover:text-white"} style={customizeOpen ? { backgroundColor: "var(--host-primary)" } : undefined}><Palette size={16} className="mr-2" />Customize</Button><Button variant="outline" onClick={openPresentation} className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />Presentation</Button><Button variant="outline" onClick={() => setFocusMode(true)} className="border-white/10 text-zinc-300 hover:text-white"><Maximize2 size={16} className="mr-2" />Focus</Button></div></div><div className="h-1 bg-zinc-900"><div className="h-1 transition-all" style={{ width: `${progress}%`, background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" }} /></div></div>;
 
-const PresentationControls = ({ mode, setMode, rounds, currentIndex, currentRound, introRoundKey, setIntroRoundKey, showAnswer, toggleAnswer, showFunFact, toggleFunFact, hasFunFact }) => {
+const PresentationControls = ({ mode, setMode, rounds, currentIndex, currentRound, introRoundKey, setIntroRoundKey, showAnswer, toggleAnswer, showFunFact, toggleFunFact, hasFunFact, customizeOpen, setCustomizeOpen }) => {
   const nextRound = rounds.find((round) => round.startIndex > currentIndex);
   const suggestedRound = currentRound && currentIndex >= currentRound.startIndex + currentRound.questions.length - 1 && nextRound ? nextRound : currentRound;
   const selectedIntroKey = introRoundKey || suggestedRound?.key || currentRound?.key || "";
@@ -449,8 +499,23 @@ const PresentationControls = ({ mode, setMode, rounds, currentIndex, currentRoun
     if (mode === "categories") setMode("categories", roundKey);
   };
 
-  return <Card className="glass-card mb-4"><CardContent className="p-3 flex items-center justify-between gap-3 flex-wrap"><div className="flex items-center gap-2 flex-wrap"><Button size="sm" onClick={() => setMode("question")} className={mode === "question" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><MonitorPlay size={15} className="mr-2" />Question</Button><Button size="sm" onClick={() => setMode("categories", selectedIntroKey)} className={mode === "categories" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><Tags size={15} className="mr-2" />Round Intro</Button><select aria-label="Round intro target" value={selectedIntroKey} onChange={(event) => chooseIntroRound(event.target.value)} className="h-8 rounded-md bg-zinc-950 border border-white/10 px-2 text-sm text-zinc-200">{rounds.map((round) => <option key={round.key} value={round.key}>{round.name}</option>)}</select><Button size="sm" onClick={() => setMode("leaderboard")} className={mode === "leaderboard" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><Trophy size={15} className="mr-2" />Leaderboard</Button></div><div className="flex items-center gap-2 flex-wrap"><Button size="sm" variant="outline" onClick={toggleAnswer} className="border-white/10 text-zinc-300 hover:text-white">{showAnswer ? <EyeOff size={15} className="mr-2" /> : <Eye size={15} className="mr-2" />}{showAnswer ? "Hide Answer" : "Show Answer"}</Button><Button size="sm" variant="outline" onClick={toggleFunFact} disabled={!hasFunFact} className="border-white/10 text-zinc-300 hover:text-white disabled:opacity-50"><Sparkles size={15} className="mr-2" />{showFunFact ? "Hide Fun Fact" : "Show Fun Fact"}</Button></div></CardContent></Card>;
+  return <Card className="glass-card mb-4"><CardContent className="p-3 flex items-center justify-between gap-3 flex-wrap"><div className="flex items-center gap-2 flex-wrap"><Button size="sm" onClick={() => setMode("question")} className={mode === "question" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><MonitorPlay size={15} className="mr-2" />Question</Button><Button size="sm" onClick={() => setMode("categories", selectedIntroKey)} className={mode === "categories" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><Tags size={15} className="mr-2" />Round Intro</Button><select aria-label="Round intro target" value={selectedIntroKey} onChange={(event) => chooseIntroRound(event.target.value)} className="h-8 rounded-md bg-zinc-950 border border-white/10 px-2 text-sm text-zinc-200">{rounds.map((round) => <option key={round.key} value={round.key}>{round.name}</option>)}</select><Button size="sm" onClick={() => setMode("leaderboard")} className={mode === "leaderboard" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><Trophy size={15} className="mr-2" />Leaderboard</Button><Button size="sm" onClick={() => setCustomizeOpen((value) => !value)} className={customizeOpen ? "text-zinc-950 hover:opacity-90" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"} style={customizeOpen ? { backgroundColor: "var(--host-primary)" } : undefined}><Palette size={15} className="mr-2" />Customize</Button></div><div className="flex items-center gap-2 flex-wrap"><Button size="sm" variant="outline" onClick={toggleAnswer} className="border-white/10 text-zinc-300 hover:text-white">{showAnswer ? <EyeOff size={15} className="mr-2" /> : <Eye size={15} className="mr-2" />}{showAnswer ? "Hide Answer" : "Show Answer"}</Button><Button size="sm" variant="outline" onClick={toggleFunFact} disabled={!hasFunFact} className="border-white/10 text-zinc-300 hover:text-white disabled:opacity-50"><Sparkles size={15} className="mr-2" />{showFunFact ? "Hide Fun Fact" : "Show Fun Fact"}</Button></div></CardContent></Card>;
 };
+
+const HostCustomizePanel = ({ branding, onSave, onClose }) => {
+  const [form, setForm] = useState(branding);
+  useEffect(() => setForm(branding), [branding]);
+  const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+  const uploadLogo = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) return toast.error("Choose an image file for the logo");
+    update("logoUrl", await fileToDataUrl(file));
+  };
+  return <Card className="glass-card mb-4"><CardContent className="p-4"><div className="flex items-center justify-between gap-3 mb-4"><div><h2 className="text-lg font-bold text-white flex items-center gap-2"><Palette size={18} style={{ color: "var(--host-primary)" }} />Customize Host Screen</h2><p className="text-xs text-zinc-500">Branding applies immediately to this live host screen.</p></div><Button size="sm" variant="ghost" onClick={onClose} className="text-zinc-400 hover:text-white">Close</Button></div><div className="grid grid-cols-1 lg:grid-cols-[160px_1fr] gap-4"><div className="rounded-lg border border-white/10 bg-zinc-950/60 p-3 flex flex-col items-center justify-center min-h-36">{form.logoUrl ? <img src={form.logoUrl} alt="Logo preview" className="max-h-24 max-w-full rounded-md bg-white object-contain p-2" /> : <div className="h-24 w-24 rounded-md border border-white/10 bg-zinc-900 flex items-center justify-center text-zinc-500"><Image size={28} /></div>}<p className="mt-3 text-sm font-bold text-white text-center">{form.name || "Host Name"}</p></div><div className="space-y-3"><div className="grid grid-cols-1 md:grid-cols-2 gap-3"><label className="text-xs text-zinc-400">Host name<input value={form.name || ""} onChange={(event) => update("name", event.target.value)} className="mt-1 h-10 w-full rounded-md bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><label className="text-xs text-zinc-400">Logo URL<input value={form.logoUrl || ""} onChange={(event) => update("logoUrl", event.target.value)} placeholder="https://..." className="mt-1 h-10 w-full rounded-md bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label></div><div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end"><label className="text-xs text-zinc-400">Upload logo<span className="mt-1 h-10 rounded-md border border-white/10 bg-zinc-950 px-3 text-zinc-200 flex items-center gap-2 cursor-pointer hover:border-[#71E0DC]/50"><Upload size={15} />Choose file<input type="file" accept="image/*" onChange={uploadLogo} className="hidden" /></span></label><ColorField label="Primary color" value={form.primaryColor} onChange={(value) => update("primaryColor", value)} /><ColorField label="Accent color" value={form.accentColor} onChange={(value) => update("accentColor", value)} /></div><div className="flex justify-end gap-2 pt-1"><Button variant="outline" onClick={() => setForm(DEFAULT_BRANDING)} className="border-white/10 text-zinc-300 hover:text-white">Reset</Button><Button onClick={() => onSave(form)} className="text-zinc-950 font-semibold hover:opacity-90" style={{ background: `linear-gradient(90deg, ${form.primaryColor}, ${form.accentColor})` }}><Save size={16} className="mr-2" />Save Branding</Button></div></div></div></CardContent></Card>;
+};
+
+const ColorField = ({ label, value, onChange }) => <label className="text-xs text-zinc-400">{label}<div className="mt-1 flex h-10 rounded-md border border-white/10 bg-zinc-950 overflow-hidden focus-within:border-[#71E0DC]/60"><input type="color" value={value || DEFAULT_BRANDING.primaryColor} onChange={(event) => onChange(event.target.value)} className="h-10 w-12 border-0 bg-transparent p-1" /><input value={value || ""} onChange={(event) => onChange(event.target.value)} className="min-w-0 flex-1 bg-transparent px-2 text-white outline-none" /></div></label>;
 
 const HostSettings = ({ pointsPerQuestion, setPointsPerQuestion, wagerMode, setWagerMode, wagerLimit, setWagerLimit, wagerTiming, setWagerTiming, timerSeconds, setTimerSeconds, timeRemaining, startTimer, resetTimer }) => <Card className="glass-card mb-4"><CardContent className="p-3 grid grid-cols-1 md:grid-cols-[0.8fr_0.8fr_0.9fr_auto_auto] gap-2 items-end"><label className="text-xs text-zinc-400">Points<input type="number" min="0" value={pointsPerQuestion} onChange={(event) => setPointsPerQuestion(event.target.value)} className="mt-1 w-full h-9 rounded-md bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><label className="text-xs text-zinc-400">Timer seconds<input type="number" min="0" value={timerSeconds} onChange={(event) => setTimerSeconds(event.target.value)} className="mt-1 w-full h-9 rounded-md bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><label className="text-xs text-zinc-400">Wager limit<input type="number" min="0" value={wagerLimit} onChange={(event) => { setWagerLimit(event.target.value); setWagerMode(Number(event.target.value || 0) > 0); }} className="mt-1 w-full h-9 rounded-md bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><Button onClick={() => setWagerTiming((value) => value === "after_answer" ? "before_answer" : "after_answer")} disabled={!wagerMode} className={wagerMode ? "h-9 bg-purple-500/20 text-purple-200 border border-purple-500/30 hover:bg-purple-500/30" : "h-9 bg-zinc-800 text-zinc-500"}>{wagerTiming === "after_answer" ? "Wager After" : "Wager Before"}</Button><div className="flex gap-2"><Button onClick={startTimer} className="h-9 gradient-btn"><Play size={15} className="mr-2" />Start</Button><Button variant="outline" onClick={resetTimer} className="h-9 border-white/10 text-zinc-300 hover:text-white"><RotateCcw size={15} className="mr-2" />{timeRemaining === null ? "Clear" : `${timeRemaining}s`}</Button></div></CardContent></Card>;
 
@@ -471,7 +536,7 @@ const RunSheet = ({ rounds, currentIndex, goToQuestion }) => <Card className="gl
 
 const QuestionBadge = ({ type }) => { const meta = typeMeta[type] || typeMeta.written; const Icon = meta.icon; return <Badge className="bg-zinc-800 text-zinc-300 text-[11px]"><Icon size={11} className={`mr-1 ${meta.color}`} />{meta.short}</Badge>; };
 
-const QuestionStage = ({ question, index, total, roundName, showAnswer, showFunFact, focusMode, pointsPerQuestion, timeRemaining, wagerMode, wagerLimit, wagerTiming }) => { const meta = typeMeta[question.type] || typeMeta.written; const Icon = meta.icon; const imageUrl = buildStorageUrl(question.imageUrl); return <Card className={`glass-card overflow-hidden ${focusMode ? "w-full" : ""}`}><CardContent className={focusMode ? "p-8 lg:p-12" : "p-5 lg:p-7"}><div className="flex items-center justify-between gap-3 flex-wrap mb-6"><div className="flex items-center gap-2 flex-wrap"><Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20">{roundName || "Round"}</Badge><Badge variant="outline" className="border-zinc-700 text-zinc-300">{question.category}</Badge><Badge className="bg-zinc-800 text-zinc-300"><Icon size={13} className={`mr-1 ${meta.color}`} />{meta.label}</Badge><Badge className={wagerMode ? "bg-purple-500/15 text-purple-300 border border-purple-500/20" : "bg-amber-400/15 text-amber-200 border border-amber-400/20"}>{wagerMode ? `Wager ${wagerLimit || ""} ${wagerTiming === "after_answer" ? "after" : "before"}` : `${Number(pointsPerQuestion) || getDefaultPoints(question)} pts`}</Badge>{timeRemaining !== null && <Badge className={timeRemaining === 0 ? "bg-red-500/15 text-red-300 border border-red-500/20" : "bg-[#AEB2EF]/15 text-[#AEB2EF] border border-[#AEB2EF]/20"}><Timer size={13} className="mr-1" />{timeRemaining}s</Badge>}</div><span className="text-zinc-500 font-mono text-sm">{index + 1} / {total}</span></div>{imageUrl && <div className="mb-6 flex justify-center"><img src={imageUrl} alt="Question" className="max-h-[42vh] max-w-full rounded-lg border border-white/10 object-contain" /></div>}<h2 className={`${focusMode ? "text-4xl lg:text-6xl" : "text-2xl lg:text-4xl"} font-black leading-tight text-white text-center mb-8`}>{question.questionText}</h2>{question.type === "true_false" && <div className="grid grid-cols-2 gap-4 max-w-xl mx-auto mb-6"><div className="rounded-lg border-2 border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-center font-bold py-5 text-2xl">True</div><div className="rounded-lg border-2 border-red-500/30 bg-red-500/10 text-red-300 text-center font-bold py-5 text-2xl">False</div></div>}{question.type === "multiple_choice" && question.options.length > 0 && <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-3xl mx-auto mb-6">{question.options.map((option, optionIndex) => <div key={optionIndex} className="rounded-lg border border-white/10 bg-zinc-900/80 px-4 py-3 text-zinc-200 text-lg">{option}</div>)}</div>}{showAnswer && <div className="mt-8 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-5 text-center"><p className="text-zinc-400 text-sm uppercase tracking-wider mb-1">Answer</p><p className={`${focusMode ? "text-4xl" : "text-2xl"} font-bold text-emerald-300`}>{question.answer}</p></div>}{showFunFact && question.funFact && <div className="mt-5 rounded-lg border border-[#AEB2EF]/30 bg-[#AEB2EF]/10 p-5 text-center"><div className="flex items-center justify-center gap-2 text-[#AEB2EF] font-bold mb-2"><Sparkles size={18} />Fun Fact</div><p className="text-zinc-300 max-w-3xl mx-auto">{question.funFact}</p></div>}</CardContent></Card>; };
+const QuestionStage = ({ question, index, total, roundName, showAnswer, showFunFact, focusMode, pointsPerQuestion, timeRemaining, wagerMode, wagerLimit, wagerTiming, branding }) => { const meta = typeMeta[question.type] || typeMeta.written; const Icon = meta.icon; const imageUrl = buildStorageUrl(question.imageUrl); return <Card className={`glass-card overflow-hidden ${focusMode ? "w-full" : ""}`}><CardContent className={focusMode ? "p-8 lg:p-12" : "p-5 lg:p-7"}><div className="flex items-center justify-between gap-3 flex-wrap mb-6"><div className="flex items-center gap-2 flex-wrap">{branding?.logoUrl && <img src={branding.logoUrl} alt={branding.name || "Host logo"} className="h-8 w-8 rounded bg-white object-contain p-1" />}<Badge className="border" style={{ backgroundColor: `${branding?.primaryColor || DEFAULT_BRANDING.primaryColor}24`, borderColor: `${branding?.primaryColor || DEFAULT_BRANDING.primaryColor}55`, color: branding?.primaryColor || DEFAULT_BRANDING.primaryColor }}>{roundName || "Round"}</Badge><Badge variant="outline" className="border-zinc-700 text-zinc-300">{question.category}</Badge><Badge className="bg-zinc-800 text-zinc-300"><Icon size={13} className={`mr-1 ${meta.color}`} />{meta.label}</Badge><Badge className={wagerMode ? "bg-purple-500/15 text-purple-300 border border-purple-500/20" : "bg-amber-400/15 text-amber-200 border border-amber-400/20"}>{wagerMode ? `Wager ${wagerLimit || ""} ${wagerTiming === "after_answer" ? "after" : "before"}` : `${Number(pointsPerQuestion) || getDefaultPoints(question)} pts`}</Badge>{timeRemaining !== null && <Badge className={timeRemaining === 0 ? "bg-red-500/15 text-red-300 border border-red-500/20" : "border"} style={timeRemaining === 0 ? undefined : { backgroundColor: `${branding?.accentColor || DEFAULT_BRANDING.accentColor}24`, borderColor: `${branding?.accentColor || DEFAULT_BRANDING.accentColor}55`, color: branding?.accentColor || DEFAULT_BRANDING.accentColor }}><Timer size={13} className="mr-1" />{timeRemaining}s</Badge>}</div><span className="text-zinc-500 font-mono text-sm">{index + 1} / {total}</span></div>{imageUrl && <div className="mb-6 flex justify-center"><img src={imageUrl} alt="Question" className="max-h-[42vh] max-w-full rounded-lg border border-white/10 object-contain" /></div>}<h2 className={`${focusMode ? "text-4xl lg:text-6xl" : "text-2xl lg:text-4xl"} font-black leading-tight text-white text-center mb-8`}>{question.questionText}</h2>{question.type === "true_false" && <div className="grid grid-cols-2 gap-4 max-w-xl mx-auto mb-6"><div className="rounded-lg border-2 border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-center font-bold py-5 text-2xl">True</div><div className="rounded-lg border-2 border-red-500/30 bg-red-500/10 text-red-300 text-center font-bold py-5 text-2xl">False</div></div>}{question.type === "multiple_choice" && question.options.length > 0 && <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-3xl mx-auto mb-6">{question.options.map((option, optionIndex) => <div key={optionIndex} className="rounded-lg border border-white/10 bg-zinc-900/80 px-4 py-3 text-zinc-200 text-lg">{option}</div>)}</div>}{showAnswer && <div className="mt-8 rounded-lg border p-5 text-center" style={{ backgroundColor: `${branding?.primaryColor || DEFAULT_BRANDING.primaryColor}18`, borderColor: `${branding?.primaryColor || DEFAULT_BRANDING.primaryColor}55` }}><p className="text-zinc-400 text-sm uppercase tracking-wider mb-1">Answer</p><p className={`${focusMode ? "text-4xl" : "text-2xl"} font-bold`} style={{ color: branding?.primaryColor || DEFAULT_BRANDING.primaryColor }}>{question.answer}</p></div>}{showFunFact && question.funFact && <div className="mt-5 rounded-lg border p-5 text-center" style={{ backgroundColor: `${branding?.accentColor || DEFAULT_BRANDING.accentColor}18`, borderColor: `${branding?.accentColor || DEFAULT_BRANDING.accentColor}55` }}><div className="flex items-center justify-center gap-2 font-bold mb-2" style={{ color: branding?.accentColor || DEFAULT_BRANDING.accentColor }}><Sparkles size={18} />Fun Fact</div><p className="text-zinc-300 max-w-3xl mx-auto">{question.funFact}</p></div>}</CardContent></Card>; };
 
 export default HostSession;
 
