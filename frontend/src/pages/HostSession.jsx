@@ -400,6 +400,7 @@ const HostSession = () => {
       currentQuestion: publicQuestion,
       introRound: serializeRoundIntro(introRound),
       showAnswer,
+      revealedAnswer: showAnswer ? currentQuestion.answer : "",
       showFunFact,
       leaderboard,
       players,

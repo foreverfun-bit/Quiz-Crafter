@@ -137,7 +137,7 @@ const PlayerSession = () => {
     };
   }, [id, player]);
 
-  const currentQuestion = hostState?.currentQuestion || null;
+  const currentQuestion = hostState?.currentQuestion ? { ...hostState.currentQuestion, answer: hostState.showAnswer ? (hostState.revealedAnswer || hostState.currentQuestion.answer || "") : "" } : null;
   const leaderboard = useMemo(() => [...(hostState?.leaderboard || [])].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)), [hostState]);
   const roundCategories = useMemo(() => buildRoundCategories(session), [session]);
   const branding = useMemo(() => getSessionBranding(session), [session]);

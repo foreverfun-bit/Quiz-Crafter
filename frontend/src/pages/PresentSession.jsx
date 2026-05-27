@@ -228,7 +228,7 @@ const PresentSession = () => {
   const currentIndex = Math.min(Math.max(Number(presentState.currentIndex || 0), 0), Math.max(questions.length - 1, 0));
   const savedQuestion = questions[currentIndex] || null;
   const liveQuestion = presentState.currentQuestion && Number(presentState.currentIndex || 0) === currentIndex ? presentState.currentQuestion : null;
-  const currentQuestion = liveQuestion ? { ...savedQuestion, ...liveQuestion } : savedQuestion;
+  const currentQuestion = liveQuestion ? { ...savedQuestion, ...liveQuestion, answer: presentState.showAnswer ? (presentState.revealedAnswer || liveQuestion.answer || savedQuestion?.answer || "") : "" } : savedQuestion;
   const currentRound = rounds.find((round) => currentIndex >= round.startIndex && currentIndex < round.startIndex + round.questions.length);
   const mode = presentState.mode || "question";
   const introRound = mode === "categories" && presentState.introRound?.key ? (rounds.find((round) => round.key === presentState.introRound.key) || presentState.introRound) : currentRound;
