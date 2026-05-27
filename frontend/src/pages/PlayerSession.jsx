@@ -21,6 +21,21 @@ const arrayConfig = [
 const getStoredPlayer = (sessionId) => {
   try { return JSON.parse(sessionStorage.getItem(`quiz-crafter-player-${sessionId}`) || "null"); } catch { return null; }
 };
+const getStoredFeedback = (sessionId, name) => {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(`quiz-crafter-player-${sessionId}-${name}`) || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+const writeStoredFeedback = (sessionId, name, value) => {
+  try {
+    sessionStorage.setItem(`quiz-crafter-player-${sessionId}-${name}`, JSON.stringify(value));
+  } catch {
+    // Feedback still broadcasts if device storage is unavailable.
+  }
+};
 
 const getRoundOrder = (question, fallbackOrder = 1) => Number(question?.round_order || question?.round_number || question?.round || fallbackOrder) || fallbackOrder;
 const getRoundName = (question, fallbackOrder = 1) => {
@@ -72,8 +87,8 @@ const PlayerSession = () => {
   const [updatePreference, setUpdatePreference] = useState("none");
   const [updateContact, setUpdateContact] = useState("");
   const [hostUpdate, setHostUpdate] = useState(null);
-  const [feedbackByQuestion, setFeedbackByQuestion] = useState({});
-  const [feedbackByCategory, setFeedbackByCategory] = useState({});
+  const [feedbackByQuestion, setFeedbackByQuestion] = useState(() => getStoredFeedback(id, "question-feedback"));
+  const [feedbackByCategory, setFeedbackByCategory] = useState(() => getStoredFeedback(id, "category-feedback"));
   const [submitted, setSubmitted] = useState(null);
   const [connected, setConnected] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -164,7 +179,11 @@ const PlayerSession = () => {
   const submitFeedback = (sentiment) => {
     if (!player || !currentQuestion || !hostState) return;
     const key = String(hostState.currentIndex);
-    setFeedbackByQuestion((current) => ({ ...current, [key]: sentiment }));
+    setFeedbackByQuestion((current) => {
+      const next = { ...current, [key]: sentiment };
+      writeStoredFeedback(id, "question-feedback", next);
+      return next;
+    });
     channelRef.current?.send({ type: "broadcast", event: "feedback_submit", payload: { playerId: player.id, playerName: player.name, sentiment, questionIndex: hostState.currentIndex, questionId: currentQuestion.id, questionText: currentQuestion.questionText, category: currentQuestion.category || "Uncategorized", roundName: currentQuestion.roundName || "Round", submittedAt: new Date().toISOString() } });
     toast.success("Feedback saved");
   };
@@ -172,7 +191,11 @@ const PlayerSession = () => {
   const submitCategoryFeedback = (category, sentiment) => {
     if (!player || !hostState || !category) return;
     const key = `${categoryFeedbackKey}-${category}`;
-    setFeedbackByCategory((current) => ({ ...current, [key]: sentiment }));
+    setFeedbackByCategory((current) => {
+      const next = { ...current, [key]: sentiment };
+      writeStoredFeedback(id, "category-feedback", next);
+      return next;
+    });
     channelRef.current?.send({ type: "broadcast", event: "category_feedback_submit", payload: { playerId: player.id, playerName: player.name, sentiment, category, questionIndex: hostState.currentIndex, roundKey: categoryFeedbackKey, roundName: activeRoundName, submittedAt: new Date().toISOString() } });
     toast.success("Feedback saved");
   };

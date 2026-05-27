@@ -222,6 +222,28 @@ const readStoredLeaderboard = (sessionId) => {
     return [];
   }
 };
+const hostToolsStorageKey = (sessionId, name) => `quiz-crafter-host-tools-${sessionId}-${name}`;
+const readStoredList = (key) => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+const writeStoredList = (key, value) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Live hosting should keep running even if browser storage is unavailable.
+  }
+};
+const persistLiveVote = (sessionId, name, payload, makeKey) => {
+  const key = hostToolsStorageKey(sessionId, name);
+  const current = readStoredList(key);
+  const next = [...current.filter((item) => makeKey(item) !== makeKey(payload)), payload];
+  writeStoredList(key, next);
+};
 
 const getDefaultPoints = (question) => POINTS_BY_TYPE[question?.type] || 100;
 const getQuestionPoints = (question) => Number(question?.points ?? 0) > 0 ? Number(question.points) : getDefaultPoints(question);
@@ -313,6 +335,14 @@ const HostSession = () => {
           const filtered = current.filter((answer) => !(answer.playerId === payload.playerId && answer.questionIndex === payload.questionIndex));
           return [...filtered, payload];
         });
+      })
+      .on("broadcast", { event: "feedback_submit" }, ({ payload }) => {
+        if (!payload?.playerId || payload.questionIndex === undefined) return;
+        persistLiveVote(id, "feedback", payload, (item) => `${item.playerId}-${item.questionIndex}`);
+      })
+      .on("broadcast", { event: "category_feedback_submit" }, ({ payload }) => {
+        if (!payload?.playerId || !payload.category) return;
+        persistLiveVote(id, "category-feedback", payload, (item) => `${item.playerId}-${item.roundKey || item.roundName}-${item.category}`);
       })
       .subscribe((status) => setLiveStatus(status === "SUBSCRIBED" ? "live" : "connecting"));
     return () => {
