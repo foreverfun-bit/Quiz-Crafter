@@ -30,6 +30,14 @@ const normalizeText = (value) => String(value || "").replace(/\s+/g, " ").trim()
 const fingerprint = (value) => normalizeText(value).toLowerCase().replace(/[^a-z0-9]/g, "");
 const categoryKey = (value) => fingerprint(value);
 const cleanList = (values) => values.map((value) => normalizeText(value)).filter(Boolean);
+const createDefaultRounds = () => defaultRounds.map((round) => ({ ...round, questionIds: [...round.questionIds] }));
+const normalizeRounds = (value) => {
+  const rounds = (Array.isArray(value) ? value : []).map((round, index) => {
+    const questionIds = Array.isArray(round?.questionIds) ? round.questionIds.filter((id) => id !== null && id !== undefined) : [];
+    return { id: normalizeText(round?.id) || `round-${index + 1}`, name: normalizeText(round?.name) || `Round ${index + 1}`, description: normalizeText(round?.description), questionIds };
+  }).filter((round) => round.id);
+  return rounds.length ? rounds : createDefaultRounds();
+};
 const uniqueCategories = (values) => {
   const seen = new Set();
   return values.map((value) => normalizeText(value)).filter(Boolean).filter((value) => {
@@ -81,7 +89,7 @@ const buildStateFromSavedSession = (session) => {
     return normalizeQuestion({ ...entry.question, id, question_type: entry.type === "picture" ? "written" : entry.type, image_url: entry.question?.image_url || entry.question?.media_url || "", image_timing: entry.question?.image_timing || entry.question?.image_display_timing }, entry.type);
   });
   const rounds = [...roundMap.values()];
-  return { questions, rounds: rounds.length ? rounds : defaultRounds, activeRoundId: rounds[0]?.id || defaultRounds[0].id };
+  return { questions, rounds: rounds.length ? rounds : createDefaultRounds(), activeRoundId: rounds[0]?.id || defaultRounds[0].id };
 };
 const newRoundId = () => `round-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const loadLocalCategoryPrefs = () => { try { const parsed = JSON.parse(localStorage.getItem(CATEGORY_PREF_KEY) || "{}"); return { approved: Array.isArray(parsed.approved) ? parsed.approved : [], rejected: Array.isArray(parsed.rejected) ? parsed.rejected : [] }; } catch { return { approved: [], rejected: [] }; } };
@@ -89,16 +97,28 @@ const saveLocalCategoryPrefs = (approved, rejected) => localStorage.setItem(CATE
 const loadRejectedAi = () => { try { return new Set(JSON.parse(localStorage.getItem(REJECTED_AI_KEY) || "[]")); } catch { return new Set(); } };
 const saveRejectedAi = (values) => localStorage.setItem(REJECTED_AI_KEY, JSON.stringify([...values]));
 const fileToDataUrl = (file) => new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file); });
+const loadBuildSavedState = () => {
+  try {
+    const saved = localStorage.getItem(BUILD_STORAGE_KEY) || localStorage.getItem("trivia-flex-round-builder-state-v4") || localStorage.getItem("trivia-flex-round-builder-state-v3") || localStorage.getItem("trivia-flex-round-builder-state-v2");
+    if (!saved) return null;
+    const parsed = JSON.parse(saved);
+    const savedQuestions = Array.isArray(parsed.questions) ? parsed.questions.map((q) => normalizeQuestion(q, q.question_type)) : [];
+    const savedRounds = normalizeRounds(parsed.rounds);
+    const activeRoundId = savedRounds.some((round) => round.id === parsed.activeRoundId) ? parsed.activeRoundId : savedRounds[0]?.id || "round-1";
+    return { ...parsed, questions: savedQuestions, rounds: savedRounds, activeRoundId, typeFilter: parsed.typeFilter === "picture" ? "all" : parsed.typeFilter, generateType: parsed.generateType === "picture" ? "written" : parsed.generateType };
+  } catch {
+    return null;
+  }
+};
 
 const BuildSession = () => {
   const navigate = useNavigate();
   const { sessionId } = useParams();
   const { user } = useAuth();
-  const loadSavedState = () => { try { const saved = localStorage.getItem(BUILD_STORAGE_KEY) || localStorage.getItem("trivia-flex-round-builder-state-v4") || localStorage.getItem("trivia-flex-round-builder-state-v3") || localStorage.getItem("trivia-flex-round-builder-state-v2"); if (!saved) return null; const parsed = JSON.parse(saved); const savedQuestions = Array.isArray(parsed.questions) ? parsed.questions.map((q) => normalizeQuestion(q, q.question_type)) : []; return { ...parsed, questions: savedQuestions, typeFilter: parsed.typeFilter === "picture" ? "all" : parsed.typeFilter, generateType: parsed.generateType === "picture" ? "written" : parsed.generateType }; } catch { return null; } };
-  const savedState = sessionId ? null : loadSavedState();
+  const savedState = useMemo(() => (sessionId ? null : loadBuildSavedState()), [sessionId]);
   const initialPrefs = loadLocalCategoryPrefs();
   const [sessionName, setSessionName] = useState(savedState?.sessionName || "");
-  const [rounds, setRounds] = useState(savedState?.rounds || defaultRounds);
+  const [rounds, setRounds] = useState(savedState?.rounds || createDefaultRounds());
   const [activeRoundId, setActiveRoundId] = useState(savedState?.activeRoundId || (savedState?.rounds?.[0]?.id || "round-1"));
   const [roundMenuOpen, setRoundMenuOpen] = useState(false);
   const [questions, setQuestions] = useState([]);
@@ -178,7 +198,7 @@ const BuildSession = () => {
   const handleTuneGeneratedDifficulty = async (question, direction) => { setActionQuestionId(question.id); try { const type = normalizeType(question); const targetDifficulty = direction === "easier" ? easierDifficulty[difficulty] || "medium" : harderDifficulty[difficulty] || "hard"; const tuningTheme = [theme, direction === "easier" ? "Make a more accessible version of this same trivia idea. Keep it fresh, but add a clearer clue path and make the answer more gettable for a strong bar-trivia team." : "Make a harder version of this same trivia idea. Keep it fair and satisfying, but require a stronger clue path or second-layer knowledge.", type === "written" ? "Because this is a written-answer question, make the answer especially fair to recall without options. Avoid exact-spelling traps." : type === "multiple_choice" ? "Because this is multiple choice, keep the wrong answers plausible and comparable." : "Because this is true/false, keep the claim cleanly verifiable and not a coin flip.", `Original category: ${question.category || "General"}`, `Original question: ${question.question_text}`, `Original answer: ${question.correct_answer}`, question.fun_fact ? `Original fun fact: ${question.fun_fact}` : "", "Return a replacement, not a duplicate. It may keep the same broad subject, but should be newly worded and calibrated to the requested difficulty."].filter(Boolean).join("\n"); const { data } = await requestGeneratedQuestions({ replacement: question, rejectCurrent: true, difficultyOverride: targetDifficulty, themeOverride: tuningTheme, allowCurrentCategory: true, lockedCategoriesOverride: [question.category].filter(Boolean) }); const generated = normalizeGeneratedCandidates(data?.candidates, activeRound.id, type).map((candidate) => normalizeQuestion({ ...candidate, category: question.category || candidate.category }, type)); if (!generated.length) throw new Error(`No ${direction} version came back. Try changing the AI direction.`); addGeneratedToRound(generated, question); toast.success(direction === "easier" ? "Made easier" : "Made harder"); } catch (error) { console.error("Tune generated question error:", error); toast.error(error.response?.data?.error || error.message || `Failed to make question ${direction}`); } finally { setActionQuestionId(null); } };
   const handleRejectQuestion = (question) => { const nextRejectedAi = new Set(rejectedAi); nextRejectedAi.add(fingerprint(question.question_text)); setRejectedAi(nextRejectedAi); saveRejectedAi(nextRejectedAi); setQuestions((prev) => prev.filter((q) => String(q.id) !== String(question.id))); setRounds((prev) => prev.map((round) => ({ ...round, questionIds: (round.questionIds || []).filter((id) => String(id) !== String(question.id)) }))); toast.success("Question blocked from future AI suggestions"); };
   const handleRejectCategory = (question) => { if (!question.category) return; const approved = new Set(approvedCategories); const rejected = new Set(rejectedCategories); approved.delete(question.category); rejected.add(question.category); setApprovedCategories([...approved].sort((a, b) => a.localeCompare(b))); setRejectedCategories([...rejected].sort((a, b) => a.localeCompare(b))); saveLocalCategoryPrefs(approved, rejected); removeFromRound(activeRound.id, question.id); toast.success(`${question.category} moved to rejected categories`); };
-  const handleClearSession = () => { clearSavedState(); setSessionName(""); setRounds(defaultRounds); setActiveRoundId("round-1"); setTheme(""); setTypeFilter("all"); setGenerateType("multiple_choice"); setShowWriteForm(false); setShowLibrary(false); toast.success("Session cleared"); };
+  const handleClearSession = () => { clearSavedState(); setSessionName(""); setRounds(createDefaultRounds()); setActiveRoundId("round-1"); setTheme(""); setTypeFilter("all"); setGenerateType("multiple_choice"); setShowWriteForm(false); setShowLibrary(false); toast.success("Session cleared"); };
   const handleSave = async (goLive = false) => {
     if (!user?.id) return toast.error("You must be signed in");
 
