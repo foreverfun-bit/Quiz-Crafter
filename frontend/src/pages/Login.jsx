@@ -85,13 +85,13 @@ const Login = () => {
       <div className="relative w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
-          <img 
-            src="https://customer-assets.emergentagent.com/job_trivia-forge-2/artifacts/pdn53z7h_4ever-full-gradient.svg"
-            alt="4EVER Trivia"
-            className="w-20 h-20 mx-auto mb-4"
+          <img
+            src="/quiz-crafter-logo.svg"
+            alt="Quiz Crafter"
+            className="w-72 max-w-full mx-auto mb-4"
           />
-          <h1 className="text-3xl font-bold gradient-text font-heading">Quiz Crafter</h1>
-          <p className="text-zinc-500 mt-2">Craft unforgettable trivia experiences</p>
+          <h1 className="sr-only">Quiz Crafter</h1>
+          <p className="text-zinc-400 mt-2 brand-wide text-sm">Craft unforgettable trivia experiences</p>
         </div>
 
         <Card className="bg-zinc-900/50 border-white/10 backdrop-blur-sm">

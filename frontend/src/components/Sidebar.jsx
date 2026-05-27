@@ -80,7 +80,7 @@ const Sidebar = ({ isOpen, onClose }) => {
               <img
                 src="/quiz-crafter-logo.svg"
                 alt="Quiz Crafter"
-                className="h-12 w-40 object-contain object-left"
+                className="h-16 w-44 object-contain object-left"
               />
             </div>
             <button

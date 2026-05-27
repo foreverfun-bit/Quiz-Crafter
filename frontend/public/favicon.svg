@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Quiz Crafter lightbulb">
+  <defs>
+    <linearGradient id="bulb" x1="10" y1="54" x2="54" y2="8" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#17E4E0"/>
+      <stop offset="0.55" stop-color="#3FB8FF"/>
+      <stop offset="1" stop-color="#8A5CFF"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#02040A"/>
+  <path d="M32 12c-11 0-20 8.8-20 19.6 0 7.2 3.8 13.3 9.5 16.8 2 1.2 3.2 3.5 3.2 5.8V56h14.6v-1.9c0-2.3 1.2-4.5 3.1-5.8C48.2 44.7 52 38.6 52 31.6 52 20.8 43 12 32 12z" fill="none" stroke="url(#bulb)" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M25 59h14M27 63h10M32 6V2M14 14l-4-5M50 14l4-5M7 31H2M62 31h-5" stroke="url(#bulb)" stroke-width="4.2" stroke-linecap="round"/>
+  <text x="32" y="40" text-anchor="middle" font-family="Arial, sans-serif" font-size="27" font-weight="900" fill="#fff">?</text>
+</svg>
