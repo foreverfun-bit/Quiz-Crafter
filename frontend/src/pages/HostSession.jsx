@@ -279,6 +279,7 @@ const HostSession = () => {
   const [showFunFact, setShowFunFact] = useState(false);
   const [presentMode, setPresentMode] = useState("question");
   const [introRoundKey, setIntroRoundKey] = useState(null);
+  const [pendingBonusIndex, setPendingBonusIndex] = useState(null);
   const [gameStarted, setGameStarted] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [leaderboard, setLeaderboard] = useState(() => readStoredLeaderboard(id));
@@ -394,6 +395,8 @@ const HostSession = () => {
       gameStarted,
       joinUrl,
       currentIndex,
+      pendingBonusIndex,
+      pendingBonusRound: pendingBonusIndex !== null ? serializeRoundIntro(rounds.find((round) => pendingBonusIndex >= round.startIndex && pendingBonusIndex < round.startIndex + round.questions.length)) : null,
       currentQuestion: publicQuestion,
       introRound: serializeRoundIntro(introRound),
       showAnswer,
@@ -412,12 +415,24 @@ const HostSession = () => {
     };
     localStorage.setItem(`quiz-crafter-present-state-${id}`, JSON.stringify(state));
     liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: state });
-  }, [id, session, sessionName, questions.length, currentQuestion, currentIndex, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, leaderboard, players, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerEndAt, timeRemaining, acceptingAnswers, branding]);
+  }, [id, session, sessionName, questions.length, currentQuestion, currentIndex, pendingBonusIndex, rounds, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, leaderboard, players, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerEndAt, timeRemaining, acceptingAnswers, branding]);
 
   const goToQuestion = (index, options = {}) => {
     if (index < 0 || index >= questions.length) return;
     const targetQuestion = questions[index];
+    const targetRound = rounds.find((round) => index >= round.startIndex && index < round.startIndex + round.questions.length);
+    const isRoundBonus = targetRound && targetRound.questions.length > 1 && index === targetRound.startIndex + targetRound.questions.length - 1;
+    if (options.pauseBeforeBonus !== false && isRoundBonus && pendingBonusIndex !== index) {
+      setPendingBonusIndex(index);
+      setShowAnswer(false);
+      setShowFunFact(false);
+      setTimerEndAt(null);
+      setPresentMode("bonus_pause");
+      setGameStarted(true);
+      return;
+    }
     setCurrentIndex(index);
+    setPendingBonusIndex(null);
     setShowAnswer(false);
     setShowFunFact(false);
     setTimerEndAt(options.startTimer ? Date.now() + Math.max(1, Number(targetQuestion?.timerSeconds || 30)) * 1000 : null);
@@ -545,8 +560,8 @@ const HostSession = () => {
           {!focusMode && <PresentationControls mode={presentMode} setMode={releaseMode} rounds={rounds} currentIndex={currentIndex} currentRound={currentRound} introRoundKey={introRound?.key || introRoundKey} setIntroRoundKey={setIntroRoundKey} showAnswer={showAnswer} toggleAnswer={toggleAnswer} showFunFact={showFunFact} toggleFunFact={toggleFunFact} hasFunFact={Boolean(currentQuestion.funFact)} customizeOpen={customizeOpen} setCustomizeOpen={setCustomizeOpen} />}
           {!focusMode && customizeOpen && <HostCustomizePanel branding={branding} defaultBranding={readDefaultBranding()} onSave={saveBranding} onSaveDefault={saveBrandingAsDefault} onUseDefault={useDefaultBranding} onClose={() => setCustomizeOpen(false)} />}
           <HostSettings pointsPerQuestion={pointsPerQuestion} setPointsPerQuestion={setPointsPerQuestion} wagerMode={wagerMode} setWagerMode={setWagerMode} wagerLimit={wagerLimit} setWagerLimit={setWagerLimit} wagerTiming={wagerTiming} setWagerTiming={setWagerTiming} timerSeconds={timerSeconds} setTimerSeconds={setTimerSeconds} timeRemaining={timeRemaining} startTimer={startTimer} resetTimer={resetTimer} />
-          <QuestionStage question={currentQuestion} index={currentIndex} total={questions.length} roundName={currentRound?.name} showAnswer={showAnswer} showFunFact={showFunFact} focusMode={focusMode} pointsPerQuestion={pointsPerQuestion} timeRemaining={timeRemaining} wagerMode={wagerMode} wagerLimit={wagerLimit} wagerTiming={wagerTiming} branding={branding} />
-          <div className="mt-4 flex items-center justify-between gap-3 flex-wrap"><Button variant="outline" onClick={() => goToQuestion(currentIndex - 1)} disabled={currentIndex === 0} className="border-white/10 text-zinc-300 hover:text-white"><ChevronLeft size={18} className="mr-2" />Previous</Button><div className="flex gap-2 flex-wrap justify-end"><Button onClick={toggleAnswer} className={showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700" : "gradient-btn"}>{showAnswer ? <EyeOff size={18} className="mr-2" /> : <Eye size={18} className="mr-2" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button><Button onClick={toggleFunFact} disabled={!currentQuestion.funFact} className="bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-50"><Sparkles size={18} className="mr-2" />Fun Fact</Button><Button onClick={() => goToQuestion(currentIndex + 1, { startTimer: true })} disabled={currentIndex === questions.length - 1} className="bg-[#AEB2EF] text-zinc-950 hover:bg-[#AEB2EF]/90"><ChevronRight size={18} className="mr-2" />Next</Button></div></div>
+          {presentMode === "bonus_pause" ? <BonusPauseStage round={rounds.find((round) => pendingBonusIndex >= round.startIndex && pendingBonusIndex < round.startIndex + round.questions.length)} leaderboard={leaderboard} /> : <QuestionStage question={currentQuestion} index={currentIndex} total={questions.length} roundName={currentRound?.name} showAnswer={showAnswer} showFunFact={showFunFact} focusMode={focusMode} pointsPerQuestion={pointsPerQuestion} timeRemaining={timeRemaining} wagerMode={wagerMode} wagerLimit={wagerLimit} wagerTiming={wagerTiming} branding={branding} />}
+          <div className="mt-4 flex items-center justify-between gap-3 flex-wrap"><Button variant="outline" onClick={() => goToQuestion(currentIndex - 1)} disabled={currentIndex === 0} className="border-white/10 text-zinc-300 hover:text-white"><ChevronLeft size={18} className="mr-2" />Previous</Button><div className="flex gap-2 flex-wrap justify-end"><Button onClick={toggleAnswer} disabled={presentMode === "bonus_pause"} className={showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-50" : "gradient-btn disabled:opacity-50"}>{showAnswer ? <EyeOff size={18} className="mr-2" /> : <Eye size={18} className="mr-2" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button><Button onClick={toggleFunFact} disabled={presentMode === "bonus_pause" || !currentQuestion.funFact} className="bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-50"><Sparkles size={18} className="mr-2" />Fun Fact</Button><Button onClick={() => presentMode === "bonus_pause" && pendingBonusIndex !== null ? goToQuestion(pendingBonusIndex, { startTimer: true, pauseBeforeBonus: false }) : goToQuestion(currentIndex + 1, { startTimer: true })} disabled={presentMode !== "bonus_pause" && currentIndex === questions.length - 1} className="bg-[#AEB2EF] text-zinc-950 hover:bg-[#AEB2EF]/90"><ChevronRight size={18} className="mr-2" />{presentMode === "bonus_pause" ? "Start Bonus" : "Next"}</Button></div></div>
         </main>
         {!focusMode && <aside className="space-y-3"><PhonePlayPanel joinUrl={joinUrl} copyJoinLink={copyJoinLink} players={players} answers={currentAnswers} leaderboard={leaderboard} gradedAnswers={gradedAnswers} markAnswer={markAnswer} openScoreModal={openScoreModal} pointsPerQuestion={Number(pointsPerQuestion) || getDefaultPoints(currentQuestion)} wagerMode={wagerMode} wagerLimit={wagerLimit} setMode={releaseMode} /><LeaderboardPanel leaderboard={leaderboard} teamName={teamName} teamScore={teamScore} setTeamName={setTeamName} setTeamScore={setTeamScore} addTeam={addTeam} adjustScore={adjustScore} openScoreModal={openScoreModal} removeTeam={removeTeam} showLeaderboard={() => releaseMode("leaderboard")} /><RunSheet rounds={rounds} currentIndex={currentIndex} goToQuestion={goToQuestion} /></aside>}
       </div>
@@ -594,6 +609,11 @@ const PhonePlayPanel = ({ joinUrl, copyJoinLink, players, answers, leaderboard, 
 };
 
 const LeaderboardPanel = ({ leaderboard, teamName, teamScore, setTeamName, setTeamScore, addTeam, adjustScore, openScoreModal, removeTeam, showLeaderboard }) => { const sorted = [...leaderboard].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)); return <Card className="glass-card"><CardContent className="p-3"><div className="flex items-center justify-between gap-2 mb-3"><div className="flex items-center gap-2 text-white font-semibold"><Trophy size={18} className="text-amber-300" />Leaderboard</div><Button size="sm" variant="outline" onClick={showLeaderboard} className="h-8 border-white/10 text-zinc-300 hover:text-white">Show</Button></div><div className="grid grid-cols-[1fr_76px_36px] gap-2 mb-3"><input value={teamName} onChange={(event) => setTeamName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && addTeam()} placeholder="Team name" className="h-9 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" /><input value={teamScore} onChange={(event) => setTeamScore(event.target.value)} onKeyDown={(event) => event.key === "Enter" && addTeam()} placeholder="Score" type="number" className="h-9 rounded-md bg-zinc-950 border border-white/10 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" /><Button onClick={addTeam} className="h-9 w-9 p-0 gradient-btn" aria-label="Add team"><Plus size={16} /></Button></div><div className="space-y-2 max-h-48 overflow-y-auto pr-1">{sorted.map((team) => <div key={team.id} className="rounded-md border border-white/10 bg-zinc-950/60 p-2"><div className="flex items-center justify-between gap-2 mb-2"><span className="font-semibold text-sm truncate">{team.name}</span><span className="font-black text-[#71E0DC]">{Number(team.score || 0)}</span></div><div className="flex items-center gap-1"><Button size="sm" onClick={() => adjustScore(team.id, -1)} className="h-7 flex-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200">-1</Button><Button size="sm" onClick={() => adjustScore(team.id, 1)} className="h-7 flex-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200">+1</Button><Button size="sm" variant="outline" onClick={() => openScoreModal(team.id)} className="h-7 flex-1 border-white/10 text-zinc-300 hover:text-white">Edit</Button><Button size="sm" variant="outline" onClick={() => removeTeam(team.id)} className="h-7 w-8 p-0 border-white/10 text-zinc-400 hover:text-red-300" aria-label="Remove team"><Trash2 size={13} /></Button></div></div>)}{!sorted.length && <p className="text-xs text-zinc-500 text-center py-3">Teams will appear here when players join from their phones.</p>}</div></CardContent></Card>; };
+
+const BonusPauseStage = ({ round, leaderboard }) => {
+  const sorted = [...leaderboard].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)).slice(0, 8);
+  return <Card className="glass-card overflow-hidden"><CardContent className="p-8 lg:p-10 text-center"><div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full border border-[#71E0DC]/30 bg-[#71E0DC]/10"><Loader2 className="animate-spin text-[#71E0DC]" size={30} /></div><p className="text-sm font-bold uppercase tracking-wide text-[#71E0DC]">Bonus question next</p><h2 className="mt-2 text-4xl lg:text-6xl font-black text-white">{round?.name || "Round"} Bonus</h2><p className="mt-3 text-zinc-400">Leaderboard pause before the final question of the round.</p><div className="mx-auto mt-8 max-w-3xl space-y-3 text-left">{sorted.map((team, index) => <div key={team.id || team.name} className="grid grid-cols-[44px_1fr_auto] items-center gap-3 rounded-lg border border-white/10 bg-zinc-950/70 px-4 py-3"><div className={`h-9 w-9 rounded-full flex items-center justify-center font-black ${index === 0 ? "bg-amber-300 text-zinc-950" : "bg-white/10 text-zinc-200"}`}>{index + 1}</div><span className="truncate text-lg font-bold text-white">{team.name}</span><span className="text-2xl font-black text-[#71E0DC]">{Number(team.score || 0)}</span></div>)}{!sorted.length && <p className="rounded-lg border border-white/10 bg-zinc-950/70 p-5 text-center text-zinc-500">Leaderboard will appear once teams join or are added.</p>}</div></CardContent></Card>;
+};
 
 const ScoreAdjustModal = ({ modal, setModal, adjustScore, setScore }) => {
   const adjustment = Number(modal.adjustment || 0);

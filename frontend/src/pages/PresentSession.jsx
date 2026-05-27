@@ -266,7 +266,7 @@ const PresentSession = () => {
         <header className="flex items-center justify-between gap-4 border-b border-white/10 pb-5">
           <div>
             <p className="text-[#71E0DC] font-semibold tracking-wide uppercase text-sm">{sessionName}</p>
-            <h1 className="text-3xl lg:text-5xl font-black mt-1">{mode === "categories" ? "Round Intro" : mode === "leaderboard" ? "Leaderboard" : currentRound?.name || "Question"}</h1>
+            <h1 className="text-3xl lg:text-5xl font-black mt-1">{mode === "categories" ? "Round Intro" : mode === "leaderboard" ? "Leaderboard" : mode === "bonus_pause" ? "Bonus Coming Up" : currentRound?.name || "Question"}</h1>
           </div>
           <Badge className="bg-white/10 text-zinc-200 border border-white/10 text-base px-4 py-2">{displayRound?.name || "Round"}</Badge>
         </header>
@@ -274,7 +274,8 @@ const PresentSession = () => {
         <main className="flex-1 flex items-center justify-center py-8">
           {mode === "categories" && <CategoriesView round={introRound} rounds={rounds} />}
           {mode === "leaderboard" && <LeaderboardView leaderboard={presentState.leaderboard || []} />}
-          {mode !== "categories" && mode !== "leaderboard" && (
+          {mode === "bonus_pause" && <BonusPauseView round={presentState.pendingBonusRound || currentRound} leaderboard={presentState.leaderboard || []} />}
+          {mode !== "categories" && mode !== "leaderboard" && mode !== "bonus_pause" && (
             <QuestionView question={currentQuestion} index={currentIndex} total={questions.length} showAnswer={presentState.showAnswer} showFunFact={presentState.showFunFact} />
           )}
         </main>
@@ -372,6 +373,35 @@ const LeaderboardView = ({ leaderboard }) => {
               </div>
             ))}
             {!sorted.length && <p className="text-center text-zinc-400 text-2xl py-10">Leaderboard will appear here when teams are added on the host screen.</p>}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+};
+
+const BonusPauseView = ({ round, leaderboard }) => {
+  const sorted = [...leaderboard].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)).slice(0, 8);
+
+  return (
+    <div className="w-full max-w-5xl">
+      <Card className="glass-card">
+        <CardContent className="p-8 lg:p-12 text-center">
+          <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full border border-[#71E0DC]/30 bg-[#71E0DC]/10">
+            <Loader2 className="animate-spin text-[#71E0DC]" size={38} />
+          </div>
+          <p className="text-[#71E0DC] font-bold uppercase tracking-wide mb-2">Bonus question next</p>
+          <h2 className="text-5xl lg:text-8xl font-black leading-none mb-5">{round?.name || "Round"} Bonus</h2>
+          <p className="text-2xl text-zinc-300 mb-8">Current leaderboard</p>
+          <div className="mx-auto max-w-4xl space-y-3 text-left">
+            {sorted.map((team, index) => (
+              <div key={team.id || team.name} className="grid grid-cols-[64px_1fr_auto] items-center gap-4 rounded-lg border border-white/10 bg-zinc-950/70 px-5 py-4">
+                <div className={`h-12 w-12 rounded-full flex items-center justify-center font-black text-xl ${index === 0 ? "bg-amber-300 text-zinc-950" : "bg-white/10 text-zinc-200"}`}>{index + 1}</div>
+                <div className="text-3xl font-bold truncate">{team.name}</div>
+                <div className="text-4xl font-black text-[#71E0DC]">{Number(team.score || 0)}</div>
+              </div>
+            ))}
+            {!sorted.length && <p className="rounded-lg border border-white/10 bg-zinc-950/70 p-8 text-center text-2xl text-zinc-400">Leaderboard will appear once teams join or are added.</p>}
           </div>
         </CardContent>
       </Card>
