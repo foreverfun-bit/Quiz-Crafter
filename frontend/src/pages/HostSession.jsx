@@ -68,23 +68,42 @@ const buildStorageUrl = (path) => {
   if (!STORAGE_BASE) return value;
   return `${STORAGE_BASE}${value.replace(/^\/+/, "")}`;
 };
+const HOST_DEFAULT_BRANDING_KEY = "quiz-crafter-host-branding-defaults";
 const hostBrandingKey = (sessionId) => `quiz-crafter-host-branding-${sessionId}`;
 const sanitizeHexColor = (value, fallback) => /^#[0-9a-f]{6}$/i.test(String(value || "")) ? value : fallback;
-const getSessionBranding = (session) => ({
-  name: session?.host_brand_name || session?.brand_name || session?.company_name || session?.venue_name || DEFAULT_BRANDING.name,
-  logoUrl: session?.host_logo_url || session?.brand_logo_url || session?.logo_url || DEFAULT_BRANDING.logoUrl,
-  primaryColor: sanitizeHexColor(session?.host_primary_color || session?.primary_color, DEFAULT_BRANDING.primaryColor),
-  accentColor: sanitizeHexColor(session?.host_accent_color || session?.accent_color, DEFAULT_BRANDING.accentColor),
+const normalizeBranding = (branding = {}) => ({
+  name: branding.name?.trim() || DEFAULT_BRANDING.name,
+  logoUrl: branding.logoUrl?.trim() || "",
+  primaryColor: sanitizeHexColor(branding.primaryColor, DEFAULT_BRANDING.primaryColor),
+  accentColor: sanitizeHexColor(branding.accentColor, DEFAULT_BRANDING.accentColor),
 });
+const readDefaultBranding = () => {
+  try {
+    return normalizeBranding({ ...DEFAULT_BRANDING, ...JSON.parse(localStorage.getItem(HOST_DEFAULT_BRANDING_KEY) || "null") });
+  } catch {
+    return DEFAULT_BRANDING;
+  }
+};
+const writeDefaultBranding = (branding) => localStorage.setItem(HOST_DEFAULT_BRANDING_KEY, JSON.stringify(normalizeBranding(branding)));
+const getSessionBranding = (session) => {
+  const defaults = readDefaultBranding();
+  return {
+    ...defaults,
+    name: session?.host_brand_name || session?.brand_name || session?.company_name || session?.venue_name || defaults.name,
+    logoUrl: session?.host_logo_url || session?.brand_logo_url || session?.logo_url || defaults.logoUrl,
+    primaryColor: sanitizeHexColor(session?.host_primary_color || session?.primary_color, defaults.primaryColor),
+    accentColor: sanitizeHexColor(session?.host_accent_color || session?.accent_color, defaults.accentColor),
+  };
+};
 const readStoredBranding = (sessionId, session = null) => {
   try {
     const stored = JSON.parse(localStorage.getItem(hostBrandingKey(sessionId)) || "null");
-    return stored ? { ...getSessionBranding(session), ...stored, primaryColor: sanitizeHexColor(stored.primaryColor, DEFAULT_BRANDING.primaryColor), accentColor: sanitizeHexColor(stored.accentColor, DEFAULT_BRANDING.accentColor) } : getSessionBranding(session);
+    return stored ? normalizeBranding({ ...getSessionBranding(session), ...stored }) : getSessionBranding(session);
   } catch {
     return getSessionBranding(session);
   }
 };
-const writeStoredBranding = (sessionId, branding) => localStorage.setItem(hostBrandingKey(sessionId), JSON.stringify(branding));
+const writeStoredBranding = (sessionId, branding) => localStorage.setItem(hostBrandingKey(sessionId), JSON.stringify(normalizeBranding(branding)));
 const fileToDataUrl = (file) => new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file); });
 
 const parseOptions = (value) => {
@@ -399,12 +418,7 @@ const HostSession = () => {
     }
   };
   const saveBranding = async (nextBranding) => {
-    const cleanBranding = {
-      name: nextBranding.name?.trim() || DEFAULT_BRANDING.name,
-      logoUrl: nextBranding.logoUrl?.trim() || "",
-      primaryColor: sanitizeHexColor(nextBranding.primaryColor, DEFAULT_BRANDING.primaryColor),
-      accentColor: sanitizeHexColor(nextBranding.accentColor, DEFAULT_BRANDING.accentColor),
-    };
+    const cleanBranding = normalizeBranding(nextBranding);
     setBranding(cleanBranding);
     writeStoredBranding(id, cleanBranding);
     try {
@@ -420,6 +434,17 @@ const HostSession = () => {
       console.error("Save host branding error:", error);
       toast.success("Host branding saved on this device");
     }
+  };
+  const saveBrandingAsDefault = (nextBranding) => {
+    const cleanBranding = normalizeBranding(nextBranding);
+    writeDefaultBranding(cleanBranding);
+    saveBranding(cleanBranding);
+    toast.success("Default host branding saved");
+  };
+  const useDefaultBranding = () => {
+    const defaults = readDefaultBranding();
+    saveBranding(defaults);
+    return defaults;
   };
 
 
@@ -476,7 +501,7 @@ const HostSession = () => {
       <div className={focusMode ? "flex-1 flex items-center" : "grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-5"}>
         <main className="w-full">
           {!focusMode && <PresentationControls mode={presentMode} setMode={releaseMode} rounds={rounds} currentIndex={currentIndex} currentRound={currentRound} introRoundKey={introRound?.key || introRoundKey} setIntroRoundKey={setIntroRoundKey} showAnswer={showAnswer} toggleAnswer={toggleAnswer} showFunFact={showFunFact} toggleFunFact={toggleFunFact} hasFunFact={Boolean(currentQuestion.funFact)} customizeOpen={customizeOpen} setCustomizeOpen={setCustomizeOpen} />}
-          {!focusMode && customizeOpen && <HostCustomizePanel branding={branding} onSave={saveBranding} onClose={() => setCustomizeOpen(false)} />}
+          {!focusMode && customizeOpen && <HostCustomizePanel branding={branding} defaultBranding={readDefaultBranding()} onSave={saveBranding} onSaveDefault={saveBrandingAsDefault} onUseDefault={useDefaultBranding} onClose={() => setCustomizeOpen(false)} />}
           <HostSettings pointsPerQuestion={pointsPerQuestion} setPointsPerQuestion={setPointsPerQuestion} wagerMode={wagerMode} setWagerMode={setWagerMode} wagerLimit={wagerLimit} setWagerLimit={setWagerLimit} wagerTiming={wagerTiming} setWagerTiming={setWagerTiming} timerSeconds={timerSeconds} setTimerSeconds={setTimerSeconds} timeRemaining={timeRemaining} startTimer={startTimer} resetTimer={resetTimer} />
           <QuestionStage question={currentQuestion} index={currentIndex} total={questions.length} roundName={currentRound?.name} showAnswer={showAnswer} showFunFact={showFunFact} focusMode={focusMode} pointsPerQuestion={pointsPerQuestion} timeRemaining={timeRemaining} wagerMode={wagerMode} wagerLimit={wagerLimit} wagerTiming={wagerTiming} branding={branding} />
           <div className="mt-4 flex items-center justify-between gap-3 flex-wrap"><Button variant="outline" onClick={() => goToQuestion(currentIndex - 1)} disabled={currentIndex === 0} className="border-white/10 text-zinc-300 hover:text-white"><ChevronLeft size={18} className="mr-2" />Previous</Button><div className="flex gap-2 flex-wrap justify-end"><Button onClick={toggleAnswer} className={showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700" : "gradient-btn"}>{showAnswer ? <EyeOff size={18} className="mr-2" /> : <Eye size={18} className="mr-2" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button><Button onClick={toggleFunFact} disabled={!currentQuestion.funFact} className="bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-50"><Sparkles size={18} className="mr-2" />Fun Fact</Button><Button onClick={() => goToQuestion(currentIndex + 1)} disabled={currentIndex === questions.length - 1} className="bg-[#AEB2EF] text-zinc-950 hover:bg-[#AEB2EF]/90"><ChevronRight size={18} className="mr-2" />Next</Button></div></div>
@@ -502,7 +527,7 @@ const PresentationControls = ({ mode, setMode, rounds, currentIndex, currentRoun
   return <Card className="glass-card mb-4"><CardContent className="p-3 flex items-center justify-between gap-3 flex-wrap"><div className="flex items-center gap-2 flex-wrap"><Button size="sm" onClick={() => setMode("question")} className={mode === "question" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><MonitorPlay size={15} className="mr-2" />Question</Button><Button size="sm" onClick={() => setMode("categories", selectedIntroKey)} className={mode === "categories" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><Tags size={15} className="mr-2" />Round Intro</Button><select aria-label="Round intro target" value={selectedIntroKey} onChange={(event) => chooseIntroRound(event.target.value)} className="h-8 rounded-md bg-zinc-950 border border-white/10 px-2 text-sm text-zinc-200">{rounds.map((round) => <option key={round.key} value={round.key}>{round.name}</option>)}</select><Button size="sm" onClick={() => setMode("leaderboard")} className={mode === "leaderboard" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><Trophy size={15} className="mr-2" />Leaderboard</Button><Button size="sm" onClick={() => setCustomizeOpen((value) => !value)} className={customizeOpen ? "text-zinc-950 hover:opacity-90" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"} style={customizeOpen ? { backgroundColor: "var(--host-primary)" } : undefined}><Palette size={15} className="mr-2" />Customize</Button></div><div className="flex items-center gap-2 flex-wrap"><Button size="sm" variant="outline" onClick={toggleAnswer} className="border-white/10 text-zinc-300 hover:text-white">{showAnswer ? <EyeOff size={15} className="mr-2" /> : <Eye size={15} className="mr-2" />}{showAnswer ? "Hide Answer" : "Show Answer"}</Button><Button size="sm" variant="outline" onClick={toggleFunFact} disabled={!hasFunFact} className="border-white/10 text-zinc-300 hover:text-white disabled:opacity-50"><Sparkles size={15} className="mr-2" />{showFunFact ? "Hide Fun Fact" : "Show Fun Fact"}</Button></div></CardContent></Card>;
 };
 
-const HostCustomizePanel = ({ branding, onSave, onClose }) => {
+const HostCustomizePanel = ({ branding, defaultBranding, onSave, onSaveDefault, onUseDefault, onClose }) => {
   const [form, setForm] = useState(branding);
   useEffect(() => setForm(branding), [branding]);
   const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
@@ -512,7 +537,7 @@ const HostCustomizePanel = ({ branding, onSave, onClose }) => {
     if (!file.type.startsWith("image/")) return toast.error("Choose an image file for the logo");
     update("logoUrl", await fileToDataUrl(file));
   };
-  return <Card className="glass-card mb-4"><CardContent className="p-4"><div className="flex items-center justify-between gap-3 mb-4"><div><h2 className="text-lg font-bold text-white flex items-center gap-2"><Palette size={18} style={{ color: "var(--host-primary)" }} />Customize Host Screen</h2><p className="text-xs text-zinc-500">Branding applies immediately to this live host screen.</p></div><Button size="sm" variant="ghost" onClick={onClose} className="text-zinc-400 hover:text-white">Close</Button></div><div className="grid grid-cols-1 lg:grid-cols-[160px_1fr] gap-4"><div className="rounded-lg border border-white/10 bg-zinc-950/60 p-3 flex flex-col items-center justify-center min-h-36">{form.logoUrl ? <img src={form.logoUrl} alt="Logo preview" className="max-h-24 max-w-full rounded-md bg-white object-contain p-2" /> : <div className="h-24 w-24 rounded-md border border-white/10 bg-zinc-900 flex items-center justify-center text-zinc-500"><Image size={28} /></div>}<p className="mt-3 text-sm font-bold text-white text-center">{form.name || "Host Name"}</p></div><div className="space-y-3"><div className="grid grid-cols-1 md:grid-cols-2 gap-3"><label className="text-xs text-zinc-400">Host name<input value={form.name || ""} onChange={(event) => update("name", event.target.value)} className="mt-1 h-10 w-full rounded-md bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><label className="text-xs text-zinc-400">Logo URL<input value={form.logoUrl || ""} onChange={(event) => update("logoUrl", event.target.value)} placeholder="https://..." className="mt-1 h-10 w-full rounded-md bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label></div><div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end"><label className="text-xs text-zinc-400">Upload logo<span className="mt-1 h-10 rounded-md border border-white/10 bg-zinc-950 px-3 text-zinc-200 flex items-center gap-2 cursor-pointer hover:border-[#71E0DC]/50"><Upload size={15} />Choose file<input type="file" accept="image/*" onChange={uploadLogo} className="hidden" /></span></label><ColorField label="Primary color" value={form.primaryColor} onChange={(value) => update("primaryColor", value)} /><ColorField label="Accent color" value={form.accentColor} onChange={(value) => update("accentColor", value)} /></div><div className="flex justify-end gap-2 pt-1"><Button variant="outline" onClick={() => setForm(DEFAULT_BRANDING)} className="border-white/10 text-zinc-300 hover:text-white">Reset</Button><Button onClick={() => onSave(form)} className="text-zinc-950 font-semibold hover:opacity-90" style={{ background: `linear-gradient(90deg, ${form.primaryColor}, ${form.accentColor})` }}><Save size={16} className="mr-2" />Save Branding</Button></div></div></div></CardContent></Card>;
+  return <Card className="glass-card mb-4"><CardContent className="p-4"><div className="flex items-center justify-between gap-3 mb-4"><div><h2 className="text-lg font-bold text-white flex items-center gap-2"><Palette size={18} style={{ color: "var(--host-primary)" }} />Customize Host Screen</h2><p className="text-xs text-zinc-500">Default branding is used for new host sessions. This session can still be customized.</p></div><Button size="sm" variant="ghost" onClick={onClose} className="text-zinc-400 hover:text-white">Close</Button></div><div className="grid grid-cols-1 lg:grid-cols-[160px_1fr] gap-4"><div className="rounded-lg border border-white/10 bg-zinc-950/60 p-3 flex flex-col items-center justify-center min-h-36">{form.logoUrl ? <img src={form.logoUrl} alt="Logo preview" className="max-h-24 max-w-full rounded-md bg-white object-contain p-2" /> : <div className="h-24 w-24 rounded-md border border-white/10 bg-zinc-900 flex items-center justify-center text-zinc-500"><Image size={28} /></div>}<p className="mt-3 text-sm font-bold text-white text-center">{form.name || "Host Name"}</p></div><div className="space-y-3"><div className="grid grid-cols-1 md:grid-cols-2 gap-3"><label className="text-xs text-zinc-400">Host name<input value={form.name || ""} onChange={(event) => update("name", event.target.value)} className="mt-1 h-10 w-full rounded-md bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><label className="text-xs text-zinc-400">Logo URL<input value={form.logoUrl || ""} onChange={(event) => update("logoUrl", event.target.value)} placeholder="https://..." className="mt-1 h-10 w-full rounded-md bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label></div><div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end"><label className="text-xs text-zinc-400">Upload logo<span className="mt-1 h-10 rounded-md border border-white/10 bg-zinc-950 px-3 text-zinc-200 flex items-center gap-2 cursor-pointer hover:border-[#71E0DC]/50"><Upload size={15} />Choose file<input type="file" accept="image/*" onChange={uploadLogo} className="hidden" /></span></label><ColorField label="Primary color" value={form.primaryColor} onChange={(value) => update("primaryColor", value)} /><ColorField label="Accent color" value={form.accentColor} onChange={(value) => update("accentColor", value)} /></div><div className="rounded-md border border-white/10 bg-zinc-950/50 p-3"><div className="flex items-center justify-between gap-3 flex-wrap"><div><p className="text-sm font-semibold text-white">Current default</p><p className="text-xs text-zinc-500">{defaultBranding.name} · {defaultBranding.primaryColor} / {defaultBranding.accentColor}</p></div><Button size="sm" variant="outline" onClick={() => setForm(onUseDefault())} className="border-white/10 text-zinc-300 hover:text-white">Use Default</Button></div></div><div className="flex justify-end gap-2 pt-1 flex-wrap"><Button variant="outline" onClick={() => setForm(DEFAULT_BRANDING)} className="border-white/10 text-zinc-300 hover:text-white">Reset</Button><Button variant="outline" onClick={() => onSaveDefault(form)} className="border-white/10 text-zinc-300 hover:text-white">Save as Default</Button><Button onClick={() => onSave(form)} className="text-zinc-950 font-semibold hover:opacity-90" style={{ background: `linear-gradient(90deg, ${form.primaryColor}, ${form.accentColor})` }}><Save size={16} className="mr-2" />Save This Session</Button></div></div></div></CardContent></Card>;
 };
 
 const ColorField = ({ label, value, onChange }) => <label className="text-xs text-zinc-400">{label}<div className="mt-1 flex h-10 rounded-md border border-white/10 bg-zinc-950 overflow-hidden focus-within:border-[#71E0DC]/60"><input type="color" value={value || DEFAULT_BRANDING.primaryColor} onChange={(event) => onChange(event.target.value)} className="h-10 w-12 border-0 bg-transparent p-1" /><input value={value || ""} onChange={(event) => onChange(event.target.value)} className="min-w-0 flex-1 bg-transparent px-2 text-white outline-none" /></div></label>;
