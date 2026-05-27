@@ -185,6 +185,7 @@ const getQuestionPoints = (question) => Number(question?.points ?? 0) > 0 ? Numb
 const answerKey = (answer) => `${answer.playerId}-${answer.questionIndex}`;
 const normalizeAnswerText = (value) => String(value || "").trim().toLowerCase().replace(/[’']/g, "'").replace(/[^a-z0-9]+/g, " ").trim();
 const isCorrectSubmission = (answer, question) => Boolean(question?.answer) && normalizeAnswerText(answer?.answer) === normalizeAnswerText(question.answer);
+const serializeRoundIntro = (round) => round ? { key: round.key, name: round.name, description: round.description || "", categories: [...new Set((round.questions || []).map((question) => question.category).filter(Boolean))], questionCount: round.questions?.length || 0, startIndex: round.startIndex } : null;
 const getTeamScore = (leaderboard, teamId) => Number(leaderboard.find((team) => team.id === teamId)?.score || 0);
 const getWagerAward = (answer, leaderboard, wagerLimit, previousPoints = 0) => {
   const requested = Math.max(0, Number(answer?.wagerAmount || 0));
@@ -206,6 +207,7 @@ const HostSession = () => {
   const [showAnswer, setShowAnswer] = useState(false);
   const [showFunFact, setShowFunFact] = useState(false);
   const [presentMode, setPresentMode] = useState("question");
+  const [introRoundKey, setIntroRoundKey] = useState(null);
   const [gameStarted, setGameStarted] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [leaderboard, setLeaderboard] = useState(() => readStoredLeaderboard(id));
@@ -277,6 +279,9 @@ const HostSession = () => {
   const rounds = useMemo(() => makeRounds(questions), [questions]);
   const currentQuestion = questions[currentIndex] || null;
   const currentRound = rounds.find((round) => currentIndex >= round.startIndex && currentIndex < round.startIndex + round.questions.length);
+  const nextRound = rounds.find((round) => round.startIndex > currentIndex);
+  const defaultIntroRound = currentRound && currentIndex >= currentRound.startIndex + currentRound.questions.length - 1 && nextRound ? nextRound : currentRound;
+  const introRound = rounds.find((round) => round.key === (introRoundKey || defaultIntroRound?.key)) || defaultIntroRound || currentRound;
   const currentAnswers = answers.filter((answer) => answer.questionIndex === currentIndex).sort((a, b) => String(a.submittedAt).localeCompare(String(b.submittedAt)));
   const progress = questions.length ? Math.round(((currentIndex + 1) / questions.length) * 100) : 0;
   const sessionName = session?.name || session?.session_name || "Trivia Session";
@@ -308,6 +313,7 @@ const HostSession = () => {
       joinUrl,
       currentIndex,
       currentQuestion: publicQuestion,
+      introRound: serializeRoundIntro(introRound),
       showAnswer,
       showFunFact,
       leaderboard,
@@ -323,7 +329,7 @@ const HostSession = () => {
     };
     localStorage.setItem(`quiz-crafter-present-state-${id}`, JSON.stringify(state));
     liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: state });
-  }, [id, session, sessionName, questions.length, currentQuestion, currentIndex, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, leaderboard, players, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerEndAt, timeRemaining, acceptingAnswers]);
+  }, [id, session, sessionName, questions.length, currentQuestion, currentIndex, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, leaderboard, players, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerEndAt, timeRemaining, acceptingAnswers]);
 
   const goToQuestion = (index) => {
     if (index < 0 || index >= questions.length) return;
@@ -334,7 +340,8 @@ const HostSession = () => {
     setPresentMode("question");
   };
 
-  const releaseMode = (mode) => {
+  const releaseMode = (mode, roundKey = null) => {
+    if (mode === "categories") setIntroRoundKey(roundKey || introRound?.key || currentRound?.key || null);
     setPresentMode(mode);
     setGameStarted(true);
   };
@@ -419,7 +426,7 @@ const HostSession = () => {
       {focusMode && <div className="flex justify-between items-center mb-4"><Badge className="bg-zinc-800 text-zinc-300">{currentRound?.name || "Round"} - {currentIndex + 1} / {questions.length}</Badge><Button variant="outline" onClick={() => setFocusMode(false)} className="border-white/10 text-zinc-300 hover:text-white">Exit Focus</Button></div>}
       <div className={focusMode ? "flex-1 flex items-center" : "grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-5"}>
         <main className="w-full">
-          {!focusMode && <PresentationControls mode={presentMode} setMode={releaseMode} showAnswer={showAnswer} toggleAnswer={toggleAnswer} showFunFact={showFunFact} toggleFunFact={toggleFunFact} hasFunFact={Boolean(currentQuestion.funFact)} />}
+          {!focusMode && <PresentationControls mode={presentMode} setMode={releaseMode} rounds={rounds} currentIndex={currentIndex} currentRound={currentRound} introRoundKey={introRound?.key || introRoundKey} setIntroRoundKey={setIntroRoundKey} showAnswer={showAnswer} toggleAnswer={toggleAnswer} showFunFact={showFunFact} toggleFunFact={toggleFunFact} hasFunFact={Boolean(currentQuestion.funFact)} />}
           <HostSettings pointsPerQuestion={pointsPerQuestion} setPointsPerQuestion={setPointsPerQuestion} wagerMode={wagerMode} setWagerMode={setWagerMode} wagerLimit={wagerLimit} setWagerLimit={setWagerLimit} wagerTiming={wagerTiming} setWagerTiming={setWagerTiming} timerSeconds={timerSeconds} setTimerSeconds={setTimerSeconds} timeRemaining={timeRemaining} startTimer={startTimer} resetTimer={resetTimer} />
           <QuestionStage question={currentQuestion} index={currentIndex} total={questions.length} roundName={currentRound?.name} showAnswer={showAnswer} showFunFact={showFunFact} focusMode={focusMode} pointsPerQuestion={pointsPerQuestion} timeRemaining={timeRemaining} wagerMode={wagerMode} wagerLimit={wagerLimit} wagerTiming={wagerTiming} />
           <div className="mt-4 flex items-center justify-between gap-3 flex-wrap"><Button variant="outline" onClick={() => goToQuestion(currentIndex - 1)} disabled={currentIndex === 0} className="border-white/10 text-zinc-300 hover:text-white"><ChevronLeft size={18} className="mr-2" />Previous</Button><div className="flex gap-2 flex-wrap justify-end"><Button onClick={toggleAnswer} className={showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700" : "gradient-btn"}>{showAnswer ? <EyeOff size={18} className="mr-2" /> : <Eye size={18} className="mr-2" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button><Button onClick={toggleFunFact} disabled={!currentQuestion.funFact} className="bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-50"><Sparkles size={18} className="mr-2" />Fun Fact</Button><Button onClick={() => goToQuestion(currentIndex + 1)} disabled={currentIndex === questions.length - 1} className="bg-[#AEB2EF] text-zinc-950 hover:bg-[#AEB2EF]/90"><ChevronRight size={18} className="mr-2" />Next</Button></div></div>
@@ -433,7 +440,17 @@ const HostSession = () => {
 
 const TopBar = ({ navigate, id, sessionName, questions, players, currentIndex, liveStatus, openPresentation, setFocusMode, progress }) => <div className="border-b border-white/10 bg-zinc-950/80 sticky top-0 z-20"><div className="max-w-7xl mx-auto px-4 lg:px-6 py-3 flex items-center justify-between gap-3"><div className="flex items-center gap-3 min-w-0"><Button variant="ghost" onClick={() => navigate(`/session/${id}`)} className="text-zinc-400 hover:text-white h-9 w-9 p-0" aria-label="Back to session"><ArrowLeft size={18} /></Button><div className="min-w-0"><h1 className="font-bold truncate">{sessionName}</h1><p className="text-xs text-zinc-500">Hosting view - {questions.length} questions - {players.length} players</p></div></div><div className="flex items-center gap-2 flex-wrap justify-end"><Badge className={liveStatus === "live" ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/20" : "bg-zinc-800 text-zinc-300"}><Wifi size={13} className="mr-1" />{liveStatus === "live" ? "Live" : "Connecting"}</Badge><Badge className="bg-zinc-800 text-zinc-300">{currentIndex + 1} / {questions.length}</Badge><Button variant="outline" onClick={openPresentation} className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />Presentation</Button><Button variant="outline" onClick={() => setFocusMode(true)} className="border-white/10 text-zinc-300 hover:text-white"><Maximize2 size={16} className="mr-2" />Focus</Button></div></div><div className="h-1 bg-zinc-900"><div className="h-1 bg-gradient-to-r from-[#71E0DC] to-[#AEB2EF] transition-all" style={{ width: `${progress}%` }} /></div></div>;
 
-const PresentationControls = ({ mode, setMode, showAnswer, toggleAnswer, showFunFact, toggleFunFact, hasFunFact }) => <Card className="glass-card mb-4"><CardContent className="p-3 flex items-center justify-between gap-3 flex-wrap"><div className="flex items-center gap-2 flex-wrap"><Button size="sm" onClick={() => setMode("question")} className={mode === "question" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><MonitorPlay size={15} className="mr-2" />Question</Button><Button size="sm" onClick={() => setMode("categories")} className={mode === "categories" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><Tags size={15} className="mr-2" />Round Intro</Button><Button size="sm" onClick={() => setMode("leaderboard")} className={mode === "leaderboard" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><Trophy size={15} className="mr-2" />Leaderboard</Button></div><div className="flex items-center gap-2 flex-wrap"><Button size="sm" variant="outline" onClick={toggleAnswer} className="border-white/10 text-zinc-300 hover:text-white">{showAnswer ? <EyeOff size={15} className="mr-2" /> : <Eye size={15} className="mr-2" />}{showAnswer ? "Hide Answer" : "Show Answer"}</Button><Button size="sm" variant="outline" onClick={toggleFunFact} disabled={!hasFunFact} className="border-white/10 text-zinc-300 hover:text-white disabled:opacity-50"><Sparkles size={15} className="mr-2" />{showFunFact ? "Hide Fun Fact" : "Show Fun Fact"}</Button></div></CardContent></Card>;
+const PresentationControls = ({ mode, setMode, rounds, currentIndex, currentRound, introRoundKey, setIntroRoundKey, showAnswer, toggleAnswer, showFunFact, toggleFunFact, hasFunFact }) => {
+  const nextRound = rounds.find((round) => round.startIndex > currentIndex);
+  const suggestedRound = currentRound && currentIndex >= currentRound.startIndex + currentRound.questions.length - 1 && nextRound ? nextRound : currentRound;
+  const selectedIntroKey = introRoundKey || suggestedRound?.key || currentRound?.key || "";
+  const chooseIntroRound = (roundKey) => {
+    setIntroRoundKey(roundKey);
+    if (mode === "categories") setMode("categories", roundKey);
+  };
+
+  return <Card className="glass-card mb-4"><CardContent className="p-3 flex items-center justify-between gap-3 flex-wrap"><div className="flex items-center gap-2 flex-wrap"><Button size="sm" onClick={() => setMode("question")} className={mode === "question" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><MonitorPlay size={15} className="mr-2" />Question</Button><Button size="sm" onClick={() => setMode("categories", selectedIntroKey)} className={mode === "categories" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><Tags size={15} className="mr-2" />Round Intro</Button><select aria-label="Round intro target" value={selectedIntroKey} onChange={(event) => chooseIntroRound(event.target.value)} className="h-8 rounded-md bg-zinc-950 border border-white/10 px-2 text-sm text-zinc-200">{rounds.map((round) => <option key={round.key} value={round.key}>{round.name}</option>)}</select><Button size="sm" onClick={() => setMode("leaderboard")} className={mode === "leaderboard" ? "gradient-btn" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"}><Trophy size={15} className="mr-2" />Leaderboard</Button></div><div className="flex items-center gap-2 flex-wrap"><Button size="sm" variant="outline" onClick={toggleAnswer} className="border-white/10 text-zinc-300 hover:text-white">{showAnswer ? <EyeOff size={15} className="mr-2" /> : <Eye size={15} className="mr-2" />}{showAnswer ? "Hide Answer" : "Show Answer"}</Button><Button size="sm" variant="outline" onClick={toggleFunFact} disabled={!hasFunFact} className="border-white/10 text-zinc-300 hover:text-white disabled:opacity-50"><Sparkles size={15} className="mr-2" />{showFunFact ? "Hide Fun Fact" : "Show Fun Fact"}</Button></div></CardContent></Card>;
+};
 
 const HostSettings = ({ pointsPerQuestion, setPointsPerQuestion, wagerMode, setWagerMode, wagerLimit, setWagerLimit, wagerTiming, setWagerTiming, timerSeconds, setTimerSeconds, timeRemaining, startTimer, resetTimer }) => <Card className="glass-card mb-4"><CardContent className="p-3 grid grid-cols-1 md:grid-cols-[0.8fr_0.8fr_0.9fr_auto_auto] gap-2 items-end"><label className="text-xs text-zinc-400">Points<input type="number" min="0" value={pointsPerQuestion} onChange={(event) => setPointsPerQuestion(event.target.value)} className="mt-1 w-full h-9 rounded-md bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><label className="text-xs text-zinc-400">Timer seconds<input type="number" min="0" value={timerSeconds} onChange={(event) => setTimerSeconds(event.target.value)} className="mt-1 w-full h-9 rounded-md bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><label className="text-xs text-zinc-400">Wager limit<input type="number" min="0" value={wagerLimit} onChange={(event) => { setWagerLimit(event.target.value); setWagerMode(Number(event.target.value || 0) > 0); }} className="mt-1 w-full h-9 rounded-md bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><Button onClick={() => setWagerTiming((value) => value === "after_answer" ? "before_answer" : "after_answer")} disabled={!wagerMode} className={wagerMode ? "h-9 bg-purple-500/20 text-purple-200 border border-purple-500/30 hover:bg-purple-500/30" : "h-9 bg-zinc-800 text-zinc-500"}>{wagerTiming === "after_answer" ? "Wager After" : "Wager Before"}</Button><div className="flex gap-2"><Button onClick={startTimer} className="h-9 gradient-btn"><Play size={15} className="mr-2" />Start</Button><Button variant="outline" onClick={resetTimer} className="h-9 border-white/10 text-zinc-300 hover:text-white"><RotateCcw size={15} className="mr-2" />{timeRemaining === null ? "Clear" : `${timeRemaining}s`}</Button></div></CardContent></Card>;
 

@@ -136,12 +136,16 @@ const PlayerSession = () => {
   const effectiveWagerLimit = wagerMode ? Math.max(0, Math.min(wagerLimit || Number.POSITIVE_INFINITY, Number(myScore || 0))) : 0;
   const wagerTiming = hostState?.wagerTiming === "after_answer" ? "after_answer" : "before_answer";
   const gameStarted = hasGameStarted(hostState);
+  const introRound = hostState?.introRound || null;
   const activeRoundCategories = useMemo(() => {
+    if (hostState?.mode === "categories" && Array.isArray(introRound?.categories)) return introRound.categories;
     const roundName = currentQuestion?.roundName;
     if (!roundName) return [];
     const matchedRound = roundCategories.find((round) => round.name === roundName);
     return matchedRound?.categories || [];
-  }, [currentQuestion?.roundName, roundCategories]);
+  }, [currentQuestion?.roundName, hostState?.mode, introRound, roundCategories]);
+  const activeRoundName = hostState?.mode === "categories" ? (introRound?.name || currentQuestion?.roundName || "Round") : (currentQuestion?.roundName || "Round");
+  const categoryFeedbackKey = hostState?.mode === "categories" ? (introRound?.key || hostState.currentIndex) : hostState?.currentIndex;
 
   useEffect(() => {
     setWagerAmount("");
@@ -167,9 +171,9 @@ const PlayerSession = () => {
 
   const submitCategoryFeedback = (category, sentiment) => {
     if (!player || !hostState || !category) return;
-    const key = `${hostState.currentIndex}-${category}`;
+    const key = `${categoryFeedbackKey}-${category}`;
     setFeedbackByCategory((current) => ({ ...current, [key]: sentiment }));
-    channelRef.current?.send({ type: "broadcast", event: "category_feedback_submit", payload: { playerId: player.id, playerName: player.name, sentiment, category, questionIndex: hostState.currentIndex, roundName: currentQuestion?.roundName || "Round", submittedAt: new Date().toISOString() } });
+    channelRef.current?.send({ type: "broadcast", event: "category_feedback_submit", payload: { playerId: player.id, playerName: player.name, sentiment, category, questionIndex: hostState.currentIndex, roundKey: categoryFeedbackKey, roundName: activeRoundName, submittedAt: new Date().toISOString() } });
     toast.success("Feedback saved");
   };
 
@@ -213,7 +217,7 @@ const PlayerSession = () => {
         {!gameStarted && <PlayerLobby sessionName={sessionName} connected={connected} branding={branding} />}
         {hostUpdate && <HostUpdateBanner update={hostUpdate} onDismiss={() => setHostUpdate(null)} />}
         {gameStarted && hostState?.mode === "leaderboard" && <LeaderboardView leaderboard={leaderboard} playerId={player.id} />}
-        {gameStarted && hostState?.mode === "categories" && <RoundIntroFeedback roundName={currentQuestion?.roundName || "Round"} categories={activeRoundCategories} selectedByCategory={feedbackByCategory} currentIndex={hostState.currentIndex} onSelect={submitCategoryFeedback} />}
+        {gameStarted && hostState?.mode === "categories" && <RoundIntroFeedback roundName={activeRoundName} categories={activeRoundCategories} selectedByCategory={feedbackByCategory} currentIndex={categoryFeedbackKey} onSelect={submitCategoryFeedback} />}
         {gameStarted && hostState && hostState.mode !== "leaderboard" && hostState.mode !== "categories" && !currentQuestion && <div className="text-center"><p className="text-zinc-400">Waiting for the next question.</p></div>}
         {gameStarted && hostState && hostState.mode !== "leaderboard" && hostState.mode !== "categories" && currentQuestion && <div className="w-full max-w-md"><div className="text-center mb-5"><div className="flex items-center justify-center gap-2 flex-wrap mb-3"><Badge className="bg-zinc-800 text-zinc-300">{currentQuestion.roundName || "Round"} Â· {currentQuestion.category}</Badge>{wagerMode && <Badge className="bg-purple-500/15 text-purple-300 border border-purple-500/20">Wager up to {effectiveWagerLimit}</Badge>}{timeRemaining !== null && <Badge className={timeRemaining === 0 ? "bg-red-500/15 text-red-300 border border-red-500/20" : "bg-[#AEB2EF]/15 text-[#AEB2EF] border border-[#AEB2EF]/20"}><Timer size={13} className="mr-1" />{timeRemaining}s</Badge>}</div><h2 className="text-2xl font-black leading-tight">{currentQuestion.questionText}</h2><FeedbackButtons selected={feedbackByQuestion[String(hostState.currentIndex)]} onSelect={submitFeedback} /></div>{hostState.showAnswer ? <Card className="border-emerald-500/30 bg-emerald-500/10"><CardContent className="p-5 text-center"><p className="text-zinc-400 text-sm uppercase tracking-wide mb-1">Answer</p><p className="text-3xl font-black text-emerald-300">{currentQuestion.answer}</p>{hostState.showFunFact && currentQuestion.funFact && <p className="text-zinc-300 mt-3">{currentQuestion.funFact}</p>}</CardContent></Card> : submitted?.questionIndex === hostState.currentIndex ? <Card className="glass-card"><CardContent className="p-6 text-center"><CheckCircle className="mx-auto text-emerald-300 mb-3" size={42} /><h3 className="text-2xl font-black mb-1">Answer Locked</h3><p className="text-zinc-400">You answered: <span className="text-white font-bold">{submitted.answer}</span></p>{submitted.wagerMode && wagerTiming === "after_answer" && !Number(submitted.wagerAmount) ? <div className="mt-4"><WagerInput wagerMode wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={effectiveWagerLimit} /><Button onClick={submitWager} className="w-full gradient-btn">Submit Wager</Button></div> : submitted.wagerMode && <p className="text-purple-300 font-bold mt-2">Wager: {submitted.wagerAmount}</p>}</CardContent></Card> : !acceptingAnswers ? <Card className="border-red-500/30 bg-red-500/10"><CardContent className="p-6 text-center"><Timer className="mx-auto text-red-300 mb-3" size={42} /><h3 className="text-2xl font-black">Time&apos;s Up</h3><p className="text-zinc-400 mt-1">Waiting for the answer reveal.</p></CardContent></Card> : <AnswerForm question={currentQuestion} answer={answer} setAnswer={setAnswer} submitAnswer={submitAnswer} wagerMode={wagerMode && wagerTiming !== "after_answer"} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={effectiveWagerLimit} />}</div>}
       </main>

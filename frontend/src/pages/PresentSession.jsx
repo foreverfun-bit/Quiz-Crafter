@@ -204,6 +204,8 @@ const PresentSession = () => {
   const currentQuestion = questions[currentIndex] || null;
   const currentRound = rounds.find((round) => currentIndex >= round.startIndex && currentIndex < round.startIndex + round.questions.length);
   const mode = presentState.mode || "question";
+  const introRound = mode === "categories" && presentState.introRound?.key ? (rounds.find((round) => round.key === presentState.introRound.key) || presentState.introRound) : currentRound;
+  const displayRound = mode === "categories" ? introRound : currentRound;
   const sessionName = presentState.sessionName || session?.name || session?.session_name || "Trivia Session";
   const joinUrl = presentState.joinUrl || `${getPublicOrigin()}/join?session=${id}`;
   const showLobby = !hasPresentationStarted(presentState, currentIndex);
@@ -239,11 +241,11 @@ const PresentSession = () => {
             <p className="text-[#71E0DC] font-semibold tracking-wide uppercase text-sm">{sessionName}</p>
             <h1 className="text-3xl lg:text-5xl font-black mt-1">{mode === "categories" ? "Round Intro" : mode === "leaderboard" ? "Leaderboard" : currentRound?.name || "Question"}</h1>
           </div>
-          <Badge className="bg-white/10 text-zinc-200 border border-white/10 text-base px-4 py-2">{currentRound?.name || "Round"}</Badge>
+          <Badge className="bg-white/10 text-zinc-200 border border-white/10 text-base px-4 py-2">{displayRound?.name || "Round"}</Badge>
         </header>
 
         <main className="flex-1 flex items-center justify-center py-8">
-          {mode === "categories" && <CategoriesView round={currentRound} rounds={rounds} />}
+          {mode === "categories" && <CategoriesView round={introRound} rounds={rounds} />}
           {mode === "leaderboard" && <LeaderboardView leaderboard={presentState.leaderboard || []} />}
           {mode !== "categories" && mode !== "leaderboard" && (
             <QuestionView question={currentQuestion} index={currentIndex} total={questions.length} showAnswer={presentState.showAnswer} showFunFact={presentState.showFunFact} />
@@ -281,7 +283,7 @@ const LobbyView = ({ sessionName, joinUrl, players }) => {
 };
 
 const CategoriesView = ({ round, rounds }) => {
-  const categories = [...new Set((round?.questions || []).map((question) => question.category).filter(Boolean))];
+  const categories = round?.categories || [...new Set((round?.questions || []).map((question) => question.category).filter(Boolean))];
 
   return (
     <div className="w-full max-w-6xl">
