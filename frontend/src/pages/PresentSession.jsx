@@ -384,6 +384,7 @@ const QuestionView = ({ question, index, total, showAnswer, showFunFact }) => {
   const Icon = meta.icon;
   const imageUrl = buildStorageUrl(question.imageUrl);
   const shouldShowImage = Boolean(imageUrl) && (question.imageTiming !== "after_answer" || showAnswer);
+  const funFactOnly = Boolean(showFunFact && question.funFact);
 
   return (
     <div className="w-full max-w-6xl">
@@ -398,35 +399,39 @@ const QuestionView = ({ question, index, total, showAnswer, showFunFact }) => {
             <span className="text-zinc-500 font-mono text-lg">{index + 1} / {total}</span>
           </div>
 
-          {shouldShowImage && <div className="mb-8 flex justify-center"><img src={imageUrl} alt="Question" className="max-h-[44vh] max-w-full rounded-lg border border-white/10 object-contain" /></div>}
-
-          <h2 className="text-4xl lg:text-7xl font-black leading-tight text-white text-center mb-10">{question.questionText}</h2>
-
-          {question.type === "true_false" && (
-            <div className="grid grid-cols-2 gap-5 max-w-3xl mx-auto mb-8">
-              <div className="rounded-lg border-2 border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-center font-black py-6 text-4xl">True</div>
-              <div className="rounded-lg border-2 border-red-500/30 bg-red-500/10 text-red-300 text-center font-black py-6 text-4xl">False</div>
+          {funFactOnly ? (
+            <div className="min-h-[50vh] flex items-center justify-center">
+              <div className="w-full rounded-lg border border-[#AEB2EF]/30 bg-[#AEB2EF]/10 p-8 lg:p-12 text-center">
+                <div className="flex items-center justify-center gap-3 text-[#AEB2EF] font-black mb-5 text-2xl"><Sparkles size={28} />Fun Fact</div>
+                <p className="text-4xl lg:text-6xl font-black leading-tight text-white max-w-5xl mx-auto">{question.funFact}</p>
+              </div>
             </div>
-          )}
+          ) : (
+            <>
+              {shouldShowImage && <div className="mb-8 flex justify-center"><img src={imageUrl} alt="Question" className="max-h-[44vh] max-w-full rounded-lg border border-white/10 object-contain" /></div>}
 
-          {question.type === "multiple_choice" && question.options.length > 0 && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-4xl mx-auto mb-8">
-              {question.options.map((option, optionIndex) => <div key={optionIndex} className="rounded-lg border border-white/10 bg-zinc-900/80 px-5 py-4 text-zinc-100 text-2xl font-semibold">{option}</div>)}
-            </div>
-          )}
+              <h2 className="text-4xl lg:text-7xl font-black leading-tight text-white text-center mb-10">{question.questionText}</h2>
 
-          {showAnswer && (
-            <div className="mt-8 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-6 text-center">
-              <p className="text-zinc-400 text-sm uppercase tracking-wider mb-2">Answer</p>
-              <p className="text-4xl lg:text-5xl font-black text-emerald-300">{question.answer}</p>
-            </div>
-          )}
+              {question.type === "true_false" && (
+                <div className="grid grid-cols-2 gap-5 max-w-3xl mx-auto mb-8">
+                  <div className="rounded-lg border-2 border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-center font-black py-6 text-4xl">True</div>
+                  <div className="rounded-lg border-2 border-red-500/30 bg-red-500/10 text-red-300 text-center font-black py-6 text-4xl">False</div>
+                </div>
+              )}
 
-          {showFunFact && question.funFact && (
-            <div className="mt-5 rounded-lg border border-[#AEB2EF]/30 bg-[#AEB2EF]/10 p-5 text-center">
-              <div className="flex items-center justify-center gap-2 text-[#AEB2EF] font-bold mb-2"><Sparkles size={18} />Fun Fact</div>
-              <p className="text-2xl text-zinc-100 max-w-4xl mx-auto">{question.funFact}</p>
-            </div>
+              {question.type === "multiple_choice" && question.options.length > 0 && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-4xl mx-auto mb-8">
+                  {question.options.map((option, optionIndex) => <div key={optionIndex} className="rounded-lg border border-white/10 bg-zinc-900/80 px-5 py-4 text-zinc-100 text-2xl font-semibold">{option}</div>)}
+                </div>
+              )}
+
+              {showAnswer && (
+                <div className="mt-8 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-6 text-center">
+                  <p className="text-zinc-400 text-sm uppercase tracking-wider mb-2">Answer</p>
+                  <p className="text-4xl lg:text-5xl font-black text-emerald-300">{question.answer}</p>
+                </div>
+              )}
+            </>
           )}
         </CardContent>
       </Card>
