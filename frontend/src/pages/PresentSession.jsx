@@ -110,7 +110,9 @@ const getRoundName = (question, fallbackOrder = 1) => {
 
 const getRoundMetadata = (session) => {
   const raw = session?.round_descriptions || session?.rounds_metadata || session?.rounds || [];
-  return Array.isArray(raw) ? raw : [];
+  if (Array.isArray(raw)) return raw;
+  if (raw && typeof raw === "object") return Object.values(raw);
+  return [];
 };
 
 const getRoundDescription = (session, roundOrder, roundName) => {
@@ -413,8 +415,9 @@ const QuestionView = ({ question, index, total, showAnswer, showFunFact }) => {
   const meta = typeMeta[question.type] || typeMeta.written;
   const Icon = meta.icon;
   const imageUrl = buildStorageUrl(question.imageUrl);
-  const shouldShowImage = Boolean(imageUrl) && (question.imageTiming !== "after_answer" || showAnswer);
   const funFactOnly = Boolean(showFunFact && question.funFact);
+  const shouldShowImage = Boolean(imageUrl) && question.imageTiming !== "after_answer";
+  const shouldShowFunFactImage = Boolean(imageUrl) && question.imageTiming === "after_answer" && funFactOnly;
 
   return (
     <div className="w-full max-w-6xl">
@@ -432,6 +435,7 @@ const QuestionView = ({ question, index, total, showAnswer, showFunFact }) => {
           {funFactOnly ? (
             <div className="min-h-[50vh] flex items-center justify-center">
               <div className="w-full rounded-lg border border-[#AEB2EF]/30 bg-[#AEB2EF]/10 p-8 lg:p-12 text-center">
+                {shouldShowFunFactImage && <div className="mb-8 flex justify-center"><img src={imageUrl} alt="Fun fact media" className="max-h-[42vh] max-w-full rounded-lg border border-white/10 object-contain" /></div>}
                 <div className="flex items-center justify-center gap-3 text-[#AEB2EF] font-black mb-5 text-2xl"><Sparkles size={28} />Fun Fact</div>
                 <p className="text-4xl lg:text-6xl font-black leading-tight text-white max-w-5xl mx-auto">{question.funFact}</p>
               </div>

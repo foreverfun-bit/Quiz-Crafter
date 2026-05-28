@@ -59,6 +59,7 @@ const mergeBranding = (session, hostState) => {
 };
 
 const buildRoundCategories = (session) => {
+  const metadata = getRoundMetadata(session);
   const groups = new Map();
   arrayConfig.forEach(({ key }) => {
     const questions = Array.isArray(session?.[key]) ? session[key] : [];
@@ -66,7 +67,7 @@ const buildRoundCategories = (session) => {
       const roundOrder = getRoundOrder(question, 1);
       const roundName = getRoundName(question, roundOrder);
       const mapKey = `${roundOrder}-${roundName}`;
-      if (!groups.has(mapKey)) groups.set(mapKey, { key: mapKey, name: roundName, order: roundOrder, categories: new Set() });
+      if (!groups.has(mapKey)) groups.set(mapKey, { key: mapKey, name: roundName, order: roundOrder, description: question.round_description || getRoundDescription(metadata, roundOrder, roundName), categories: new Set() });
       if (question.category) groups.get(mapKey).categories.add(question.category);
     });
   });
@@ -74,6 +75,18 @@ const buildRoundCategories = (session) => {
   return [...groups.values()]
     .sort((a, b) => a.order - b.order)
     .map((round) => ({ ...round, categories: [...round.categories] }));
+};
+
+const getRoundMetadata = (session) => {
+  const raw = session?.round_descriptions || session?.rounds_metadata || session?.rounds || [];
+  if (Array.isArray(raw)) return raw;
+  if (raw && typeof raw === "object") return Object.values(raw);
+  return [];
+};
+
+const getRoundDescription = (metadata, roundOrder, roundName) => {
+  const match = metadata.find((round) => Number(round.order || round.round_order) === Number(roundOrder) || String(round.name || round.round_name || "").toLowerCase() === String(roundName || "").toLowerCase());
+  return match?.description || match?.round_description || "";
 };
 
 const hasGameStarted = (hostState) => {
@@ -181,6 +194,7 @@ const PlayerSession = () => {
     return matchedRound?.categories || [];
   }, [currentQuestion?.roundName, hostState?.mode, introRound, roundCategories]);
   const activeRoundName = hostState?.mode === "categories" ? (introRound?.name || currentQuestion?.roundName || "Round") : (currentQuestion?.roundName || "Round");
+  const activeRoundDescription = hostState?.mode === "categories" ? (introRound?.description || "") : (roundCategories.find((round) => round.name === activeRoundName)?.description || "");
   const categoryFeedbackKey = hostState?.mode === "categories" ? (introRound?.key || hostState.currentIndex) : hostState?.currentIndex;
 
   useEffect(() => {
@@ -256,13 +270,13 @@ const PlayerSession = () => {
 
   return (
     <div className="min-h-screen bg-[#09090B] text-white flex flex-col" data-testid="player-session-page">
-      <header className="px-4 py-3 border-b border-white/10 flex items-center justify-between gap-3 bg-zinc-950/80 sticky top-0 z-10"><div className="min-w-0 flex items-center gap-2">{branding.logoUrl && <img src={branding.logoUrl} alt={branding.name} className="h-9 w-9 shrink-0 rounded-full bg-white object-contain p-1" />}<div className="min-w-0"><p className="font-bold truncate">{player.name}</p><p className="text-xs text-zinc-500 truncate">{sessionName}</p></div></div><div className="flex items-center gap-2"><Badge className={wagerMode ? "bg-purple-500/15 text-purple-300 border border-purple-500/20" : "bg-amber-400/15 text-amber-200 border border-amber-400/20"}>{wagerMode ? "Wager" : `${pointsPerQuestion} pts`}</Badge><Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20">{Number(myScore)} pts</Badge></div></header>
+      <header className="px-4 py-3 border-b border-white/10 flex items-center justify-between gap-3 bg-zinc-950/80 sticky top-0 z-10"><div className="min-w-0 flex items-center gap-2">{branding.logoUrl && <img src={branding.logoUrl} alt={branding.name} className="h-9 w-9 shrink-0 rounded-full bg-white object-contain p-1" />}<div className="min-w-0"><p className="font-bold truncate">{player.name}</p><p className="text-xs text-zinc-500 truncate">{sessionName}</p></div></div><Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20">{Number(myScore)} pts</Badge></header>
       <main className="flex-1 flex items-center justify-center p-4">
         {!gameStarted && <PlayerLobby sessionName={sessionName} connected={connected} branding={branding} />}
         {hostUpdate && <HostUpdateBanner update={hostUpdate} onDismiss={() => setHostUpdate(null)} />}
         {gameStarted && hostState?.mode === "leaderboard" && <LeaderboardView leaderboard={leaderboard} playerId={player.id} />}
         {gameStarted && hostState?.mode === "bonus_pause" && <LeaderboardView leaderboard={leaderboard} playerId={player.id} title="Bonus Question Next" />}
-        {gameStarted && hostState?.mode === "categories" && <RoundIntroFeedback roundName={activeRoundName} categories={activeRoundCategories} selectedByCategory={feedbackByCategory} currentIndex={categoryFeedbackKey} onSelect={submitCategoryFeedback} />}
+        {gameStarted && hostState?.mode === "categories" && <RoundIntroFeedback roundName={activeRoundName} description={activeRoundDescription} categories={activeRoundCategories} selectedByCategory={feedbackByCategory} currentIndex={categoryFeedbackKey} onSelect={submitCategoryFeedback} />}
         {gameStarted && hostState && hostState.mode !== "leaderboard" && hostState.mode !== "categories" && hostState.mode !== "bonus_pause" && !currentQuestion && <div className="text-center"><p className="text-zinc-400">Waiting for the next question.</p></div>}
         {gameStarted && hostState && hostState.mode !== "leaderboard" && hostState.mode !== "categories" && hostState.mode !== "bonus_pause" && currentQuestion && <div className="w-full max-w-md"><div className="text-center mb-5"><div className="flex items-center justify-center gap-2 flex-wrap mb-3"><Badge className="bg-zinc-800 text-zinc-300"><span>{currentQuestion.roundName || "Round"}</span><span className="mx-1 text-zinc-500">/</span><span>{currentQuestion.category}</span></Badge>{wagerMode && <Badge className="bg-purple-500/15 text-purple-300 border border-purple-500/20">Wager up to {effectiveWagerLimit}</Badge>}{timeRemaining !== null && <Badge className={timeRemaining === 0 ? "bg-red-500/15 text-red-300 border border-red-500/20" : "bg-[#AEB2EF]/15 text-[#AEB2EF] border border-[#AEB2EF]/20"}><Timer size={13} className="mr-1" />{timeRemaining}s</Badge>}</div><h2 className="text-2xl font-black leading-tight">{currentQuestion.questionText}</h2><FeedbackButtons selected={feedbackByQuestion[String(hostState.currentIndex)]} onSelect={submitFeedback} /></div>{hostState.showAnswer ? <Card className="border-emerald-500/30 bg-emerald-500/10"><CardContent className="p-5 text-center"><p className="text-zinc-400 text-sm uppercase tracking-wide mb-1">Answer</p><p className="text-3xl font-black text-emerald-300">{currentQuestion.answer}</p>{hostState.showFunFact && currentQuestion.funFact && <p className="text-zinc-300 mt-3">{currentQuestion.funFact}</p>}</CardContent></Card> : submitted?.questionIndex === hostState.currentIndex ? <Card className="glass-card"><CardContent className="p-6 text-center"><CheckCircle className="mx-auto text-emerald-300 mb-3" size={42} /><h3 className="text-2xl font-black mb-1">Answer Locked</h3><p className="text-zinc-400">You answered: <span className="text-white font-bold">{submitted.answer}</span></p>{submitted.wagerMode && wagerTiming === "after_answer" && !Number(submitted.wagerAmount) ? <div className="mt-4"><WagerInput wagerMode wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={effectiveWagerLimit} /><Button onClick={submitWager} className="w-full gradient-btn">Submit Wager</Button></div> : submitted.wagerMode && <p className="text-purple-300 font-bold mt-2">Wager: {submitted.wagerAmount}</p>}</CardContent></Card> : !acceptingAnswers ? <Card className="border-red-500/30 bg-red-500/10"><CardContent className="p-6 text-center"><Timer className="mx-auto text-red-300 mb-3" size={42} /><h3 className="text-2xl font-black">Time&apos;s Up</h3><p className="text-zinc-400 mt-1">Waiting for the answer reveal.</p></CardContent></Card> : <AnswerForm question={currentQuestion} answer={answer} setAnswer={setAnswer} submitAnswer={submitAnswer} wagerMode={wagerMode && wagerTiming !== "after_answer"} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={effectiveWagerLimit} />}</div>}
       </main>
@@ -286,9 +300,9 @@ const HostBrandMark = ({ branding }) => {
 };
 
 const QuizCrafterBadge = () => (
-  <div className="mt-4 flex items-center justify-center gap-2 text-[11px] uppercase tracking-wide text-zinc-500">
+  <div className="mt-4 flex items-center justify-center gap-3 text-sm uppercase tracking-wide text-zinc-500">
     <span>Powered by</span>
-    <img src={QUIZ_CRAFTER_LOGO_SRC} alt="Quiz Crafter" className="h-5 w-24 object-contain" />
+    <img src={QUIZ_CRAFTER_LOGO_SRC} alt="Quiz Crafter" className="h-8 w-36 object-contain" />
   </div>
 );
 
@@ -330,11 +344,12 @@ const PlayerLobby = ({ sessionName, connected, branding }) => (
   </div>
 );
 
-const RoundIntroFeedback = ({ roundName, categories, selectedByCategory, currentIndex, onSelect }) => (
+const RoundIntroFeedback = ({ roundName, description, categories, selectedByCategory, currentIndex, onSelect }) => (
   <div className="w-full max-w-md text-center">
     <Tags className="mx-auto text-[#71E0DC] mb-3" size={38} />
     <p className="text-[#71E0DC] text-sm font-bold uppercase tracking-wide mb-2">Round Info</p>
     <h2 className="text-3xl font-black mb-2">{roundName}</h2>
+    {description && <p className="text-zinc-300 mb-4 leading-relaxed">{description}</p>}
     <p className="text-zinc-500 mb-5">Rate the categories separately from the questions.</p>
     <div className="space-y-3 text-left">
       {categories.map((category) => {
