@@ -8,7 +8,7 @@ import { CheckCircle, Send, Tags, ThumbsDown, ThumbsUp, Timer, Trophy } from "lu
 import { toast } from "sonner";
 
 const makePlayerId = () => `player-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-const DEFAULT_HOST_LOGO_SRC = process.env.REACT_APP_BRAND_LOGO_URL || "/forever-fun-logo.png";
+const DEFAULT_HOST_LOGO_SRC = process.env.REACT_APP_BRAND_LOGO_URL || "/quiz-crafter-logo.svg";
 const QUIZ_CRAFTER_LOGO_SRC = "/quiz-crafter-logo.svg";
 
 const arrayConfig = [
@@ -49,6 +49,14 @@ const getSessionBranding = (session) => ({
   name: session?.host_brand_name || session?.brand_name || session?.company_name || session?.venue_name || "Forever Fun Events",
   logoUrl: session?.host_logo_url || session?.brand_logo_url || session?.logo_url || DEFAULT_HOST_LOGO_SRC,
 });
+const mergeBranding = (session, hostState) => {
+  const sessionBranding = getSessionBranding(session);
+  const liveBranding = hostState?.branding && typeof hostState.branding === "object" ? hostState.branding : {};
+  return {
+    name: liveBranding.name || sessionBranding.name,
+    logoUrl: liveBranding.logoUrl || sessionBranding.logoUrl,
+  };
+};
 
 const buildRoundCategories = (session) => {
   const groups = new Map();
@@ -108,6 +116,19 @@ const PlayerSession = () => {
   }, [id]);
 
   useEffect(() => {
+    if (player) return undefined;
+    const channel = supabase.channel(`quiz-crafter-live-${id}`, { config: { broadcast: { self: false } } });
+    channel
+      .on("broadcast", { event: "host_state" }, ({ payload }) => {
+        setHostState(payload || null);
+      })
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [id, player]);
+
+  useEffect(() => {
     if (!player) return undefined;
     const channel = supabase.channel(`quiz-crafter-live-${id}`, { config: { broadcast: { self: false } } });
     channelRef.current = channel;
@@ -140,7 +161,7 @@ const PlayerSession = () => {
   const currentQuestion = hostState?.currentQuestion ? { ...hostState.currentQuestion, answer: hostState.showAnswer ? (hostState.revealedAnswer || hostState.currentQuestion.answer || "") : "" } : null;
   const leaderboard = useMemo(() => [...(hostState?.leaderboard || [])].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)), [hostState]);
   const roundCategories = useMemo(() => buildRoundCategories(session), [session]);
-  const branding = useMemo(() => getSessionBranding(session), [session]);
+  const branding = useMemo(() => mergeBranding(session, hostState), [session, hostState]);
   const myScore = leaderboard.find((team) => team.id === player?.id)?.score || 0;
   const sessionName = hostState?.sessionName || session?.name || session?.session_name || "Trivia Session";
   const timeRemaining = hostState?.timerEndAt ? Math.max(0, Math.ceil((new Date(hostState.timerEndAt).getTime() - now) / 1000)) : null;
@@ -235,7 +256,7 @@ const PlayerSession = () => {
 
   return (
     <div className="min-h-screen bg-[#09090B] text-white flex flex-col" data-testid="player-session-page">
-      <header className="px-4 py-3 border-b border-white/10 flex items-center justify-between gap-3 bg-zinc-950/80 sticky top-0 z-10"><div className="min-w-0"><p className="font-bold truncate">{player.name}</p><p className="text-xs text-zinc-500 truncate">{sessionName}</p></div><div className="flex items-center gap-2"><Badge className={wagerMode ? "bg-purple-500/15 text-purple-300 border border-purple-500/20" : "bg-amber-400/15 text-amber-200 border border-amber-400/20"}>{wagerMode ? "Wager" : `${pointsPerQuestion} pts`}</Badge><Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20">{Number(myScore)} pts</Badge></div></header>
+      <header className="px-4 py-3 border-b border-white/10 flex items-center justify-between gap-3 bg-zinc-950/80 sticky top-0 z-10"><div className="min-w-0 flex items-center gap-2">{branding.logoUrl && <img src={branding.logoUrl} alt={branding.name} className="h-9 w-9 shrink-0 rounded-full bg-white object-contain p-1" />}<div className="min-w-0"><p className="font-bold truncate">{player.name}</p><p className="text-xs text-zinc-500 truncate">{sessionName}</p></div></div><div className="flex items-center gap-2"><Badge className={wagerMode ? "bg-purple-500/15 text-purple-300 border border-purple-500/20" : "bg-amber-400/15 text-amber-200 border border-amber-400/20"}>{wagerMode ? "Wager" : `${pointsPerQuestion} pts`}</Badge><Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20">{Number(myScore)} pts</Badge></div></header>
       <main className="flex-1 flex items-center justify-center p-4">
         {!gameStarted && <PlayerLobby sessionName={sessionName} connected={connected} branding={branding} />}
         {hostUpdate && <HostUpdateBanner update={hostUpdate} onDismiss={() => setHostUpdate(null)} />}
@@ -243,7 +264,7 @@ const PlayerSession = () => {
         {gameStarted && hostState?.mode === "bonus_pause" && <LeaderboardView leaderboard={leaderboard} playerId={player.id} title="Bonus Question Next" />}
         {gameStarted && hostState?.mode === "categories" && <RoundIntroFeedback roundName={activeRoundName} categories={activeRoundCategories} selectedByCategory={feedbackByCategory} currentIndex={categoryFeedbackKey} onSelect={submitCategoryFeedback} />}
         {gameStarted && hostState && hostState.mode !== "leaderboard" && hostState.mode !== "categories" && hostState.mode !== "bonus_pause" && !currentQuestion && <div className="text-center"><p className="text-zinc-400">Waiting for the next question.</p></div>}
-        {gameStarted && hostState && hostState.mode !== "leaderboard" && hostState.mode !== "categories" && hostState.mode !== "bonus_pause" && currentQuestion && <div className="w-full max-w-md"><div className="text-center mb-5"><div className="flex items-center justify-center gap-2 flex-wrap mb-3"><Badge className="bg-zinc-800 text-zinc-300">{currentQuestion.roundName || "Round"} Â· {currentQuestion.category}</Badge>{wagerMode && <Badge className="bg-purple-500/15 text-purple-300 border border-purple-500/20">Wager up to {effectiveWagerLimit}</Badge>}{timeRemaining !== null && <Badge className={timeRemaining === 0 ? "bg-red-500/15 text-red-300 border border-red-500/20" : "bg-[#AEB2EF]/15 text-[#AEB2EF] border border-[#AEB2EF]/20"}><Timer size={13} className="mr-1" />{timeRemaining}s</Badge>}</div><h2 className="text-2xl font-black leading-tight">{currentQuestion.questionText}</h2><FeedbackButtons selected={feedbackByQuestion[String(hostState.currentIndex)]} onSelect={submitFeedback} /></div>{hostState.showAnswer ? <Card className="border-emerald-500/30 bg-emerald-500/10"><CardContent className="p-5 text-center"><p className="text-zinc-400 text-sm uppercase tracking-wide mb-1">Answer</p><p className="text-3xl font-black text-emerald-300">{currentQuestion.answer}</p>{hostState.showFunFact && currentQuestion.funFact && <p className="text-zinc-300 mt-3">{currentQuestion.funFact}</p>}</CardContent></Card> : submitted?.questionIndex === hostState.currentIndex ? <Card className="glass-card"><CardContent className="p-6 text-center"><CheckCircle className="mx-auto text-emerald-300 mb-3" size={42} /><h3 className="text-2xl font-black mb-1">Answer Locked</h3><p className="text-zinc-400">You answered: <span className="text-white font-bold">{submitted.answer}</span></p>{submitted.wagerMode && wagerTiming === "after_answer" && !Number(submitted.wagerAmount) ? <div className="mt-4"><WagerInput wagerMode wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={effectiveWagerLimit} /><Button onClick={submitWager} className="w-full gradient-btn">Submit Wager</Button></div> : submitted.wagerMode && <p className="text-purple-300 font-bold mt-2">Wager: {submitted.wagerAmount}</p>}</CardContent></Card> : !acceptingAnswers ? <Card className="border-red-500/30 bg-red-500/10"><CardContent className="p-6 text-center"><Timer className="mx-auto text-red-300 mb-3" size={42} /><h3 className="text-2xl font-black">Time&apos;s Up</h3><p className="text-zinc-400 mt-1">Waiting for the answer reveal.</p></CardContent></Card> : <AnswerForm question={currentQuestion} answer={answer} setAnswer={setAnswer} submitAnswer={submitAnswer} wagerMode={wagerMode && wagerTiming !== "after_answer"} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={effectiveWagerLimit} />}</div>}
+        {gameStarted && hostState && hostState.mode !== "leaderboard" && hostState.mode !== "categories" && hostState.mode !== "bonus_pause" && currentQuestion && <div className="w-full max-w-md"><div className="text-center mb-5"><div className="flex items-center justify-center gap-2 flex-wrap mb-3"><Badge className="bg-zinc-800 text-zinc-300"><span>{currentQuestion.roundName || "Round"}</span><span className="mx-1 text-zinc-500">/</span><span>{currentQuestion.category}</span></Badge>{wagerMode && <Badge className="bg-purple-500/15 text-purple-300 border border-purple-500/20">Wager up to {effectiveWagerLimit}</Badge>}{timeRemaining !== null && <Badge className={timeRemaining === 0 ? "bg-red-500/15 text-red-300 border border-red-500/20" : "bg-[#AEB2EF]/15 text-[#AEB2EF] border border-[#AEB2EF]/20"}><Timer size={13} className="mr-1" />{timeRemaining}s</Badge>}</div><h2 className="text-2xl font-black leading-tight">{currentQuestion.questionText}</h2><FeedbackButtons selected={feedbackByQuestion[String(hostState.currentIndex)]} onSelect={submitFeedback} /></div>{hostState.showAnswer ? <Card className="border-emerald-500/30 bg-emerald-500/10"><CardContent className="p-5 text-center"><p className="text-zinc-400 text-sm uppercase tracking-wide mb-1">Answer</p><p className="text-3xl font-black text-emerald-300">{currentQuestion.answer}</p>{hostState.showFunFact && currentQuestion.funFact && <p className="text-zinc-300 mt-3">{currentQuestion.funFact}</p>}</CardContent></Card> : submitted?.questionIndex === hostState.currentIndex ? <Card className="glass-card"><CardContent className="p-6 text-center"><CheckCircle className="mx-auto text-emerald-300 mb-3" size={42} /><h3 className="text-2xl font-black mb-1">Answer Locked</h3><p className="text-zinc-400">You answered: <span className="text-white font-bold">{submitted.answer}</span></p>{submitted.wagerMode && wagerTiming === "after_answer" && !Number(submitted.wagerAmount) ? <div className="mt-4"><WagerInput wagerMode wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={effectiveWagerLimit} /><Button onClick={submitWager} className="w-full gradient-btn">Submit Wager</Button></div> : submitted.wagerMode && <p className="text-purple-300 font-bold mt-2">Wager: {submitted.wagerAmount}</p>}</CardContent></Card> : !acceptingAnswers ? <Card className="border-red-500/30 bg-red-500/10"><CardContent className="p-6 text-center"><Timer className="mx-auto text-red-300 mb-3" size={42} /><h3 className="text-2xl font-black">Time&apos;s Up</h3><p className="text-zinc-400 mt-1">Waiting for the answer reveal.</p></CardContent></Card> : <AnswerForm question={currentQuestion} answer={answer} setAnswer={setAnswer} submitAnswer={submitAnswer} wagerMode={wagerMode && wagerTiming !== "after_answer"} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={effectiveWagerLimit} />}</div>}
       </main>
     </div>
   );
@@ -251,6 +272,7 @@ const PlayerSession = () => {
 
 const HostBrandMark = ({ branding }) => {
   const [logoFailed, setLogoFailed] = useState(false);
+  useEffect(() => setLogoFailed(false), [branding.logoUrl]);
 
   if (branding.logoUrl && !logoFailed) {
     return (

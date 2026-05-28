@@ -418,6 +418,18 @@ const HostSession = () => {
     liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: state });
   }, [id, session, sessionName, questions.length, currentQuestion, currentIndex, pendingBonusIndex, rounds, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, leaderboard, players, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerEndAt, timeRemaining, acceptingAnswers, branding]);
 
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      try {
+        const state = JSON.parse(localStorage.getItem(`quiz-crafter-present-state-${id}`) || "null");
+        if (state) liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: state });
+      } catch {
+        // Late-joining phones will catch the next regular host-state update.
+      }
+    }, 2500);
+    return () => window.clearInterval(interval);
+  }, [id]);
+
   const goToQuestion = (index, options = {}) => {
     if (index < 0 || index >= questions.length) return;
     const targetQuestion = questions[index];
