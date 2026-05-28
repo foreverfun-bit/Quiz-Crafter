@@ -30,6 +30,7 @@ import {
   Timer,
   Trash2,
   Trophy,
+  Upload,
   Users,
   Wifi,
   XCircle,
@@ -39,7 +40,7 @@ import { toast } from "sonner";
 const STORAGE_BASE = process.env.REACT_APP_SUPABASE_URL ? `${process.env.REACT_APP_SUPABASE_URL}/storage/v1/object/public/` : "";
 const DEFAULT_PUBLIC_SITE = "https://quizcrafter.com";
 const POINTS_BY_TYPE = { true_false: 25, multiple_choice: 50, written: 100 };
-const DEFAULT_BRANDING = { name: "Forever Fun Events", logoUrl: "/forever-fun-logo.png", primaryColor: "#71E0DC", accentColor: "#AEB2EF" };
+const DEFAULT_BRANDING = { name: "Forever Fun Events", logoUrl: "/quiz-crafter-logo.svg", primaryColor: "#71E0DC", accentColor: "#AEB2EF" };
 
 const typeMeta = {
   true_false: { label: "True/False", short: "T/F", icon: CheckCircle, color: "text-[#71E0DC]" },
@@ -73,9 +74,10 @@ const hostBrandingKey = (sessionId) => `quiz-crafter-host-branding-${sessionId}`
 const sanitizeHexColor = (value, fallback) => /^#[0-9a-f]{6}$/i.test(String(value || "")) ? value : fallback;
 const normalizeBranding = (branding = {}) => {
   const source = branding && typeof branding === "object" ? branding : {};
+  const logoUrl = String(source.logoUrl || "").trim();
   return {
     name: String(source.name || "").trim() || DEFAULT_BRANDING.name,
-    logoUrl: String(source.logoUrl || "").trim(),
+    logoUrl: logoUrl === "/forever-fun-logo.png" ? DEFAULT_BRANDING.logoUrl : logoUrl,
     primaryColor: sanitizeHexColor(source.primaryColor, DEFAULT_BRANDING.primaryColor),
     accentColor: sanitizeHexColor(source.accentColor, DEFAULT_BRANDING.accentColor),
   };

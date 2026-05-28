@@ -8,13 +8,14 @@ import { toast } from "sonner";
 
 const SOCIAL_STORAGE_KEY = "quiz-crafter-social-links";
 const HOST_DEFAULT_BRANDING_KEY = "quiz-crafter-host-branding-defaults";
-const DEFAULT_BRANDING = { name: "Forever Fun Events", logoUrl: "/forever-fun-logo.png", primaryColor: "#71E0DC", accentColor: "#AEB2EF" };
+const DEFAULT_BRANDING = { name: "Forever Fun Events", logoUrl: "/quiz-crafter-logo.svg", primaryColor: "#71E0DC", accentColor: "#AEB2EF" };
 const readJson = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); } catch { return fallback; } };
 const writeJson = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* Keep tools usable if browser storage is full. */ } };
 const sanitizeHexColor = (value, fallback) => /^#[0-9a-f]{6}$/i.test(String(value || "")) ? value : fallback;
 const normalizeBranding = (branding = {}) => {
   const source = branding && typeof branding === "object" ? branding : {};
-  return { name: String(source.name || "").trim() || DEFAULT_BRANDING.name, logoUrl: String(source.logoUrl || "").trim(), primaryColor: sanitizeHexColor(source.primaryColor, DEFAULT_BRANDING.primaryColor), accentColor: sanitizeHexColor(source.accentColor, DEFAULT_BRANDING.accentColor) };
+  const logoUrl = String(source.logoUrl || "").trim();
+  return { name: String(source.name || "").trim() || DEFAULT_BRANDING.name, logoUrl: logoUrl === "/forever-fun-logo.png" ? DEFAULT_BRANDING.logoUrl : logoUrl, primaryColor: sanitizeHexColor(source.primaryColor, DEFAULT_BRANDING.primaryColor), accentColor: sanitizeHexColor(source.accentColor, DEFAULT_BRANDING.accentColor) };
 };
 const readDefaultBranding = () => normalizeBranding({ ...DEFAULT_BRANDING, ...readJson(HOST_DEFAULT_BRANDING_KEY, {}) });
 const writeDefaultBranding = (branding) => writeJson(HOST_DEFAULT_BRANDING_KEY, normalizeBranding(branding));
