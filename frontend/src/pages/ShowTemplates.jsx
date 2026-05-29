@@ -123,9 +123,15 @@ const ShowTemplates = () => {
       const next = normalizeTemplate(current);
       const names = [...next.roundNames];
       const descriptions = [...next.roundDescriptions];
+      const points = [...next.roundPoints];
+      const timers = [...next.roundTimers];
+      const wagers = [...next.roundWagerLimits];
       if (key === "name") names[index] = value;
       if (key === "description") descriptions[index] = value;
-      return normalizeTemplate({ ...next, roundNames: names, roundDescriptions: descriptions, updatedAt: new Date().toISOString() });
+      if (key === "points") points[index] = value;
+      if (key === "timer") timers[index] = value;
+      if (key === "wager") wagers[index] = value;
+      return normalizeTemplate({ ...next, roundNames: names, roundDescriptions: descriptions, roundPoints: points, roundTimers: timers, roundWagerLimits: wagers, updatedAt: new Date().toISOString() });
     });
   };
 
@@ -211,14 +217,14 @@ const TemplateEditor = ({ form, selectedTemplate, selectedVenue, updateForm, upd
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <Field label="Rounds" type="number" value={form.roundCount} onChange={(value) => updateForm("roundCount", value)} />
           <Field label="Per round" type="number" value={form.questionsPerRound} onChange={(value) => updateForm("questionsPerRound", value)} />
-          <Field label="Points" type="number" value={form.defaultPoints} onChange={(value) => updateForm("defaultPoints", value)} />
-          <Field label="Timer" type="number" value={form.defaultTimer} onChange={(value) => updateForm("defaultTimer", value)} />
-          <Field label="Wager cap" type="number" value={form.defaultWagerLimit} onChange={(value) => updateForm("defaultWagerLimit", value)} />
+          <Field label="Base points" type="number" value={form.defaultPoints} onChange={(value) => updateForm("defaultPoints", value)} />
+          <Field label="Base timer" type="number" value={form.defaultTimer} onChange={(value) => updateForm("defaultTimer", value)} />
+          <Field label="Base wager cap" type="number" value={form.defaultWagerLimit} onChange={(value) => updateForm("defaultWagerLimit", value)} />
         </div>
       </div>
       <div className="space-y-3">
         <h3 className="font-bold text-white">Round Plan</h3>
-        {form.roundNames.map((roundName, index) => <div key={`round-${index}`} className="rounded-lg border border-white/10 bg-zinc-950/50 p-3 grid grid-cols-1 md:grid-cols-[0.8fr_1.2fr] gap-3"><Field label={`Round ${index + 1} name`} value={roundName} onChange={(value) => updateRound(index, "name", value)} /><TextArea label="Description / category direction" value={form.roundDescriptions[index] || ""} onChange={(value) => updateRound(index, "description", value)} placeholder="What this round should feel like, include, or avoid." /></div>)}
+        {form.roundNames.map((roundName, index) => <div key={`round-${index}`} className="rounded-lg border border-white/10 bg-zinc-950/50 p-3 space-y-3"><div className="grid grid-cols-1 md:grid-cols-[1fr_90px_90px_110px] gap-3"><Field label={`Round ${index + 1} name`} value={roundName} onChange={(value) => updateRound(index, "name", value)} /><Field label="Points" type="number" value={form.roundPoints[index]} onChange={(value) => updateRound(index, "points", value)} /><Field label="Timer" type="number" value={form.roundTimers[index]} onChange={(value) => updateRound(index, "timer", value)} /><Field label="Wager cap" type="number" value={form.roundWagerLimits[index]} onChange={(value) => updateRound(index, "wager", value)} /></div><TextArea label="Description / category direction" value={form.roundDescriptions[index] || ""} onChange={(value) => updateRound(index, "description", value)} placeholder="What this round should feel like, include, or avoid." /></div>)}
       </div>
       <TextArea label="Host notes" value={form.hostNotes} onChange={(value) => updateForm("hostNotes", value)} placeholder="Scoring notes, wager rules, pacing, category mix, or host reminders..." />
       <div className="flex justify-end gap-2 flex-wrap">

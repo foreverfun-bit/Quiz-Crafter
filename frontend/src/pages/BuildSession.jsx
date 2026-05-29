@@ -34,10 +34,19 @@ const fingerprint = (value) => normalizeText(value).toLowerCase().replace(/[^a-z
 const categoryKey = (value) => fingerprint(value);
 const cleanList = (values) => values.map((value) => normalizeText(value)).filter(Boolean);
 const createDefaultRounds = () => defaultRounds.map((round) => ({ ...round, questionIds: [...round.questionIds] }));
+const normalizeRoundQuestionSettings = (value) => {
+  const source = value && typeof value === "object" ? value : {};
+  return {
+    points: Math.max(0, Number(source.points ?? source.defaultPoints ?? defaultQuestionSettings.points) || 0),
+    timer_seconds: Math.max(0, Number(source.timer_seconds ?? source.timerSeconds ?? source.defaultTimer ?? defaultQuestionSettings.timer_seconds) || 0),
+    wager_limit: Math.max(0, Number(source.wager_limit ?? source.wagerLimit ?? source.defaultWagerLimit ?? 0) || 0),
+    wager_timing: normalizeWagerTiming(source.wager_timing || source.wagerTiming),
+  };
+};
 const normalizeRounds = (value) => {
   const rounds = (Array.isArray(value) ? value : []).map((round, index) => {
     const questionIds = Array.isArray(round?.questionIds) ? round.questionIds.filter((id) => id !== null && id !== undefined) : [];
-    return { id: normalizeText(round?.id) || `round-${index + 1}`, name: normalizeText(round?.name) || `Round ${index + 1}`, description: normalizeText(round?.description), questionIds };
+    return { id: normalizeText(round?.id) || `round-${index + 1}`, name: normalizeText(round?.name) || `Round ${index + 1}`, description: normalizeText(round?.description), defaultQuestionSettings: round?.defaultQuestionSettings ? normalizeRoundQuestionSettings(round.defaultQuestionSettings) : null, questionIds };
   }).filter((round) => round.id);
   return rounds.length ? rounds : createDefaultRounds();
 };
@@ -211,7 +220,7 @@ const BuildSession = () => {
   const moveQuestionWithinRound = (roundId, questionId, direction) => setRounds((prev) => prev.map((round) => { if (round.id !== roundId) return round; const ids = [...(round.questionIds || [])]; const index = ids.findIndex((id) => String(id) === String(questionId)); const nextIndex = index + direction; if (index < 0 || nextIndex < 0 || nextIndex >= ids.length) return round; [ids[index], ids[nextIndex]] = [ids[nextIndex], ids[index]]; return { ...round, questionIds: ids }; }));
   const moveQuestionToRound = (questionId, targetRoundId) => { if (!targetRoundId || targetRoundId === activeRound.id) return; setRounds((prev) => prev.map((round) => { const ids = (round.questionIds || []).filter((id) => String(id) !== String(questionId)); if (round.id === targetRoundId) ids.push(questionId); return { ...round, questionIds: ids }; })); };
   const updateQuestion = (questionId, patch) => setQuestions((prev) => prev.map((question) => String(question.id) === String(questionId) ? normalizeQuestion({ ...question, ...patch }, question.question_type) : question));
-  const applyDraftDefaults = (question) => normalizeQuestion({ ...question, points: question.points === "" || question.points === null || question.points === undefined ? (draftQuestionDefaults?.points ?? question.points) : question.points, timer_seconds: question.timer_seconds === null || question.timer_seconds === undefined ? (draftQuestionDefaults?.timer_seconds ?? question.timer_seconds) : question.timer_seconds, wager_limit: question.wager_limit === null || question.wager_limit === undefined ? (draftQuestionDefaults?.wager_limit ?? question.wager_limit) : question.wager_limit }, question.question_type);
+  const applyDraftDefaults = (question, round = activeRound) => { const roundDefaults = round?.defaultQuestionSettings || draftQuestionDefaults; return normalizeQuestion({ ...question, points: question.points === "" || question.points === null || question.points === undefined ? (roundDefaults?.points ?? question.points) : question.points, timer_seconds: question.timer_seconds === null || question.timer_seconds === undefined ? (roundDefaults?.timer_seconds ?? question.timer_seconds) : question.timer_seconds, wager_limit: question.wager_limit === null || question.wager_limit === undefined ? (roundDefaults?.wager_limit ?? question.wager_limit) : question.wager_limit, wager_timing: question.wager_timing || roundDefaults?.wager_timing }, question.question_type); };
   const applyQuestionSettings = (questionId, patch, scope) => {
     const selectedRoundIds = new Set(activeRound.questionIds || []);
     const selectedAllIds = new Set(rounds.flatMap((round) => round.questionIds || []));
