@@ -1,6 +1,7 @@
 export const VENUES_STORAGE_KEY = "quiz-crafter-venues-v1";
 export const ACTIVE_VENUE_STORAGE_KEY = "quiz-crafter-active-venue-id";
 export const VENUE_BUILD_DRAFT_KEY = "quiz-crafter-venue-build-draft";
+export const SHOW_TEMPLATES_STORAGE_KEY = "quiz-crafter-show-templates-v1";
 
 export const defaultVenue = {
   name: "",
@@ -115,5 +116,136 @@ export const readVenueBuildDraft = () => {
     return parsed && typeof parsed === "object" ? parsed : null;
   } catch {
     return null;
+  }
+};
+
+export const defaultShowTemplates = [
+  {
+    id: "template-bar-classic",
+    name: "Classic Bar Night",
+    description: "Five balanced rounds for a weekly bar crowd, ending with a final wager-style round.",
+    roundCount: 5,
+    questionsPerRound: 5,
+    defaultPoints: 25,
+    defaultTimer: 30,
+    defaultWagerLimit: 0,
+    roundNames: ["Warm-Up", "General Mix", "Theme Round", "Audio/Visual", "Final Wager"],
+    roundDescriptions: [
+      "Accessible opener with a few satisfying pulls.",
+      "Mixed categories with fair but fresher clues.",
+      "A cohesive theme without repeated bar-trivia staples.",
+      "Media-friendly round. Pictures can attach to any question.",
+      "Higher-stakes finish with room for a wager or bonus question.",
+    ],
+    hostNotes: "Good default for weekly public trivia. Keep the first round welcoming and the final round more strategic.",
+  },
+  {
+    id: "template-corporate",
+    name: "Corporate Event",
+    description: "Smoother pacing, lower difficulty, and no harsh penalties for casual teams.",
+    roundCount: 4,
+    questionsPerRound: 5,
+    defaultPoints: 20,
+    defaultTimer: 35,
+    defaultWagerLimit: 0,
+    roundNames: ["Icebreaker", "Pop Culture", "Teamwork Round", "Final Challenge"],
+    roundDescriptions: [
+      "Friendly questions that get teams talking.",
+      "Broad, current-ish culture without niche fandom traps.",
+      "Questions designed for discussion and group recall.",
+      "A slightly tougher close, but still fair for non-regulars.",
+    ],
+    hostNotes: "Avoid overly obscure clues and keep scoring forgiving.",
+  },
+  {
+    id: "template-tournament",
+    name: "Competitive League Night",
+    description: "Harder questions, tighter timing, and clear scoring for regular teams.",
+    roundCount: 6,
+    questionsPerRound: 5,
+    defaultPoints: 50,
+    defaultTimer: 30,
+    defaultWagerLimit: 0,
+    roundNames: ["Opening Mix", "Knowledge Ladder", "Theme Deep Dive", "Connections", "High Difficulty", "Final Bonus"],
+    roundDescriptions: [
+      "Start fair, but signal that this is a serious room.",
+      "Questions climb from medium to hard.",
+      "One focused category with layered clues.",
+      "Answers connect through a hidden thread.",
+      "Obscure-but-fair questions for top teams.",
+      "Final round or bonus sequence.",
+    ],
+    hostNotes: "Use more written answers and avoid soft multiple-choice saves.",
+  },
+];
+
+export const normalizeTemplate = (template = {}) => {
+  const source = template && typeof template === "object" ? template : {};
+  const roundCount = Math.max(1, Math.min(12, Number(source.roundCount || 5)));
+  return {
+    id: source.id || `template-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    name: String(source.name || "").trim() || "New Show Template",
+    description: String(source.description || "").trim(),
+    roundCount,
+    questionsPerRound: Math.max(1, Math.min(20, Number(source.questionsPerRound || 5))),
+    defaultPoints: Math.max(0, Number(source.defaultPoints || 25)),
+    defaultTimer: Math.max(0, Number(source.defaultTimer || 30)),
+    defaultWagerLimit: Math.max(0, Number(source.defaultWagerLimit || 0)),
+    roundNames: Array.from({ length: roundCount }, (_, index) => String(source.roundNames?.[index] || (index === roundCount - 1 ? "Final Round" : `Round ${index + 1}`)).trim()),
+    roundDescriptions: Array.from({ length: roundCount }, (_, index) => String(source.roundDescriptions?.[index] || "").trim()),
+    hostNotes: String(source.hostNotes || "").trim(),
+    updatedAt: source.updatedAt || new Date().toISOString(),
+  };
+};
+
+export const readLocalTemplates = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SHOW_TEMPLATES_STORAGE_KEY) || "null");
+    const source = Array.isArray(parsed) && parsed.length ? parsed : defaultShowTemplates;
+    return source.map(normalizeTemplate);
+  } catch {
+    return defaultShowTemplates.map(normalizeTemplate);
+  }
+};
+
+export const writeLocalTemplates = (templates) => {
+  try {
+    localStorage.setItem(SHOW_TEMPLATES_STORAGE_KEY, JSON.stringify(Array.isArray(templates) ? templates : []));
+  } catch {
+    // Template tools should still work in memory if storage is unavailable.
+  }
+};
+
+export const makeTemplateBuildDraft = (template, venue = null) => {
+  const cleanTemplate = normalizeTemplate(template);
+  const date = new Date().toLocaleDateString(undefined, { month: "numeric", day: "numeric", year: "numeric" });
+  const venueName = venue?.nightName || venue?.name || "";
+  return {
+    sessionName: [date, venueName || cleanTemplate.name].filter(Boolean).join(" "),
+    rounds: cleanTemplate.roundNames.map((name, index) => ({
+      id: `round-${index + 1}`,
+      name,
+      description: cleanTemplate.roundDescriptions[index] || "",
+      questionIds: [],
+    })),
+    activeRoundId: "round-1",
+    theme: [venue?.name, venue?.nightName, cleanTemplate.name, cleanTemplate.description, cleanTemplate.hostNotes, venue?.houseRules, venue?.hostNotes].filter(Boolean).join("\n"),
+    venueId: venue?.id || "",
+    venueName: venue?.name || "",
+    templateId: cleanTemplate.id,
+    templateName: cleanTemplate.name,
+    defaultQuestionSettings: {
+      points: cleanTemplate.defaultPoints,
+      timer_seconds: cleanTemplate.defaultTimer,
+      wager_limit: cleanTemplate.defaultWagerLimit,
+    },
+  };
+};
+
+export const writeTemplateBuildDraft = (template, venue = null) => {
+  try {
+    localStorage.setItem(VENUE_BUILD_DRAFT_KEY, JSON.stringify(makeTemplateBuildDraft(template, venue)));
+  } catch {
+    // Builder can still open without the draft.
   }
 };

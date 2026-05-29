@@ -1,0 +1,211 @@
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { supabase } from "../lib/supabase";
+import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { Button } from "../components/ui/button";
+import { Badge } from "../components/ui/badge";
+import { Clock, Copy, Layers, Plus, Save, Sparkles, Trash2, Trophy } from "lucide-react";
+import { toast } from "sonner";
+import { SHOW_TEMPLATES_STORAGE_KEY, defaultShowTemplates, normalizeTemplate, readLocalTemplates, readLocalVenues, writeLocalTemplates, writeTemplateBuildDraft } from "../lib/venues";
+
+const metadataTemplatesKey = "quiz_crafter_show_templates_v1";
+
+const ShowTemplates = () => {
+  const navigate = useNavigate();
+  const [templates, setTemplates] = useState(readLocalTemplates);
+  const [venues, setVenues] = useState(readLocalVenues);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [selectedVenueId, setSelectedVenueId] = useState("");
+  const [form, setForm] = useState(() => normalizeTemplate(defaultShowTemplates[0]));
+  const [saving, setSaving] = useState(false);
+  const [syncStatus, setSyncStatus] = useState("Loading");
+
+  const selectedTemplate = useMemo(() => templates.find((template) => template.id === selectedTemplateId) || null, [templates, selectedTemplateId]);
+  const selectedVenue = useMemo(() => venues.find((venue) => venue.id === selectedVenueId) || null, [venues, selectedVenueId]);
+
+  useEffect(() => {
+    const localTemplates = readLocalTemplates();
+    const localVenues = readLocalVenues();
+    setTemplates(localTemplates);
+    setVenues(localVenues);
+    setSelectedVenueId(localVenues[0]?.id || "");
+    setSelectedTemplateId(localTemplates[0]?.id || "");
+    setForm(normalizeTemplate(localTemplates[0] || defaultShowTemplates[0]));
+
+    const loadRemote = async () => {
+      try {
+        const { data, error } = await supabase.auth.getUser();
+        if (error) throw error;
+        const remoteTemplates = data?.user?.user_metadata?.[metadataTemplatesKey];
+        const normalized = Array.isArray(remoteTemplates) && remoteTemplates.length ? remoteTemplates.map(normalizeTemplate) : localTemplates;
+        setTemplates(normalized);
+        writeLocalTemplates(normalized);
+        setSelectedTemplateId(normalized[0]?.id || "");
+        setForm(normalizeTemplate(normalized[0] || defaultShowTemplates[0]));
+        setSyncStatus("Synced");
+      } catch (error) {
+        console.warn("Template metadata sync unavailable:", error);
+        setSyncStatus("Local only");
+      }
+    };
+    loadRemote();
+  }, []);
+
+  const persistTemplates = async (nextTemplates) => {
+    const normalized = nextTemplates.map(normalizeTemplate);
+    setTemplates(normalized);
+    writeLocalTemplates(normalized);
+    try {
+      const { error } = await supabase.auth.updateUser({ data: { [metadataTemplatesKey]: normalized } });
+      if (error) throw error;
+      localStorage.setItem(SHOW_TEMPLATES_STORAGE_KEY, JSON.stringify(normalized));
+      setSyncStatus("Synced");
+    } catch (error) {
+      console.warn("Template metadata save unavailable:", error);
+      setSyncStatus("Local only");
+    }
+  };
+
+  const editTemplate = (template) => {
+    setSelectedTemplateId(template.id);
+    setForm(normalizeTemplate(template));
+  };
+
+  const createTemplate = () => {
+    const next = normalizeTemplate({ name: "New Show Template", description: "Custom reusable trivia format." });
+    setSelectedTemplateId("");
+    setForm(next);
+  };
+
+  const cloneTemplate = (template) => {
+    const copy = normalizeTemplate({ ...template, id: undefined, name: `${template.name} Copy`, updatedAt: new Date().toISOString() });
+    setSelectedTemplateId("");
+    setForm(copy);
+    toast.success("Template copied");
+  };
+
+  const saveTemplate = async () => {
+    const clean = normalizeTemplate({ ...form, updatedAt: new Date().toISOString() });
+    if (!clean.name) return toast.error("Template name is required");
+    setSaving(true);
+    const nextTemplates = templates.some((template) => template.id === clean.id)
+      ? templates.map((template) => template.id === clean.id ? clean : template)
+      : [clean, ...templates];
+    await persistTemplates(nextTemplates);
+    setSelectedTemplateId(clean.id);
+    setForm(clean);
+    setSaving(false);
+    toast.success("Template saved");
+  };
+
+  const deleteTemplate = async (templateId) => {
+    const nextTemplates = templates.filter((template) => template.id !== templateId);
+    await persistTemplates(nextTemplates);
+    const nextSelected = nextTemplates[0] || normalizeTemplate(defaultShowTemplates[0]);
+    setSelectedTemplateId(nextSelected.id || "");
+    setForm(nextSelected);
+    toast.success("Template removed");
+  };
+
+  const startBuild = (template = form) => {
+    writeTemplateBuildDraft(template, selectedVenue);
+    navigate("/build");
+  };
+
+  const updateForm = (key, value) => setForm((current) => normalizeTemplate({ ...current, [key]: value, updatedAt: new Date().toISOString() }));
+  const updateRound = (index, key, value) => {
+    setForm((current) => {
+      const next = normalizeTemplate(current);
+      const names = [...next.roundNames];
+      const descriptions = [...next.roundDescriptions];
+      if (key === "name") names[index] = value;
+      if (key === "description") descriptions[index] = value;
+      return normalizeTemplate({ ...next, roundNames: names, roundDescriptions: descriptions, updatedAt: new Date().toISOString() });
+    });
+  };
+
+  return (
+    <div className="p-6 lg:p-8 max-w-7xl mx-auto animate-fade-in" data-testid="show-templates-page">
+      <div className="mb-6 flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+        <div>
+          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-[#71E0DC]">Reusable Formats</p>
+          <h1 className="text-3xl md:text-4xl font-bold text-white mt-2">Show Templates</h1>
+          <p className="text-zinc-500 mt-2">Save your usual trivia formats once, then start a new build with the rounds, pacing, and scoring already set.</p>
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          <Badge className={syncStatus === "Synced" ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/20" : "bg-zinc-800 text-zinc-300"}>{syncStatus}</Badge>
+          <Button onClick={createTemplate} className="gradient-btn"><Plus size={16} className="mr-2" />New Template</Button>
+        </div>
+      </div>
+
+      <Card className="glass-card mb-6"><CardContent className="p-4 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-3 items-end"><label className="text-sm text-zinc-400">Apply venue defaults when building<select value={selectedVenueId} onChange={(event) => setSelectedVenueId(event.target.value)} className="mt-1 h-11 w-full rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60"><option value="">No venue</option>{venues.map((venue) => <option key={venue.id} value={venue.id}>{venue.name}</option>)}</select></label><Button onClick={() => startBuild(form)} className="gradient-btn h-11"><Sparkles size={16} className="mr-2" />Start Build From Template</Button></CardContent></Card>
+
+      <div className="grid grid-cols-1 xl:grid-cols-[0.95fr_1.05fr] gap-6">
+        <section className="space-y-4">
+          {templates.map((template) => (
+            <Card key={template.id} className={`glass-card transition ${selectedTemplateId === template.id ? "border-[#71E0DC]/40" : ""}`}>
+              <CardContent className="p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h3 className="text-lg font-black text-white">{template.name}</h3>
+                    <p className="text-sm text-zinc-400 mt-1">{template.description || "Reusable trivia show format"}</p>
+                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm text-zinc-500">
+                      <span className="flex items-center gap-2"><Layers size={14} />{template.roundCount} rounds</span>
+                      <span className="flex items-center gap-2"><Trophy size={14} />{template.defaultPoints} pts</span>
+                      <span className="flex items-center gap-2"><Clock size={14} />{template.defaultTimer}s</span>
+                    </div>
+                  </div>
+                  <Badge className="bg-zinc-800 text-zinc-300">{template.questionsPerRound} each</Badge>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Button size="sm" variant="outline" onClick={() => editTemplate(template)} className="border-white/10 text-zinc-300 hover:text-white">Edit</Button>
+                  <Button size="sm" variant="outline" onClick={() => cloneTemplate(template)} className="border-white/10 text-zinc-300 hover:text-white"><Copy size={14} className="mr-1" />Copy</Button>
+                  <Button size="sm" onClick={() => startBuild(template)} className="bg-[#71E0DC] text-zinc-950 hover:bg-[#AEEBFF]">Start Build</Button>
+                  <Button size="sm" variant="ghost" onClick={() => deleteTemplate(template.id)} className="text-red-300 hover:text-red-200"><Trash2 size={15} /></Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </section>
+
+        <TemplateEditor form={form} selectedTemplate={selectedTemplate} updateForm={updateForm} updateRound={updateRound} saveTemplate={saveTemplate} saving={saving} />
+      </div>
+    </div>
+  );
+};
+
+const TemplateEditor = ({ form, selectedTemplate, updateForm, updateRound, saveTemplate, saving }) => (
+  <Card className="glass-card">
+    <CardHeader><CardTitle className="text-white flex items-center gap-2"><Layers className="text-[#71E0DC]" />{selectedTemplate ? "Edit Template" : "New Template"}</CardTitle></CardHeader>
+    <CardContent className="space-y-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <Field label="Template name" value={form.name} onChange={(value) => updateForm("name", value)} />
+        <Field label="Short description" value={form.description} onChange={(value) => updateForm("description", value)} />
+      </div>
+      <div className="rounded-xl border border-white/10 bg-zinc-950/50 p-4 space-y-3">
+        <h3 className="font-bold text-white">Format Defaults</h3>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <Field label="Rounds" type="number" value={form.roundCount} onChange={(value) => updateForm("roundCount", value)} />
+          <Field label="Per round" type="number" value={form.questionsPerRound} onChange={(value) => updateForm("questionsPerRound", value)} />
+          <Field label="Points" type="number" value={form.defaultPoints} onChange={(value) => updateForm("defaultPoints", value)} />
+          <Field label="Timer" type="number" value={form.defaultTimer} onChange={(value) => updateForm("defaultTimer", value)} />
+          <Field label="Wager cap" type="number" value={form.defaultWagerLimit} onChange={(value) => updateForm("defaultWagerLimit", value)} />
+        </div>
+      </div>
+      <div className="space-y-3">
+        <h3 className="font-bold text-white">Round Plan</h3>
+        {form.roundNames.map((roundName, index) => <div key={`round-${index}`} className="rounded-lg border border-white/10 bg-zinc-950/50 p-3 grid grid-cols-1 md:grid-cols-[0.8fr_1.2fr] gap-3"><Field label={`Round ${index + 1} name`} value={roundName} onChange={(value) => updateRound(index, "name", value)} /><TextArea label="Description / category direction" value={form.roundDescriptions[index] || ""} onChange={(value) => updateRound(index, "description", value)} placeholder="What this round should feel like, include, or avoid." /></div>)}
+      </div>
+      <TextArea label="Host notes" value={form.hostNotes} onChange={(value) => updateForm("hostNotes", value)} placeholder="Scoring notes, wager rules, pacing, category mix, or host reminders..." />
+      <div className="flex justify-end">
+        <Button onClick={saveTemplate} disabled={saving} className="gradient-btn"><Save size={16} className="mr-2" />{saving ? "Saving..." : "Save Template"}</Button>
+      </div>
+    </CardContent>
+  </Card>
+);
+
+const Field = ({ label, value, onChange, type = "text" }) => <label className="text-xs text-zinc-400">{label}<input type={type} value={value || ""} onChange={(event) => onChange(event.target.value)} className="mt-1 h-10 w-full rounded-md bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label>;
+
+const TextArea = ({ label, value, onChange, placeholder }) => <label className="text-xs text-zinc-400">{label}<textarea value={value || ""} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="mt-1 min-h-20 w-full resize-none rounded-md bg-zinc-950 border border-white/10 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /></label>;
+
+export default ShowTemplates;
