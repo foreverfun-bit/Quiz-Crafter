@@ -63,6 +63,17 @@ const toSessionQuestion = (question, round, roundIndex, sourceOrder) => ({ categ
 const getSessionQuestionOrder = (question, fallback = 1) => Number(question?.import_order || question?.source_order || question?.question_order || question?.order || fallback) || fallback;
 const getSessionRoundOrder = (question, fallback = 1) => Number(question?.round_order || question?.round_number || question?.round || fallback) || fallback;
 const getSessionRoundName = (question, fallback = 1) => question?.round_name || question?.round_title || `Round ${getSessionRoundOrder(question, fallback)}`;
+const getSessionRoundMetadata = (session) => {
+  const raw = session?.round_descriptions || session?.rounds_metadata || session?.rounds || [];
+  if (Array.isArray(raw)) return raw;
+  if (raw && typeof raw === "object") return Object.values(raw);
+  return [];
+};
+const getSavedRoundDescription = (session, roundOrder, roundName) => {
+  const metadata = getSessionRoundMetadata(session);
+  const match = metadata.find((round) => Number(round.order || round.round_order) === Number(roundOrder) || String(round.name || round.round_name || "").toLowerCase() === String(roundName || "").toLowerCase());
+  return normalizeText(match?.description || match?.round_description);
+};
 const buildStateFromSavedSession = (session) => {
   const entries = [
     ["true_false", session?.true_false_questions],
@@ -84,7 +95,9 @@ const buildStateFromSavedSession = (session) => {
   const questions = entries.map((entry) => {
     const id = `session-${session.id}-${entry.type}-${entry.index}`;
     const roundKey = `${entry.roundOrder}-${entry.roundName}`;
-    if (!roundMap.has(roundKey)) roundMap.set(roundKey, { id: `round-${entry.roundOrder}-${fingerprint(entry.roundName) || entry.roundOrder}`, name: entry.roundName, description: "", questionIds: [] });
+    const roundDescription = normalizeText(entry.question?.round_description) || getSavedRoundDescription(session, entry.roundOrder, entry.roundName);
+    if (!roundMap.has(roundKey)) roundMap.set(roundKey, { id: `round-${entry.roundOrder}-${fingerprint(entry.roundName) || entry.roundOrder}`, name: entry.roundName, description: roundDescription, questionIds: [] });
+    else if (!roundMap.get(roundKey).description && roundDescription) roundMap.get(roundKey).description = roundDescription;
     roundMap.get(roundKey).questionIds.push(id);
     return normalizeQuestion({ ...entry.question, id, question_type: entry.type === "picture" ? "written" : entry.type, image_url: entry.question?.image_url || entry.question?.media_url || "", image_timing: entry.question?.image_timing || entry.question?.image_display_timing }, entry.type);
   });
