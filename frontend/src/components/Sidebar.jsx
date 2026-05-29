@@ -11,6 +11,7 @@ import {
   History,
   Trophy,
   MessageSquare,
+  MapPin,
   Trash2,
   FolderOpen,
   Layers,
@@ -48,8 +49,9 @@ const Sidebar = ({ isOpen, onClose }) => {
     {
       label: "Sessions",
       icon: Layers,
-      paths: ["/build", "/past-sessions", "/session", "/game-history"],
+      paths: ["/venues", "/build", "/past-sessions", "/session", "/game-history"],
       links: [
+        { path: "/venues", icon: MapPin, label: "Venues" },
         { path: "/build", icon: PlusCircle, label: "Build" },
         { path: "/past-sessions", icon: History, label: "Past Sessions" },
         { path: "/game-history", icon: Trophy, label: "Game History" },

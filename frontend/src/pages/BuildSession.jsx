@@ -12,6 +12,7 @@ import { ScrollArea } from "../components/ui/scroll-area";
 import { Badge } from "../components/ui/badge";
 import { ArrowDown, ArrowUp, Ban, Check, CheckCircle, ChevronDown, Clock, Coins, Image, Layers, Link, List, Loader2, MessageSquare, Pencil, Plus, RefreshCw, Save, Search, Settings, Sparkles, Tag, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
+import { readVenueBuildDraft } from "../lib/venues";
 
 const questionTypes = [
   { value: "all", label: "All", shortLabel: "All", icon: List, color: "text-zinc-300" },
@@ -129,10 +130,11 @@ const BuildSession = () => {
   const { sessionId } = useParams();
   const { user } = useAuth();
   const savedState = useMemo(() => (sessionId ? null : loadBuildSavedState()), [sessionId]);
+  const venueDraft = useMemo(() => (sessionId || savedState ? null : readVenueBuildDraft()), [sessionId, savedState]);
   const initialPrefs = loadLocalCategoryPrefs();
-  const [sessionName, setSessionName] = useState(savedState?.sessionName || "");
-  const [rounds, setRounds] = useState(savedState?.rounds || createDefaultRounds());
-  const [activeRoundId, setActiveRoundId] = useState(savedState?.activeRoundId || (savedState?.rounds?.[0]?.id || "round-1"));
+  const [sessionName, setSessionName] = useState(savedState?.sessionName || venueDraft?.sessionName || "");
+  const [rounds, setRounds] = useState(savedState?.rounds || venueDraft?.rounds || createDefaultRounds());
+  const [activeRoundId, setActiveRoundId] = useState(savedState?.activeRoundId || venueDraft?.activeRoundId || (savedState?.rounds?.[0]?.id || venueDraft?.rounds?.[0]?.id || "round-1"));
   const [roundMenuOpen, setRoundMenuOpen] = useState(false);
   const [questions, setQuestions] = useState(savedState?.questions || []);
   const [usedFingerprints, setUsedFingerprints] = useState(new Set());
@@ -143,7 +145,7 @@ const BuildSession = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [theme, setTheme] = useState(savedState?.theme || "");
+  const [theme, setTheme] = useState(savedState?.theme || venueDraft?.theme || "");
   const [difficulty, setDifficulty] = useState(savedState?.difficulty || "host_hard");
   const [typeFilter, setTypeFilter] = useState(savedState?.typeFilter || "all");
   const [generateType, setGenerateType] = useState(savedState?.generateType || "multiple_choice");
