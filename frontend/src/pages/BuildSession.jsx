@@ -62,6 +62,12 @@ const easierDifficulty = { host_hard: "medium", hard: "medium", medium: "easy", 
 const harderDifficulty = { easy: "medium", medium: "hard", hard: "host_hard", host_hard: "host_hard" };
 const getQuestionSettings = (question) => ({ points: question?.points ?? question?.question_points ?? defaultQuestionSettings.points, timer_seconds: question?.timer_seconds ?? question?.time_limit ?? defaultQuestionSettings.timer_seconds, wager_limit: question?.wager_limit ?? question?.free_wager_limit ?? 0, wager_timing: normalizeWagerTiming(question?.wager_timing || question?.wagerTiming) });
 const normalizeQuestion = (q, fallbackType) => ({ ...q, id: q.id || q.local_id || `local-${Date.now()}-${Math.random().toString(16).slice(2)}`, question_text: normalizeText(q.question_text || q.question), correct_answer: normalizeText(q.correct_answer || q.answer), question_type: normalizeType(q, fallbackType), category: normalizeText(q.category) || "General", incorrect_answers: q.incorrect_answers ?? null, options: parseAnswerOptions(q.incorrect_answers ?? q.options), fun_fact: normalizeText(q.fun_fact), image_url: q.image_url || "", image_prompt: q.image_prompt || "", image_timing: normalizeImageTiming(q.image_timing || q.image_display_timing), ...getQuestionSettings(q), isGenerated: Boolean(q.isGenerated) });
+const safeQuestions = (value) => (Array.isArray(value) ? value : []).map((question) => question && typeof question === "object" ? normalizeQuestion(question, question.question_type) : null).filter(Boolean);
+const getInitialActiveRoundId = (rounds, preferred) => {
+  const preferredId = normalizeText(preferred);
+  if (preferredId && rounds.some((round) => round.id === preferredId)) return preferredId;
+  return rounds[0]?.id || "round-1";
+};
 const collectSessionQuestions = (session) => [session?.true_false_questions, session?.multiple_choice_questions, session?.written_questions, session?.picture_questions].flatMap((value) => (Array.isArray(value) ? value : []));
 const toSessionQuestion = (question, round, roundIndex, sourceOrder) => ({ category: question.category || "General", round_name: round.name, round_order: roundIndex + 1, round_description: round.description || "", source_order: sourceOrder + 1, import_order: sourceOrder + 1, question_text: question.question_text, correct_answer: question.correct_answer, question_type: normalizeType(question), incorrect_answers: Array.isArray(question.options) && question.options.length ? question.options.join("; ") : question.incorrect_answers || null, fun_fact: question.fun_fact || null, image_url: question.image_url || null, image_timing: normalizeImageTiming(question.image_timing), ...getQuestionSettings(question) });
 const getSessionQuestionOrder = (question, fallback = 1) => Number(question?.import_order || question?.source_order || question?.question_order || question?.order || fallback) || fallback;
@@ -119,9 +125,9 @@ const loadBuildSavedState = () => {
     const saved = localStorage.getItem(BUILD_STORAGE_KEY) || localStorage.getItem("trivia-flex-round-builder-state-v4") || localStorage.getItem("trivia-flex-round-builder-state-v3") || localStorage.getItem("trivia-flex-round-builder-state-v2");
     if (!saved) return null;
     const parsed = JSON.parse(saved);
-    const savedQuestions = Array.isArray(parsed.questions) ? parsed.questions.map((q) => normalizeQuestion(q, q.question_type)) : [];
+    const savedQuestions = safeQuestions(parsed.questions);
     const savedRounds = normalizeRounds(parsed.rounds);
-    const activeRoundId = savedRounds.some((round) => round.id === parsed.activeRoundId) ? parsed.activeRoundId : savedRounds[0]?.id || "round-1";
+    const activeRoundId = getInitialActiveRoundId(savedRounds, parsed.activeRoundId);
     return { ...parsed, questions: savedQuestions, rounds: savedRounds, activeRoundId, typeFilter: parsed.typeFilter === "picture" ? "all" : parsed.typeFilter, generateType: parsed.generateType === "picture" ? "written" : parsed.generateType };
   } catch {
     return null;
@@ -134,13 +140,15 @@ const BuildSession = () => {
   const { user } = useAuth();
   const savedState = useMemo(() => (sessionId ? null : loadBuildSavedState()), [sessionId]);
   const venueDraft = useMemo(() => (sessionId || savedState ? null : readVenueBuildDraft()), [sessionId, savedState]);
-  const draftQuestionDefaults = venueDraft?.defaultQuestionSettings || null;
+  const initialRounds = useMemo(() => normalizeRounds(savedState?.rounds || venueDraft?.rounds || createDefaultRounds()), [savedState, venueDraft]);
+  const initialQuestions = useMemo(() => safeQuestions(savedState?.questions), [savedState]);
+  const draftQuestionDefaults = venueDraft?.defaultQuestionSettings && typeof venueDraft.defaultQuestionSettings === "object" ? venueDraft.defaultQuestionSettings : null;
   const initialPrefs = loadLocalCategoryPrefs();
   const [sessionName, setSessionName] = useState(savedState?.sessionName || venueDraft?.sessionName || "");
-  const [rounds, setRounds] = useState(savedState?.rounds || venueDraft?.rounds || createDefaultRounds());
-  const [activeRoundId, setActiveRoundId] = useState(savedState?.activeRoundId || venueDraft?.activeRoundId || (savedState?.rounds?.[0]?.id || venueDraft?.rounds?.[0]?.id || "round-1"));
+  const [rounds, setRounds] = useState(initialRounds);
+  const [activeRoundId, setActiveRoundId] = useState(getInitialActiveRoundId(initialRounds, savedState?.activeRoundId || venueDraft?.activeRoundId));
   const [roundMenuOpen, setRoundMenuOpen] = useState(false);
-  const [questions, setQuestions] = useState(savedState?.questions || []);
+  const [questions, setQuestions] = useState(initialQuestions);
   const [usedFingerprints, setUsedFingerprints] = useState(new Set());
   const [usedQuestionIds, setUsedQuestionIds] = useState(readUsedIds);
   const [unusedQuestionIds, setUnusedQuestionIds] = useState(readUnusedIds);
@@ -170,25 +178,30 @@ const BuildSession = () => {
 
   useEffect(() => {
     if (sessionId || loading) return;
-    const selectedIdsForDraft = new Set(rounds.flatMap((round) => round.questionIds || []).map(String));
-    const selectedQuestionsForDraft = questions.filter((question) => selectedIdsForDraft.has(String(question.id)));
-    localStorage.setItem(BUILD_STORAGE_KEY, JSON.stringify({ sessionName, rounds, activeRoundId, theme, difficulty, typeFilter, generateType, generateCount, includeImageIdeas, questions: selectedQuestionsForDraft }));
+    const draftRounds = normalizeRounds(rounds);
+    const draftQuestions = safeQuestions(questions);
+    const selectedIdsForDraft = new Set(draftRounds.flatMap((round) => round.questionIds || []).map(String));
+    const selectedQuestionsForDraft = draftQuestions.filter((question) => selectedIdsForDraft.has(String(question.id)));
+    localStorage.setItem(BUILD_STORAGE_KEY, JSON.stringify({ sessionName, rounds: draftRounds, activeRoundId: getInitialActiveRoundId(draftRounds, activeRoundId), theme, difficulty, typeFilter, generateType, generateCount, includeImageIdeas, questions: selectedQuestionsForDraft }));
   }, [sessionId, loading, sessionName, rounds, activeRoundId, theme, difficulty, typeFilter, generateType, generateCount, includeImageIdeas, questions]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { fetchBuilderData(); }, [sessionId]);
   const clearSavedState = () => { localStorage.removeItem(BUILD_STORAGE_KEY); localStorage.removeItem("trivia-flex-round-builder-state-v4"); localStorage.removeItem("trivia-flex-round-builder-state-v3"); localStorage.removeItem("trivia-flex-round-builder-state-v2"); localStorage.removeItem(VENUE_BUILD_DRAFT_KEY); };
   const scrollToLibrary = () => window.setTimeout(() => document.getElementById("build-session-library")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
   const handleBrowseLibrary = () => { setUsedQuestionIds(readUsedIds()); setUnusedQuestionIds(readUnusedIds()); setQuestionMemory(readQuestionMemory()); setShowLibrary(true); setShowWriteForm(false); scrollToLibrary(); };
+  useEffect(() => { localStorage.removeItem("quiz-crafter-build-recovery-attempted"); }, []);
 
-  const fetchBuilderData = async () => { try { setLoading(true); const [questionsResult, sessionsResult] = await Promise.all([supabase.from("questions").select("*").order("created_at", { ascending: false }), supabase.from("sessions").select("*").order("created_at", { ascending: false })]); if (questionsResult.error) throw questionsResult.error; if (sessionsResult.error) throw sessionsResult.error; const sessions = sessionsResult.data || []; const latestSavedBuild = !sessionId && !savedState && !venueDraft ? sessions.find((session) => !session.is_past && collectSessionQuestions(session).length > 0) : null; const sessionToEdit = sessionId ? sessions.find((session) => String(session.id) === String(sessionId)) : latestSavedBuild; if (sessionId && !sessionToEdit) throw new Error("Saved session not found"); const localUsed = readUsedIds(); const localUnused = readUnusedIds(); const used = new Set(); sessions.forEach((session) => { if (sessionToEdit && String(session.id) === String(sessionToEdit.id)) return; collectSessionQuestions(session).forEach((question) => { const text = question?.question_text || question?.question; if (text) used.add(fingerprint(text)); }); }); (questionsResult.data || []).forEach((question) => { if (!localUnused.has(String(question.id)) && isQuestionMarkedUsed(question, localUsed)) used.add(fingerprint(question.question_text)); }); const prefs = loadLocalCategoryPrefs(); const approved = new Set(prefs.approved); const rejected = new Set(prefs.rejected); (questionsResult.data || []).forEach((question) => { const category = normalizeText(question.category); if (category && !rejected.has(category)) approved.add(category); }); setUsedQuestionIds(localUsed); setUnusedQuestionIds(localUnused); setQuestionMemory(readQuestionMemory()); setUsedFingerprints(used); setApprovedCategories([...approved].sort((a, b) => a.localeCompare(b))); setRejectedCategories([...rejected]); const libraryQuestions = (questionsResult.data || []).map((q) => normalizeQuestion(q)); if (sessionToEdit) { const builderState = buildStateFromSavedSession(sessionToEdit); setEditingSessionId(sessionToEdit.id); setEditingSessionWasPast(Boolean(sessionToEdit.is_past)); setSessionName(sessionToEdit.name || sessionToEdit.session_name || "Untitled Session"); setRounds(builderState.rounds); setActiveRoundId(builderState.activeRoundId); setQuestions([...builderState.questions, ...libraryQuestions]); clearSavedState(); if (!sessionId) navigate(`/build/${sessionToEdit.id}`, { replace: true }); } else { setEditingSessionId(null); setEditingSessionWasPast(false); setQuestions([...(savedState?.questions || []), ...libraryQuestions]); } } catch (error) { console.error("Build session load error:", error); toast.error(error.message || "Failed to load builder"); if (sessionId) navigate("/past-sessions"); } finally { setLoading(false); } };
-  const questionById = useMemo(() => new Map(questions.map((q) => [String(q.id), q])), [questions]);
-  const activeRound = rounds.find((round) => round.id === activeRoundId) || rounds[0] || defaultRounds[0];
-  const selectedIds = useMemo(() => new Set(rounds.flatMap((round) => round.questionIds || []).map(String)), [rounds]);
+  const fetchBuilderData = async () => { try { setLoading(true); const [questionsResult, sessionsResult] = await Promise.all([supabase.from("questions").select("*").order("created_at", { ascending: false }), supabase.from("sessions").select("*").order("created_at", { ascending: false })]); if (questionsResult.error) throw questionsResult.error; if (sessionsResult.error) throw sessionsResult.error; const sessions = sessionsResult.data || []; const latestSavedBuild = !sessionId && !savedState && !venueDraft ? sessions.find((session) => !session.is_past && collectSessionQuestions(session).length > 0) : null; const sessionToEdit = sessionId ? sessions.find((session) => String(session.id) === String(sessionId)) : latestSavedBuild; if (sessionId && !sessionToEdit) throw new Error("Saved session not found"); const localUsed = readUsedIds(); const localUnused = readUnusedIds(); const used = new Set(); sessions.forEach((session) => { if (sessionToEdit && String(session.id) === String(sessionToEdit.id)) return; collectSessionQuestions(session).forEach((question) => { const text = question?.question_text || question?.question; if (text) used.add(fingerprint(text)); }); }); (questionsResult.data || []).forEach((question) => { if (!localUnused.has(String(question.id)) && isQuestionMarkedUsed(question, localUsed)) used.add(fingerprint(question.question_text)); }); const prefs = loadLocalCategoryPrefs(); const approved = new Set(prefs.approved); const rejected = new Set(prefs.rejected); (questionsResult.data || []).forEach((question) => { const category = normalizeText(question.category); if (category && !rejected.has(category)) approved.add(category); }); setUsedQuestionIds(localUsed); setUnusedQuestionIds(localUnused); setQuestionMemory(readQuestionMemory()); setUsedFingerprints(used); setApprovedCategories([...approved].sort((a, b) => a.localeCompare(b))); setRejectedCategories([...rejected]); const libraryQuestions = safeQuestions(questionsResult.data); if (sessionToEdit) { const builderState = buildStateFromSavedSession(sessionToEdit); setEditingSessionId(sessionToEdit.id); setEditingSessionWasPast(Boolean(sessionToEdit.is_past)); setSessionName(sessionToEdit.name || sessionToEdit.session_name || "Untitled Session"); setRounds(builderState.rounds); setActiveRoundId(builderState.activeRoundId); setQuestions([...builderState.questions, ...libraryQuestions]); clearSavedState(); if (!sessionId) navigate(`/build/${sessionToEdit.id}`, { replace: true }); } else { setEditingSessionId(null); setEditingSessionWasPast(false); setQuestions([...safeQuestions(savedState?.questions), ...libraryQuestions]); } } catch (error) { console.error("Build session load error:", error); toast.error(error.message || "Failed to load builder"); if (sessionId) navigate("/past-sessions"); } finally { setLoading(false); } };
+  const safeRounds = useMemo(() => normalizeRounds(rounds), [rounds]);
+  const normalizedQuestions = useMemo(() => safeQuestions(questions), [questions]);
+  const questionById = useMemo(() => new Map(normalizedQuestions.map((q) => [String(q.id), q])), [normalizedQuestions]);
+  const activeRound = safeRounds.find((round) => round.id === activeRoundId) || safeRounds[0] || defaultRounds[0];
+  const selectedIds = useMemo(() => new Set(safeRounds.flatMap((round) => round.questionIds || []).map(String)), [safeRounds]);
   const activeRoundQuestions = useMemo(() => (activeRound?.questionIds || []).map((id) => questionById.get(String(id))).filter(Boolean), [activeRound, questionById]);
-  const selectedSessionCategories = useMemo(() => uniqueCategories(rounds.flatMap((round) => (round.questionIds || []).map((id) => questionById.get(String(id))?.category))), [rounds, questionById]);
+  const selectedSessionCategories = useMemo(() => uniqueCategories(safeRounds.flatMap((round) => (round.questionIds || []).map((id) => questionById.get(String(id))?.category))), [safeRounds, questionById]);
   const mediaQuestion = mediaQuestionId ? questionById.get(String(mediaQuestionId)) : null;
   const settingsQuestion = settingsQuestionId ? questionById.get(String(settingsQuestionId)) : null;
-  const availableQuestions = useMemo(() => { const query = searchQuery.trim().toLowerCase(); return questions.filter((question) => { const type = normalizeType(question); const id = String(question.id); const selected = selectedIds.has(id); const manuallyUnused = unusedQuestionIds.has(id); const blockedByMemory = !manuallyUnused && isMemoryBlocked(question, questionMemory); const used = !manuallyUnused && (isQuestionMarkedUsed(question, usedQuestionIds) || usedFingerprints.has(fingerprint(question.question_text))); if (typeFilter !== "all" && type !== typeFilter) return false; if (rejectedAi.has(fingerprint(question.question_text))) return false; if ((used || blockedByMemory) && !selected) return false; if (!query) return true; return [question.question_text, question.correct_answer, question.category, question.fun_fact].filter(Boolean).some((value) => String(value).toLowerCase().includes(query)); }); }, [questionMemory, questions, rejectedAi, searchQuery, selectedIds, typeFilter, usedFingerprints, usedQuestionIds, unusedQuestionIds]);
+  const availableQuestions = useMemo(() => { const query = searchQuery.trim().toLowerCase(); return normalizedQuestions.filter((question) => { const type = normalizeType(question); const id = String(question.id); const selected = selectedIds.has(id); const manuallyUnused = unusedQuestionIds.has(id); const blockedByMemory = !manuallyUnused && isMemoryBlocked(question, questionMemory); const used = !manuallyUnused && (isQuestionMarkedUsed(question, usedQuestionIds) || usedFingerprints.has(fingerprint(question.question_text))); if (typeFilter !== "all" && type !== typeFilter) return false; if (rejectedAi.has(fingerprint(question.question_text))) return false; if ((used || blockedByMemory) && !selected) return false; if (!query) return true; return [question.question_text, question.correct_answer, question.category, question.fun_fact].filter(Boolean).some((value) => String(value).toLowerCase().includes(query)); }); }, [normalizedQuestions, questionMemory, rejectedAi, searchQuery, selectedIds, typeFilter, usedFingerprints, usedQuestionIds, unusedQuestionIds]);
   const handleAddRound = () => { const round = { id: newRoundId(), name: `Round ${rounds.length + 1}`, description: "", questionIds: [] }; setRounds((prev) => [...prev, round]); setActiveRoundId(round.id); };
   const handleDeleteRound = (roundId) => { if (rounds.length === 1) return toast.error("Keep at least one round"); const nextRound = rounds.find((round) => round.id !== roundId) || rounds[0]; setRounds((prev) => prev.filter((round) => round.id !== roundId)); if (activeRoundId === roundId) setActiveRoundId(nextRound.id); };
   const handleRenameRound = (roundId, name) => setRounds((prev) => prev.map((round) => (round.id === roundId ? { ...round, name } : round)));
@@ -227,14 +240,14 @@ const BuildSession = () => {
     const builtName = sessionName.trim() || `${new Date().toLocaleDateString()} Trivia`;
     const grouped = { true_false_questions: [], multiple_choice_questions: [], written_questions: [], picture_questions: [] };
     const selectedLibraryIds = new Set();
-    const roundDescriptions = rounds.map((round, index) => ({
+    const roundDescriptions = safeRounds.map((round, index) => ({
       name: round.name,
       description: round.description || "",
       order: index + 1,
       categories: [...new Set((round.questionIds || []).map((id) => questionById.get(String(id))?.category).filter(Boolean))],
     }));
 
-    rounds.forEach((round, roundIndex) => (round.questionIds || []).forEach((id, sourceOrder) => {
+    safeRounds.forEach((round, roundIndex) => (round.questionIds || []).forEach((id, sourceOrder) => {
       const question = questionById.get(String(id));
       if (!question) return;
       const questionId = String(question.id);
@@ -287,7 +300,7 @@ const BuildSession = () => {
       setSaving(false);
     }
   };
-  const selectedTotal = rounds.reduce((sum, round) => sum + (round.questionIds?.length || 0), 0);
+  const selectedTotal = safeRounds.reduce((sum, round) => sum + (round.questionIds?.length || 0), 0);
 
   return <div className="p-4 lg:p-6 max-w-7xl mx-auto animate-fade-in" data-testid="build-session-page">
     <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-4 mb-5"><div><h1 className="text-3xl md:text-4xl font-bold text-white mb-2">Build <span className="gradient-text">Session</span></h1><p className="text-zinc-500">Build rounds freely, add media anywhere, and let AI fill gaps from approved categories.</p></div><div className="flex gap-2 flex-wrap">{selectedTotal > 0 && <Button variant="outline" onClick={handleClearSession} className="border-zinc-700 text-zinc-400 hover:text-white hover:bg-zinc-800"><X size={16} className="mr-2" />Clear</Button>}<Button onClick={() => handleSave(true)} disabled={saving} className="bg-[#AEB2EF] hover:bg-[#C6C9FF] text-zinc-950 font-semibold" data-testid="go-live-btn">{saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</> : <><Sparkles className="mr-2" size={18} />Go Live</>}</Button><Button onClick={() => handleSave(false)} disabled={saving} className="gradient-btn" data-testid="save-build-btn">{saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</> : <><Save className="mr-2" size={18} />Save Build</>}</Button></div></div>

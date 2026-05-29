@@ -49,6 +49,14 @@ export const api = {
 
 // Auth Context
 const AuthContext = createContext(null);
+const BUILD_RECOVERY_FLAG = "quiz-crafter-build-recovery-attempted";
+const BUILD_RECOVERY_KEYS = [
+  "trivia-flex-round-builder-state-v5",
+  "trivia-flex-round-builder-state-v4",
+  "trivia-flex-round-builder-state-v3",
+  "trivia-flex-round-builder-state-v2",
+  "quiz-crafter-venue-build-draft",
+];
 
 export const useAuth = () => useContext(AuthContext);
 
@@ -121,6 +129,12 @@ class BuildErrorBoundary extends Component {
 
   componentDidCatch(error) {
     console.error("Build screen crashed:", error);
+    const alreadyRecovered = localStorage.getItem(BUILD_RECOVERY_FLAG) === "1";
+    if (!alreadyRecovered) {
+      localStorage.setItem(BUILD_RECOVERY_FLAG, "1");
+      BUILD_RECOVERY_KEYS.forEach((key) => localStorage.removeItem(key));
+      window.setTimeout(() => window.location.reload(), 50);
+    }
   }
 
   handleRetry = () => {
@@ -129,7 +143,8 @@ class BuildErrorBoundary extends Component {
   };
 
   handleResetAndRetry = () => {
-    ["trivia-flex-round-builder-state-v5", "trivia-flex-round-builder-state-v4", "trivia-flex-round-builder-state-v3", "trivia-flex-round-builder-state-v2"].forEach((key) => localStorage.removeItem(key));
+    BUILD_RECOVERY_KEYS.forEach((key) => localStorage.removeItem(key));
+    localStorage.removeItem(BUILD_RECOVERY_FLAG);
     this.handleRetry();
   };
 
