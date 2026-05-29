@@ -7,6 +7,8 @@ import { Badge } from "../components/ui/badge";
 import { ScrollArea } from "../components/ui/scroll-area";
 import {
   CheckCircle,
+  AlertTriangle,
+  Ban,
   Image,
   Library as LibraryIcon,
   List,
@@ -15,9 +17,11 @@ import {
   Pencil,
   Save,
   Search,
+  RotateCcw,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { getQuestionMemory, isMemoryBlocked, isMemoryUsed, memoryStatuses, readQuestionMemory, upsertQuestionMemory } from "../lib/questionMemory";
 
 const typeConfig = {
   all: { label: "All", icon: LibraryIcon, color: "text-white" },
@@ -29,6 +33,14 @@ const typeConfig = {
 
 const typeOrder = ["all", "true_false", "multiple_choice", "written", "picture"];
 const editableTypes = ["true_false", "multiple_choice", "written", "picture"];
+const memoryFilters = [
+  { value: "all", label: "All Memory" },
+  { value: "available", label: "Available" },
+  { value: "used_recently", label: "Used Recently" },
+  { value: "needs_rewrite", label: "Needs Rewrite" },
+  { value: "too_common", label: "Too Common" },
+  { value: "retired", label: "Retired" },
+];
 const USED_QUESTIONS_KEY = "quiz-crafter-used-question-ids";
 const UNUSED_QUESTIONS_KEY = "quiz-crafter-unused-question-ids";
 
@@ -99,12 +111,14 @@ export default function Library() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeType, setActiveType] = useState("all");
+  const [memoryFilter, setMemoryFilter] = useState("all");
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState(null);
   const [savingId, setSavingId] = useState(null);
   const [usedIds, setUsedIds] = useState(readUsedIds);
   const [unusedIds, setUnusedIds] = useState(readUnusedIds);
   const [usedFingerprints, setUsedFingerprints] = useState(new Set());
+  const [questionMemory, setQuestionMemory] = useState(readQuestionMemory);
 
   useEffect(() => {
     fetchQuestions();
@@ -154,9 +168,10 @@ export default function Library() {
   const isUsed = useCallback((question) => {
     const id = String(question?.id || "");
     if (unusedIds.has(id)) return false;
-    return isQuestionMarkedUsed(question, usedIds) || usedFingerprints.has(fingerprint(question.question_text));
-  }, [unusedIds, usedIds, usedFingerprints]);
+    return isMemoryUsed(question, questionMemory) || isQuestionMarkedUsed(question, usedIds) || usedFingerprints.has(fingerprint(question.question_text));
+  }, [questionMemory, unusedIds, usedIds, usedFingerprints]);
   const usedCount = useMemo(() => questions.filter((question) => isUsed(question)).length, [questions, isUsed]);
+  const blockedMemoryCount = useMemo(() => questions.filter((question) => isMemoryBlocked(question, questionMemory)).length, [questionMemory, questions]);
 
   const filteredQuestions = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -164,13 +179,16 @@ export default function Library() {
     return questions.filter((question) => {
       const type = question.question_type || "written";
       if (activeType !== "all" && type !== activeType) return false;
+      const memory = getQuestionMemory(question, questionMemory);
+      if (memoryFilter === "available" && (isUsed(question) || isMemoryBlocked(question, questionMemory))) return false;
+      if (memoryFilter !== "all" && memoryFilter !== "available" && memory.status !== memoryFilter) return false;
       if (!query) return true;
 
       return [question.question_text, question.correct_answer, question.category, question.fun_fact]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(query));
     });
-  }, [activeType, questions, searchQuery]);
+  }, [activeType, isUsed, memoryFilter, questionMemory, questions, searchQuery]);
 
   const toggleUsed = async (question) => {
     const id = String(question.id);
@@ -190,6 +208,7 @@ export default function Library() {
     setUnusedIds(nextUnused);
     writeUsedIds(nextUsed);
     writeUnusedIds(nextUnused);
+    setQuestionMemory(upsertQuestionMemory(question, { status: willBeUsed ? "used_recently" : "available" }, questionMemory));
     setQuestions((prev) => prev.map((item) => item.id === question.id ? {
       ...item,
       is_used: willBeUsed,
@@ -216,6 +235,21 @@ export default function Library() {
     }
 
     toast.success(willBeUsed ? "Marked used" : "Marked unused");
+  };
+
+  const updateMemory = async (question, status) => {
+    const nextMemory = upsertQuestionMemory(question, { status }, questionMemory);
+    setQuestionMemory(nextMemory);
+    const possiblePayloads = [
+      { memory_status: status === "available" ? null : status, memory_updated_at: status === "available" ? null : new Date().toISOString() },
+      { memory_status: status === "available" ? null : status },
+    ];
+    for (const payload of possiblePayloads) {
+      const { error } = await supabase.from("questions").update(payload).eq("id", question.id);
+      if (!error) break;
+      if (!/schema cache|column|could not find/i.test(error.message || "")) break;
+    }
+    toast.success(status === "available" ? "Question memory cleared" : `Marked ${memoryStatuses[status]?.label || status}`);
   };
 
   const startEditing = (question) => {
@@ -295,7 +329,7 @@ export default function Library() {
             Question <span className="gradient-text">Library</span>
           </h1>
           <p className="text-zinc-500">Browse and edit saved questions from imports, generated sets, and custom writing.</p>
-          <p className="text-zinc-600 text-sm mt-1">{usedCount} marked used</p>
+          <p className="text-zinc-600 text-sm mt-1">{usedCount} marked used / {blockedMemoryCount} blocked by memory</p>
         </div>
         <Button onClick={fetchQuestions} variant="outline" className="border-zinc-700 text-zinc-300 hover:text-white">
           Refresh
@@ -335,6 +369,9 @@ export default function Library() {
               );
             })}
           </div>
+          <div className="flex flex-wrap gap-2">
+            {memoryFilters.map((filter) => <Button key={filter.value} size="sm" variant={memoryFilter === filter.value ? "default" : "outline"} onClick={() => setMemoryFilter(filter.value)} className={memoryFilter === filter.value ? "gradient-btn" : "border-white/10 text-zinc-300 hover:text-white hover:bg-zinc-800"}>{filter.label}</Button>)}
+          </div>
         </CardContent>
       </Card>
 
@@ -366,7 +403,7 @@ export default function Library() {
                   onCancel={cancelEditing}
                 />
               ) : (
-                <QuestionCard key={question.id} question={question} used={isUsed(question)} onEdit={() => startEditing(question)} onToggleUsed={() => toggleUsed(question)} />
+                <QuestionCard key={question.id} question={question} used={isUsed(question)} memory={getQuestionMemory(question, questionMemory)} onEdit={() => startEditing(question)} onToggleUsed={() => toggleUsed(question)} onMemory={(status) => updateMemory(question, status)} />
               );
             })}
           </div>
@@ -376,7 +413,7 @@ export default function Library() {
   );
 }
 
-const QuestionCard = ({ question, used, onEdit, onToggleUsed }) => {
+const QuestionCard = ({ question, used, memory, onEdit, onToggleUsed, onMemory }) => {
   const type = question.question_type || "written";
   const config = typeConfig[type] || typeConfig.written;
   const Icon = config.icon;
@@ -392,6 +429,7 @@ const QuestionCard = ({ question, used, onEdit, onToggleUsed }) => {
               {formatType(type)}
             </Badge>
             {used && <Badge className="bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">Used</Badge>}
+            {memory?.status && memory.status !== "available" && <Badge className={memory.status === "retired" || memory.status === "too_common" ? "bg-red-500/10 text-red-300 border border-red-500/20" : memory.status === "needs_rewrite" ? "bg-amber-500/10 text-amber-300 border border-amber-500/20" : "bg-[#AEB2EF]/10 text-[#AEB2EF] border border-[#AEB2EF]/20"}>{memoryStatuses[memory.status]?.label || memory.status}</Badge>}
             {question.image_url && <Badge className="bg-amber-500/10 text-amber-300 border border-amber-500/20">Image</Badge>}
           </div>
           <div className="flex gap-2 flex-wrap justify-end">
@@ -402,6 +440,13 @@ const QuestionCard = ({ question, used, onEdit, onToggleUsed }) => {
               <Pencil size={14} className="mr-2" />Edit
             </Button>
           </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2 rounded-lg border border-white/10 bg-zinc-950/40 p-2">
+          <Button size="sm" variant="ghost" onClick={() => onMemory("needs_rewrite")} className="h-8 text-amber-300 hover:text-amber-200 hover:bg-amber-500/10"><AlertTriangle size={13} className="mr-1" />Rewrite</Button>
+          <Button size="sm" variant="ghost" onClick={() => onMemory("too_common")} className="h-8 text-red-300 hover:text-red-200 hover:bg-red-500/10"><Ban size={13} className="mr-1" />Too Common</Button>
+          <Button size="sm" variant="ghost" onClick={() => onMemory("retired")} className="h-8 text-zinc-300 hover:text-white hover:bg-zinc-800"><X size={13} className="mr-1" />Retire</Button>
+          <Button size="sm" variant="ghost" onClick={() => onMemory("available")} className="h-8 text-[#71E0DC] hover:text-[#AEEBFF] hover:bg-[#71E0DC]/10"><RotateCcw size={13} className="mr-1" />Reusable</Button>
         </div>
 
         <div>

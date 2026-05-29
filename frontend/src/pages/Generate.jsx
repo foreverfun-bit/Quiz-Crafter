@@ -30,6 +30,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { memoryRejectedQuestionTexts, readQuestionMemory, upsertQuestionMemory } from "../lib/questionMemory";
 
 const questionTypes = [
   { value: "true_false", label: "True/False", icon: CheckCircle, color: "text-[#71E0DC]", round: "Round 1" },
@@ -128,6 +129,7 @@ const Generate = ({ initialCreateMode = "generate" }) => {
   const [avoidDuplicates, setAvoidDuplicates] = useState(true);
   const [includeMediaIdeas, setIncludeMediaIdeas] = useState(false);
   const [lockedCategories, setLockedCategories] = useState(() => readJsonArray(LOCKED_CATEGORY_KEY));
+  const [questionMemory, setQuestionMemory] = useState(readQuestionMemory);
 
   const [roundThemeSubject, setRoundThemeSubject] = useState("");
   const [freeBuildType, setFreeBuildType] = useState("multiple_choice");
@@ -150,7 +152,7 @@ const Generate = ({ initialCreateMode = "generate" }) => {
 
   const getGenerationPreferences = (extraRejectedQuestions = [], lockedCategoriesOverride = null) => {
     const prefs = readCategoryPrefs();
-    const rejectedQuestions = [...readJsonArray(REJECTED_AI_KEY), ...extraRejectedQuestions];
+    const rejectedQuestions = [...readJsonArray(REJECTED_AI_KEY), ...memoryRejectedQuestionTexts(questionMemory), ...extraRejectedQuestions];
 
     return {
       approvedCategories: cleanList(prefs.approved),
@@ -384,6 +386,7 @@ const Generate = ({ initialCreateMode = "generate" }) => {
 
     if (rejectedFingerprint) {
       writeJsonArray(REJECTED_AI_KEY, [...rejected, rejectedFingerprint]);
+      setQuestionMemory(upsertQuestionMemory(candidate, { status: "too_common" }, questionMemory));
     }
 
     setGroupedCandidates((prev) => ({
