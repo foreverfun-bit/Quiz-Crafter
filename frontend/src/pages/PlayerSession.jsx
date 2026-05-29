@@ -179,6 +179,7 @@ const PlayerSession = () => {
   const sessionName = hostState?.sessionName || session?.name || session?.session_name || "Trivia Session";
   const timeRemaining = hostState?.timerEndAt ? Math.max(0, Math.ceil((new Date(hostState.timerEndAt).getTime() - now) / 1000)) : null;
   const acceptingAnswers = timeRemaining === null || timeRemaining > 0;
+  const submissionTiming = () => ({ secondsRemainingAtSubmit: timeRemaining, timerEndAt: hostState?.timerEndAt || null, timerSeconds: hostState?.timerSeconds || null });
   const pointsPerQuestion = Number(hostState?.pointsPerQuestion || 1);
   const wagerMode = Boolean(hostState?.wagerMode);
   const wagerLimit = Number(hostState?.wagerLimit || 0);
@@ -263,7 +264,7 @@ const PlayerSession = () => {
     if (shouldWagerBefore && effectiveWagerLimit <= 0) return toast.error("You need points to wager");
     if (shouldWagerBefore && wager > effectiveWagerLimit) return toast.error(`Wager up to ${effectiveWagerLimit}`);
     const awardedPoints = wagerMode ? wager : pointsPerQuestion;
-    const payload = { playerId: player.id, playerName: player.name, answer: finalAnswer, points: awardedPoints, wagerAmount: wager, wagerMode, wagerLimit, wagerCap: effectiveWagerLimit, scoreAtWager: Number(myScore || 0), wagerTiming, questionIndex: hostState.currentIndex, questionId: currentQuestion.id, questionText: currentQuestion.questionText, submittedAt: new Date().toISOString() };
+    const payload = { playerId: player.id, playerName: player.name, answer: finalAnswer, points: awardedPoints, wagerAmount: wager, wagerMode, wagerLimit, wagerCap: effectiveWagerLimit, scoreAtWager: Number(myScore || 0), wagerTiming, questionIndex: hostState.currentIndex, questionId: currentQuestion.id, questionText: currentQuestion.questionText, ...submissionTiming(), submittedAt: new Date().toISOString() };
     channelRef.current?.send({ type: "broadcast", event: "answer_submit", payload });
     setSubmitted(payload);
     setAnswer("");
@@ -276,7 +277,7 @@ const PlayerSession = () => {
     if (wager <= 0) return toast.error("Enter a wager");
     if (effectiveWagerLimit <= 0) return toast.error("You need points to wager");
     if (wager > effectiveWagerLimit) return toast.error(`Wager up to ${effectiveWagerLimit}`);
-    const payload = { ...submitted, points: wager, wagerAmount: wager, wagerLimit, wagerCap: effectiveWagerLimit, scoreAtWager: Number(myScore || 0), wagerTiming, submittedAt: new Date().toISOString() };
+    const payload = { ...submitted, points: wager, wagerAmount: wager, wagerLimit, wagerCap: effectiveWagerLimit, scoreAtWager: Number(myScore || 0), wagerTiming, ...submissionTiming(), submittedAt: new Date().toISOString() };
     channelRef.current?.send({ type: "broadcast", event: "answer_submit", payload });
     setSubmitted(payload);
     toast.success("Wager submitted");
