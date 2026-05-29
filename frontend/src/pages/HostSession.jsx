@@ -23,6 +23,7 @@ import {
   Pencil,
   Play,
   Plus,
+  RefreshCw,
   RotateCcw,
   Save,
   Sparkles,
