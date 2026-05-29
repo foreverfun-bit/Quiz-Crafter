@@ -268,7 +268,7 @@ const PresentSession = () => {
         <header className="flex items-center justify-between gap-4 border-b border-white/10 pb-5">
           <div>
             <p className="text-[#71E0DC] font-semibold tracking-wide uppercase text-sm">{sessionName}</p>
-            <h1 className="text-3xl lg:text-5xl font-black mt-1">{mode === "categories" ? "Round Intro" : mode === "leaderboard" ? "Leaderboard" : mode === "bonus_pause" ? "Bonus Coming Up" : currentRound?.name || "Question"}</h1>
+            <h1 className="text-3xl lg:text-5xl font-black mt-1">{mode === "categories" ? "Round Intro" : mode === "leaderboard" ? "Leaderboard" : mode === "winners" ? "Winners" : mode === "bonus_pause" ? "Bonus Coming Up" : currentRound?.name || "Question"}</h1>
           </div>
           <Badge className="bg-white/10 text-zinc-200 border border-white/10 text-base px-4 py-2">{displayRound?.name || "Round"}</Badge>
         </header>
@@ -276,8 +276,9 @@ const PresentSession = () => {
         <main className="flex-1 flex items-center justify-center py-8">
           {mode === "categories" && <CategoriesView round={introRound} rounds={rounds} />}
           {mode === "leaderboard" && <LeaderboardView leaderboard={presentState.leaderboard || []} />}
+          {mode === "winners" && <WinnersView leaderboard={presentState.leaderboard || []} sessionName={sessionName} />}
           {mode === "bonus_pause" && <BonusPauseView round={presentState.pendingBonusRound || currentRound} leaderboard={presentState.leaderboard || []} />}
-          {mode !== "categories" && mode !== "leaderboard" && mode !== "bonus_pause" && (
+          {mode !== "categories" && mode !== "leaderboard" && mode !== "winners" && mode !== "bonus_pause" && (
             <QuestionView question={currentQuestion} index={currentIndex} total={questions.length} showAnswer={presentState.showAnswer} showFunFact={presentState.showFunFact} />
           )}
         </main>
@@ -376,6 +377,38 @@ const LeaderboardView = ({ leaderboard }) => {
             ))}
             {!sorted.length && <p className="text-center text-zinc-400 text-2xl py-10">Leaderboard will appear here when teams are added on the host screen.</p>}
           </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+};
+
+const WinnersView = ({ leaderboard, sessionName }) => {
+  const sorted = [...leaderboard].sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+  const winners = sorted.slice(0, 3);
+  const first = winners[0];
+
+  return (
+    <div className="w-full max-w-6xl">
+      <Card className="glass-card overflow-hidden">
+        <CardContent className="p-8 lg:p-12 text-center">
+          <div className="mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-full border border-amber-300/40 bg-amber-300/15 shadow-2xl shadow-amber-300/10">
+            <Trophy className="text-amber-300" size={52} />
+          </div>
+          <p className="text-[#71E0DC] text-xl font-black uppercase tracking-[0.3em]">{sessionName}</p>
+          <h2 className="mt-4 text-6xl lg:text-9xl font-black leading-none text-white">Winners</h2>
+          {first && <p className="mt-5 text-3xl lg:text-5xl font-black text-amber-200">{first.name}</p>}
+          <div className="mt-10 grid grid-cols-1 md:grid-cols-3 gap-5 text-left">
+            {winners.map((team, index) => (
+              <div key={team.id || team.name} className={`rounded-xl border p-6 ${index === 0 ? "border-amber-300/50 bg-amber-300/15 md:order-2 md:scale-105" : index === 1 ? "border-[#AEB2EF]/35 bg-[#AEB2EF]/10 md:order-1" : "border-[#71E0DC]/35 bg-[#71E0DC]/10 md:order-3"}`}>
+                <p className="text-sm font-black uppercase tracking-wide text-zinc-400">{index === 0 ? "Champion" : index === 1 ? "Second Place" : "Third Place"}</p>
+                <p className="mt-4 text-3xl font-black text-white truncate">{team.name}</p>
+                <p className="mt-3 text-5xl font-black" style={{ color: index === 0 ? "#FDE68A" : index === 1 ? "#AEB2EF" : "#71E0DC" }}>{Number(team.score || 0)}</p>
+              </div>
+            ))}
+            {!winners.length && <p className="md:col-span-3 rounded-lg border border-white/10 bg-zinc-950/70 p-8 text-center text-2xl text-zinc-400">Winners will appear once teams have scores.</p>}
+          </div>
+          <p className="mt-10 text-3xl font-black text-zinc-200">Thanks for playing!</p>
         </CardContent>
       </Card>
     </div>
