@@ -4,11 +4,16 @@ import { supabase } from "../lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
-import { Clock, Copy, Layers, Plus, Save, Sparkles, Trash2, Trophy } from "lucide-react";
+import { CalendarDays, Clock, Copy, Layers, MapPin, Plus, Save, Sparkles, Trash2, Trophy, Users } from "lucide-react";
 import { toast } from "sonner";
 import { SHOW_TEMPLATES_STORAGE_KEY, defaultShowTemplates, normalizeTemplate, readLocalTemplates, readLocalVenues, writeLocalTemplates, writeTemplateBuildDraft } from "../lib/venues";
 
 const metadataTemplatesKey = "quiz_crafter_show_templates_v1";
+const updatedLabel = (value) => {
+  if (!value) return "Starter template";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "Starter template" : `Updated ${date.toLocaleDateString([], { month: "short", day: "numeric" })}`;
+};
 
 const ShowTemplates = () => {
   const navigate = useNavigate();
@@ -138,10 +143,11 @@ const ShowTemplates = () => {
         </div>
       </div>
 
-      <Card className="glass-card mb-6"><CardContent className="p-4 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-3 items-end"><label className="text-sm text-zinc-400">Apply venue defaults when building<select value={selectedVenueId} onChange={(event) => setSelectedVenueId(event.target.value)} className="mt-1 h-11 w-full rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60"><option value="">No venue</option>{venues.map((venue) => <option key={venue.id} value={venue.id}>{venue.name}</option>)}</select></label><Button onClick={() => startBuild(form)} className="gradient-btn h-11"><Sparkles size={16} className="mr-2" />Start Build From Template</Button></CardContent></Card>
+      <Card className="glass-card mb-6"><CardContent className="p-4 grid grid-cols-1 lg:grid-cols-[1fr_1fr_auto] gap-3 items-end"><div><p className="text-xs uppercase tracking-wide text-zinc-500 font-bold">Selected format</p><p className="text-lg font-black text-white truncate">{form.name}</p><p className="text-sm text-zinc-500 truncate">{form.roundCount} rounds / {form.questionsPerRound} questions each / {form.defaultTimer}s timer</p></div><label className="text-sm text-zinc-400">Pair with venue<select value={selectedVenueId} onChange={(event) => setSelectedVenueId(event.target.value)} className="mt-1 h-11 w-full rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60"><option value="">No venue defaults</option>{venues.map((venue) => <option key={venue.id} value={venue.id}>{venue.name}</option>)}</select></label><Button onClick={() => startBuild(form)} className="gradient-btn h-11"><Sparkles size={16} className="mr-2" />Start Build</Button></CardContent></Card>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[0.95fr_1.05fr] gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-[0.9fr_1.1fr] gap-6 items-start">
         <section className="space-y-4">
+          {!templates.length && <Card className="glass-card"><CardContent className="p-8 text-center"><Layers className="mx-auto text-[#71E0DC] mb-3" size={38} /><h2 className="text-xl font-bold text-white">No templates yet</h2><p className="text-zinc-500 mt-2 mb-4">Create a reusable show format for your regular trivia nights.</p><Button onClick={createTemplate} className="gradient-btn">Create Template</Button></CardContent></Card>}
           {templates.map((template) => (
             <Card key={template.id} className={`glass-card transition ${selectedTemplateId === template.id ? "border-[#71E0DC]/40" : ""}`}>
               <CardContent className="p-4">
@@ -154,8 +160,9 @@ const ShowTemplates = () => {
                       <span className="flex items-center gap-2"><Trophy size={14} />{template.defaultPoints} pts</span>
                       <span className="flex items-center gap-2"><Clock size={14} />{template.defaultTimer}s</span>
                     </div>
+                    <div className="mt-3 flex flex-wrap gap-1.5">{template.roundNames.slice(0, 5).map((name, index) => <span key={`${template.id}-${index}`} className="rounded-full bg-zinc-900 px-2 py-1 text-[11px] text-zinc-400">{name}</span>)}{template.roundNames.length > 5 && <span className="rounded-full bg-zinc-900 px-2 py-1 text-[11px] text-zinc-500">+{template.roundNames.length - 5}</span>}</div>
                   </div>
-                  <Badge className="bg-zinc-800 text-zinc-300">{template.questionsPerRound} each</Badge>
+                  <div className="flex flex-col items-end gap-2"><Badge className="bg-zinc-800 text-zinc-300">{template.questionsPerRound} each</Badge><span className="text-[11px] text-zinc-600 whitespace-nowrap">{updatedLabel(template.updatedAt)}</span></div>
                 </div>
                 <div className="mt-4 flex flex-wrap gap-2">
                   <Button size="sm" variant="outline" onClick={() => editTemplate(template)} className="border-white/10 text-zinc-300 hover:text-white">Edit</Button>
@@ -168,16 +175,33 @@ const ShowTemplates = () => {
           ))}
         </section>
 
-        <TemplateEditor form={form} selectedTemplate={selectedTemplate} updateForm={updateForm} updateRound={updateRound} saveTemplate={saveTemplate} saving={saving} />
+        <TemplateEditor form={form} selectedTemplate={selectedTemplate} selectedVenue={selectedVenue} updateForm={updateForm} updateRound={updateRound} saveTemplate={saveTemplate} saving={saving} startBuild={startBuild} />
       </div>
     </div>
   );
 };
 
-const TemplateEditor = ({ form, selectedTemplate, updateForm, updateRound, saveTemplate, saving }) => (
-  <Card className="glass-card">
+const TemplateEditor = ({ form, selectedTemplate, selectedVenue, updateForm, updateRound, saveTemplate, saving, startBuild }) => (
+  <Card className="glass-card xl:sticky xl:top-6">
     <CardHeader><CardTitle className="text-white flex items-center gap-2"><Layers className="text-[#71E0DC]" />{selectedTemplate ? "Edit Template" : "New Template"}</CardTitle></CardHeader>
     <CardContent className="space-y-5">
+      <div className="rounded-xl border border-white/10 bg-zinc-950/50 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs uppercase tracking-wide text-[#71E0DC] font-bold">Build preview</p>
+            <h3 className="text-2xl font-black text-white truncate">{form.name}</h3>
+            <p className="mt-1 text-sm text-zinc-400">{form.description || "Reusable trivia show format"}</p>
+          </div>
+          <Badge className="bg-zinc-800 text-zinc-300">{form.roundCount} rounds</Badge>
+        </div>
+        <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+          <Metric icon={Users} label="Questions" value={form.roundCount * form.questionsPerRound} />
+          <Metric icon={Trophy} label="Points" value={form.defaultPoints} />
+          <Metric icon={Clock} label="Timer" value={`${form.defaultTimer}s`} />
+          <Metric icon={CalendarDays} label="Venue" value={selectedVenue?.name || "Optional"} />
+        </div>
+        {selectedVenue && <p className="mt-3 flex items-center gap-2 text-xs text-zinc-500"><MapPin size={13} />Venue defaults from {selectedVenue.name} will be included in the build direction.</p>}
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <Field label="Template name" value={form.name} onChange={(value) => updateForm("name", value)} />
         <Field label="Short description" value={form.description} onChange={(value) => updateForm("description", value)} />
@@ -197,12 +221,15 @@ const TemplateEditor = ({ form, selectedTemplate, updateForm, updateRound, saveT
         {form.roundNames.map((roundName, index) => <div key={`round-${index}`} className="rounded-lg border border-white/10 bg-zinc-950/50 p-3 grid grid-cols-1 md:grid-cols-[0.8fr_1.2fr] gap-3"><Field label={`Round ${index + 1} name`} value={roundName} onChange={(value) => updateRound(index, "name", value)} /><TextArea label="Description / category direction" value={form.roundDescriptions[index] || ""} onChange={(value) => updateRound(index, "description", value)} placeholder="What this round should feel like, include, or avoid." /></div>)}
       </div>
       <TextArea label="Host notes" value={form.hostNotes} onChange={(value) => updateForm("hostNotes", value)} placeholder="Scoring notes, wager rules, pacing, category mix, or host reminders..." />
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2 flex-wrap">
+        <Button variant="outline" onClick={() => startBuild(form)} className="border-white/10 text-zinc-300 hover:text-white"><Sparkles size={16} className="mr-2" />Start Build</Button>
         <Button onClick={saveTemplate} disabled={saving} className="gradient-btn"><Save size={16} className="mr-2" />{saving ? "Saving..." : "Save Template"}</Button>
       </div>
     </CardContent>
   </Card>
 );
+
+const Metric = ({ icon: Icon, label, value }) => <div className="rounded-md border border-white/10 bg-zinc-950/60 p-3"><div className="flex items-center gap-2 text-zinc-500"><Icon size={14} /><span className="text-xs">{label}</span></div><p className="mt-1 text-lg font-black text-white truncate">{value}</p></div>;
 
 const Field = ({ label, value, onChange, type = "text" }) => <label className="text-xs text-zinc-400">{label}<input type={type} value={value || ""} onChange={(event) => onChange(event.target.value)} className="mt-1 h-10 w-full rounded-md bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label>;
 

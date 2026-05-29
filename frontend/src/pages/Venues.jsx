@@ -4,13 +4,25 @@ import { supabase } from "../lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
-import { CalendarDays, Clock, ExternalLink, MapPin, Palette, Plus, Save, Trash2, Trophy, Users } from "lucide-react";
+import { CalendarDays, Clock, ExternalLink, Globe, Instagram, MapPin, Palette, Plus, Save, Trash2, Trophy, Users } from "lucide-react";
 import { toast } from "sonner";
 import { ACTIVE_VENUE_STORAGE_KEY, VENUES_STORAGE_KEY, defaultVenue, normalizeVenue, readActiveVenueId, readLocalVenues, writeActiveVenueId, writeLocalVenues, writeVenueBuildDraft } from "../lib/venues";
 
 const metadataVenuesKey = "quiz_crafter_venues_v1";
 const metadataActiveVenueKey = "quiz_crafter_active_venue_id";
 const weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday", "Varies"];
+const formatTime = (value) => {
+  if (!value) return "Time TBD";
+  const [hours, minutes = "00"] = String(value).split(":");
+  const date = new Date();
+  date.setHours(Number(hours) || 0, Number(minutes) || 0, 0, 0);
+  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+};
+const updatedLabel = (value) => {
+  if (!value) return "Not saved yet";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "Not saved yet" : `Updated ${date.toLocaleDateString([], { month: "short", day: "numeric" })}`;
+};
 
 const Venues = () => {
   const navigate = useNavigate();
@@ -140,9 +152,9 @@ const Venues = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[0.95fr_1.05fr] gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-[0.9fr_1.1fr] gap-6 items-start">
         <section className="space-y-4">
-          {activeVenue && <Card className="glass-card border-[#71E0DC]/30"><CardContent className="p-5"><div className="flex items-start justify-between gap-3"><div><p className="text-xs uppercase tracking-wide text-[#71E0DC] font-bold">Default venue</p><h2 className="text-2xl font-black text-white mt-1">{activeVenue.name}</h2><p className="text-zinc-400">{activeVenue.nightName || "Trivia Night"} / {activeVenue.dayOfWeek} {activeVenue.startTime}</p></div><Button onClick={() => startBuild(activeVenue)} className="gradient-btn">Build From Venue</Button></div></CardContent></Card>}
+          {activeVenue && <Card className="glass-card border-[#71E0DC]/30 overflow-hidden"><CardContent className="p-0"><div className="p-5 border-b border-white/10 bg-[#071A1D]/50"><div className="flex items-start justify-between gap-4"><div className="min-w-0"><p className="text-xs uppercase tracking-wide text-[#71E0DC] font-bold">Default venue for new builds</p><h2 className="text-2xl font-black text-white mt-1 truncate">{activeVenue.name}</h2><p className="text-zinc-400">{activeVenue.nightName || "Trivia Night"} / {activeVenue.dayOfWeek} at {formatTime(activeVenue.startTime)}</p></div>{activeVenue.logoUrl && <img src={activeVenue.logoUrl} alt={activeVenue.name} className="h-16 w-16 rounded-lg bg-white object-contain p-1" />}</div></div><div className="p-4 grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm"><Metric icon={Trophy} label="Rounds" value={activeVenue.roundCount} /><Metric icon={Users} label="Per round" value={activeVenue.questionsPerRound} /><Metric icon={Clock} label="Timer" value={`${activeVenue.defaultTimer}s`} /><Metric icon={Palette} label="Points" value={activeVenue.defaultPoints} /></div><div className="px-4 pb-4"><Button onClick={() => startBuild(activeVenue)} className="gradient-btn w-full">Build From Default Venue</Button></div></CardContent></Card>}
           {!venues.length && <Card className="glass-card"><CardContent className="p-8 text-center"><MapPin className="mx-auto text-[#71E0DC] mb-3" size={38} /><h2 className="text-xl font-bold text-white">No venues yet</h2><p className="text-zinc-500 mt-2 mb-4">Add your weekly spots once, then use them as defaults for future sessions.</p><Button onClick={createVenue} className="gradient-btn">Add First Venue</Button></CardContent></Card>}
           {venues.map((venue) => (
             <Card key={venue.id} className={`glass-card transition ${selectedVenueId === venue.id ? "border-[#71E0DC]/40" : ""}`}>
@@ -156,12 +168,18 @@ const Venues = () => {
                     <p className="text-sm text-zinc-400 truncate">{venue.nightName || "Trivia Night"}</p>
                     <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm text-zinc-500">
                       <span className="flex items-center gap-2"><CalendarDays size={14} />{venue.dayOfWeek}</span>
-                      <span className="flex items-center gap-2"><Clock size={14} />{venue.startTime || "Time TBD"}</span>
+                      <span className="flex items-center gap-2"><Clock size={14} />{formatTime(venue.startTime)}</span>
                       <span className="flex items-center gap-2"><Trophy size={14} />{venue.roundCount} rounds</span>
                       <span className="flex items-center gap-2"><Users size={14} />{venue.questionsPerRound} per round</span>
                     </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-500">
+                      <span className="rounded-full bg-zinc-900 px-2 py-1">{updatedLabel(venue.updatedAt)}</span>
+                      {venue.website && <span className="rounded-full bg-zinc-900 px-2 py-1 flex items-center gap-1"><Globe size={11} />Website</span>}
+                      {venue.instagram && <span className="rounded-full bg-zinc-900 px-2 py-1 flex items-center gap-1"><Instagram size={11} />Social</span>}
+                      {venue.houseRules && <span className="rounded-full bg-zinc-900 px-2 py-1">Rules saved</span>}
+                    </div>
                   </div>
-                  {venue.logoUrl && <img src={venue.logoUrl} alt={venue.name} className="h-14 w-14 rounded-lg bg-white object-contain p-1" />}
+                  <div className="flex flex-col items-end gap-2">{venue.logoUrl && <img src={venue.logoUrl} alt={venue.name} className="h-14 w-14 rounded-lg bg-white object-contain p-1" />}<div className="flex gap-1"><span className="h-4 w-4 rounded-full border border-white/20" style={{ backgroundColor: venue.primaryColor }} /><span className="h-4 w-4 rounded-full border border-white/20" style={{ backgroundColor: venue.accentColor }} /></div></div>
                 </div>
                 <div className="mt-4 flex flex-wrap gap-2">
                   <Button size="sm" variant="outline" onClick={() => editVenue(venue)} className="border-white/10 text-zinc-300 hover:text-white">Edit</Button>
@@ -180,10 +198,23 @@ const Venues = () => {
   );
 };
 
+const Metric = ({ icon: Icon, label, value }) => <div className="rounded-md border border-white/10 bg-zinc-950/50 p-3"><div className="flex items-center gap-2 text-zinc-500"><Icon size={14} /><span className="text-xs">{label}</span></div><p className="mt-1 text-lg font-black text-white">{value}</p></div>;
+
 const VenueEditor = ({ form, selectedVenue, updateForm, saveVenue, saving }) => (
-  <Card className="glass-card">
+  <Card className="glass-card xl:sticky xl:top-6">
     <CardHeader><CardTitle className="text-white flex items-center gap-2"><MapPin className="text-[#71E0DC]" />{selectedVenue ? "Edit Venue" : "New Venue"}</CardTitle></CardHeader>
     <CardContent className="space-y-5">
+      <div className="rounded-xl border border-white/10 bg-zinc-950/50 p-4">
+        <div className="flex items-center gap-4">
+          {form.logoUrl ? <img src={form.logoUrl} alt={form.name || "Venue logo"} className="h-20 w-20 rounded-lg bg-white object-contain p-2" /> : <div className="h-20 w-20 rounded-lg border border-white/10 bg-zinc-900 flex items-center justify-center text-zinc-500"><MapPin size={28} /></div>}
+          <div className="min-w-0">
+            <p className="text-xs uppercase tracking-wide text-zinc-500">Build preview</p>
+            <h3 className="text-xl font-black text-white truncate">{form.name || "Venue name"}</h3>
+            <p className="text-sm text-zinc-400 truncate">{form.nightName || "Trivia Night"} / {form.dayOfWeek} at {formatTime(form.startTime)}</p>
+            <div className="mt-3 flex gap-2"><span className="h-5 w-12 rounded-full border border-white/20" style={{ backgroundColor: form.primaryColor }} /><span className="h-5 w-12 rounded-full border border-white/20" style={{ backgroundColor: form.accentColor }} /></div>
+          </div>
+        </div>
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <Field label="Venue name" value={form.name} onChange={(value) => updateForm("name", value)} placeholder="AJ's Bar" />
         <Field label="Trivia night name" value={form.nightName} onChange={(value) => updateForm("nightName", value)} placeholder="AJ's Trivia" />
