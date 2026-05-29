@@ -254,6 +254,13 @@ const persistLiveVote = (sessionId, name, payload, makeKey) => {
   const next = [...current.filter((item) => makeKey(item) !== makeKey(payload)), payload];
   writeStoredList(key, next);
 };
+const persistLiveIdea = (sessionId, payload) => {
+  const key = hostToolsStorageKey(sessionId, "ideas");
+  const current = readStoredList(key);
+  const next = [payload, ...current.filter((item) => !(item.playerId === payload.playerId && item.submittedAt === payload.submittedAt))].slice(0, 200);
+  writeStoredList(key, next);
+  return next;
+};
 
 const getDefaultPoints = (question) => POINTS_BY_TYPE[question?.type] || 100;
 const getQuestionPoints = (question) => Number(question?.points ?? 0) > 0 ? Number(question.points) : getDefaultPoints(question);
@@ -328,7 +335,7 @@ const HostSession = () => {
   const [players, setPlayers] = useState([]);
   const [answers, setAnswers] = useState([]);
   const [playerActivity, setPlayerActivity] = useState([]);
-  const [playerIdeas, setPlayerIdeas] = useState([]);
+  const [playerIdeas, setPlayerIdeas] = useState(() => readStoredList(hostToolsStorageKey(id, "ideas")));
   const [gradedAnswers, setGradedAnswers] = useState({});
   const [scoreModal, setScoreModal] = useState(null);
   const [liveStatus, setLiveStatus] = useState("connecting");
@@ -400,7 +407,7 @@ const HostSession = () => {
       })
       .on("broadcast", { event: "idea_submit" }, ({ payload }) => {
         if (!payload?.playerId) return;
-        setPlayerIdeas((current) => [payload, ...current].slice(0, 200));
+        setPlayerIdeas(() => persistLiveIdea(id, payload));
       })
       .subscribe((status) => setLiveStatus(status === "SUBSCRIBED" ? "live" : "connecting"));
     return () => {

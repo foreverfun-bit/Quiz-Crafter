@@ -22,13 +22,21 @@ const writeDefaultBranding = (branding) => writeJson(HOST_DEFAULT_BRANDING_KEY, 
 const sessionStorageKey = (sessionId, name) => `quiz-crafter-host-tools-${sessionId}-${name}`;
 const sessionQuestions = (session) => [session?.true_false_questions, session?.multiple_choice_questions, session?.written_questions, session?.picture_questions].flatMap((value) => Array.isArray(value) ? value : []);
 const fileToDataUrl = (file) => new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file); });
+const hostToolTabs = [
+  { key: "live", label: "Live Hosting", icon: ExternalLink },
+  { key: "feedback", label: "Feedback", icon: MessageSquare },
+  { key: "updates", label: "Updates", icon: Mail },
+  { key: "branding", label: "Branding", icon: Palette },
+];
 
 const HostTools = () => {
   const [sessions, setSessions] = useState([]);
   const [selectedSessionId, setSelectedSessionId] = useState("");
+  const [activeTab, setActiveTab] = useState("live");
   const [players, setPlayers] = useState([]);
   const [feedback, setFeedback] = useState([]);
   const [categoryFeedback, setCategoryFeedback] = useState([]);
+  const [playerIdeas, setPlayerIdeas] = useState([]);
   const [message, setMessage] = useState("");
   const [socialPost, setSocialPost] = useState("");
   const [aiDirection, setAiDirection] = useState("Make it playful, punny, and useful without giving away answers.");
@@ -59,6 +67,7 @@ const HostTools = () => {
     setPlayers(readJson(sessionStorageKey(selectedSessionId, "players"), []));
     setFeedback(readJson(sessionStorageKey(selectedSessionId, "feedback"), []));
     setCategoryFeedback(readJson(sessionStorageKey(selectedSessionId, "category-feedback"), []));
+    setPlayerIdeas(readJson(sessionStorageKey(selectedSessionId, "ideas"), []));
 
     const channel = supabase.channel(`quiz-crafter-live-${selectedSessionId}`, { config: { broadcast: { self: false } } });
     channelRef.current = channel;
@@ -74,6 +83,10 @@ const HostTools = () => {
       .on("broadcast", { event: "category_feedback_submit" }, ({ payload }) => {
         if (!payload?.playerId || !payload.category) return;
         setCategoryFeedback((current) => persistVote(selectedSessionId, "category-feedback", current, payload, (item) => `${item.playerId}-${item.roundKey || item.roundName}-${item.category}`));
+      })
+      .on("broadcast", { event: "idea_submit" }, ({ payload }) => {
+        if (!payload?.playerId) return;
+        setPlayerIdeas((current) => persistIdea(selectedSessionId, current, payload));
       })
       .subscribe((status) => setConnected(status === "SUBSCRIBED"));
 
@@ -171,20 +184,29 @@ const HostTools = () => {
 
       <Card className="glass-card mb-6"><CardContent className="p-4 grid grid-cols-1 lg:grid-cols-[1fr_auto] gap-3 items-end"><label className="text-sm text-zinc-400">Session<select value={selectedSessionId} onChange={(event) => setSelectedSessionId(event.target.value)} className="mt-1 w-full h-11 rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60">{sessions.map((session) => <option key={session.id} value={session.id}>{session.name || session.session_name || "Untitled Session"}</option>)}</select></label><Badge className="h-10 justify-center bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20"><Users size={15} className="mr-1" />{emailPlayers.length} email opt-ins</Badge></CardContent></Card>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[1.15fr_.85fr] gap-6">
-        <section className="space-y-6">
-          <BrandingPanel branding={branding} setBranding={setBranding} onSave={saveDefaultBranding} />
-          <Panel title="Updates" icon={MessageSquare}><textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Type a clue, cancellation, schedule change, or player update..." className="min-h-32 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><div className="grid grid-cols-1 md:grid-cols-3 gap-2"><Button onClick={sendUpdate} className="gradient-btn"><Send size={16} className="mr-2" />Send In-App</Button><Button onClick={openEmailDraft} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Mail size={16} className="mr-2" />Email Draft</Button><Button onClick={copyEmails} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Copy size={16} className="mr-2" />Copy Emails</Button></div></Panel>
-          <Panel title="AI Clue Assistant" icon={Sparkles}><textarea value={aiDirection} onChange={(event) => setAiDirection(event.target.value)} className="min-h-20 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><Button onClick={generateClues} disabled={generating || !selectedSession} className="gradient-btn">{generating ? <Sparkles className="mr-2 animate-spin" size={16} /> : <Sparkles className="mr-2" size={16} />}Draft Punny Clues</Button><p className="text-xs text-zinc-500">AI studies the selected session and drafts an update plus a social post without revealing answers.</p></Panel>
-          <Panel title="Social Media" icon={ExternalLink}><textarea value={socialPost} onChange={(event) => setSocialPost(event.target.value)} placeholder="Social post text..." className="min-h-28 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><div className="grid grid-cols-1 md:grid-cols-3 gap-2"><Button onClick={copySocialPost} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Copy size={16} className="mr-2" />Copy Post</Button><Button onClick={() => openSocialComposer("facebook")} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />Facebook</Button><Button onClick={() => openSocialComposer("x")} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />X/Twitter</Button></div><div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2"><input value={socialLinks.facebook} onChange={(event) => updateSocialLink("facebook", event.target.value)} placeholder="Facebook page link" className="h-10 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none" /><input value={socialLinks.instagram} onChange={(event) => updateSocialLink("instagram", event.target.value)} placeholder="Instagram profile link" className="h-10 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none" /><input value={socialLinks.x} onChange={(event) => updateSocialLink("x", event.target.value)} placeholder="X/Twitter profile link" className="h-10 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none" /></div><p className="text-xs text-zinc-500">For now this opens/copies posts. Fully automatic posting will need connected social accounts and permissions.</p></Panel>
-        </section>
-        <section className="space-y-6"><FeedbackCard title="Player Feedback" rows={questionFeedback} empty="Question likes and dislikes will appear here after players tap the thumbs during a live session." /><FeedbackCard title="Category Feedback" rows={categoryRows} empty="Category likes and dislikes come from the released Round Info screen." /></section>
-      </div>
+      <Card className="glass-card mb-6"><CardContent className="p-2 grid grid-cols-2 lg:grid-cols-4 gap-2">{hostToolTabs.map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => setActiveTab(key)} className={`h-12 rounded-lg border px-3 font-semibold flex items-center justify-center gap-2 transition ${activeTab === key ? "bg-[#71E0DC]/20 border-[#71E0DC]/45 text-white shadow-[0_0_24px_rgba(113,224,220,.12)]" : "bg-zinc-950/50 border-white/10 text-zinc-400 hover:text-white hover:border-white/20"}`}><Icon size={17} />{label}</button>)}</CardContent></Card>
+
+      {activeTab === "live" && <LiveHostingPanel selectedSessionId={selectedSessionId} selectedSession={selectedSession} players={players} connected={connected} />}
+
+      {activeTab === "feedback" && <div className="grid grid-cols-1 xl:grid-cols-[1fr_1fr] gap-6"><FeedbackCard title="Question Feedback" rows={questionFeedback} empty="Question likes and dislikes will appear here after players tap the thumbs during a live session." /><FeedbackCard title="Category Feedback" rows={categoryRows} empty="Category likes and dislikes come from the released Round Info screen." /><IdeasFeedbackCard ideas={playerIdeas} /></div>}
+
+      {activeTab === "updates" && <section className="space-y-6 max-w-5xl"><Panel title="Email and Player Updates" icon={MessageSquare}><textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Type a clue, cancellation, schedule change, or player update..." className="min-h-32 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><div className="grid grid-cols-1 md:grid-cols-3 gap-2"><Button onClick={sendUpdate} className="gradient-btn"><Send size={16} className="mr-2" />Send In-App</Button><Button onClick={openEmailDraft} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Mail size={16} className="mr-2" />Email Draft</Button><Button onClick={copyEmails} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Copy size={16} className="mr-2" />Copy Emails</Button></div></Panel><Panel title="AI Clue Assistant" icon={Sparkles}><textarea value={aiDirection} onChange={(event) => setAiDirection(event.target.value)} className="min-h-20 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><Button onClick={generateClues} disabled={generating || !selectedSession} className="gradient-btn">{generating ? <Sparkles className="mr-2 animate-spin" size={16} /> : <Sparkles className="mr-2" size={16} />}Draft Punny Clues</Button><p className="text-xs text-zinc-500">AI studies the selected session and drafts an update plus a social post without revealing answers.</p></Panel><Panel title="Social Media" icon={ExternalLink}><textarea value={socialPost} onChange={(event) => setSocialPost(event.target.value)} placeholder="Social post text..." className="min-h-28 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><div className="grid grid-cols-1 md:grid-cols-3 gap-2"><Button onClick={copySocialPost} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Copy size={16} className="mr-2" />Copy Post</Button><Button onClick={() => openSocialComposer("facebook")} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />Facebook</Button><Button onClick={() => openSocialComposer("x")} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />X/Twitter</Button></div><div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2"><input value={socialLinks.facebook} onChange={(event) => updateSocialLink("facebook", event.target.value)} placeholder="Facebook page link" className="h-10 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none" /><input value={socialLinks.instagram} onChange={(event) => updateSocialLink("instagram", event.target.value)} placeholder="Instagram profile link" className="h-10 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none" /><input value={socialLinks.x} onChange={(event) => updateSocialLink("x", event.target.value)} placeholder="X/Twitter profile link" className="h-10 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none" /></div><p className="text-xs text-zinc-500">For now this opens/copies posts. Fully automatic posting will need connected social accounts and permissions.</p></Panel></section>}
+
+      {activeTab === "branding" && <section className="max-w-5xl"><BrandingPanel branding={branding} setBranding={setBranding} onSave={saveDefaultBranding} /></section>}
     </div>
   );
 };
 
 const Panel = ({ title, icon: Icon, children }) => <Card className="glass-card"><CardHeader><CardTitle className="text-white flex items-center gap-2"><Icon className="text-[#71E0DC]" />{title}</CardTitle></CardHeader><CardContent className="space-y-4">{children}</CardContent></Card>;
+
+const LiveHostingPanel = ({ selectedSessionId, selectedSession, players, connected }) => {
+  const sessionName = selectedSession?.name || selectedSession?.session_name || "Choose a session";
+  const openScreen = (path) => {
+    if (!selectedSessionId) return toast.error("Choose a session first");
+    window.open(path, "_blank", "noopener,noreferrer");
+  };
+  return <section className="max-w-5xl"><Panel title="Live Hosting" icon={ExternalLink}><div className="rounded-xl border border-white/10 bg-zinc-950/70 p-5"><div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3"><div><p className="text-xs uppercase tracking-wide text-zinc-500">Selected session</p><h2 className="text-2xl font-black text-white">{sessionName}</h2><p className="text-sm text-zinc-500 mt-1">{players.length} player{players.length === 1 ? "" : "s"} seen in Host Tools</p></div><Badge className={connected ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/20" : "bg-zinc-800 text-zinc-300"}>{connected ? "Listening live" : "Not connected"}</Badge></div></div><div className="grid grid-cols-1 md:grid-cols-2 gap-3"><Button onClick={() => openScreen(`/host-session/${selectedSessionId}`)} disabled={!selectedSessionId} className="gradient-btn h-12"><ExternalLink size={17} className="mr-2" />Open Live Hosting Screen</Button><Button onClick={() => openScreen(`/present-session/${selectedSessionId}`)} disabled={!selectedSessionId} variant="outline" className="h-12 border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={17} className="mr-2" />Open Presentation Screen</Button></div></Panel></section>;
+};
 
 const BrandingPanel = ({ branding, setBranding, onSave }) => {
   const safeBranding = normalizeBranding(branding);
@@ -213,6 +235,12 @@ const persistVote = (sessionId, key, current, payload, makeKey) => {
   return next;
 };
 
+const persistIdea = (sessionId, current, payload) => {
+  const next = [payload, ...current.filter((item) => !(item.playerId === payload.playerId && item.submittedAt === payload.submittedAt))].slice(0, 200);
+  writeJson(sessionStorageKey(sessionId, "ideas"), next);
+  return next;
+};
+
 const summarize = (items, labelKey) => Object.values(items.reduce((groups, item) => {
   const label = item[labelKey] || "Unlabeled";
   if (!groups[label]) groups[label] = { label, likes: 0, dislikes: 0 };
@@ -222,5 +250,14 @@ const summarize = (items, labelKey) => Object.values(items.reduce((groups, item)
 }, {})).sort((a, b) => (b.likes + b.dislikes) - (a.likes + a.dislikes));
 
 const FeedbackCard = ({ title, rows, empty }) => <Card className="glass-card"><CardHeader><CardTitle className="text-white flex items-center gap-2"><Sparkles className="text-[#71E0DC]" />{title}</CardTitle></CardHeader><CardContent className="space-y-2 max-h-[520px] overflow-y-auto">{rows.map((row) => <div key={row.label} className="rounded-lg border border-white/10 bg-zinc-950/60 p-3"><p className="text-sm font-semibold text-zinc-200 mb-2 line-clamp-2">{row.label}</p><div className="grid grid-cols-2 gap-2"><div className="rounded-md bg-emerald-500/10 border border-emerald-500/20 p-2 text-center"><p className="text-xs text-zinc-500">Likes</p><p className="text-xl font-black text-emerald-300">{row.likes}</p></div><div className="rounded-md bg-red-500/10 border border-red-500/20 p-2 text-center"><p className="text-xs text-zinc-500">Dislikes</p><p className="text-xl font-black text-red-300">{row.dislikes}</p></div></div></div>)}{!rows.length && <p className="text-sm text-zinc-500 text-center py-8">{empty}</p>}</CardContent></Card>;
+
+const IdeasFeedbackCard = ({ ideas }) => <Card className="glass-card xl:col-span-2"><CardHeader><CardTitle className="text-white flex items-center gap-2"><MessageSquare className="text-[#71E0DC]" />End-of-Session Ideas</CardTitle></CardHeader><CardContent className="space-y-3 max-h-[520px] overflow-y-auto">{ideas.map((idea, index) => <div key={`${idea.playerId}-${idea.submittedAt}-${index}`} className="rounded-lg border border-white/10 bg-zinc-950/60 p-4"><div className="flex flex-wrap items-center justify-between gap-2 mb-3"><p className="font-bold text-white">{idea.playerName || "Team"}</p><p className="text-xs text-zinc-500">{formatDateTime(idea.submittedAt)}</p></div>{idea.category && <p className="text-sm text-zinc-300"><span className="text-[#71E0DC] font-semibold">Category idea:</span> {idea.category}</p>}{idea.question && <p className="text-sm text-zinc-300 mt-2"><span className="text-[#AEB2EF] font-semibold">Question idea:</span> {idea.question}</p>}</div>)}{!ideas.length && <p className="text-sm text-zinc-500 text-center py-8">Player category and question ideas from the post-game feedback screen will appear here.</p>}</CardContent></Card>;
+
+const formatDateTime = (value) => {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString();
+};
 
 export default HostTools;
