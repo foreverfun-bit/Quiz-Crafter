@@ -322,6 +322,10 @@ const HostSession = () => {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [emergencyOverride, setEmergencyOverride] = useState(null);
+  const [generatedEmergency, setGeneratedEmergency] = useState(null);
+  const [emergencyLoading, setEmergencyLoading] = useState(false);
+  const [disputeNotes, setDisputeNotes] = useState(() => readStoredList(hostToolsStorageKey(id, "disputes")));
   const [showAnswer, setShowAnswer] = useState(false);
   const [showFunFact, setShowFunFact] = useState(false);
   const [presentMode, setPresentMode] = useState("question");
@@ -419,6 +423,7 @@ const HostSession = () => {
   const questions = useMemo(() => flattenSession(session), [session]);
   const rounds = useMemo(() => makeRounds(questions), [questions]);
   const currentQuestion = questions[currentIndex] || null;
+  const displayedQuestion = emergencyOverride || currentQuestion;
   const currentRound = rounds.find((round) => currentIndex >= round.startIndex && currentIndex < round.startIndex + round.questions.length);
   const nextRound = rounds.find((round) => round.startIndex > currentIndex);
   const defaultIntroRound = currentRound && currentIndex >= currentRound.startIndex + currentRound.questions.length - 1 && nextRound ? nextRound : currentRound;
@@ -433,21 +438,21 @@ const HostSession = () => {
   const acceptingAnswers = timeRemaining === null || timeRemaining > 0;
 
   useEffect(() => {
-    if (!currentQuestion) return;
-    setPointsPerQuestion(getQuestionPoints(currentQuestion));
-    setTimerSeconds(Number(currentQuestion.timerSeconds || 30));
-    setWagerLimit(Number(currentQuestion.wagerLimit || 0));
-    setWagerTiming(normalizeWagerTiming(currentQuestion.wagerTiming));
-    setWagerMode(Number(currentQuestion.wagerLimit || 0) > 0);
-  }, [currentQuestion]);
+    if (!displayedQuestion) return;
+    setPointsPerQuestion(getQuestionPoints(displayedQuestion));
+    setTimerSeconds(Number(displayedQuestion.timerSeconds || 30));
+    setWagerLimit(Number(displayedQuestion.wagerLimit || 0));
+    setWagerTiming(normalizeWagerTiming(displayedQuestion.wagerTiming));
+    setWagerMode(Number(displayedQuestion.wagerLimit || 0) > 0);
+  }, [displayedQuestion]);
 
   useEffect(() => {
     localStorage.setItem(`quiz-crafter-leaderboard-${id}`, JSON.stringify(leaderboard));
   }, [id, leaderboard]);
 
   useEffect(() => {
-    if (!session || !questions.length || !currentQuestion) return;
-    const publicQuestion = { ...currentQuestion, answer: showAnswer ? currentQuestion.answer : "" };
+    if (!session || !questions.length || !displayedQuestion) return;
+    const publicQuestion = { ...displayedQuestion, answer: showAnswer ? displayedQuestion.answer : "" };
     const state = {
       sessionId: id,
       sessionName,
@@ -460,11 +465,11 @@ const HostSession = () => {
       currentQuestion: publicQuestion,
       introRound: serializeRoundIntro(introRound),
       showAnswer,
-      revealedAnswer: showAnswer ? currentQuestion.answer : "",
+      revealedAnswer: showAnswer ? displayedQuestion.answer : "",
       showFunFact,
       leaderboard,
       players,
-      pointsPerQuestion: Number(pointsPerQuestion) || getDefaultPoints(currentQuestion),
+      pointsPerQuestion: Number(pointsPerQuestion) || getDefaultPoints(displayedQuestion),
       wagerMode,
       wagerLimit: Number(wagerLimit || 0),
       wagerTiming,
@@ -476,7 +481,7 @@ const HostSession = () => {
     };
     localStorage.setItem(`quiz-crafter-present-state-${id}`, JSON.stringify(state));
     liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: state });
-  }, [id, session, sessionName, questions.length, currentQuestion, currentIndex, pendingBonusIndex, rounds, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, leaderboard, players, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerEndAt, timeRemaining, acceptingAnswers, branding]);
+  }, [id, session, sessionName, questions.length, displayedQuestion, currentIndex, pendingBonusIndex, rounds, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, leaderboard, players, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerEndAt, timeRemaining, acceptingAnswers, branding]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -505,6 +510,7 @@ const HostSession = () => {
       return;
     }
     setCurrentIndex(index);
+    setEmergencyOverride(null);
     setPendingBonusIndex(null);
     setShowAnswer(false);
     setShowFunFact(false);
@@ -537,6 +543,83 @@ const HostSession = () => {
     setPresentMode("question");
   };
   const resetTimer = () => setTimerEndAt(null);
+  const startTimerOnly = (seconds = 60) => {
+    setTimerSeconds(seconds);
+    setTimerEndAt(Date.now() + Math.max(1, Number(seconds) || 60) * 1000);
+    setGameStarted(true);
+  };
+  const makeFallbackEmergency = (kind = "replacement") => ({
+    id: `emergency-${Date.now()}`,
+    category: kind === "tiebreaker" ? "Tiebreaker" : (displayedQuestion?.category || "Emergency"),
+    questionText: kind === "tiebreaker" ? "What year did the first modern crossword puzzle appear in a newspaper?" : "What common kitchen spice comes from the dried inner bark of trees in the Cinnamomum family?",
+    answer: kind === "tiebreaker" ? "1913" : "Cinnamon",
+    funFact: kind === "tiebreaker" ? "Arthur Wynne's word-cross appeared in the New York World in December 1913." : "The curled sticks are called quills and form as strips of bark dry.",
+    options: [],
+    type: "written",
+    roundName: currentRound?.name || "Emergency",
+    roundOrder: currentRound?.questions?.[0]?.roundOrder || 1,
+    sourceOrder: currentIndex + 1,
+    points: pointsPerQuestion || 25,
+    timerSeconds: timerSeconds || 30,
+    wagerLimit: 0,
+    wagerTiming: "before_answer",
+  });
+  const generateEmergencyQuestion = async (kind = "replacement") => {
+    setEmergencyLoading(true);
+    try {
+      const response = await fetch("/api/generate-session-candidates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: `emergency-${id}-${currentIndex}`,
+          questionType: "written",
+          count: 1,
+          difficulty: kind === "tiebreaker" ? "hard" : "medium",
+          theme: `${kind === "tiebreaker" ? "Create a fair numeric tiebreaker question." : "Create one fresh emergency replacement question."}\nCurrent category: ${displayedQuestion?.category || ""}\nCurrent question to avoid: ${displayedQuestion?.questionText || ""}`,
+          excludeUsed: true,
+          avoidDuplicates: true,
+          rejectedQuestions: [displayedQuestion?.questionText].filter(Boolean),
+        }),
+      });
+      const data = await response.json();
+      const candidate = Array.isArray(data?.candidates) ? data.candidates[0] : null;
+      if (!response.ok || !candidate) throw new Error(data?.error || "No emergency question returned");
+      setGeneratedEmergency({
+        ...makeFallbackEmergency(kind),
+        category: candidate.category || (kind === "tiebreaker" ? "Tiebreaker" : "Emergency"),
+        questionText: candidate.question_text || candidate.question || "",
+        answer: candidate.correct_answer || candidate.answer || "",
+        funFact: candidate.fun_fact || "",
+        options: [],
+        type: "written",
+      });
+      toast.success(kind === "tiebreaker" ? "Tiebreaker generated" : "Replacement generated");
+    } catch (error) {
+      setGeneratedEmergency(makeFallbackEmergency(kind));
+      toast.info("Using backup emergency question");
+    } finally {
+      setEmergencyLoading(false);
+    }
+  };
+  const useEmergencyQuestion = (question) => {
+    if (!question?.questionText || !question?.answer) return toast.error("Generate or enter an emergency question first");
+    setEmergencyOverride({ ...question, id: question.id || `emergency-${Date.now()}` });
+    setAnswers((current) => current.filter((answer) => Number(answer.questionIndex) !== Number(currentIndex)));
+    setShowAnswer(false);
+    setShowFunFact(false);
+    setTimerEndAt(null);
+    setPresentMode("question");
+    setGameStarted(true);
+    toast.success("Emergency question is live");
+  };
+  const addDisputeNote = (note) => {
+    const body = String(note || "").trim();
+    if (!body) return;
+    const next = [{ id: `dispute-${Date.now()}`, questionIndex: currentIndex, questionText: displayedQuestion?.questionText || "", note: body, createdAt: new Date().toISOString() }, ...disputeNotes].slice(0, 100);
+    setDisputeNotes(next);
+    writeStoredList(hostToolsStorageKey(id, "disputes"), next);
+    toast.success("Dispute note saved");
+  };
   const openPresentation = () => window.open(`/present-session/${id}`, "_blank", "noopener,noreferrer");
   const copyJoinLink = async () => {
     try {
@@ -597,7 +680,7 @@ const HostSession = () => {
     const key = answerKey(answer);
     const previous = gradedAnswers[key];
     const previousPoints = Number(previous?.points || 0);
-    const award = wagerMode && Number(answer.wagerAmount) > 0 ? getWagerAward(answer, leaderboard, wagerLimit, previousPoints) : Number(pointsPerQuestion) || getDefaultPoints(currentQuestion);
+    const award = wagerMode && Number(answer.wagerAmount) > 0 ? getWagerAward(answer, leaderboard, wagerLimit, previousPoints) : Number(pointsPerQuestion) || getDefaultPoints(displayedQuestion);
     const wagerPenalty = wagerMode && Number(answer.wagerAmount) > 0 ? getWagerAward(answer, leaderboard, wagerLimit, previousPoints) : 0;
     const nextPoints = status === "correct" ? award : status === "incorrect" && wagerPenalty > 0 ? -wagerPenalty : 0;
     const delta = nextPoints - previousPoints;
@@ -607,19 +690,19 @@ const HostSession = () => {
   };
 
   useEffect(() => {
-    if (!currentQuestion) return;
+    if (!displayedQuestion) return;
     currentAnswers.forEach((answer) => {
       const key = answerKey(answer);
-      if (gradedAnswers[key] || !isCorrectSubmission(answer, currentQuestion)) return;
+      if (gradedAnswers[key] || !isCorrectSubmission(answer, displayedQuestion)) return;
       if (wagerMode && wagerTiming === "after_answer" && !Number(answer.wagerAmount || 0)) return;
       markAnswer(answer, "correct", { silent: true });
     });
   // markAnswer intentionally stays outside the deps so this effect only reacts to answer/game state changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentAnswers, currentQuestion, gradedAnswers, wagerMode, wagerTiming]);
+  }, [currentAnswers, displayedQuestion, gradedAnswers, wagerMode, wagerTiming]);
 
   if (loading) return <div className="min-h-screen bg-[#09090B] flex items-center justify-center"><Loader2 className="text-[#71E0DC] animate-spin" size={34} /></div>;
-  if (!session || !currentQuestion) {
+  if (!session || !displayedQuestion) {
     return <div className="min-h-screen bg-[#09090B] flex items-center justify-center p-6 text-center"><div><p className="text-white text-2xl font-bold mb-2">No questions to host</p><p className="text-zinc-500 mb-4">Add questions to this session first.</p><Button onClick={() => navigate(`/session/${id}`)} className="gradient-btn">Back to Session</Button></div></div>;
   }
 
@@ -632,10 +715,10 @@ const HostSession = () => {
         <main className="w-full">
           {!focusMode && <PresentationControls mode={presentMode} setMode={releaseMode} rounds={rounds} currentIndex={currentIndex} currentRound={currentRound} introRoundKey={introRound?.key || introRoundKey} setIntroRoundKey={setIntroRoundKey} />}
           {!focusMode && customizeOpen && <HostCustomizePanel branding={branding} defaultBranding={readDefaultBranding()} onSave={saveBranding} onSaveDefault={saveBrandingAsDefault} onUseDefault={useDefaultBranding} onClose={() => setCustomizeOpen(false)} />}
-          {presentMode === "bonus_pause" ? <BonusPauseStage round={rounds.find((round) => pendingBonusIndex >= round.startIndex && pendingBonusIndex < round.startIndex + round.questions.length)} leaderboard={leaderboard} /> : presentMode === "winners" ? <WinnersStage leaderboard={leaderboard} /> : presentMode === "feedback" ? <FeedbackStage ideas={playerIdeas} /> : <QuestionStage question={currentQuestion} index={currentIndex} total={questions.length} roundName={currentRound?.name} showAnswer={showAnswer} showFunFact={showFunFact} focusMode={focusMode} pointsPerQuestion={pointsPerQuestion} setPointsPerQuestion={setPointsPerQuestion} timerSeconds={timerSeconds} setTimerSeconds={setTimerSeconds} timeRemaining={timeRemaining} startTimer={startTimer} resetTimer={resetTimer} wagerMode={wagerMode} setWagerMode={setWagerMode} wagerLimit={wagerLimit} setWagerLimit={setWagerLimit} wagerTiming={wagerTiming} setWagerTiming={setWagerTiming} branding={branding} />}
-          <div className="mt-4 flex items-center justify-between gap-3 flex-wrap"><Button variant="outline" onClick={() => goToQuestion(currentIndex - 1)} disabled={currentIndex === 0} className="border-white/10 text-zinc-300 hover:text-white"><ChevronLeft size={18} className="mr-2" />Previous</Button><div className="flex gap-2 flex-wrap justify-end"><Button onClick={toggleAnswer} disabled={presentMode === "bonus_pause" || presentMode === "winners" || presentMode === "feedback"} className={showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-50" : "gradient-btn disabled:opacity-50"}>{showAnswer ? <EyeOff size={18} className="mr-2" /> : <Eye size={18} className="mr-2" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button><Button onClick={toggleFunFact} disabled={presentMode === "bonus_pause" || presentMode === "winners" || presentMode === "feedback" || !currentQuestion.funFact} className="bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-50"><Sparkles size={18} className="mr-2" />Fun Fact</Button><Button onClick={() => presentMode === "bonus_pause" && pendingBonusIndex !== null ? goToQuestion(pendingBonusIndex, { startTimer: true, pauseBeforeBonus: false }) : goToQuestion(currentIndex + 1, { startTimer: true })} disabled={presentMode !== "bonus_pause" && currentIndex === questions.length - 1} className="bg-[#AEB2EF] text-zinc-950 hover:bg-[#AEB2EF]/90"><ChevronRight size={18} className="mr-2" />{presentMode === "bonus_pause" ? "Start Bonus" : "Next"}</Button></div></div>
+          {presentMode === "bonus_pause" ? <BonusPauseStage round={rounds.find((round) => pendingBonusIndex >= round.startIndex && pendingBonusIndex < round.startIndex + round.questions.length)} leaderboard={leaderboard} /> : presentMode === "winners" ? <WinnersStage leaderboard={leaderboard} /> : presentMode === "feedback" ? <FeedbackStage ideas={playerIdeas} /> : <QuestionStage question={displayedQuestion} index={currentIndex} total={questions.length} roundName={currentRound?.name} showAnswer={showAnswer} showFunFact={showFunFact} focusMode={focusMode} pointsPerQuestion={pointsPerQuestion} setPointsPerQuestion={setPointsPerQuestion} timerSeconds={timerSeconds} setTimerSeconds={setTimerSeconds} timeRemaining={timeRemaining} startTimer={startTimer} resetTimer={resetTimer} wagerMode={wagerMode} setWagerMode={setWagerMode} wagerLimit={wagerLimit} setWagerLimit={setWagerLimit} wagerTiming={wagerTiming} setWagerTiming={setWagerTiming} branding={branding} />}
+          <div className="mt-4 flex items-center justify-between gap-3 flex-wrap"><Button variant="outline" onClick={() => goToQuestion(currentIndex - 1)} disabled={currentIndex === 0} className="border-white/10 text-zinc-300 hover:text-white"><ChevronLeft size={18} className="mr-2" />Previous</Button><div className="flex gap-2 flex-wrap justify-end"><Button onClick={toggleAnswer} disabled={presentMode === "bonus_pause" || presentMode === "winners" || presentMode === "feedback"} className={showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-50" : "gradient-btn disabled:opacity-50"}>{showAnswer ? <EyeOff size={18} className="mr-2" /> : <Eye size={18} className="mr-2" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button><Button onClick={toggleFunFact} disabled={presentMode === "bonus_pause" || presentMode === "winners" || presentMode === "feedback" || !displayedQuestion.funFact} className="bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-50"><Sparkles size={18} className="mr-2" />Fun Fact</Button><Button onClick={() => presentMode === "bonus_pause" && pendingBonusIndex !== null ? goToQuestion(pendingBonusIndex, { startTimer: true, pauseBeforeBonus: false }) : goToQuestion(currentIndex + 1, { startTimer: true })} disabled={presentMode !== "bonus_pause" && currentIndex === questions.length - 1} className="bg-[#AEB2EF] text-zinc-950 hover:bg-[#AEB2EF]/90"><ChevronRight size={18} className="mr-2" />{presentMode === "bonus_pause" ? "Start Bonus" : "Next"}</Button></div></div>
         </main>
-        {!focusMode && <HostSidePanel activeTab={sidePanelTab} setActiveTab={setSidePanelTab} joinUrl={joinUrl} copyJoinLink={copyJoinLink} players={players} answers={answers} currentAnswers={currentAnswers} currentActivity={currentActivity} fairPlayStats={fairPlayStats} leaderboard={leaderboard} gradedAnswers={gradedAnswers} markAnswer={markAnswer} openScoreModal={openScoreModal} pointsPerQuestion={Number(pointsPerQuestion) || getDefaultPoints(currentQuestion)} wagerMode={wagerMode} wagerLimit={wagerLimit} setMode={releaseMode} teamName={teamName} teamScore={teamScore} setTeamName={setTeamName} setTeamScore={setTeamScore} addTeam={addTeam} adjustScore={adjustScore} removeTeam={removeTeam} showLeaderboard={() => releaseMode("leaderboard")} rounds={rounds} currentIndex={currentIndex} goToQuestion={goToQuestion} editBuild={() => navigate(`/build/${id}`)} ideas={playerIdeas} />}
+        {!focusMode && <HostSidePanel activeTab={sidePanelTab} setActiveTab={setSidePanelTab} joinUrl={joinUrl} copyJoinLink={copyJoinLink} players={players} answers={answers} currentAnswers={currentAnswers} currentActivity={currentActivity} fairPlayStats={fairPlayStats} leaderboard={leaderboard} gradedAnswers={gradedAnswers} markAnswer={markAnswer} openScoreModal={openScoreModal} pointsPerQuestion={Number(pointsPerQuestion) || getDefaultPoints(displayedQuestion)} wagerMode={wagerMode} wagerLimit={wagerLimit} setMode={releaseMode} teamName={teamName} teamScore={teamScore} setTeamName={setTeamName} setTeamScore={setTeamScore} addTeam={addTeam} adjustScore={adjustScore} removeTeam={removeTeam} showLeaderboard={() => releaseMode("leaderboard")} rounds={rounds} currentIndex={currentIndex} goToQuestion={goToQuestion} editBuild={() => navigate(`/build/${id}`)} ideas={playerIdeas} displayedQuestion={displayedQuestion} emergencyOverride={emergencyOverride} generatedEmergency={generatedEmergency} emergencyLoading={emergencyLoading} generateEmergencyQuestion={generateEmergencyQuestion} activateEmergencyQuestion={useEmergencyQuestion} clearEmergency={() => setEmergencyOverride(null)} startTimerOnly={startTimerOnly} addDisputeNote={addDisputeNote} disputeNotes={disputeNotes} />}
       </div>
     </div>
     {scoreModal && <ScoreAdjustModal modal={scoreModal} setModal={setScoreModal} adjustScore={adjustScore} setScore={setScore} />}
@@ -673,14 +756,24 @@ const HostCustomizePanel = ({ branding, defaultBranding, onSave, onSaveDefault, 
 
 const ColorField = ({ label, value, onChange }) => { const safeValue = sanitizeHexColor(value, DEFAULT_BRANDING.primaryColor); return <label className="text-xs text-zinc-400">{label}<div className="mt-1 flex h-10 rounded-md border border-white/10 bg-zinc-950 overflow-hidden focus-within:border-[#71E0DC]/60"><input type="color" value={safeValue} onChange={(event) => onChange(event.target.value)} className="h-10 w-12 border-0 bg-transparent p-1" /><input value={value || ""} onChange={(event) => onChange(event.target.value)} className="min-w-0 flex-1 bg-transparent px-2 text-white outline-none" /></div></label>; };
 
-const HostSidePanel = ({ activeTab, setActiveTab, joinUrl, copyJoinLink, players, answers, currentAnswers, currentActivity, fairPlayStats, leaderboard, gradedAnswers, markAnswer, openScoreModal, pointsPerQuestion, wagerMode, wagerLimit, setMode, teamName, teamScore, setTeamName, setTeamScore, addTeam, adjustScore, removeTeam, showLeaderboard, rounds, currentIndex, goToQuestion, editBuild, ideas }) => {
+const HostSidePanel = ({ activeTab, setActiveTab, joinUrl, copyJoinLink, players, answers, currentAnswers, currentActivity, fairPlayStats, leaderboard, gradedAnswers, markAnswer, openScoreModal, pointsPerQuestion, wagerMode, wagerLimit, setMode, teamName, teamScore, setTeamName, setTeamScore, addTeam, adjustScore, removeTeam, showLeaderboard, rounds, currentIndex, goToQuestion, editBuild, ideas, displayedQuestion, emergencyOverride, generatedEmergency, emergencyLoading, generateEmergencyQuestion, activateEmergencyQuestion, clearEmergency, startTimerOnly, addDisputeNote, disputeNotes }) => {
   const tabs = [
     { key: "answers", label: "Answers", icon: MessageSquare },
     { key: "teams", label: "Teams", icon: Trophy },
     { key: "run", label: "Run Sheet", icon: MonitorPlay },
+    { key: "emergency", label: "Rescue", icon: Timer },
     { key: "ideas", label: "Ideas", icon: Sparkles },
   ];
-  return <aside className="space-y-4"><Card className="glass-card"><CardContent className="p-2"><div className="grid grid-cols-4 gap-1">{tabs.map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => setActiveTab(key)} className={`h-10 rounded-md text-xs font-bold flex items-center justify-center gap-1.5 transition ${activeTab === key ? "text-zinc-950" : "text-zinc-300 hover:bg-white/5 hover:text-white"}`} style={activeTab === key ? { background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" } : undefined}><Icon size={14} />{label}</button>)}</div></CardContent></Card>{activeTab === "answers" && <PhonePlayPanel players={players} answers={currentAnswers} activity={currentActivity} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} pointsPerQuestion={pointsPerQuestion} setMode={setMode} />}{activeTab === "teams" && <LeaderboardPanel leaderboard={leaderboard} teamName={teamName} teamScore={teamScore} setTeamName={setTeamName} setTeamScore={setTeamScore} addTeam={addTeam} adjustScore={adjustScore} openScoreModal={openScoreModal} removeTeam={removeTeam} showLeaderboard={showLeaderboard} fairPlayStats={fairPlayStats} />}{activeTab === "run" && <RunSheet rounds={rounds} currentIndex={currentIndex} goToQuestion={goToQuestion} answers={answers} players={players} gradedAnswers={gradedAnswers} editBuild={editBuild} />}{activeTab === "ideas" && <IdeasPanel ideas={ideas} />}</aside>;
+  return <aside className="space-y-4"><Card className="glass-card"><CardContent className="p-2"><div className="grid grid-cols-5 gap-1">{tabs.map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => setActiveTab(key)} className={`h-10 rounded-md text-xs font-bold flex items-center justify-center gap-1.5 transition ${activeTab === key ? "text-zinc-950" : "text-zinc-300 hover:bg-white/5 hover:text-white"}`} style={activeTab === key ? { background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" } : undefined}><Icon size={14} />{label}</button>)}</div></CardContent></Card>{activeTab === "answers" && <PhonePlayPanel players={players} answers={currentAnswers} activity={currentActivity} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} pointsPerQuestion={pointsPerQuestion} setMode={setMode} />}{activeTab === "teams" && <LeaderboardPanel leaderboard={leaderboard} teamName={teamName} teamScore={teamScore} setTeamName={setTeamName} setTeamScore={setTeamScore} addTeam={addTeam} adjustScore={adjustScore} openScoreModal={openScoreModal} removeTeam={removeTeam} showLeaderboard={showLeaderboard} fairPlayStats={fairPlayStats} />}{activeTab === "run" && <RunSheet rounds={rounds} currentIndex={currentIndex} goToQuestion={goToQuestion} answers={answers} players={players} gradedAnswers={gradedAnswers} editBuild={editBuild} />}{activeTab === "emergency" && <EmergencyPanel currentIndex={currentIndex} displayedQuestion={displayedQuestion} emergencyOverride={emergencyOverride} generatedEmergency={generatedEmergency} emergencyLoading={emergencyLoading} generateEmergencyQuestion={generateEmergencyQuestion} activateEmergencyQuestion={activateEmergencyQuestion} clearEmergency={clearEmergency} startTimerOnly={startTimerOnly} goToQuestion={goToQuestion} editBuild={editBuild} addDisputeNote={addDisputeNote} disputeNotes={disputeNotes} />}{activeTab === "ideas" && <IdeasPanel ideas={ideas} />}</aside>;
+};
+
+const EmergencyPanel = ({ currentIndex, displayedQuestion, emergencyOverride, generatedEmergency, emergencyLoading, generateEmergencyQuestion, activateEmergencyQuestion, clearEmergency, startTimerOnly, goToQuestion, editBuild, addDisputeNote, disputeNotes }) => {
+  const [note, setNote] = useState("");
+  const saveNote = () => {
+    addDisputeNote(note);
+    setNote("");
+  };
+  return <Card className="glass-card"><CardContent className="p-4 space-y-4"><div><div className="flex items-center gap-2 text-white font-semibold"><Timer size={18} className="text-[#71E0DC]" />Emergency Host Tools</div><p className="text-xs text-zinc-500 mt-1">Quick fixes for a live hosting moment.</p></div>{emergencyOverride && <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-3 text-sm text-amber-100"><p className="font-bold">Emergency question is live</p><p className="mt-1 line-clamp-2">{emergencyOverride.questionText}</p><Button size="sm" variant="outline" onClick={clearEmergency} className="mt-2 h-8 border-amber-300/30 text-amber-100 hover:text-white">Return to original</Button></div>}<div className="grid grid-cols-2 gap-2"><Button size="sm" onClick={() => generateEmergencyQuestion("replacement")} disabled={emergencyLoading} className="bg-zinc-800 hover:bg-zinc-700 text-zinc-100">{emergencyLoading ? <Loader2 size={14} className="mr-1 animate-spin" /> : <RefreshCw size={14} className="mr-1" />}Replacement</Button><Button size="sm" onClick={() => generateEmergencyQuestion("tiebreaker")} disabled={emergencyLoading} className="bg-zinc-800 hover:bg-zinc-700 text-zinc-100"><Trophy size={14} className="mr-1" />Tiebreaker</Button><Button size="sm" onClick={() => startTimerOnly(60)} className="bg-zinc-800 hover:bg-zinc-700 text-zinc-100"><Timer size={14} className="mr-1" />60s Timer</Button><Button size="sm" onClick={() => goToQuestion(currentIndex + 1, { startTimer: true, pauseBeforeBonus: false })} className="bg-zinc-800 hover:bg-zinc-700 text-zinc-100"><ChevronRight size={14} className="mr-1" />Skip</Button></div>{generatedEmergency && <div className="rounded-lg border border-white/10 bg-zinc-950/70 p-3"><div className="flex items-center justify-between gap-2 mb-2"><Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20">{generatedEmergency.category}</Badge><Button size="sm" onClick={() => activateEmergencyQuestion(generatedEmergency)} className="h-8 gradient-btn">Use Live</Button></div><p className="text-sm font-bold text-white">{generatedEmergency.questionText}</p><p className="mt-2 text-sm text-[#71E0DC]">Answer: {generatedEmergency.answer}</p>{generatedEmergency.funFact && <p className="mt-2 text-xs text-zinc-400">{generatedEmergency.funFact}</p>}</div>}<div className="rounded-lg border border-white/10 bg-zinc-950/60 p-3"><p className="text-xs font-bold uppercase tracking-wide text-zinc-500 mb-2">Dispute note</p><textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Example: Team argued spelling, accepted after clarification." className="min-h-20 w-full resize-none rounded-md border border-white/10 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" /><Button size="sm" onClick={saveNote} disabled={!note.trim()} className="mt-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-100">Save Note</Button></div><div className="space-y-2 max-h-40 overflow-y-auto">{disputeNotes.slice(0, 5).map((item) => <div key={item.id} className="rounded-md bg-zinc-950/60 p-2 text-xs text-zinc-400"><p className="text-zinc-200 line-clamp-1">Q{Number(item.questionIndex) + 1}: {item.questionText}</p><p>{item.note}</p></div>)}{!disputeNotes.length && <p className="text-xs text-zinc-600 text-center">Dispute notes stay here for post-game review.</p>}</div><Button size="sm" variant="outline" onClick={editBuild} className="w-full border-white/10 text-zinc-300 hover:text-white"><Pencil size={14} className="mr-2" />Open Builder for Bigger Fixes</Button></CardContent></Card>;
 };
 
 const PhonePlayPanel = ({ players, answers, activity, fairPlayStats, gradedAnswers, markAnswer, pointsPerQuestion, setMode }) => {

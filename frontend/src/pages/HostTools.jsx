@@ -5,6 +5,7 @@ import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Copy, ExternalLink, Image, Mail, MessageSquare, Palette, Save, Send, Sparkles, Upload, Users } from "lucide-react";
 import { toast } from "sonner";
+import { readLocalTemplates, readLocalVenues } from "../lib/venues";
 
 const SOCIAL_STORAGE_KEY = "quiz-crafter-social-links";
 const HOST_DEFAULT_BRANDING_KEY = "quiz-crafter-host-branding-defaults";
@@ -25,6 +26,7 @@ const fileToDataUrl = (file) => new Promise((resolve, reject) => { const reader 
 const hostToolTabs = [
   { key: "live", label: "Live Hosting", icon: ExternalLink },
   { key: "feedback", label: "Feedback", icon: MessageSquare },
+  { key: "assistant", label: "Assistant", icon: Sparkles },
   { key: "updates", label: "Updates", icon: Mail },
   { key: "branding", label: "Branding", icon: Palette },
 ];
@@ -39,6 +41,9 @@ const HostTools = () => {
   const [playerIdeas, setPlayerIdeas] = useState([]);
   const [message, setMessage] = useState("");
   const [socialPost, setSocialPost] = useState("");
+  const [assistantRequest, setAssistantRequest] = useState("Look at this session and tell me what feels too easy, too hard, repetitive, or missing for my regular trivia crowd.");
+  const [assistantAnswer, setAssistantAnswer] = useState("");
+  const [assistantLoading, setAssistantLoading] = useState(false);
   const [aiDirection, setAiDirection] = useState("Make it playful, punny, and useful without giving away answers.");
   const [socialLinks, setSocialLinks] = useState(() => readJson(SOCIAL_STORAGE_KEY, { facebook: "", instagram: "", x: "" }));
   const [branding, setBranding] = useState(readDefaultBranding);
@@ -172,6 +177,30 @@ const HostTools = () => {
     }
   };
 
+  const askHostAssistant = async () => {
+    const request = assistantRequest.trim();
+    if (!request) return toast.error("Ask the assistant for something first");
+    setAssistantLoading(true);
+    try {
+      const venues = readLocalVenues();
+      const templates = readLocalTemplates();
+      const questions = sessionQuestions(selectedSession).slice(0, 40).map((question) => ({ category: question.category || "", question: question.question_text || question.question || "", answer: question.correct_answer || question.answer || "", fun_fact: question.fun_fact || "" }));
+      const response = await fetch("/api/host-assistant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request, context: { session: selectedSession, venue: venues[0] || null, template: templates[0] || null, questions, feedback, ideas: playerIdeas } }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || "Could not run host assistant");
+      setAssistantAnswer(data.answer || "");
+      toast.success("Assistant response ready");
+    } catch (error) {
+      toast.error(error.message || "Could not run host assistant");
+    } finally {
+      setAssistantLoading(false);
+    }
+  };
+
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto animate-fade-in" data-testid="host-tools-page">
       <div className="mb-6 flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
@@ -184,11 +213,13 @@ const HostTools = () => {
 
       <Card className="glass-card mb-6"><CardContent className="p-4 grid grid-cols-1 lg:grid-cols-[1fr_auto] gap-3 items-end"><label className="text-sm text-zinc-400">Session<select value={selectedSessionId} onChange={(event) => setSelectedSessionId(event.target.value)} className="mt-1 w-full h-11 rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60">{sessions.map((session) => <option key={session.id} value={session.id}>{session.name || session.session_name || "Untitled Session"}</option>)}</select></label><Badge className="h-10 justify-center bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20"><Users size={15} className="mr-1" />{emailPlayers.length} email opt-ins</Badge></CardContent></Card>
 
-      <Card className="glass-card mb-6"><CardContent className="p-2 grid grid-cols-2 lg:grid-cols-4 gap-2">{hostToolTabs.map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => setActiveTab(key)} className={`h-12 rounded-lg border px-3 font-semibold flex items-center justify-center gap-2 transition ${activeTab === key ? "bg-[#71E0DC]/20 border-[#71E0DC]/45 text-white shadow-[0_0_24px_rgba(113,224,220,.12)]" : "bg-zinc-950/50 border-white/10 text-zinc-400 hover:text-white hover:border-white/20"}`}><Icon size={17} />{label}</button>)}</CardContent></Card>
+      <Card className="glass-card mb-6"><CardContent className="p-2 grid grid-cols-2 lg:grid-cols-5 gap-2">{hostToolTabs.map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => setActiveTab(key)} className={`h-12 rounded-lg border px-3 font-semibold flex items-center justify-center gap-2 transition ${activeTab === key ? "bg-[#71E0DC]/20 border-[#71E0DC]/45 text-white shadow-[0_0_24px_rgba(113,224,220,.12)]" : "bg-zinc-950/50 border-white/10 text-zinc-400 hover:text-white hover:border-white/20"}`}><Icon size={17} />{label}</button>)}</CardContent></Card>
 
       {activeTab === "live" && <LiveHostingPanel selectedSessionId={selectedSessionId} selectedSession={selectedSession} players={players} connected={connected} />}
 
       {activeTab === "feedback" && <div className="grid grid-cols-1 xl:grid-cols-[1fr_1fr] gap-6"><FeedbackCard title="Question Feedback" rows={questionFeedback} empty="Question likes and dislikes will appear here after players tap the thumbs during a live session." /><FeedbackCard title="Category Feedback" rows={categoryRows} empty="Category likes and dislikes come from the released Round Info screen." /><IdeasFeedbackCard ideas={playerIdeas} /></div>}
+
+      {activeTab === "assistant" && <section className="max-w-5xl"><Panel title="AI Host Assistant" icon={Sparkles}><textarea value={assistantRequest} onChange={(event) => setAssistantRequest(event.target.value)} placeholder="Ask for a replacement question, round balance advice, clue rewrite, pacing help, or a plan for this venue..." className="min-h-28 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><div className="flex flex-wrap gap-2"><Button onClick={askHostAssistant} disabled={assistantLoading} className="gradient-btn">{assistantLoading ? <Sparkles className="mr-2 animate-spin" size={16} /> : <Sparkles className="mr-2" size={16} />}Ask Assistant</Button><Button variant="outline" onClick={() => setAssistantRequest("Look at this session and tell me what feels too easy, too hard, repetitive, or missing for my regular trivia crowd.")} className="border-white/10 text-zinc-300 hover:text-white">Review Session</Button><Button variant="outline" onClick={() => setAssistantRequest("Draft a fresh replacement question for the current session that avoids common bar trivia repeats. Include answer and fun fact.")} className="border-white/10 text-zinc-300 hover:text-white">Replacement</Button><Button variant="outline" onClick={() => setAssistantRequest("Help me turn harder questions into fair written-answer questions instead of true/false or multiple choice.")} className="border-white/10 text-zinc-300 hover:text-white">Written Help</Button></div>{assistantAnswer && <div className="rounded-lg border border-white/10 bg-zinc-950/70 p-4 text-sm leading-relaxed text-zinc-200 whitespace-pre-wrap">{assistantAnswer}</div>}<p className="text-xs text-zinc-500">Uses the selected session plus saved venue/template memory and player feedback stored on this device.</p></Panel></section>}
 
       {activeTab === "updates" && <section className="space-y-6 max-w-5xl"><Panel title="Email and Player Updates" icon={MessageSquare}><textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Type a clue, cancellation, schedule change, or player update..." className="min-h-32 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><div className="grid grid-cols-1 md:grid-cols-3 gap-2"><Button onClick={sendUpdate} className="gradient-btn"><Send size={16} className="mr-2" />Send In-App</Button><Button onClick={openEmailDraft} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Mail size={16} className="mr-2" />Email Draft</Button><Button onClick={copyEmails} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Copy size={16} className="mr-2" />Copy Emails</Button></div></Panel><Panel title="AI Clue Assistant" icon={Sparkles}><textarea value={aiDirection} onChange={(event) => setAiDirection(event.target.value)} className="min-h-20 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><Button onClick={generateClues} disabled={generating || !selectedSession} className="gradient-btn">{generating ? <Sparkles className="mr-2 animate-spin" size={16} /> : <Sparkles className="mr-2" size={16} />}Draft Punny Clues</Button><p className="text-xs text-zinc-500">AI studies the selected session and drafts an update plus a social post without revealing answers.</p></Panel><Panel title="Social Media" icon={ExternalLink}><textarea value={socialPost} onChange={(event) => setSocialPost(event.target.value)} placeholder="Social post text..." className="min-h-28 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><div className="grid grid-cols-1 md:grid-cols-3 gap-2"><Button onClick={copySocialPost} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Copy size={16} className="mr-2" />Copy Post</Button><Button onClick={() => openSocialComposer("facebook")} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />Facebook</Button><Button onClick={() => openSocialComposer("x")} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />X/Twitter</Button></div><div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2"><input value={socialLinks.facebook} onChange={(event) => updateSocialLink("facebook", event.target.value)} placeholder="Facebook page link" className="h-10 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none" /><input value={socialLinks.instagram} onChange={(event) => updateSocialLink("instagram", event.target.value)} placeholder="Instagram profile link" className="h-10 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none" /><input value={socialLinks.x} onChange={(event) => updateSocialLink("x", event.target.value)} placeholder="X/Twitter profile link" className="h-10 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none" /></div><p className="text-xs text-zinc-500">For now this opens/copies posts. Fully automatic posting will need connected social accounts and permissions.</p></Panel></section>}
 
