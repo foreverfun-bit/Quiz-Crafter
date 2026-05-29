@@ -6,7 +6,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import {
-  ArrowRight,
   Bot,
   Calendar,
   CheckCircle,
@@ -19,10 +18,8 @@ import {
   List,
   MapPin,
   MessageSquare,
-  PencilLine,
   PlusCircle,
   Radio,
-  Settings,
   Sparkles,
   ThumbsDown,
   Upload,
@@ -184,7 +181,7 @@ const Dashboard = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[1.15fr_0.85fr] gap-5 mb-5">
+      <div className="mb-5">
         <CommandCenter
           nextSession={nextSession}
           activeVenue={activeVenue}
@@ -199,22 +196,6 @@ const Dashboard = () => {
           onHostTools={() => navigate("/host-tools")}
         />
 
-        <Card className="glass-card">
-          <CardContent className="p-5">
-            <div className="grid grid-cols-1 gap-3">
-              <PrimaryAction icon={PencilLine} label="Create Questions" detail="Generate, write, or ask the assistant" onClick={() => navigate("/generate")} />
-              <PrimaryAction icon={ClipboardList} label="Use Show Template" detail={starterTemplate ? starterTemplate.name : "Create reusable formats"} onClick={startFromTemplate} />
-              <PrimaryAction icon={MapPin} label="Venue Setup" detail={activeVenue ? activeVenue.name : "Add recurring trivia nights"} onClick={() => navigate("/venues")} />
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-5">
-        <QuickAction icon={Sparkles} label="AI Host Assistant" detail="Review, rewrite, replace" onClick={() => navigate("/host-tools")} />
-        <QuickAction icon={Radio} label="Live Hosting" detail={nextSession ? nextSession.name || nextSession.session_name || "Open session" : "Build a session first"} onClick={() => nextSession ? navigate(`/host-session/${nextSession.id}`) : navigate("/build")} />
-        <QuickAction icon={MessageSquare} label="Feedback Hub" detail="Likes, dislikes, ideas" onClick={() => navigate("/host-tools")} />
-        <QuickAction icon={Settings} label="Templates" detail={`${templates.length || 0} reusable formats`} onClick={() => navigate("/show-templates")} />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
@@ -246,7 +227,7 @@ const Dashboard = () => {
         </Card>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          <PrepCard activeVenue={activeVenue} starterTemplate={starterTemplate} savedBuild={savedBuild} unusedCount={unusedCount} rejectedCount={rejectedCategories.length} onVenue={() => navigate("/venues")} onTemplate={() => navigate("/show-templates")} onLibrary={() => navigate("/library")} onBuild={() => navigate("/build")} onCategories={() => navigate("/categories")} />
+          <PrepCard activeVenue={activeVenue} starterTemplate={starterTemplate} savedBuild={savedBuild} unusedCount={unusedCount} rejectedCount={rejectedCategories.length} onVenue={() => navigate("/venues")} onTemplate={() => navigate("/show-templates")} onLibrary={() => navigate("/library")} onBuild={() => navigate("/build")} onCategories={() => navigate("/categories")} onGenerate={() => navigate("/generate")} />
 
           <BreakdownCard title="Question Mix" items={[
             { icon: CheckCircle, label: "True/False", value: stats.by_type?.true_false || 0, color: "text-[#71E0DC]" },
@@ -310,17 +291,6 @@ const Dashboard = () => {
   );
 };
 
-const PrimaryAction = ({ icon: Icon, label, detail, onClick }) => (
-  <button type="button" onClick={onClick} className="group rounded-lg border border-white/10 bg-zinc-950/40 p-4 text-left hover:border-[#71E0DC]/40 hover:bg-zinc-900 transition-colors">
-    <div className="flex items-center justify-between gap-3">
-      <Icon className="text-[#71E0DC]" size={22} />
-      <ArrowRight className="text-zinc-600 group-hover:text-[#71E0DC]" size={18} />
-    </div>
-    <div className="text-white font-semibold mt-4">{label}</div>
-    <div className="text-zinc-500 text-sm mt-1">{detail}</div>
-  </button>
-);
-
 const CommandCenter = ({ nextSession, activeVenue, starterTemplate, savedBuild, onContinue, onNew, onHost, onOpenSession, onStartVenue, onStartTemplate, onHostTools }) => (
   <Card className="glass-card border-[#71E0DC]/25">
     <CardContent className="p-5 lg:p-6">
@@ -353,19 +323,9 @@ const CommandCenter = ({ nextSession, activeVenue, starterTemplate, savedBuild, 
   </Card>
 );
 
-const QuickAction = ({ icon: Icon, label, detail, onClick }) => (
-  <button type="button" onClick={onClick} className="rounded-xl border border-white/10 bg-zinc-950/45 p-4 text-left hover:border-[#71E0DC]/35 hover:bg-zinc-900 transition-colors">
-    <div className="flex items-center justify-between gap-3">
-      <Icon className="text-[#71E0DC]" size={20} />
-      <ArrowRight className="text-zinc-600" size={16} />
-    </div>
-    <p className="mt-3 font-bold text-white">{label}</p>
-    <p className="mt-1 text-sm text-zinc-500 line-clamp-1">{detail}</p>
-  </button>
-);
-
-const PrepCard = ({ activeVenue, starterTemplate, savedBuild, unusedCount, rejectedCount, onVenue, onTemplate, onLibrary, onBuild, onCategories }) => {
+const PrepCard = ({ activeVenue, starterTemplate, savedBuild, unusedCount, rejectedCount, onVenue, onTemplate, onLibrary, onBuild, onCategories, onGenerate }) => {
   const items = [
+    { label: "Create questions", value: "Generate or write", ready: true, onClick: onGenerate },
     { label: "Default venue", value: activeVenue ? activeVenue.name : "Needs setup", ready: Boolean(activeVenue), onClick: onVenue },
     { label: "Show template", value: starterTemplate ? starterTemplate.name : "Needs setup", ready: Boolean(starterTemplate), onClick: onTemplate },
     { label: "Unused library", value: `${unusedCount} available`, ready: unusedCount > 0, onClick: onLibrary },

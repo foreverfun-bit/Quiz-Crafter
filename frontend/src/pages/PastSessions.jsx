@@ -130,10 +130,10 @@ const PastSessions = () => {
       <div className="flex items-center justify-between mb-8">
         <div>
           <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">
-            <span className="gradient-text">Past Sessions</span>
+            <span className="gradient-text">Sessions</span>
           </h1>
           <p className="text-zinc-500">
-            All your built and imported sessions
+            Continue builds, review past games, or reopen imported sessions.
           </p>
         </div>
 

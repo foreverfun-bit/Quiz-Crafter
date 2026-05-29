@@ -9,7 +9,6 @@ import {
   LogOut,
   X,
   History,
-  Trophy,
   MessageSquare,
   MapPin,
   ClipboardList,
@@ -30,33 +29,25 @@ const Sidebar = ({ isOpen, onClose }) => {
 
   const navSections = [
     {
-      label: "Create",
+      label: "Questions",
       icon: Sparkles,
-      paths: ["/generate", "/write-question", "/import"],
+      paths: ["/generate", "/write-question", "/library", "/import", "/categories"],
       links: [
-        { path: "/generate", icon: Sparkles, label: "Questions" },
+        { path: "/generate", icon: Sparkles, label: "Create" },
+        { path: "/library", icon: Library, label: "Library" },
         { path: "/import", icon: Upload, label: "Import" },
-      ],
-    },
-    {
-      label: "Library",
-      icon: Library,
-      paths: ["/library", "/categories"],
-      links: [
-        { path: "/library", icon: Library, label: "Questions" },
         { path: "/categories", icon: FolderOpen, label: "Categories" },
       ],
     },
     {
-      label: "Sessions",
+      label: "Shows",
       icon: Layers,
-      paths: ["/venues", "/show-templates", "/build", "/past-sessions", "/session", "/game-history"],
+      paths: ["/build", "/past-sessions", "/session", "/venues", "/show-templates", "/game-history"],
       links: [
+        { path: "/build", icon: PlusCircle, label: "Build" },
+        { path: "/past-sessions", icon: History, label: "Sessions" },
         { path: "/venues", icon: MapPin, label: "Venues" },
         { path: "/show-templates", icon: ClipboardList, label: "Templates" },
-        { path: "/build", icon: PlusCircle, label: "Build" },
-        { path: "/past-sessions", icon: History, label: "Past Sessions" },
-        { path: "/game-history", icon: Trophy, label: "Game History" },
       ],
     },
   ];
@@ -138,7 +129,7 @@ const Sidebar = ({ isOpen, onClose }) => {
                 data-testid="nav-host-tools"
               >
                 <MessageSquare size={20} />
-                <span className="font-medium">Host Tools</span>
+                <span className="font-medium">Host Hub</span>
               </NavLink>
 
               <NavLink

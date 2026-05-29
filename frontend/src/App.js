@@ -319,6 +319,7 @@ function App() {
             <Route path="/library" element={<ProtectedRoute><AppLayout><Library /></AppLayout></ProtectedRoute>} />
             <Route path="/build" element={<ProtectedRoute><AppLayout><BuildErrorBoundary><BuildSession /></BuildErrorBoundary></AppLayout></ProtectedRoute>} />
             <Route path="/build/:sessionId" element={<ProtectedRoute><AppLayout><BuildErrorBoundary><BuildSession /></BuildErrorBoundary></AppLayout></ProtectedRoute>} />
+            <Route path="/sessions" element={<Navigate to="/past-sessions" replace />} />
             <Route path="/past-sessions" element={<ProtectedRoute><AppLayout><PastSessions /></AppLayout></ProtectedRoute>} />
             <Route path="/import" element={<ProtectedRoute><AppLayout><ImportCSV /></AppLayout></ProtectedRoute>} />
             <Route path="/session/:id" element={<ProtectedRoute><AppLayout><SessionDetail /></AppLayout></ProtectedRoute>} />
