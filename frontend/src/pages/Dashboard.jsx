@@ -10,22 +10,25 @@ import {
   Bot,
   Calendar,
   CheckCircle,
+  ClipboardList,
   Clock,
   FileText,
   FolderOpen,
-  History,
   Image,
   Library,
   List,
+  MapPin,
   MessageSquare,
   PencilLine,
   PlusCircle,
   Radio,
+  Settings,
   Sparkles,
   ThumbsDown,
   Upload,
 } from "lucide-react";
 import { toast } from "sonner";
+import { readActiveVenueId, readLocalTemplates, readLocalVenues, writeTemplateBuildDraft, writeVenueBuildDraft } from "../lib/venues";
 
 const BUILD_STORAGE_KEYS = [
   "trivia-flex-round-builder-state-v5",
@@ -76,10 +79,16 @@ const Dashboard = () => {
   const [stats, setStats] = useState(emptyStats);
   const [recentSessions, setRecentSessions] = useState([]);
   const [savedBuild, setSavedBuild] = useState(null);
+  const [venues, setVenues] = useState([]);
+  const [templates, setTemplates] = useState([]);
+  const [activeVenueId, setActiveVenueId] = useState("");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setSavedBuild(readSavedBuild());
+    setVenues(readLocalVenues());
+    setTemplates(readLocalTemplates());
+    setActiveVenueId(readActiveVenueId());
   }, []);
 
   useEffect(() => {
@@ -129,6 +138,21 @@ const Dashboard = () => {
   const rejectedCategories = stats.rejected_categories || [];
   const unusedCount = Math.max(0, (stats.total_questions || 0) - (stats.used_count || 0));
   const manualCount = Math.max(0, (stats.total_questions || 0) - (stats.ai_generated_count || 0) - (stats.imported_count || 0));
+  const activeVenue = venues.find((venue) => venue.id === activeVenueId) || venues[0] || null;
+  const starterTemplate = templates[0] || null;
+  const nextSession = recentSessions.find((session) => !session.is_past) || recentSessions[0] || null;
+
+  const startFromVenue = () => {
+    if (!activeVenue) return navigate("/venues");
+    writeVenueBuildDraft(activeVenue);
+    navigate("/build");
+  };
+
+  const startFromTemplate = () => {
+    if (!starterTemplate) return navigate("/show-templates");
+    writeTemplateBuildDraft(starterTemplate, activeVenue);
+    navigate("/build");
+  };
 
   if (loading) {
     return (
@@ -160,24 +184,43 @@ const Dashboard = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[1.25fr_0.75fr] gap-5 mb-5">
+      <div className="grid grid-cols-1 xl:grid-cols-[1.15fr_0.85fr] gap-5 mb-5">
+        <CommandCenter
+          nextSession={nextSession}
+          activeVenue={activeVenue}
+          starterTemplate={starterTemplate}
+          savedBuild={savedBuild}
+          onContinue={() => navigate("/build")}
+          onNew={handleNewBuild}
+          onHost={() => nextSession && navigate(`/host-session/${nextSession.id}`)}
+          onOpenSession={() => nextSession && navigate(`/session/${nextSession.id}`)}
+          onStartVenue={startFromVenue}
+          onStartTemplate={startFromTemplate}
+          onHostTools={() => navigate("/host-tools")}
+        />
+
         <Card className="glass-card">
           <CardContent className="p-5">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <PrimaryAction icon={PencilLine} label="Create Questions" detail="Generate or write clues" onClick={() => navigate("/generate")} />
-              <PrimaryAction icon={Library} label="Use Library" detail={`${unusedCount} unused questions`} onClick={() => navigate("/library")} />
-              <PrimaryAction icon={Upload} label="Import Set" detail="CSV, PDF, or exports" onClick={() => navigate("/import")} />
+            <div className="grid grid-cols-1 gap-3">
+              <PrimaryAction icon={PencilLine} label="Create Questions" detail="Generate, write, or ask the assistant" onClick={() => navigate("/generate")} />
+              <PrimaryAction icon={ClipboardList} label="Use Show Template" detail={starterTemplate ? starterTemplate.name : "Create reusable formats"} onClick={startFromTemplate} />
+              <PrimaryAction icon={MapPin} label="Venue Setup" detail={activeVenue ? activeVenue.name : "Add recurring trivia nights"} onClick={() => navigate("/venues")} />
             </div>
           </CardContent>
         </Card>
+      </div>
 
-        <DraftCard savedBuild={savedBuild} onContinue={() => navigate("/build")} onNew={handleNewBuild} />
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-5">
+        <QuickAction icon={Sparkles} label="AI Host Assistant" detail="Review, rewrite, replace" onClick={() => navigate("/host-tools")} />
+        <QuickAction icon={Radio} label="Live Hosting" detail={nextSession ? nextSession.name || nextSession.session_name || "Open session" : "Build a session first"} onClick={() => nextSession ? navigate(`/host-session/${nextSession.id}`) : navigate("/build")} />
+        <QuickAction icon={MessageSquare} label="Feedback Hub" detail="Likes, dislikes, ideas" onClick={() => navigate("/host-tools")} />
+        <QuickAction icon={Settings} label="Templates" detail={`${templates.length || 0} reusable formats`} onClick={() => navigate("/show-templates")} />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
         <MetricCard label="Library" value={stats.total_questions} sub={`${unusedCount} unused`} icon={Library} tone="cyan" onClick={() => navigate("/library")} />
         <MetricCard label="Used" value={stats.used_count} sub="blocked from builder" icon={CheckCircle} tone="green" />
-        <MetricCard label="Sessions" value={stats.sessions_count} sub={`${stats.built_sessions_count} live builds`} icon={History} tone="purple" onClick={() => navigate("/past-sessions")} />
+        <MetricCard label="Venues" value={venues.length} sub={activeVenue ? activeVenue.name : "no default"} icon={MapPin} tone="purple" onClick={() => navigate("/venues")} />
         <MetricCard label="Media" value={stats.media_count} sub="questions with images" icon={Image} tone="amber" />
       </div>
 
@@ -203,6 +246,8 @@ const Dashboard = () => {
         </Card>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          <PrepCard activeVenue={activeVenue} starterTemplate={starterTemplate} savedBuild={savedBuild} unusedCount={unusedCount} rejectedCount={rejectedCategories.length} onVenue={() => navigate("/venues")} onTemplate={() => navigate("/show-templates")} onLibrary={() => navigate("/library")} onBuild={() => navigate("/build")} />
+
           <BreakdownCard title="Question Mix" items={[
             { icon: CheckCircle, label: "True/False", value: stats.by_type?.true_false || 0, color: "text-[#71E0DC]" },
             { icon: List, label: "Multiple Choice", value: stats.by_type?.multiple_choice || 0, color: "text-[#AEB2EF]" },
@@ -276,32 +321,60 @@ const PrimaryAction = ({ icon: Icon, label, detail, onClick }) => (
   </button>
 );
 
-const DraftCard = ({ savedBuild, onContinue, onNew }) => (
-  <Card className="bg-zinc-950/50 border-white/10">
-    <CardContent className="p-5">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2 text-white font-semibold">
-            <Clock className="text-[#71E0DC]" size={20} />
-            Saved Build
+const CommandCenter = ({ nextSession, activeVenue, starterTemplate, savedBuild, onContinue, onNew, onHost, onOpenSession, onStartVenue, onStartTemplate, onHostTools }) => (
+  <Card className="glass-card border-[#71E0DC]/25">
+    <CardContent className="p-5 lg:p-6">
+      <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-5">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-[#71E0DC] font-bold uppercase tracking-[0.16em] text-xs">
+            <Radio size={16} />
+            Host Command Center
           </div>
-          <p className="text-zinc-500 text-sm mt-2">
-            {savedBuild ? savedBuild.sessionName || "Untitled draft" : "No local draft saved on this device"}
+          <h2 className="mt-3 text-2xl lg:text-3xl font-black text-white">
+            {nextSession ? nextSession.name || nextSession.session_name || "Next Session" : savedBuild ? "Draft in progress" : "Set up your next trivia night"}
+          </h2>
+          <p className="mt-2 text-zinc-500">
+            {nextSession ? `${compactDate(nextSession.created_at)} / ${questionCount(nextSession)} questions ready` : savedBuild ? `${savedBuild.questionCount} questions selected locally` : "Start with a venue, a show template, or a fresh build."}
           </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {activeVenue && <Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20"><MapPin size={13} className="mr-1" />{activeVenue.name}</Badge>}
+            {starterTemplate && <Badge className="bg-[#AEB2EF]/15 text-[#AEB2EF] border border-[#AEB2EF]/20"><ClipboardList size={13} className="mr-1" />{starterTemplate.name}</Badge>}
+            {savedBuild && <Badge className="bg-amber-500/15 text-amber-200 border border-amber-500/20"><Clock size={13} className="mr-1" />Saved draft</Badge>}
+          </div>
         </div>
-        {savedBuild && <Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border-[#71E0DC]/20">{savedBuild.questionCount} selected</Badge>}
-      </div>
-      <div className="flex gap-2 mt-5">
-        <Button onClick={savedBuild ? onContinue : onNew} className="gradient-btn flex-1">
-          {savedBuild ? "Continue Build" : "Start Build"}
-        </Button>
-        <Button variant="outline" onClick={onNew} className="border-white/20 text-white hover:bg-zinc-800">
-          New
-        </Button>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:w-[360px] gap-2">
+          <Button onClick={nextSession ? onHost : savedBuild ? onContinue : onStartVenue} className="gradient-btn">{nextSession ? "Go Live" : savedBuild ? "Continue Build" : "Build From Venue"}</Button>
+          <Button variant="outline" onClick={nextSession ? onOpenSession : onStartTemplate} className="border-white/20 text-white hover:bg-zinc-800">{nextSession ? "Open Session" : "Use Template"}</Button>
+          <Button variant="outline" onClick={onHostTools} className="border-white/20 text-white hover:bg-zinc-800">Host Tools</Button>
+          <Button variant="outline" onClick={onNew} className="border-white/20 text-white hover:bg-zinc-800">New Build</Button>
+        </div>
       </div>
     </CardContent>
   </Card>
 );
+
+const QuickAction = ({ icon: Icon, label, detail, onClick }) => (
+  <button type="button" onClick={onClick} className="rounded-xl border border-white/10 bg-zinc-950/45 p-4 text-left hover:border-[#71E0DC]/35 hover:bg-zinc-900 transition-colors">
+    <div className="flex items-center justify-between gap-3">
+      <Icon className="text-[#71E0DC]" size={20} />
+      <ArrowRight className="text-zinc-600" size={16} />
+    </div>
+    <p className="mt-3 font-bold text-white">{label}</p>
+    <p className="mt-1 text-sm text-zinc-500 line-clamp-1">{detail}</p>
+  </button>
+);
+
+const PrepCard = ({ activeVenue, starterTemplate, savedBuild, unusedCount, rejectedCount, onVenue, onTemplate, onLibrary, onBuild }) => {
+  const items = [
+    { label: "Default venue", value: activeVenue ? activeVenue.name : "Needs setup", ready: Boolean(activeVenue), onClick: onVenue },
+    { label: "Show template", value: starterTemplate ? starterTemplate.name : "Needs setup", ready: Boolean(starterTemplate), onClick: onTemplate },
+    { label: "Unused library", value: `${unusedCount} available`, ready: unusedCount > 0, onClick: onLibrary },
+    { label: "Saved build", value: savedBuild ? `${savedBuild.questionCount} selected` : "None", ready: Boolean(savedBuild), onClick: onBuild },
+    { label: "Rejected categories", value: `${rejectedCount} blocked`, ready: true, onClick: onTemplate },
+  ];
+
+  return <Card className="glass-card"><CardHeader className="pb-3"><CardTitle className="text-white text-lg">Prep Checklist</CardTitle></CardHeader><CardContent className="space-y-3">{items.map((item) => <button key={item.label} type="button" onClick={item.onClick} className="w-full flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-zinc-950/45 px-3 py-3 text-left hover:bg-zinc-900"><div className="min-w-0"><p className="text-sm font-semibold text-white">{item.label}</p><p className="text-xs text-zinc-500 truncate">{item.value}</p></div><Badge className={item.ready ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-200"}>{item.ready ? "Ready" : "Set up"}</Badge></button>)}</CardContent></Card>;
+};
 
 const MetricCard = ({ label, value, sub, icon: Icon, tone, onClick }) => {
   const tones = {
