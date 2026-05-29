@@ -171,7 +171,7 @@ const PlayerSession = () => {
     };
   }, [id, player]);
 
-  const currentQuestion = hostState?.currentQuestion ? { ...hostState.currentQuestion, answer: hostState.showAnswer ? (hostState.revealedAnswer || hostState.currentQuestion.answer || "") : "" } : null;
+  const currentQuestion = useMemo(() => (hostState?.currentQuestion ? { ...hostState.currentQuestion, answer: hostState.showAnswer ? (hostState.revealedAnswer || hostState.currentQuestion.answer || "") : "" } : null), [hostState]);
   const leaderboard = useMemo(() => [...(hostState?.leaderboard || [])].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)), [hostState]);
   const roundCategories = useMemo(() => buildRoundCategories(session), [session]);
   const branding = useMemo(() => mergeBranding(session, hostState), [session, hostState]);
@@ -196,6 +196,24 @@ const PlayerSession = () => {
   const activeRoundName = hostState?.mode === "categories" ? (introRound?.name || currentQuestion?.roundName || "Round") : (currentQuestion?.roundName || "Round");
   const activeRoundDescription = hostState?.mode === "categories" ? (introRound?.description || "") : (roundCategories.find((round) => round.name === activeRoundName)?.description || "");
   const categoryFeedbackKey = hostState?.mode === "categories" ? (introRound?.key || hostState.currentIndex) : hostState?.currentIndex;
+
+  useEffect(() => {
+    if (!player || !hostState || !currentQuestion || hostState.mode !== "question") return undefined;
+    const sendActivity = (eventType) => {
+      channelRef.current?.send({ type: "broadcast", event: "player_activity", payload: { playerId: player.id, playerName: player.name, eventType, questionIndex: hostState.currentIndex, questionId: currentQuestion.id, questionText: currentQuestion.questionText, submittedAt: new Date().toISOString() } });
+    };
+    const handleVisibility = () => {
+      if (document.hidden) sendActivity("left_screen");
+      else sendActivity("returned");
+    };
+    const handlePageHide = () => sendActivity("left_screen");
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("pagehide", handlePageHide);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("pagehide", handlePageHide);
+    };
+  }, [currentQuestion, hostState, player]);
 
   useEffect(() => {
     setWagerAmount("");
