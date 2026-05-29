@@ -268,7 +268,7 @@ const PresentSession = () => {
         <header className="flex items-center justify-between gap-4 border-b border-white/10 pb-5">
           <div>
             <p className="text-[#71E0DC] font-semibold tracking-wide uppercase text-sm">{sessionName}</p>
-            <h1 className="text-3xl lg:text-5xl font-black mt-1">{mode === "categories" ? "Round Intro" : mode === "leaderboard" ? "Leaderboard" : mode === "winners" ? "Winners" : mode === "bonus_pause" ? "Bonus Coming Up" : currentRound?.name || "Question"}</h1>
+            <h1 className="text-3xl lg:text-5xl font-black mt-1">{mode === "categories" ? "Round Intro" : mode === "leaderboard" ? "Leaderboard" : mode === "winners" ? "Winners" : mode === "feedback" ? "Feedback" : mode === "bonus_pause" ? "Bonus Coming Up" : currentRound?.name || "Question"}</h1>
           </div>
           <Badge className="bg-white/10 text-zinc-200 border border-white/10 text-base px-4 py-2">{displayRound?.name || "Round"}</Badge>
         </header>
@@ -277,8 +277,9 @@ const PresentSession = () => {
           {mode === "categories" && <CategoriesView round={introRound} rounds={rounds} />}
           {mode === "leaderboard" && <LeaderboardView leaderboard={presentState.leaderboard || []} />}
           {mode === "winners" && <WinnersView leaderboard={presentState.leaderboard || []} sessionName={sessionName} />}
+          {mode === "feedback" && <FeedbackView />}
           {mode === "bonus_pause" && <BonusPauseView round={presentState.pendingBonusRound || currentRound} leaderboard={presentState.leaderboard || []} />}
-          {mode !== "categories" && mode !== "leaderboard" && mode !== "winners" && mode !== "bonus_pause" && (
+          {mode !== "categories" && mode !== "leaderboard" && mode !== "winners" && mode !== "feedback" && mode !== "bonus_pause" && (
             <QuestionView question={currentQuestion} index={currentIndex} total={questions.length} showAnswer={presentState.showAnswer} showFunFact={presentState.showFunFact} />
           )}
         </main>
@@ -414,6 +415,22 @@ const WinnersView = ({ leaderboard, sessionName }) => {
     </div>
   );
 };
+
+const FeedbackView = () => (
+  <div className="w-full max-w-5xl">
+    <Card className="glass-card overflow-hidden">
+      <CardContent className="p-8 lg:p-12 text-center">
+        <div className="mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-full border border-[#71E0DC]/40 bg-[#71E0DC]/15 shadow-2xl shadow-[#71E0DC]/10">
+          <Sparkles className="text-[#71E0DC]" size={52} />
+        </div>
+        <p className="text-[#71E0DC] text-xl font-black uppercase tracking-[0.3em]">One More Thing</p>
+        <h2 className="mt-4 text-5xl lg:text-8xl font-black leading-none text-white">Send Us Ideas</h2>
+        <p className="mx-auto mt-8 max-w-3xl text-3xl text-zinc-300">Use your phone to send category ideas, question ideas, or topics you want at a future trivia night.</p>
+        <p className="mt-10 text-3xl font-black text-zinc-200">Thanks for playing!</p>
+      </CardContent>
+    </Card>
+  </div>
+);
 
 const BonusPauseView = ({ round, leaderboard }) => {
   const sorted = [...leaderboard].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)).slice(0, 8);
