@@ -208,7 +208,7 @@ export default function Library() {
     setUnusedIds(nextUnused);
     writeUsedIds(nextUsed);
     writeUnusedIds(nextUnused);
-    setQuestionMemory(upsertQuestionMemory(question, { status: willBeUsed ? "used_recently" : "available" }, questionMemory));
+    setQuestionMemory(upsertQuestionMemory(question, { status: willBeUsed ? "used_recently" : "available" }, readQuestionMemory()));
     setQuestions((prev) => prev.map((item) => item.id === question.id ? {
       ...item,
       is_used: willBeUsed,
@@ -238,7 +238,7 @@ export default function Library() {
   };
 
   const updateMemory = async (question, status) => {
-    const nextMemory = upsertQuestionMemory(question, { status }, questionMemory);
+    const nextMemory = upsertQuestionMemory(question, { status }, readQuestionMemory());
     setQuestionMemory(nextMemory);
     const possiblePayloads = [
       { memory_status: status === "available" ? null : status, memory_updated_at: status === "available" ? null : new Date().toISOString() },

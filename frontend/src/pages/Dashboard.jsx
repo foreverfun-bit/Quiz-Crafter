@@ -140,7 +140,7 @@ const Dashboard = () => {
   const manualCount = Math.max(0, (stats.total_questions || 0) - (stats.ai_generated_count || 0) - (stats.imported_count || 0));
   const activeVenue = venues.find((venue) => venue.id === activeVenueId) || venues[0] || null;
   const starterTemplate = templates[0] || null;
-  const nextSession = recentSessions.find((session) => !session.is_past) || recentSessions[0] || null;
+  const nextSession = recentSessions.find((session) => !session.is_past) || null;
 
   const startFromVenue = () => {
     if (!activeVenue) return navigate("/venues");
@@ -246,7 +246,7 @@ const Dashboard = () => {
         </Card>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          <PrepCard activeVenue={activeVenue} starterTemplate={starterTemplate} savedBuild={savedBuild} unusedCount={unusedCount} rejectedCount={rejectedCategories.length} onVenue={() => navigate("/venues")} onTemplate={() => navigate("/show-templates")} onLibrary={() => navigate("/library")} onBuild={() => navigate("/build")} />
+          <PrepCard activeVenue={activeVenue} starterTemplate={starterTemplate} savedBuild={savedBuild} unusedCount={unusedCount} rejectedCount={rejectedCategories.length} onVenue={() => navigate("/venues")} onTemplate={() => navigate("/show-templates")} onLibrary={() => navigate("/library")} onBuild={() => navigate("/build")} onCategories={() => navigate("/categories")} />
 
           <BreakdownCard title="Question Mix" items={[
             { icon: CheckCircle, label: "True/False", value: stats.by_type?.true_false || 0, color: "text-[#71E0DC]" },
@@ -364,13 +364,13 @@ const QuickAction = ({ icon: Icon, label, detail, onClick }) => (
   </button>
 );
 
-const PrepCard = ({ activeVenue, starterTemplate, savedBuild, unusedCount, rejectedCount, onVenue, onTemplate, onLibrary, onBuild }) => {
+const PrepCard = ({ activeVenue, starterTemplate, savedBuild, unusedCount, rejectedCount, onVenue, onTemplate, onLibrary, onBuild, onCategories }) => {
   const items = [
     { label: "Default venue", value: activeVenue ? activeVenue.name : "Needs setup", ready: Boolean(activeVenue), onClick: onVenue },
     { label: "Show template", value: starterTemplate ? starterTemplate.name : "Needs setup", ready: Boolean(starterTemplate), onClick: onTemplate },
     { label: "Unused library", value: `${unusedCount} available`, ready: unusedCount > 0, onClick: onLibrary },
     { label: "Saved build", value: savedBuild ? `${savedBuild.questionCount} selected` : "None", ready: Boolean(savedBuild), onClick: onBuild },
-    { label: "Rejected categories", value: `${rejectedCount} blocked`, ready: true, onClick: onTemplate },
+    { label: "Rejected categories", value: `${rejectedCount} blocked`, ready: true, onClick: onCategories },
   ];
 
   return <Card className="glass-card"><CardHeader className="pb-3"><CardTitle className="text-white text-lg">Prep Checklist</CardTitle></CardHeader><CardContent className="space-y-3">{items.map((item) => <button key={item.label} type="button" onClick={item.onClick} className="w-full flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-zinc-950/45 px-3 py-3 text-left hover:bg-zinc-900"><div className="min-w-0"><p className="text-sm font-semibold text-white">{item.label}</p><p className="text-xs text-zinc-500 truncate">{item.value}</p></div><Badge className={item.ready ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-200"}>{item.ready ? "Ready" : "Set up"}</Badge></button>)}</CardContent></Card>;

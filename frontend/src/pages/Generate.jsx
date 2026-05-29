@@ -152,7 +152,9 @@ const Generate = ({ initialCreateMode = "generate" }) => {
 
   const getGenerationPreferences = (extraRejectedQuestions = [], lockedCategoriesOverride = null) => {
     const prefs = readCategoryPrefs();
-    const rejectedQuestions = [...readJsonArray(REJECTED_AI_KEY), ...memoryRejectedQuestionTexts(questionMemory), ...extraRejectedQuestions];
+    const latestMemory = readQuestionMemory();
+    setQuestionMemory(latestMemory);
+    const rejectedQuestions = [...readJsonArray(REJECTED_AI_KEY), ...memoryRejectedQuestionTexts(latestMemory), ...extraRejectedQuestions];
 
     return {
       approvedCategories: cleanList(prefs.approved),
@@ -386,7 +388,7 @@ const Generate = ({ initialCreateMode = "generate" }) => {
 
     if (rejectedFingerprint) {
       writeJsonArray(REJECTED_AI_KEY, [...rejected, rejectedFingerprint]);
-      setQuestionMemory(upsertQuestionMemory(candidate, { status: "too_common" }, questionMemory));
+      setQuestionMemory(upsertQuestionMemory(candidate, { status: "too_common" }, readQuestionMemory()));
     }
 
     setGroupedCandidates((prev) => ({

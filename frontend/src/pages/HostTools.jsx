@@ -5,7 +5,7 @@ import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Copy, ExternalLink, Image, Mail, MessageSquare, Palette, Save, Send, Sparkles, Upload, Users } from "lucide-react";
 import { toast } from "sonner";
-import { readLocalTemplates, readLocalVenues } from "../lib/venues";
+import { readActiveVenueId, readLocalTemplates, readLocalVenues } from "../lib/venues";
 
 const SOCIAL_STORAGE_KEY = "quiz-crafter-social-links";
 const HOST_DEFAULT_BRANDING_KEY = "quiz-crafter-host-branding-defaults";
@@ -184,11 +184,13 @@ const HostTools = () => {
     try {
       const venues = readLocalVenues();
       const templates = readLocalTemplates();
+      const activeVenueId = readActiveVenueId();
+      const activeVenue = venues.find((venue) => venue.id === activeVenueId) || venues[0] || null;
       const questions = sessionQuestions(selectedSession).slice(0, 40).map((question) => ({ category: question.category || "", question: question.question_text || question.question || "", answer: question.correct_answer || question.answer || "", fun_fact: question.fun_fact || "" }));
       const response = await fetch("/api/host-assistant", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ request, context: { session: selectedSession, venue: venues[0] || null, template: templates[0] || null, questions, feedback, ideas: playerIdeas } }),
+        body: JSON.stringify({ request, context: { session: selectedSession, venue: activeVenue, template: templates[0] || null, questions, feedback, ideas: playerIdeas } }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data?.error || "Could not run host assistant");
