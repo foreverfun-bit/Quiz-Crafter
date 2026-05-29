@@ -337,8 +337,8 @@ const HostSession = () => {
   const [teamName, setTeamName] = useState("");
   const [teamScore, setTeamScore] = useState("");
   const [players, setPlayers] = useState([]);
-  const [answers, setAnswers] = useState([]);
-  const [playerActivity, setPlayerActivity] = useState([]);
+  const [answers, setAnswers] = useState(() => readStoredList(hostToolsStorageKey(id, "answers")));
+  const [playerActivity, setPlayerActivity] = useState(() => readStoredList(hostToolsStorageKey(id, "activity")));
   const [playerIdeas, setPlayerIdeas] = useState(() => readStoredList(hostToolsStorageKey(id, "ideas")));
   const [gradedAnswers, setGradedAnswers] = useState({});
   const [scoreModal, setScoreModal] = useState(null);
@@ -394,12 +394,18 @@ const HostSession = () => {
         if (!payload?.playerId) return;
         setAnswers((current) => {
           const filtered = current.filter((answer) => !(answer.playerId === payload.playerId && answer.questionIndex === payload.questionIndex));
-          return [...filtered, payload];
+          const next = [...filtered, payload].slice(-800);
+          writeStoredList(hostToolsStorageKey(id, "answers"), next);
+          return next;
         });
       })
       .on("broadcast", { event: "player_activity" }, ({ payload }) => {
         if (!payload?.playerId || payload.questionIndex === undefined) return;
-        setPlayerActivity((current) => [...current, payload].slice(-400));
+        setPlayerActivity((current) => {
+          const next = [...current, payload].slice(-800);
+          writeStoredList(hostToolsStorageKey(id, "activity"), next);
+          return next;
+        });
       })
       .on("broadcast", { event: "feedback_submit" }, ({ payload }) => {
         if (!payload?.playerId || payload.questionIndex === undefined) return;
