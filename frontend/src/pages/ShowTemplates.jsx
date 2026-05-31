@@ -200,10 +200,9 @@ const TemplateEditor = ({ form, selectedTemplate, selectedVenue, updateForm, upd
           </div>
           <Badge className="bg-zinc-800 text-zinc-300">{form.roundCount} rounds</Badge>
         </div>
-        <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+        <div className="mt-4 grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
           <Metric icon={Users} label="Questions" value={form.roundCount * form.questionsPerRound} />
-          <Metric icon={Trophy} label="Points" value={form.defaultPoints} />
-          <Metric icon={Clock} label="Timer" value={`${form.defaultTimer}s`} />
+          <Metric icon={Layers} label="Per round" value={form.questionsPerRound} />
           <Metric icon={CalendarDays} label="Venue" value={selectedVenue?.name || "Optional"} />
         </div>
         {selectedVenue && <p className="mt-3 flex items-center gap-2 text-xs text-zinc-500"><MapPin size={13} />Venue defaults from {selectedVenue.name} will be included in the build direction.</p>}
