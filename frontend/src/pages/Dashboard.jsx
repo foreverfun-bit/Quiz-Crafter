@@ -17,13 +17,15 @@ import {
   MapPin,
   MessageSquare,
   PlusCircle,
-  Radio,
+  Save,
   Sparkles,
   ThumbsDown,
   Upload,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { normalizeTemplate, normalizeVenue, readActiveVenueId, readLocalTemplates, readLocalVenues, writeLocalTemplates, writeLocalVenues } from "../lib/venues";
+import { loadProfileValue, saveProfileValue } from "../lib/profileState";
 
 const BUILD_STORAGE_KEYS = [
   "trivia-flex-round-builder-state-v5",
@@ -31,6 +33,11 @@ const BUILD_STORAGE_KEYS = [
   "trivia-flex-round-builder-state-v3",
   "trivia-flex-round-builder-state-v2",
 ];
+const activeBuildProfileKey = "quiz_crafter_active_build_v1";
+const buildClearedProfileKey = "quiz_crafter_active_build_cleared_at_v1";
+const buildDraftArchiveKey = "quiz_crafter_build_draft_archive_v1";
+const todoStorageKey = "quiz-crafter-dashboard-todos-v1";
+const todoProfileKey = "quiz_crafter_dashboard_todos_v1";
 
 const emptyStats = {
   total_questions: 0,
@@ -47,6 +54,7 @@ const emptyStats = {
   by_type: {},
   approved_categories: [],
   rejected_categories: [],
+  liked_categories: [],
 };
 
 const rejectedValues = new Set(["rejected", "reject", "hidden", "hide", "disliked", "dislike", "bad"]);
@@ -140,11 +148,14 @@ const Dashboard = () => {
   const [venues, setVenues] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [activeVenueId, setActiveVenueId] = useState("");
+  const [todos, setTodos] = useState([]);
+  const [todoText, setTodoText] = useState("");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const loadHostSetup = async () => {
       setSavedBuild(readSavedBuild());
+      setTodos(readTodos());
       const localVenues = readLocalVenues();
       const localTemplates = readLocalTemplates();
       setVenues(localVenues);
@@ -166,6 +177,11 @@ const Dashboard = () => {
           writeLocalTemplates(remoteTemplates);
         }
         setActiveVenueId(metadata[activeVenueMetadataKey] || readActiveVenueId());
+        const remoteTodos = Array.isArray(metadata[todoProfileKey]) ? metadata[todoProfileKey] : null;
+        if (remoteTodos) {
+          setTodos(remoteTodos);
+          writeTodos(remoteTodos);
+        }
       } catch (error) {
         console.warn("Dashboard host setup sync unavailable:", error);
       }
@@ -218,6 +234,50 @@ const Dashboard = () => {
   const starterTemplate = templates[0] || null;
   const nextSession = recentSessions.find((session) => !session.is_past) || null;
   const upcomingSchedule = useMemo(() => buildVenueSchedule(venues), [venues]);
+  const likedCategories = stats.liked_categories || [];
+
+  const persistTodos = (nextTodos) => {
+    setTodos(nextTodos);
+    writeTodos(nextTodos);
+    saveProfileValue(todoProfileKey, nextTodos).catch((error) => console.warn("Dashboard todo profile save unavailable:", error));
+  };
+
+  const addTodo = () => {
+    const text = todoText.trim();
+    if (!text) return;
+    persistTodos([{ id: `todo-${Date.now()}`, text, done: false }, ...todos].slice(0, 20));
+    setTodoText("");
+  };
+
+  const toggleTodo = (id) => persistTodos(todos.map((todo) => todo.id === id ? { ...todo, done: !todo.done } : todo));
+  const removeTodo = (id) => persistTodos(todos.filter((todo) => todo.id !== id));
+
+  const handleContinueBuild = () => navigate("/build");
+  const handleNewBlankBuild = async () => {
+    try {
+      const draft = readSavedBuildState();
+      if (draft) {
+        const archive = await readDraftArchive();
+        const nextArchive = [
+          { ...draft, archivedAt: new Date().toISOString(), draftName: draft.sessionName || "Untitled draft" },
+          ...archive.filter((item) => item?.sessionName !== draft.sessionName || item?.updatedAt !== draft.updatedAt),
+        ].slice(0, 10);
+        writeDraftArchive(nextArchive);
+        await saveProfileValue(buildDraftArchiveKey, nextArchive);
+      }
+      clearSavedBuild();
+      await Promise.allSettled([
+        saveProfileValue(activeBuildProfileKey, null),
+        saveProfileValue(buildClearedProfileKey, new Date().toISOString()),
+      ]);
+      setSavedBuild(null);
+      toast.success(draft ? "Current build saved as a draft. Starting blank." : "Starting a blank build.");
+      navigate("/build");
+    } catch (error) {
+      console.error("New blank build error:", error);
+      toast.error("Could not start a blank build");
+    }
+  };
 
   if (loading) {
     return (
@@ -238,16 +298,20 @@ const Dashboard = () => {
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <Button onClick={() => navigate("/build")} className="gradient-btn" data-testid="dashboard-build-btn">
+          <Button onClick={handleContinueBuild} variant="outline" className="border-white/20 text-white hover:bg-zinc-800" data-testid="dashboard-continue-build-btn">
+            <Save className="mr-2" size={18} />
+            Continue Build
+          </Button>
+          <Button onClick={handleNewBlankBuild} className="gradient-btn" data-testid="dashboard-build-btn">
             <PlusCircle className="mr-2" size={18} />
-            Create & Build
+            New Build
           </Button>
         </div>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_0.65fr] gap-5 mb-5">
         <ScheduleCard schedule={upcomingSchedule} nextSession={nextSession} savedBuild={savedBuild} onBuild={() => navigate("/build")} onVenues={() => navigate("/venues")} onHostSession={() => nextSession && navigate(`/host-session/${nextSession.id}`)} />
-        <PrepCard activeVenue={activeVenue} starterTemplate={starterTemplate} savedBuild={savedBuild} unusedCount={unusedCount} rejectedCount={rejectedCategories.length} onVenue={() => navigate("/venues")} onTemplate={() => navigate("/show-templates")} onLibrary={() => navigate("/library")} onBuild={() => navigate("/build")} onCategories={() => navigate("/categories")} />
+        <TodoCard todos={todos} todoText={todoText} setTodoText={setTodoText} onAdd={addTodo} onToggle={toggleTodo} onRemove={removeTodo} />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
@@ -258,7 +322,7 @@ const Dashboard = () => {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-[0.9fr_1.1fr] gap-5">
-        <RecentSessionsCard recentSessions={recentSessions} onOpen={(session) => navigate(`/session/${session.id}`)} onHost={(session) => navigate(`/host-session/${session.id}`)} onAll={() => navigate("/past-sessions")} onBuild={() => navigate("/build")} />
+        <LikedCategoriesCard categories={likedCategories} onCategories={() => navigate("/categories")} />
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
           <BreakdownCard title="Question Mix" items={[
             { icon: CheckCircle, label: "True/False", value: stats.by_type?.true_false || 0, color: "text-[#71E0DC]" },
@@ -388,6 +452,83 @@ const RecentSessionsCard = ({ recentSessions, onOpen, onHost, onAll, onBuild }) 
   </Card>
 );
 
+const LikedCategoriesCard = ({ categories, onCategories }) => (
+  <Card className="glass-card">
+    <CardHeader className="pb-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <CardTitle className="text-white text-lg">Most Liked Categories</CardTitle>
+          <p className="text-zinc-500 text-sm mt-1">Based on liked questions and host feedback signals.</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={onCategories} className="border-white/20 text-white hover:bg-zinc-800">
+          Manage
+        </Button>
+      </div>
+    </CardHeader>
+    <CardContent className="space-y-3">
+      {categories.length === 0 ? (
+        <EmptyPanel icon={Sparkles} title="No liked categories yet" text="As you like questions, the strongest category signals will show up here." action="Manage Categories" onClick={onCategories} />
+      ) : (
+        categories.slice(0, 8).map((item, index) => (
+          <div key={item.category} className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-zinc-950/45 px-4 py-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <span className="flex h-8 w-8 items-center justify-center rounded-md bg-[#71E0DC]/15 text-sm font-black text-[#71E0DC]">{index + 1}</span>
+              <div className="min-w-0">
+                <p className="text-white font-semibold truncate">{item.category}</p>
+                <p className="text-zinc-500 text-xs">{item.count} liked question{item.count === 1 ? "" : "s"}</p>
+              </div>
+            </div>
+            <Badge className="bg-emerald-500/15 text-emerald-300">Liked</Badge>
+          </div>
+        ))
+      )}
+    </CardContent>
+  </Card>
+);
+
+const TodoCard = ({ todos, todoText, setTodoText, onAdd, onToggle, onRemove }) => (
+  <Card className="glass-card">
+    <CardHeader className="pb-3">
+      <CardTitle className="text-white text-lg">Host To-Do</CardTitle>
+      <p className="text-zinc-500 text-sm mt-1">Quick reminders for prizes, clues, sponsors, and show prep.</p>
+    </CardHeader>
+    <CardContent className="space-y-3">
+      <div className="flex gap-2">
+        <input
+          value={todoText}
+          onChange={(event) => setTodoText(event.target.value)}
+          onKeyDown={(event) => { if (event.key === "Enter") onAdd(); }}
+          placeholder="Add a reminder..."
+          className="h-10 min-w-0 flex-1 rounded-md border border-white/10 bg-zinc-950 px-3 text-sm text-white outline-none focus:border-[#71E0DC]/60"
+        />
+        <Button type="button" onClick={onAdd} className="gradient-btn">Add</Button>
+      </div>
+      {todos.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-white/10 bg-zinc-950/35 px-4 py-5 text-sm text-zinc-500">
+          Nothing pending. Future-you is suspiciously organized.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {todos.slice(0, 8).map((todo) => (
+            <div key={todo.id} className="flex items-center gap-3 rounded-lg border border-white/10 bg-zinc-950/45 px-3 py-2">
+              <button
+                type="button"
+                onClick={() => onToggle(todo.id)}
+                className={`h-5 w-5 rounded border flex-shrink-0 ${todo.done ? "border-[#71E0DC] bg-[#71E0DC]" : "border-white/20 bg-zinc-950"}`}
+                aria-label={todo.done ? "Mark incomplete" : "Mark complete"}
+              />
+              <span className={`min-w-0 flex-1 text-sm ${todo.done ? "text-zinc-600 line-through" : "text-zinc-200"}`}>{todo.text}</span>
+              <button type="button" onClick={() => onRemove(todo.id)} className="text-zinc-500 hover:text-white" aria-label="Remove reminder">
+                <X size={16} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </CardContent>
+  </Card>
+);
+
 const PrepCard = ({ activeVenue, starterTemplate, savedBuild, unusedCount, rejectedCount, onVenue, onTemplate, onLibrary, onBuild, onCategories }) => {
   const items = [
     { label: "Create & build", value: "Generate, write, save, or select", ready: true, onClick: onBuild },
@@ -510,15 +651,21 @@ const CategoryPreview = ({ title, categories, tone, emptyText }) => {
 };
 
 function readSavedBuild() {
+  const parsed = readSavedBuildState();
+  if (!parsed) return null;
+  const rounds = Array.isArray(parsed.rounds) ? parsed.rounds : [];
+  return {
+    sessionName: parsed.sessionName || "",
+    questionCount: rounds.reduce((sum, round) => sum + safeArray(round.questionIds).length, 0),
+  };
+}
+
+function readSavedBuildState() {
   for (const key of BUILD_STORAGE_KEYS) {
     try {
       const parsed = JSON.parse(localStorage.getItem(key) || "null");
       if (!parsed) continue;
-      const rounds = Array.isArray(parsed.rounds) ? parsed.rounds : [];
-      return {
-        sessionName: parsed.sessionName || "",
-        questionCount: rounds.reduce((sum, round) => sum + safeArray(round.questionIds).length, 0),
-      };
+      return parsed;
     } catch {
       // Try the next storage key.
     }
@@ -530,10 +677,51 @@ function clearSavedBuild() {
   BUILD_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
 }
 
+function readTodos() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(todoStorageKey) || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeTodos(todos) {
+  try {
+    localStorage.setItem(todoStorageKey, JSON.stringify(Array.isArray(todos) ? todos : []));
+  } catch {
+    // To-dos are a convenience cache.
+  }
+}
+
+async function readDraftArchive() {
+  try {
+    const remote = await loadProfileValue(buildDraftArchiveKey);
+    if (Array.isArray(remote)) return remote;
+  } catch {
+    // Fall back to local archive below.
+  }
+  try {
+    const parsed = JSON.parse(localStorage.getItem(buildDraftArchiveKey) || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeDraftArchive(drafts) {
+  try {
+    localStorage.setItem(buildDraftArchiveKey, JSON.stringify(Array.isArray(drafts) ? drafts : []));
+  } catch {
+    // The active build is still cleared even if archive cache fails.
+  }
+}
+
 function buildStats(questions, sessions, categoryState) {
   const byType = {};
   const approvedCategories = new Set(categoryState.approved);
   const rejectedCategories = new Set(categoryState.rejected);
+  const likedCategoryCounts = new Map();
   const usedFingerprints = new Set();
   let likedCount = 0;
   let dislikedCount = 0;
@@ -563,6 +751,10 @@ function buildStats(questions, sessions, categoryState) {
     const category = cleanCategory(question.category);
     if (!category) return;
 
+    if (isTruthy(question.is_liked) || approvedValues.has(normalizeStatus(question.rating))) {
+      likedCategoryCounts.set(category, (likedCategoryCounts.get(category) || 0) + 1);
+    }
+
     if (isRejectedQuestionCategory(question)) {
       rejectedCategories.add(category);
       approvedCategories.delete(category);
@@ -586,6 +778,9 @@ function buildStats(questions, sessions, categoryState) {
     by_type: byType,
     approved_categories: sortCategories([...approvedCategories]),
     rejected_categories: sortCategories([...rejectedCategories]),
+    liked_categories: [...likedCategoryCounts.entries()]
+      .map(([category, count]) => ({ category, count }))
+      .sort((a, b) => b.count - a.count || a.category.localeCompare(b.category)),
   };
 }
 
