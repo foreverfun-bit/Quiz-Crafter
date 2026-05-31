@@ -9,8 +9,6 @@ import {
   Bot,
   Calendar,
   CheckCircle,
-  ClipboardList,
-  Clock,
   FileText,
   FolderOpen,
   Image,
@@ -25,7 +23,7 @@ import {
   Upload,
 } from "lucide-react";
 import { toast } from "sonner";
-import { readActiveVenueId, readLocalTemplates, readLocalVenues, writeTemplateBuildDraft, writeVenueBuildDraft } from "../lib/venues";
+import { normalizeTemplate, normalizeVenue, readActiveVenueId, readLocalTemplates, readLocalVenues, writeLocalTemplates, writeLocalVenues } from "../lib/venues";
 
 const BUILD_STORAGE_KEYS = [
   "trivia-flex-round-builder-state-v5",
@@ -69,6 +67,69 @@ const compactDate = (value) => {
   if (Number.isNaN(date.getTime())) return "No date";
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 };
+const venueMetadataKey = "quiz_crafter_venues_v1";
+const templateMetadataKey = "quiz_crafter_show_templates_v1";
+const activeVenueMetadataKey = "quiz_crafter_active_venue_id";
+const dayIndex = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
+const weekIndex = { first: 1, second: 2, third: 3, fourth: 4 };
+const formatScheduleTime = (time, timeZone) => {
+  if (!time) return "Time TBD";
+  const [hours, minutes = "00"] = String(time).split(":");
+  const date = new Date();
+  date.setHours(Number(hours) || 0, Number(minutes) || 0, 0, 0);
+  const zone = String(timeZone || "America/Chicago").split("/").pop()?.replace("_", " ") || "Local";
+  return `${date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} ${zone}`;
+};
+const addDays = (date, days) => {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+};
+const startOfDay = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+const nextWeeklyDate = (venue, fromDate) => {
+  const target = dayIndex[venue.dayOfWeek];
+  if (target === undefined) return null;
+  const from = startOfDay(fromDate);
+  const offset = (target - from.getDay() + 7) % 7;
+  return addDays(from, offset);
+};
+const monthlyOccurrence = (year, month, dayName, monthlyWeek) => {
+  const target = dayIndex[dayName];
+  if (target === undefined) return null;
+  if (monthlyWeek === "last") {
+    const date = new Date(year, month + 1, 0);
+    date.setDate(date.getDate() - ((date.getDay() - target + 7) % 7));
+    return startOfDay(date);
+  }
+  const occurrence = weekIndex[monthlyWeek] || 1;
+  const first = new Date(year, month, 1);
+  const offset = (target - first.getDay() + 7) % 7;
+  return startOfDay(new Date(year, month, 1 + offset + ((occurrence - 1) * 7)));
+};
+const nextMonthlyDate = (venue, fromDate) => {
+  const from = startOfDay(fromDate);
+  for (let offset = 0; offset < 12; offset += 1) {
+    const monthDate = new Date(from.getFullYear(), from.getMonth() + offset, 1);
+    const candidate = monthlyOccurrence(monthDate.getFullYear(), monthDate.getMonth(), venue.dayOfWeek, venue.monthlyWeek);
+    if (candidate && candidate >= from) return candidate;
+  }
+  return null;
+};
+const nextVenueDate = (venue, fromDate = new Date()) => {
+  if (venue.frequency === "monthly") return nextMonthlyDate(venue, fromDate);
+  const weekly = nextWeeklyDate(venue, fromDate);
+  if (!weekly) return null;
+  if (venue.frequency !== "bi_weekly") return weekly;
+  const updated = venue.updatedAt ? new Date(venue.updatedAt) : fromDate;
+  const anchor = Number.isNaN(updated.getTime()) ? fromDate : updated;
+  const weeks = Math.floor((weekly - startOfDay(anchor)) / (7 * 24 * 60 * 60 * 1000));
+  return weeks % 2 === 0 ? weekly : addDays(weekly, 7);
+};
+const buildVenueSchedule = (venues) => venues
+  .map((venue) => ({ venue, date: nextVenueDate(venue) }))
+  .filter((item) => item.date)
+  .sort((a, b) => a.date - b.date)
+  .slice(0, 6);
 
 const Dashboard = () => {
   const { user } = useAuth();
@@ -82,10 +143,34 @@ const Dashboard = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setSavedBuild(readSavedBuild());
-    setVenues(readLocalVenues());
-    setTemplates(readLocalTemplates());
-    setActiveVenueId(readActiveVenueId());
+    const loadHostSetup = async () => {
+      setSavedBuild(readSavedBuild());
+      const localVenues = readLocalVenues();
+      const localTemplates = readLocalTemplates();
+      setVenues(localVenues);
+      setTemplates(localTemplates);
+      setActiveVenueId(readActiveVenueId());
+
+      try {
+        const { data, error } = await supabase.auth.getUser();
+        if (error) throw error;
+        const metadata = data?.user?.user_metadata || {};
+        const remoteVenues = Array.isArray(metadata[venueMetadataKey]) ? metadata[venueMetadataKey].map(normalizeVenue) : null;
+        const remoteTemplates = Array.isArray(metadata[templateMetadataKey]) ? metadata[templateMetadataKey].map(normalizeTemplate) : null;
+        if (remoteVenues) {
+          setVenues(remoteVenues);
+          writeLocalVenues(remoteVenues);
+        }
+        if (remoteTemplates) {
+          setTemplates(remoteTemplates);
+          writeLocalTemplates(remoteTemplates);
+        }
+        setActiveVenueId(metadata[activeVenueMetadataKey] || readActiveVenueId());
+      } catch (error) {
+        console.warn("Dashboard host setup sync unavailable:", error);
+      }
+    };
+    loadHostSetup();
   }, []);
 
   useEffect(() => {
@@ -125,12 +210,6 @@ const Dashboard = () => {
     return String(name).split(/[ @]/)[0] || "Host";
   }, [user]);
 
-  const handleNewBuild = () => {
-    clearSavedBuild();
-    setSavedBuild(null);
-    navigate("/build");
-  };
-
   const approvedCategories = stats.approved_categories || [];
   const rejectedCategories = stats.rejected_categories || [];
   const unusedCount = Math.max(0, (stats.total_questions || 0) - (stats.used_count || 0));
@@ -138,18 +217,7 @@ const Dashboard = () => {
   const activeVenue = venues.find((venue) => venue.id === activeVenueId) || venues[0] || null;
   const starterTemplate = templates[0] || null;
   const nextSession = recentSessions.find((session) => !session.is_past) || null;
-
-  const startFromVenue = () => {
-    if (!activeVenue) return navigate("/venues");
-    writeVenueBuildDraft(activeVenue);
-    navigate("/build");
-  };
-
-  const startFromTemplate = () => {
-    if (!starterTemplate) return navigate("/show-templates");
-    writeTemplateBuildDraft(starterTemplate, activeVenue);
-    navigate("/build");
-  };
+  const upcomingSchedule = useMemo(() => buildVenueSchedule(venues), [venues]);
 
   if (loading) {
     return (
@@ -164,9 +232,9 @@ const Dashboard = () => {
       <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-4 mb-6">
         <div>
           <p className="text-sm font-semibold uppercase tracking-[0.18em] text-[#71E0DC]">Host Dashboard</p>
-          <h1 className="text-3xl md:text-4xl font-bold text-white mt-2">Ready room for {firstName}</h1>
+          <h1 className="text-3xl md:text-4xl font-bold text-white mt-2">Tonight and next up</h1>
           <p className="text-zinc-500 mt-2 max-w-3xl">
-            Prep your next set, keep repeats out, and jump back into the hosting flow without hunting through menus.
+            A cleaner home base for {firstName}: upcoming venue nights, useful stats, and the next prep move.
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
@@ -177,59 +245,26 @@ const Dashboard = () => {
         </div>
       </div>
 
-      <div className="mb-5">
-        <CommandCenter
-          nextSession={nextSession}
-          activeVenue={activeVenue}
-          starterTemplate={starterTemplate}
-          savedBuild={savedBuild}
-          onContinue={() => navigate("/build")}
-          onNew={handleNewBuild}
-          onHost={() => nextSession && navigate(`/host-session/${nextSession.id}`)}
-          onOpenSession={() => nextSession && navigate(`/session/${nextSession.id}`)}
-          onStartVenue={startFromVenue}
-          onStartTemplate={startFromTemplate}
-          onHostTools={() => navigate("/host-tools")}
-        />
-
+      <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_0.65fr] gap-5 mb-5">
+        <ScheduleCard schedule={upcomingSchedule} nextSession={nextSession} savedBuild={savedBuild} onBuild={() => navigate("/build")} onVenues={() => navigate("/venues")} onHostSession={() => nextSession && navigate(`/host-session/${nextSession.id}`)} />
+        <PrepCard activeVenue={activeVenue} starterTemplate={starterTemplate} savedBuild={savedBuild} unusedCount={unusedCount} rejectedCount={rejectedCategories.length} onVenue={() => navigate("/venues")} onTemplate={() => navigate("/show-templates")} onLibrary={() => navigate("/library")} onBuild={() => navigate("/build")} onCategories={() => navigate("/categories")} />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
-        <MetricCard label="Library" value={stats.total_questions} sub={`${unusedCount} unused`} icon={Library} tone="cyan" onClick={() => navigate("/library")} />
-        <MetricCard label="Used" value={stats.used_count} sub="blocked from builder" icon={CheckCircle} tone="green" />
-        <MetricCard label="Venues" value={venues.length} sub={activeVenue ? activeVenue.name : "no default"} icon={MapPin} tone="purple" onClick={() => navigate("/venues")} />
-        <MetricCard label="Media" value={stats.media_count} sub="questions with images" icon={Image} tone="amber" />
+        <MetricCard label="Questions" value={stats.total_questions} sub={`${unusedCount} unused`} icon={Library} tone="cyan" onClick={() => navigate("/library")} />
+        <MetricCard label="Sessions" value={stats.sessions_count} sub={`${stats.imported_sessions_count} past`} icon={Calendar} tone="purple" onClick={() => navigate("/past-sessions")} />
+        <MetricCard label="Venues" value={venues.length} sub={activeVenue ? activeVenue.name : "set one up"} icon={MapPin} tone="green" onClick={() => navigate("/venues")} />
+        <MetricCard label="Categories" value={approvedCategories.length} sub={`${rejectedCategories.length} rejected`} icon={FolderOpen} tone="amber" onClick={() => navigate("/categories")} />
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[0.95fr_1.05fr] gap-5">
-        <Card className="glass-card">
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between gap-3">
-              <CardTitle className="text-white text-lg">Recent Sessions</CardTitle>
-              <Button variant="outline" size="sm" onClick={() => navigate("/past-sessions")} className="border-white/20 text-white hover:bg-zinc-800">
-                View All
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {recentSessions.length === 0 ? (
-              <EmptyPanel icon={Calendar} title="No sessions yet" text="Build a session or import a set to start your archive." action="Start Building" onClick={() => navigate("/build")} />
-            ) : (
-              recentSessions.map((session) => (
-                <SessionRow key={session.id} session={session} onOpen={() => navigate(`/session/${session.id}`)} onHost={() => navigate(`/host-session/${session.id}`)} />
-              ))
-            )}
-          </CardContent>
-        </Card>
-
+      <div className="grid grid-cols-1 xl:grid-cols-[0.9fr_1.1fr] gap-5">
+        <RecentSessionsCard recentSessions={recentSessions} onOpen={(session) => navigate(`/session/${session.id}`)} onHost={(session) => navigate(`/host-session/${session.id}`)} onAll={() => navigate("/past-sessions")} onBuild={() => navigate("/build")} />
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          <PrepCard activeVenue={activeVenue} starterTemplate={starterTemplate} savedBuild={savedBuild} unusedCount={unusedCount} rejectedCount={rejectedCategories.length} onVenue={() => navigate("/venues")} onTemplate={() => navigate("/show-templates")} onLibrary={() => navigate("/library")} onBuild={() => navigate("/build")} onCategories={() => navigate("/categories")} />
-
           <BreakdownCard title="Question Mix" items={[
             { icon: CheckCircle, label: "True/False", value: stats.by_type?.true_false || 0, color: "text-[#71E0DC]" },
             { icon: List, label: "Multiple Choice", value: stats.by_type?.multiple_choice || 0, color: "text-[#AEB2EF]" },
             { icon: MessageSquare, label: "Written", value: stats.by_type?.written || 0, color: "text-emerald-400" },
-            { icon: Image, label: "Picture", value: stats.by_type?.picture || 0, color: "text-amber-400" },
+            { icon: Image, label: "Media", value: stats.media_count || 0, color: "text-amber-400" },
           ]} />
 
           <BreakdownCard title="Source Mix" items={[
@@ -287,34 +322,68 @@ const Dashboard = () => {
   );
 };
 
-const CommandCenter = ({ nextSession, activeVenue, starterTemplate, savedBuild, onContinue, onNew, onHost, onOpenSession, onStartVenue, onStartTemplate, onHostTools }) => (
+const ScheduleCard = ({ schedule, nextSession, savedBuild, onBuild, onVenues, onHostSession }) => (
   <Card className="glass-card border-[#71E0DC]/25">
-    <CardContent className="p-5 lg:p-6">
-      <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-5">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 text-[#71E0DC] font-bold uppercase tracking-[0.16em] text-xs">
-            <Radio size={16} />
-            Host Command Center
-          </div>
-          <h2 className="mt-3 text-2xl lg:text-3xl font-black text-white">
-            {nextSession ? nextSession.name || nextSession.session_name || "Next Session" : savedBuild ? "Draft in progress" : "Set up your next trivia night"}
-          </h2>
-          <p className="mt-2 text-zinc-500">
-            {nextSession ? `${compactDate(nextSession.created_at)} / ${questionCount(nextSession)} questions ready` : savedBuild ? `${savedBuild.questionCount} questions selected locally` : "Start with a venue, a show template, or a fresh build."}
-          </p>
-          <div className="mt-4 flex flex-wrap gap-2">
-            {activeVenue && <Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20"><MapPin size={13} className="mr-1" />{activeVenue.name}</Badge>}
-            {starterTemplate && <Badge className="bg-[#AEB2EF]/15 text-[#AEB2EF] border border-[#AEB2EF]/20"><ClipboardList size={13} className="mr-1" />{starterTemplate.name}</Badge>}
-            {savedBuild && <Badge className="bg-amber-500/15 text-amber-200 border border-amber-500/20"><Clock size={13} className="mr-1" />Saved draft</Badge>}
-          </div>
+    <CardHeader className="pb-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <CardTitle className="text-white text-xl">Upcoming Schedule</CardTitle>
+          <p className="text-zinc-500 text-sm mt-1">Built from your venue day, frequency, and start time.</p>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:w-[360px] gap-2">
-          <Button onClick={nextSession ? onHost : savedBuild ? onContinue : onStartVenue} className="gradient-btn">{nextSession ? "Go Live" : savedBuild ? "Continue Build" : "Build From Venue"}</Button>
-          <Button variant="outline" onClick={nextSession ? onOpenSession : onStartTemplate} className="border-white/20 text-white hover:bg-zinc-800">{nextSession ? "Open Session" : "Use Template"}</Button>
-          <Button variant="outline" onClick={onHostTools} className="border-white/20 text-white hover:bg-zinc-800">Host Tools</Button>
-          <Button variant="outline" onClick={onNew} className="border-white/20 text-white hover:bg-zinc-800">New Build</Button>
-        </div>
+        <Button variant="outline" size="sm" onClick={onVenues} className="border-white/20 text-white hover:bg-zinc-800">
+          Venues
+        </Button>
       </div>
+    </CardHeader>
+    <CardContent className="space-y-3">
+      {schedule.length === 0 ? (
+        <EmptyPanel icon={Calendar} title="No venue schedule yet" text="Add your regular trivia venues and this becomes your weekly hosting calendar." action="Set Up Venues" onClick={onVenues} />
+      ) : (
+        schedule.map(({ venue, date }, index) => (
+          <div key={`${venue.id}-${date.toISOString()}`} className={`rounded-lg border p-4 ${index === 0 ? "border-[#71E0DC]/35 bg-[#71E0DC]/10" : "border-white/10 bg-zinc-950/45"}`}>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <Badge className={index === 0 ? "bg-[#71E0DC] text-zinc-950" : "bg-white/10 text-zinc-300"}>{index === 0 ? "Next" : date.toLocaleDateString([], { weekday: "short" })}</Badge>
+                  <p className="text-white font-bold truncate">{venue.nightName || venue.name}</p>
+                </div>
+                <p className="text-zinc-400 text-sm mt-2">
+                  {date.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })} at {formatScheduleTime(venue.startTime, venue.timeZone)}
+                </p>
+                {venue.address && <p className="text-zinc-600 text-xs mt-1 truncate">{venue.address}</p>}
+              </div>
+              {index === 0 && (
+                <div className="flex gap-2">
+                  <Button size="sm" className="gradient-btn" onClick={onBuild}>{savedBuild ? "Continue Build" : "Build Set"}</Button>
+                  {nextSession && <Button size="sm" variant="outline" onClick={onHostSession} className="border-white/20 text-white hover:bg-zinc-800">Go Live</Button>}
+                </div>
+              )}
+            </div>
+          </div>
+        ))
+      )}
+    </CardContent>
+  </Card>
+);
+
+const RecentSessionsCard = ({ recentSessions, onOpen, onHost, onAll, onBuild }) => (
+  <Card className="glass-card">
+    <CardHeader className="pb-3">
+      <div className="flex items-center justify-between gap-3">
+        <CardTitle className="text-white text-lg">Recent Sessions</CardTitle>
+        <Button variant="outline" size="sm" onClick={onAll} className="border-white/20 text-white hover:bg-zinc-800">
+          View All
+        </Button>
+      </div>
+    </CardHeader>
+    <CardContent className="space-y-3">
+      {recentSessions.length === 0 ? (
+        <EmptyPanel icon={Calendar} title="No sessions yet" text="Build a session or import a set to start your archive." action="Start Building" onClick={onBuild} />
+      ) : (
+        recentSessions.slice(0, 4).map((session) => (
+          <SessionRow key={session.id} session={session} onOpen={() => onOpen(session)} onHost={() => onHost(session)} />
+        ))
+      )}
     </CardContent>
   </Card>
 );
@@ -367,7 +436,7 @@ const SessionRow = ({ session, onOpen, onHost }) => (
     <div className="flex items-start justify-between gap-3">
       <button type="button" onClick={onOpen} className="text-left min-w-0">
         <div className="text-white font-semibold truncate">{session.name || session.session_name || "Untitled Session"}</div>
-        <div className="text-zinc-500 text-sm mt-1">{compactDate(session.created_at)} · {questionCount(session)} questions</div>
+        <div className="text-zinc-500 text-sm mt-1">{compactDate(session.created_at)} / {questionCount(session)} questions</div>
       </button>
       <Badge className={session.is_past ? "bg-[#AEB2EF]/15 text-[#AEB2EF]" : "bg-[#71E0DC]/15 text-[#71E0DC]"}>
         {session.is_past ? "Past" : "Build"}
