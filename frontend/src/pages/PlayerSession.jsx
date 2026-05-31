@@ -381,9 +381,9 @@ const HostBrandMark = ({ branding }) => {
 };
 
 const QuizCrafterBadge = () => (
-  <div className="mt-4 flex items-center justify-center gap-3 text-sm uppercase tracking-wide text-zinc-500">
+  <div className="mt-4 flex flex-col items-center justify-center gap-1.5 text-center text-sm uppercase tracking-wide text-zinc-500">
     <span>Powered by</span>
-    <img src={QUIZ_CRAFTER_LOGO_SRC} alt="Quiz Crafter" className="h-8 w-36 object-contain" />
+    <img src={QUIZ_CRAFTER_LOGO_SRC} alt="Quiz Crafter" className="h-10 w-44 object-contain" />
   </div>
 );
 
