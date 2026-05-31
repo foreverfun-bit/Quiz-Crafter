@@ -116,6 +116,7 @@ export default async function handler(req, res) {
       cleanExcludeCategories,
       cleanApprovedCategories,
       cleanLockedCategories,
+      cleanRejectedQuestions,
       existingQuestions,
       styleExamples,
       excludeUsed,
@@ -220,7 +221,7 @@ function categoryKey(value) {
   return cleanText(value).toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt }) {
+function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, cleanRejectedQuestions = [], existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt }) {
   const overGenerateCount = Math.min(18, Math.max(safeCount + 4, Math.ceil(safeCount * 1.7)));
   const lockedCategoryText = cleanLockedCategories.length ? `Locked categories are active. The category field must exactly match one of these locked categories: ${cleanLockedCategories.join(", ")}. Generate all candidates inside these locked categories until the host unlocks them.` : "";
   const approvedCategoryText = cleanLockedCategories.length
@@ -233,6 +234,7 @@ function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, clea
   const styleText = styleExamples.length ? `Use these saved library questions as calibration for the host's style and difficulty. Match the readability, category feel, and answerability. Do not copy, lightly rewrite, reuse their answers, or generate the same topic angles:\n${styleExamples.map(formatStyleExample).join("\n")}` : "";
   const duplicateExamples = existingQuestions.slice(0, DUPLICATE_EXAMPLE_LIMIT).map((q) => `- ${q.question_text}${q.correct_answer ? ` Answer: ${q.correct_answer}` : ""}`).join("\n");
   const duplicateText = avoidDuplicates && duplicateExamples ? `Avoid duplicating, lightly rewording, using the same answer, or using the same answer-angle as these existing and past-session questions:\n${duplicateExamples}` : "";
+  const rejectedText = cleanRejectedQuestions.length ? `The host explicitly rejected these generated questions. Do not return them, close rewrites, same-answer variations, or same topic-angle cousins:\n${cleanRejectedQuestions.map((question) => `- ${question}`).join("\n")}` : "";
   const usedText = excludeUsed ? "Assume the host has already used years of common trivia. Do not use standard listicle facts or classroom facts unless the angle is unusually fresh." : "";
   const hostHardText = difficultyKey === "host_hard" ? "Host Hard calibration: make these feel like the host's stronger library questions, not encyclopedia deep cuts. Prefer recognizable subjects with a fresh angle over obscure subjects with no clue path." : "";
   const noveltySeed = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -298,6 +300,7 @@ ${styleText}
 ${themeText}
 ${excludedCategoryText}
 ${usedText}
+${rejectedText}
 ${duplicateText}
 `.trim();
 }
