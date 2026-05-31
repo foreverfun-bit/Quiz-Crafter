@@ -164,7 +164,19 @@ const loadBuildSavedState = () => {
   const saved = localStorage.getItem(BUILD_STORAGE_KEY) || localStorage.getItem("trivia-flex-round-builder-state-v4") || localStorage.getItem("trivia-flex-round-builder-state-v3") || localStorage.getItem("trivia-flex-round-builder-state-v2");
   return saved ? normalizeBuildSavedState(saved) : null;
 };
-const hasBuildContent = (state) => Boolean(normalizeText(state?.sessionName) || normalizeText(state?.theme) || safeQuestions(state?.questions).length || normalizeRounds(state?.rounds).some((round) => round.description || (round.questionIds || []).length || !/^Round \d+$/i.test(round.name)));
+const isDefaultRoundShell = (round, index) => !normalizeText(round?.description)
+  && !(round?.questionIds || []).length
+  && !round?.defaultQuestionSettings
+  && normalizeText(round?.name) === `Round ${index + 1}`;
+const hasBuildContent = (state) => {
+  const questions = safeQuestions(state?.questions);
+  const rounds = normalizeRounds(state?.rounds);
+  return Boolean(
+    normalizeText(state?.theme)
+    || questions.length
+    || rounds.some((round, index) => !isDefaultRoundShell(round, index))
+  );
+};
 const buildStateUpdatedAt = (state) => {
   const time = new Date(state?.updatedAt || 0).getTime();
   return Number.isNaN(time) || time <= 0 ? (hasBuildContent(state) ? 1 : 0) : time;
