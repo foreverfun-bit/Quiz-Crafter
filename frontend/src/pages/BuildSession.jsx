@@ -23,6 +23,8 @@ const questionTypes = [
 ];
 const defaultRounds = [{ id: "round-1", name: "Round 1", description: "", questionIds: [] }, { id: "round-2", name: "Round 2", description: "", questionIds: [] }, { id: "round-3", name: "Round 3", description: "", questionIds: [] }];
 const BUILD_STORAGE_KEY = "trivia-flex-round-builder-state-v5";
+const metadataBuildKey = "quiz_crafter_active_build_v1";
+const metadataBuildClearedKey = "quiz_crafter_active_build_cleared_at_v1";
 const CATEGORY_PREF_KEY = "quiz-crafter-category-preferences";
 const REJECTED_AI_KEY = "quiz-crafter-rejected-ai-questions";
 const USED_QUESTIONS_KEY = "quiz-crafter-used-question-ids";
@@ -133,11 +135,10 @@ const todayInputDate = () => new Date().toISOString().slice(0, 10);
 const formatSessionDate = (value) => { const [year, month, day] = String(value || "").split("-"); return year && month && day ? `${Number(month)}.${Number(day)}.${year}` : new Date().toLocaleDateString(); };
 const venueDisplayName = (venue) => venue?.nightName || venue?.name || "";
 const buildAutoSessionName = (date, venue) => [formatSessionDate(date), venueDisplayName(venue) || "Trivia"].filter(Boolean).join(" ");
-const loadBuildSavedState = () => {
+const normalizeBuildSavedState = (value) => {
   try {
-    const saved = localStorage.getItem(BUILD_STORAGE_KEY) || localStorage.getItem("trivia-flex-round-builder-state-v4") || localStorage.getItem("trivia-flex-round-builder-state-v3") || localStorage.getItem("trivia-flex-round-builder-state-v2");
-    if (!saved) return null;
-    const parsed = JSON.parse(saved);
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    if (!parsed || typeof parsed !== "object") return null;
     const savedQuestions = safeQuestions(parsed.questions);
     const savedRounds = normalizeRounds(parsed.rounds);
     const activeRoundId = getInitialActiveRoundId(savedRounds, parsed.activeRoundId);
@@ -145,6 +146,35 @@ const loadBuildSavedState = () => {
   } catch {
     return null;
   }
+};
+const loadBuildSavedState = () => {
+  const saved = localStorage.getItem(BUILD_STORAGE_KEY) || localStorage.getItem("trivia-flex-round-builder-state-v4") || localStorage.getItem("trivia-flex-round-builder-state-v3") || localStorage.getItem("trivia-flex-round-builder-state-v2");
+  return saved ? normalizeBuildSavedState(saved) : null;
+};
+const hasBuildContent = (state) => Boolean(normalizeText(state?.sessionName) || normalizeText(state?.theme) || safeQuestions(state?.questions).length || normalizeRounds(state?.rounds).some((round) => round.description || (round.questionIds || []).length || !/^Round \d+$/i.test(round.name)));
+const buildStateUpdatedAt = (state) => {
+  const time = new Date(state?.updatedAt || 0).getTime();
+  return Number.isNaN(time) || time <= 0 ? (hasBuildContent(state) ? 1 : 0) : time;
+};
+const createBuildSnapshot = ({ sessionName, sessionDate, selectedVenueId, rounds, activeRoundId, theme, difficulty, typeFilter, generateType, generateCount, includeImageIdeas, questions }) => {
+  const draftRounds = normalizeRounds(rounds);
+  const draftQuestions = safeQuestions(questions);
+  const selectedIdsForDraft = new Set(draftRounds.flatMap((round) => round.questionIds || []).map(String));
+  return {
+    sessionName,
+    sessionDate,
+    venueId: selectedVenueId,
+    rounds: draftRounds,
+    activeRoundId: getInitialActiveRoundId(draftRounds, activeRoundId),
+    theme,
+    difficulty,
+    typeFilter,
+    generateType,
+    generateCount,
+    includeImageIdeas,
+    questions: draftQuestions.filter((question) => selectedIdsForDraft.has(String(question.id))),
+    updatedAt: new Date().toISOString(),
+  };
 };
 
 const BuildSession = () => {
@@ -196,25 +226,91 @@ const BuildSession = () => {
   const [templates, setTemplates] = useState(() => readLocalTemplates());
   const [venues] = useState(() => readLocalVenues());
   const [selectedTemplateId, setSelectedTemplateId] = useState(() => readLocalTemplates()[0]?.id || "");
+  const [profileBuildHydrated, setProfileBuildHydrated] = useState(Boolean(sessionId));
   const selectedVenue = useMemo(() => venues.find((venue) => venue.id === selectedVenueId) || null, [venues, selectedVenueId]);
 
+  useEffect(() => { setProfileBuildHydrated(Boolean(sessionId)); }, [sessionId]);
   useEffect(() => {
-    if (sessionId || loading) return;
-    const draftRounds = normalizeRounds(rounds);
-    const draftQuestions = safeQuestions(questions);
-    const selectedIdsForDraft = new Set(draftRounds.flatMap((round) => round.questionIds || []).map(String));
-    const selectedQuestionsForDraft = draftQuestions.filter((question) => selectedIdsForDraft.has(String(question.id)));
-    localStorage.setItem(BUILD_STORAGE_KEY, JSON.stringify({ sessionName, sessionDate, venueId: selectedVenueId, rounds: draftRounds, activeRoundId: getInitialActiveRoundId(draftRounds, activeRoundId), theme, difficulty, typeFilter, generateType, generateCount, includeImageIdeas, questions: selectedQuestionsForDraft }));
-  }, [sessionId, loading, sessionName, sessionDate, selectedVenueId, rounds, activeRoundId, theme, difficulty, typeFilter, generateType, generateCount, includeImageIdeas, questions]);
+    if (sessionId || editingSessionId || loading) return;
+    const snapshot = createBuildSnapshot({ sessionName, sessionDate, selectedVenueId, rounds, activeRoundId, theme, difficulty, typeFilter, generateType, generateCount, includeImageIdeas, questions });
+    if (!hasBuildContent(snapshot)) return;
+    localStorage.setItem(BUILD_STORAGE_KEY, JSON.stringify(snapshot));
+    const saveTimer = window.setTimeout(async () => {
+      try {
+        await supabase.auth.updateUser({ data: { [metadataBuildKey]: snapshot, [metadataBuildClearedKey]: null } });
+      } catch (error) {
+        console.warn("Build profile autosave unavailable:", error);
+      }
+    }, 900);
+    return () => window.clearTimeout(saveTimer);
+  }, [sessionId, editingSessionId, loading, sessionName, sessionDate, selectedVenueId, rounds, activeRoundId, theme, difficulty, typeFilter, generateType, generateCount, includeImageIdeas, questions]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { fetchBuilderData(); }, [sessionId]);
-  useEffect(() => { if (!loading) setSessionName(buildAutoSessionName(sessionDate, selectedVenue)); }, [sessionDate, selectedVenue, loading]);
-  const clearSavedState = () => { localStorage.removeItem(BUILD_STORAGE_KEY); localStorage.removeItem("trivia-flex-round-builder-state-v4"); localStorage.removeItem("trivia-flex-round-builder-state-v3"); localStorage.removeItem("trivia-flex-round-builder-state-v2"); localStorage.removeItem(VENUE_BUILD_DRAFT_KEY); };
+  useEffect(() => { if (!loading) setSessionName((current) => current.trim() ? current : buildAutoSessionName(sessionDate, selectedVenue)); }, [sessionDate, selectedVenue, loading]);
+  const clearSavedState = async () => {
+    localStorage.removeItem(BUILD_STORAGE_KEY);
+    localStorage.removeItem("trivia-flex-round-builder-state-v4");
+    localStorage.removeItem("trivia-flex-round-builder-state-v3");
+    localStorage.removeItem("trivia-flex-round-builder-state-v2");
+    localStorage.removeItem(VENUE_BUILD_DRAFT_KEY);
+    try {
+      await supabase.auth.updateUser({ data: { [metadataBuildKey]: null, [metadataBuildClearedKey]: new Date().toISOString() } });
+    } catch (error) {
+      console.warn("Build profile clear unavailable:", error);
+    }
+  };
+  const applySavedBuildState = (state) => {
+    const cleanState = normalizeBuildSavedState(state);
+    if (!cleanState || !hasBuildContent(cleanState)) return false;
+    const cleanRounds = normalizeRounds(cleanState.rounds);
+    const cleanQuestions = safeQuestions(cleanState.questions);
+    setSessionName(cleanState.sessionName || "");
+    setSessionDate(cleanState.sessionDate || todayInputDate());
+    setSelectedVenueId(cleanState.venueId || "");
+    setRounds(cleanRounds);
+    setActiveRoundId(getInitialActiveRoundId(cleanRounds, cleanState.activeRoundId));
+    setTheme(cleanState.theme || "");
+    setDifficulty(cleanState.difficulty || "host_hard");
+    setTypeFilter(cleanState.typeFilter || "all");
+    setGenerateType(cleanState.generateType || "multiple_choice");
+    setGenerateCount(cleanState.generateCount || "3");
+    setIncludeImageIdeas(Boolean(cleanState.includeImageIdeas));
+    setQuestions((current) => {
+      const restoredIds = new Set(cleanQuestions.map((question) => String(question.id)));
+      return [...cleanQuestions, ...current.filter((question) => !restoredIds.has(String(question.id)))];
+    });
+    localStorage.setItem(BUILD_STORAGE_KEY, JSON.stringify(cleanState));
+    return true;
+  };
+  useEffect(() => {
+    if (sessionId || loading || profileBuildHydrated) return;
+    const hydrateProfileBuild = async () => {
+      try {
+        const { data, error } = await supabase.auth.getUser();
+        if (error) throw error;
+        const remoteState = normalizeBuildSavedState(data?.user?.user_metadata?.[metadataBuildKey]);
+        const clearedAt = new Date(data?.user?.user_metadata?.[metadataBuildClearedKey] || 0).getTime() || 0;
+        const localState = loadBuildSavedState();
+        const remoteIsFresh = remoteState && hasBuildContent(remoteState) && buildStateUpdatedAt(remoteState) > clearedAt;
+        const localIsFresh = localState && hasBuildContent(localState) && buildStateUpdatedAt(localState) > clearedAt;
+        if (remoteIsFresh && (!localIsFresh || buildStateUpdatedAt(remoteState) >= buildStateUpdatedAt(localState))) {
+          applySavedBuildState(remoteState);
+        } else if (localIsFresh) {
+          await supabase.auth.updateUser({ data: { [metadataBuildKey]: localState, [metadataBuildClearedKey]: null } });
+        }
+      } catch (error) {
+        console.warn("Build profile restore unavailable:", error);
+      } finally {
+        setProfileBuildHydrated(true);
+      }
+    };
+    hydrateProfileBuild();
+  }, [sessionId, loading, profileBuildHydrated]);
   const handleBrowseLibrary = () => { setUsedQuestionIds(readUsedIds()); setUnusedQuestionIds(readUnusedIds()); setQuestionMemory(readQuestionMemory()); setShowLibrary(true); setShowWriteForm(false); setShowAiPanel(false); };
   useEffect(() => { localStorage.removeItem("quiz-crafter-build-recovery-attempted"); }, []);
   useEffect(() => { const latestTemplates = readLocalTemplates(); setTemplates(latestTemplates); setSelectedTemplateId((current) => current || latestTemplates[0]?.id || ""); }, []);
 
-  const fetchBuilderData = async () => { try { setLoading(true); const [questionsResult, sessionsResult] = await Promise.all([supabase.from("questions").select("*").order("created_at", { ascending: false }), supabase.from("sessions").select("*").order("created_at", { ascending: false })]); if (questionsResult.error) throw questionsResult.error; if (sessionsResult.error) throw sessionsResult.error; const sessions = sessionsResult.data || []; const sessionToEdit = sessionId ? sessions.find((session) => String(session.id) === String(sessionId)) : null; if (sessionId && !sessionToEdit) throw new Error("Saved session not found"); const localUsed = readUsedIds(); const localUnused = readUnusedIds(); const used = new Set(); sessions.forEach((session) => { if (sessionToEdit && String(session.id) === String(sessionToEdit.id)) return; collectSessionQuestions(session).forEach((question) => { const text = question?.question_text || question?.question; if (text) used.add(fingerprint(text)); }); }); (questionsResult.data || []).forEach((question) => { if (!localUnused.has(String(question.id)) && isQuestionMarkedUsed(question, localUsed)) used.add(fingerprint(question.question_text)); }); const prefs = loadLocalCategoryPrefs(); const approved = new Set(prefs.approved); const rejected = new Set(prefs.rejected); (questionsResult.data || []).forEach((question) => { const category = normalizeText(question.category); if (category && !rejected.has(category)) approved.add(category); }); setUsedQuestionIds(localUsed); setUnusedQuestionIds(localUnused); setQuestionMemory(readQuestionMemory()); setUsedFingerprints(used); setApprovedCategories([...approved].sort((a, b) => a.localeCompare(b))); setRejectedCategories([...rejected]); const libraryQuestions = safeQuestions(questionsResult.data); if (sessionToEdit) { const builderState = buildStateFromSavedSession(sessionToEdit); setEditingSessionId(sessionToEdit.id); setEditingSessionWasPast(Boolean(sessionToEdit.is_past)); setSessionName(sessionToEdit.name || sessionToEdit.session_name || "Untitled Session"); setSessionDate(String(sessionToEdit.session_date || sessionToEdit.event_date || "").slice(0, 10) || savedState?.sessionDate || todayInputDate()); setSelectedVenueId(sessionToEdit.venue_id || savedState?.venueId || venueDraft?.venueId || ""); setRounds(builderState.rounds); setActiveRoundId(builderState.activeRoundId); setQuestions([...builderState.questions, ...libraryQuestions]); clearSavedState(); } else { setEditingSessionId(null); setEditingSessionWasPast(false); setQuestions([...safeQuestions(savedState?.questions), ...libraryQuestions]); } } catch (error) { console.error("Build session load error:", error); toast.error(error.message || "Failed to load builder"); if (sessionId) navigate("/past-sessions"); } finally { setLoading(false); } };
+  const fetchBuilderData = async () => { try { setLoading(true); const [questionsResult, sessionsResult] = await Promise.all([supabase.from("questions").select("*").order("created_at", { ascending: false }), supabase.from("sessions").select("*").order("created_at", { ascending: false })]); if (questionsResult.error) throw questionsResult.error; if (sessionsResult.error) throw sessionsResult.error; const sessions = sessionsResult.data || []; const sessionToEdit = sessionId ? sessions.find((session) => String(session.id) === String(sessionId)) : null; if (sessionId && !sessionToEdit) throw new Error("Saved session not found"); const localUsed = readUsedIds(); const localUnused = readUnusedIds(); const used = new Set(); sessions.forEach((session) => { if (sessionToEdit && String(session.id) === String(sessionToEdit.id)) return; collectSessionQuestions(session).forEach((question) => { const text = question?.question_text || question?.question; if (text) used.add(fingerprint(text)); }); }); (questionsResult.data || []).forEach((question) => { if (!localUnused.has(String(question.id)) && isQuestionMarkedUsed(question, localUsed)) used.add(fingerprint(question.question_text)); }); const prefs = loadLocalCategoryPrefs(); const approved = new Set(prefs.approved); const rejected = new Set(prefs.rejected); (questionsResult.data || []).forEach((question) => { const category = normalizeText(question.category); if (category && !rejected.has(category)) approved.add(category); }); setUsedQuestionIds(localUsed); setUnusedQuestionIds(localUnused); setQuestionMemory(readQuestionMemory()); setUsedFingerprints(used); setApprovedCategories([...approved].sort((a, b) => a.localeCompare(b))); setRejectedCategories([...rejected]); const libraryQuestions = safeQuestions(questionsResult.data); if (sessionToEdit) { const builderState = buildStateFromSavedSession(sessionToEdit); setEditingSessionId(sessionToEdit.id); setEditingSessionWasPast(Boolean(sessionToEdit.is_past)); setSessionName(sessionToEdit.name || sessionToEdit.session_name || "Untitled Session"); setSessionDate(String(sessionToEdit.session_date || sessionToEdit.event_date || "").slice(0, 10) || savedState?.sessionDate || todayInputDate()); setSelectedVenueId(sessionToEdit.venue_id || savedState?.venueId || venueDraft?.venueId || ""); setRounds(builderState.rounds); setActiveRoundId(builderState.activeRoundId); setQuestions([...builderState.questions, ...libraryQuestions]); await clearSavedState(); } else { setEditingSessionId(null); setEditingSessionWasPast(false); setQuestions([...safeQuestions(savedState?.questions), ...libraryQuestions]); } } catch (error) { console.error("Build session load error:", error); toast.error(error.message || "Failed to load builder"); if (sessionId) navigate("/past-sessions"); } finally { setLoading(false); } };
   const safeRounds = useMemo(() => normalizeRounds(rounds), [rounds]);
   const normalizedQuestions = useMemo(() => safeQuestions(questions), [questions]);
   const questionById = useMemo(() => new Map(normalizedQuestions.map((q) => [String(q.id), q])), [normalizedQuestions]);
@@ -260,7 +356,7 @@ const BuildSession = () => {
   const handleTuneGeneratedDifficulty = async (question, direction) => { setActionQuestionId(question.id); try { const type = normalizeType(question); const targetDifficulty = direction === "easier" ? easierDifficulty[difficulty] || "medium" : harderDifficulty[difficulty] || "hard"; const tuningTheme = [theme, direction === "easier" ? "Make a more accessible version of this same trivia idea. Keep it fresh, but add a clearer clue path and make the answer more gettable for a strong bar-trivia team." : "Make a harder version of this same trivia idea. Keep it fair and satisfying, but require a stronger clue path or second-layer knowledge.", type === "written" ? "Because this is a written-answer question, make the answer especially fair to recall without options. Avoid exact-spelling traps." : type === "multiple_choice" ? "Because this is multiple choice, keep the wrong answers plausible and comparable." : "Because this is true/false, keep the claim cleanly verifiable and not a coin flip.", `Original category: ${question.category || "General"}`, `Original question: ${question.question_text}`, `Original answer: ${question.correct_answer}`, question.fun_fact ? `Original fun fact: ${question.fun_fact}` : "", "Return a replacement, not a duplicate. It may keep the same broad subject, but should be newly worded and calibrated to the requested difficulty."].filter(Boolean).join("\n"); const { data } = await requestGeneratedQuestions({ replacement: question, rejectCurrent: true, difficultyOverride: targetDifficulty, themeOverride: tuningTheme, allowCurrentCategory: true, lockedCategoriesOverride: [question.category].filter(Boolean) }); const generated = normalizeGeneratedCandidates(data?.candidates, activeRound.id, type).map((candidate) => normalizeQuestion({ ...candidate, category: question.category || candidate.category }, type)); if (!generated.length) throw new Error(`No ${direction} version came back. Try changing the AI direction.`); addGeneratedToRound(generated, question); toast.success(direction === "easier" ? "Made easier" : "Made harder"); } catch (error) { console.error("Tune generated question error:", error); toast.error(error.response?.data?.error || error.message || `Failed to make question ${direction}`); } finally { setActionQuestionId(null); } };
   const handleRejectQuestion = (question) => { const nextRejectedAi = new Set(rejectedAi); nextRejectedAi.add(fingerprint(question.question_text)); setRejectedAi(nextRejectedAi); saveRejectedAi(nextRejectedAi); setQuestionMemory(upsertQuestionMemory(question, { status: "too_common" }, readQuestionMemory())); setQuestions((prev) => prev.filter((q) => String(q.id) !== String(question.id))); setRounds((prev) => prev.map((round) => ({ ...round, questionIds: (round.questionIds || []).filter((id) => String(id) !== String(question.id)) }))); toast.success("Question blocked from future AI suggestions"); };
   const handleRejectCategory = (question) => { if (!question.category) return; const approved = new Set(approvedCategories); const rejected = new Set(rejectedCategories); approved.delete(question.category); rejected.add(question.category); setApprovedCategories([...approved].sort((a, b) => a.localeCompare(b))); setRejectedCategories([...rejected].sort((a, b) => a.localeCompare(b))); saveLocalCategoryPrefs(approved, rejected); removeFromRound(activeRound.id, question.id); toast.success(`${question.category} moved to rejected categories`); };
-  const handleClearSession = () => { clearSavedState(); setEditingSessionId(null); setEditingSessionWasPast(false); setSessionName(""); setSessionDate(todayInputDate()); setSelectedVenueId(readActiveVenueId() || ""); setRounds(createDefaultRounds()); setActiveRoundId("round-1"); setTheme(""); setTypeFilter("all"); setGenerateType("multiple_choice"); setAiCandidates([]); setShowAiPanel(false); setShowWriteForm(false); setShowLibrary(false); if (sessionId) navigate("/build", { replace: true }); toast.success("Session cleared"); };
+  const handleClearSession = async () => { await clearSavedState(); setEditingSessionId(null); setEditingSessionWasPast(false); setSessionName(""); setSessionDate(todayInputDate()); setSelectedVenueId(readActiveVenueId() || ""); setRounds(createDefaultRounds()); setActiveRoundId("round-1"); setTheme(""); setTypeFilter("all"); setGenerateType("multiple_choice"); setAiCandidates([]); setShowAiPanel(false); setShowWriteForm(false); setShowLibrary(false); if (sessionId) navigate("/build", { replace: true }); toast.success("Session cleared"); };
   const handleStartFromTemplate = () => {
     const template = templates.find((item) => item.id === selectedTemplateId) || templates[0];
     if (!template) return toast.error("Create a template in Setup first");
@@ -334,7 +430,7 @@ const BuildSession = () => {
       const data = saveResult.data;
       setEditingSessionId(data.id);
       setSessionName(builtName);
-      clearSavedState();
+      await clearSavedState();
 
       if (goLive) {
         if (selectedLibraryIds.size > 0) {
