@@ -1,4 +1,5 @@
 export const QUESTION_MEMORY_KEY = "quiz-crafter-question-memory-v1";
+export const QUESTION_MEMORY_PROFILE_KEY = "quiz_crafter_question_memory_v1";
 
 export const memoryStatuses = {
   available: { label: "Available", blocksBuild: false, blocksAI: false },
@@ -26,6 +27,25 @@ export const writeQuestionMemory = (memory) => {
   } catch {
     // Keep the app usable if browser storage is unavailable.
   }
+};
+
+export const syncQuestionMemoryFromProfile = async (supabase) => {
+  const localMemory = readQuestionMemory();
+  const { data, error } = await supabase.auth.getUser();
+  if (error) throw error;
+  const remoteMemory = data?.user?.user_metadata?.[QUESTION_MEMORY_PROFILE_KEY];
+  const nextMemory = remoteMemory && typeof remoteMemory === "object" ? { ...remoteMemory, ...localMemory } : localMemory;
+  writeQuestionMemory(nextMemory);
+  if (!remoteMemory || JSON.stringify(remoteMemory) !== JSON.stringify(nextMemory)) {
+    await supabase.auth.updateUser({ data: { [QUESTION_MEMORY_PROFILE_KEY]: nextMemory } });
+  }
+  return nextMemory;
+};
+
+export const saveQuestionMemoryToProfile = async (supabase, memory) => {
+  const safeMemory = memory && typeof memory === "object" ? memory : {};
+  await supabase.auth.updateUser({ data: { [QUESTION_MEMORY_PROFILE_KEY]: safeMemory } });
+  return safeMemory;
 };
 
 export const memoryKeysForQuestion = (question = {}) => {

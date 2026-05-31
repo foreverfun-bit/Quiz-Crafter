@@ -6,6 +6,7 @@ import { Badge } from "../components/ui/badge";
 import { BarChart3, Copy, ExternalLink, Image, Lightbulb, Mail, MessageSquare, Palette, Save, Send, Sparkles, ThumbsDown, ThumbsUp, TrendingUp, Upload, Users } from "lucide-react";
 import { toast } from "sonner";
 import { readActiveVenueId, readLocalTemplates, readLocalVenues } from "../lib/venues";
+import { loadHostToolsSessionState, profileKeys, saveHostToolsSessionState, saveProfileValue, syncProfileJson } from "../lib/profileState";
 
 const SOCIAL_STORAGE_KEY = "quiz-crafter-social-links";
 const HOST_DEFAULT_BRANDING_KEY = "quiz-crafter-host-branding-defaults";
@@ -81,6 +82,18 @@ const HostTools = () => {
   }, []);
 
   useEffect(() => {
+    const syncSocialLinks = async () => {
+      try {
+        const links = await syncProfileJson({ localKey: SOCIAL_STORAGE_KEY, profileKey: profileKeys.socialLinks, fallback: { facebook: "", instagram: "", x: "" }, merge: "object" });
+        setSocialLinks({ facebook: links.facebook || "", instagram: links.instagram || "", x: links.x || "" });
+      } catch (error) {
+        console.warn("Social links profile sync unavailable:", error);
+      }
+    };
+    syncSocialLinks();
+  }, []);
+
+  useEffect(() => {
     const loadSessions = async () => {
       const { data, error } = await supabase.from("sessions").select("*").order("created_at", { ascending: false }).limit(50);
       if (error) return toast.error("Could not load sessions");
@@ -93,12 +106,44 @@ const HostTools = () => {
 
   useEffect(() => {
     if (!selectedSessionId) return undefined;
-    setPlayers(readJson(sessionStorageKey(selectedSessionId, "players"), []));
-    setFeedback(readJson(sessionStorageKey(selectedSessionId, "feedback"), []));
-    setCategoryFeedback(readJson(sessionStorageKey(selectedSessionId, "category-feedback"), []));
-    setPlayerIdeas(readJson(sessionStorageKey(selectedSessionId, "ideas"), []));
-    setAnswers(readJson(sessionStorageKey(selectedSessionId, "answers"), []));
-    setActivity(readJson(sessionStorageKey(selectedSessionId, "activity"), []));
+    const loadStoredHostTools = async () => {
+      const localState = {
+        players: readJson(sessionStorageKey(selectedSessionId, "players"), []),
+        feedback: readJson(sessionStorageKey(selectedSessionId, "feedback"), []),
+        categoryFeedback: readJson(sessionStorageKey(selectedSessionId, "category-feedback"), []),
+        ideas: readJson(sessionStorageKey(selectedSessionId, "ideas"), []),
+        answers: readJson(sessionStorageKey(selectedSessionId, "answers"), []),
+        activity: readJson(sessionStorageKey(selectedSessionId, "activity"), []),
+      };
+      try {
+        const profileState = await loadHostToolsSessionState(selectedSessionId);
+        const nextState = {
+          players: mergeByKey(profileState.players, localState.players, (item) => item.id),
+          feedback: mergeByKey(profileState.feedback, localState.feedback, (item) => `${item.playerId}-${item.questionIndex}`),
+          categoryFeedback: mergeByKey(profileState.categoryFeedback, localState.categoryFeedback, (item) => `${item.playerId}-${item.roundKey || item.roundName}-${item.category}`),
+          ideas: mergeByKey(profileState.ideas, localState.ideas, (item) => `${item.playerId}-${item.submittedAt}`),
+          answers: mergeByKey(profileState.answers, localState.answers, (item) => `${item.playerId}-${item.questionIndex}`),
+          activity: [...(Array.isArray(profileState.activity) ? profileState.activity : []), ...(Array.isArray(localState.activity) ? localState.activity : [])].slice(-800),
+        };
+        setPlayers(nextState.players);
+        setFeedback(nextState.feedback);
+        setCategoryFeedback(nextState.categoryFeedback);
+        setPlayerIdeas(nextState.ideas);
+        setAnswers(nextState.answers);
+        setActivity(nextState.activity);
+        Object.entries(nextState).forEach(([key, value]) => writeJson(sessionStorageKey(selectedSessionId, key === "categoryFeedback" ? "category-feedback" : key), value));
+        saveHostToolsSessionState(selectedSessionId, nextState).catch((error) => console.warn("Host tools profile save unavailable:", error));
+      } catch (error) {
+        console.warn("Host tools profile sync unavailable:", error);
+        setPlayers(localState.players);
+        setFeedback(localState.feedback);
+        setCategoryFeedback(localState.categoryFeedback);
+        setPlayerIdeas(localState.ideas);
+        setAnswers(localState.answers);
+        setActivity(localState.activity);
+      }
+    };
+    loadStoredHostTools();
 
     const channel = supabase.channel(`quiz-crafter-live-${selectedSessionId}`, { config: { broadcast: { self: false } } });
     channelRef.current = channel;
@@ -140,6 +185,7 @@ const HostTools = () => {
     const next = { ...socialLinks, [key]: value };
     setSocialLinks(next);
     writeJson(SOCIAL_STORAGE_KEY, next);
+    saveProfileValue(profileKeys.socialLinks, next).catch((error) => console.warn("Social links profile save unavailable:", error));
   };
   const saveDefaultBranding = async (nextBranding) => {
     const cleanBranding = normalizeBranding(nextBranding);
@@ -298,34 +344,48 @@ const BrandingPanel = ({ branding, setBranding, onSave }) => {
 
 const ColorField = ({ label, value, onChange }) => { const safeValue = sanitizeHexColor(value, DEFAULT_BRANDING.primaryColor); return <label className="text-xs text-zinc-400">{label}<div className="mt-1 flex h-10 rounded-md border border-white/10 bg-zinc-950 overflow-hidden focus-within:border-[#71E0DC]/60"><input type="color" value={safeValue} onChange={(event) => onChange(event.target.value)} className="h-10 w-12 border-0 bg-transparent p-1" /><input value={value || ""} onChange={(event) => onChange(event.target.value)} className="min-w-0 flex-1 bg-transparent px-2 text-white outline-none" /></div></label>; };
 
+const mergeByKey = (remote, local, makeKey) => {
+  const map = new Map();
+  [...(Array.isArray(remote) ? remote : []), ...(Array.isArray(local) ? local : [])].forEach((item) => {
+    const key = makeKey(item);
+    if (key) map.set(key, { ...(map.get(key) || {}), ...item });
+  });
+  return [...map.values()];
+};
+
 const persistPlayer = (sessionId, current, payload) => {
   const nextPlayer = { id: payload.playerId, name: payload.playerName || "Team", updatePreference: payload.updatePreference || "none", updateContact: payload.updateContact || "", joinedAt: payload.joinedAt };
   const next = current.some((player) => player.id === payload.playerId) ? current.map((player) => player.id === payload.playerId ? { ...player, ...nextPlayer } : player) : [...current, nextPlayer];
   writeJson(sessionStorageKey(sessionId, "players"), next);
+  saveHostToolsSessionState(sessionId, { players: next }).catch((error) => console.warn("Host tools profile save unavailable:", error));
   return next;
 };
 
 const persistVote = (sessionId, key, current, payload, makeKey) => {
   const next = [...current.filter((item) => makeKey(item) !== makeKey(payload)), payload];
   writeJson(sessionStorageKey(sessionId, key), next);
+  saveHostToolsSessionState(sessionId, { [key === "category-feedback" ? "categoryFeedback" : key]: next }).catch((error) => console.warn("Host tools profile save unavailable:", error));
   return next;
 };
 
 const persistIdea = (sessionId, current, payload) => {
   const next = [payload, ...current.filter((item) => !(item.playerId === payload.playerId && item.submittedAt === payload.submittedAt))].slice(0, 200);
   writeJson(sessionStorageKey(sessionId, "ideas"), next);
+  saveHostToolsSessionState(sessionId, { ideas: next }).catch((error) => console.warn("Host tools profile save unavailable:", error));
   return next;
 };
 
 const persistAnswer = (sessionId, current, payload) => {
   const next = [...current.filter((answer) => !(answer.playerId === payload.playerId && Number(answer.questionIndex) === Number(payload.questionIndex))), payload].slice(-800);
   writeJson(sessionStorageKey(sessionId, "answers"), next);
+  saveHostToolsSessionState(sessionId, { answers: next }).catch((error) => console.warn("Host tools profile save unavailable:", error));
   return next;
 };
 
 const persistActivity = (sessionId, current, payload) => {
   const next = [...current, payload].slice(-800);
   writeJson(sessionStorageKey(sessionId, "activity"), next);
+  saveHostToolsSessionState(sessionId, { activity: next }).catch((error) => console.warn("Host tools profile save unavailable:", error));
   return next;
 };
 

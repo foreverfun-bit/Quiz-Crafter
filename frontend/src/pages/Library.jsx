@@ -21,7 +21,8 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { getQuestionMemory, isMemoryBlocked, isMemoryUsed, memoryStatuses, readQuestionMemory, upsertQuestionMemory } from "../lib/questionMemory";
+import { getQuestionMemory, isMemoryBlocked, isMemoryUsed, memoryStatuses, readQuestionMemory, saveQuestionMemoryToProfile, syncQuestionMemoryFromProfile, upsertQuestionMemory } from "../lib/questionMemory";
+import { profileKeys, saveProfileValue, syncProfileJson } from "../lib/profileState";
 
 const typeConfig = {
   all: { label: "All", icon: LibraryIcon, color: "text-white" },
@@ -78,11 +79,15 @@ const readUnusedIds = () => {
 };
 
 const writeUsedIds = (ids) => {
-  localStorage.setItem(USED_QUESTIONS_KEY, JSON.stringify([...ids]));
+  const values = [...ids];
+  localStorage.setItem(USED_QUESTIONS_KEY, JSON.stringify(values));
+  saveProfileValue(profileKeys.usedQuestionIds, values).catch((error) => console.warn("Used question profile save unavailable:", error));
 };
 
 const writeUnusedIds = (ids) => {
-  localStorage.setItem(UNUSED_QUESTIONS_KEY, JSON.stringify([...ids]));
+  const values = [...ids];
+  localStorage.setItem(UNUSED_QUESTIONS_KEY, JSON.stringify(values));
+  saveProfileValue(profileKeys.unusedQuestionIds, values).catch((error) => console.warn("Unused question profile save unavailable:", error));
 };
 
 const isQuestionMarkedUsed = (question, usedIds) => {
@@ -122,6 +127,24 @@ export default function Library() {
 
   useEffect(() => {
     fetchQuestions();
+  }, []);
+
+  useEffect(() => {
+    const syncLibraryProfileState = async () => {
+      try {
+        const [used, unused, memory] = await Promise.all([
+          syncProfileJson({ localKey: USED_QUESTIONS_KEY, profileKey: profileKeys.usedQuestionIds, fallback: [], merge: "array" }),
+          syncProfileJson({ localKey: UNUSED_QUESTIONS_KEY, profileKey: profileKeys.unusedQuestionIds, fallback: [], merge: "array" }),
+          syncQuestionMemoryFromProfile(supabase),
+        ]);
+        setUsedIds(new Set(Array.isArray(used) ? used.map(String) : []));
+        setUnusedIds(new Set(Array.isArray(unused) ? unused.map(String) : []));
+        setQuestionMemory(memory);
+      } catch (error) {
+        console.warn("Library profile sync unavailable:", error);
+      }
+    };
+    syncLibraryProfileState();
   }, []);
 
   async function fetchQuestions() {
@@ -208,7 +231,9 @@ export default function Library() {
     setUnusedIds(nextUnused);
     writeUsedIds(nextUsed);
     writeUnusedIds(nextUnused);
-    setQuestionMemory(upsertQuestionMemory(question, { status: willBeUsed ? "used_recently" : "available" }, readQuestionMemory()));
+    const nextMemory = upsertQuestionMemory(question, { status: willBeUsed ? "used_recently" : "available" }, readQuestionMemory());
+    setQuestionMemory(nextMemory);
+    saveQuestionMemoryToProfile(supabase, nextMemory).catch((error) => console.warn("Question memory profile save unavailable:", error));
     setQuestions((prev) => prev.map((item) => item.id === question.id ? {
       ...item,
       is_used: willBeUsed,
@@ -240,6 +265,7 @@ export default function Library() {
   const updateMemory = async (question, status) => {
     const nextMemory = upsertQuestionMemory(question, { status }, readQuestionMemory());
     setQuestionMemory(nextMemory);
+    saveQuestionMemoryToProfile(supabase, nextMemory).catch((error) => console.warn("Question memory profile save unavailable:", error));
     const possiblePayloads = [
       { memory_status: status === "available" ? null : status, memory_updated_at: status === "available" ? null : new Date().toISOString() },
       { memory_status: status === "available" ? null : status },

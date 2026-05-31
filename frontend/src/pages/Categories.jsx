@@ -13,6 +13,7 @@ import {
   ArrowLeft,
 } from "lucide-react";
 import { toast } from "sonner";
+import { profileKeys, saveProfileValue, syncProfileJson } from "../lib/profileState";
 
 const STORAGE_KEY = "quiz-crafter-category-preferences";
 const rejectedValues = new Set(["rejected", "reject", "hidden", "hide", "disliked", "dislike", "bad"]);
@@ -227,6 +228,20 @@ async function fetchCategoryState() {
   const approved = new Set(local.approved);
   const rejected = new Set(local.rejected);
 
+  try {
+    const profilePrefs = await syncProfileJson({ localKey: STORAGE_KEY, profileKey: profileKeys.categoryPrefs, fallback: { approved: [], rejected: [] }, merge: "categoryPrefs" });
+    (profilePrefs.approved || []).forEach((category) => approved.add(cleanCategory(category)));
+    (profilePrefs.rejected || []).forEach((category) => {
+      const clean = cleanCategory(category);
+      if (clean) {
+        rejected.add(clean);
+        approved.delete(clean);
+      }
+    });
+  } catch (error) {
+    console.warn("Category profile sync unavailable:", error);
+  }
+
   const results = await Promise.allSettled([
     supabase.from("categories").select("*"),
     supabase.from("disliked_categories").select("*"),
@@ -303,13 +318,12 @@ function loadLocalPreferences() {
 }
 
 function saveLocalPreferences(preferences) {
-  localStorage.setItem(
-    STORAGE_KEY,
-    JSON.stringify({
-      approved: [...preferences.approved],
-      rejected: [...preferences.rejected],
-    })
-  );
+  const prefs = {
+    approved: [...preferences.approved],
+    rejected: [...preferences.rejected],
+  };
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
+  saveProfileValue(profileKeys.categoryPrefs, prefs).catch((error) => console.warn("Category profile save unavailable:", error));
 }
 
 function isRejectedQuestionCategory(question) {

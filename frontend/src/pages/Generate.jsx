@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import { useAuth } from "../App";
 import WriteQuestion from "./WriteQuestion";
@@ -30,7 +30,8 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { memoryRejectedQuestionTexts, readQuestionMemory, upsertQuestionMemory } from "../lib/questionMemory";
+import { memoryRejectedQuestionTexts, readQuestionMemory, saveQuestionMemoryToProfile, syncQuestionMemoryFromProfile, upsertQuestionMemory } from "../lib/questionMemory";
+import { profileKeys, saveProfileValue, syncProfileJson } from "../lib/profileState";
 
 const questionTypes = [
   { value: "true_false", label: "True/False", icon: CheckCircle, color: "text-[#71E0DC]", round: "Round 1" },
@@ -80,7 +81,10 @@ const readJsonArray = (key) => {
 };
 
 const writeJsonArray = (key, values) => {
-  localStorage.setItem(key, JSON.stringify([...new Set(values.filter(Boolean))]));
+  const list = [...new Set(values.filter(Boolean))];
+  localStorage.setItem(key, JSON.stringify(list));
+  const profileKey = key === REJECTED_AI_KEY ? profileKeys.rejectedAi : key === GENERATED_HISTORY_KEY ? profileKeys.generatedHistory : key === LOCKED_CATEGORY_KEY ? profileKeys.lockedCategories : null;
+  if (profileKey) saveProfileValue(profileKey, list).catch((error) => console.warn("Generator profile save unavailable:", error));
 };
 
 const rememberGenerated = (groupedCandidates) => {
@@ -102,13 +106,12 @@ const readCategoryPrefs = () => {
 };
 
 const writeCategoryPrefs = ({ approved, rejected }) => {
-  localStorage.setItem(
-    CATEGORY_PREF_KEY,
-    JSON.stringify({
-      approved: [...new Set(cleanList(approved || []))],
-      rejected: [...new Set(cleanList(rejected || []))],
-    })
-  );
+  const prefs = {
+    approved: [...new Set(cleanList(approved || []))],
+    rejected: [...new Set(cleanList(rejected || []))],
+  };
+  localStorage.setItem(CATEGORY_PREF_KEY, JSON.stringify(prefs));
+  saveProfileValue(profileKeys.categoryPrefs, prefs).catch((error) => console.warn("Category profile save unavailable:", error));
 };
 
 const fileToDataUrl = (file) => new Promise((resolve, reject) => {
@@ -139,6 +142,25 @@ const Generate = ({ initialCreateMode = "generate" }) => {
   const [generating, setGenerating] = useState(false);
   const [savingKey, setSavingKey] = useState(null);
   const [refreshingKey, setRefreshingKey] = useState(null);
+
+  useEffect(() => {
+    const syncGeneratorProfileState = async () => {
+      try {
+        const [locked, memory] = await Promise.all([
+          syncProfileJson({ localKey: LOCKED_CATEGORY_KEY, profileKey: profileKeys.lockedCategories, fallback: [], merge: "array" }),
+          syncQuestionMemoryFromProfile(supabase),
+          syncProfileJson({ localKey: CATEGORY_PREF_KEY, profileKey: profileKeys.categoryPrefs, fallback: { approved: [], rejected: [] }, merge: "categoryPrefs" }),
+          syncProfileJson({ localKey: REJECTED_AI_KEY, profileKey: profileKeys.rejectedAi, fallback: [], merge: "array" }),
+          syncProfileJson({ localKey: GENERATED_HISTORY_KEY, profileKey: profileKeys.generatedHistory, fallback: [], merge: "array" }),
+        ]);
+        setLockedCategories(Array.isArray(locked) ? locked : []);
+        setQuestionMemory(memory);
+      } catch (error) {
+        console.warn("Generator profile sync unavailable:", error);
+      }
+    };
+    syncGeneratorProfileState();
+  }, []);
 
   const totalGenerated = useMemo(() => {
     return Object.values(groupedCandidates).reduce((sum, arr) => sum + arr.length, 0);
@@ -388,7 +410,9 @@ const Generate = ({ initialCreateMode = "generate" }) => {
 
     if (rejectedFingerprint) {
       writeJsonArray(REJECTED_AI_KEY, [...rejected, rejectedFingerprint]);
-      setQuestionMemory(upsertQuestionMemory(candidate, { status: "too_common" }, readQuestionMemory()));
+      const nextMemory = upsertQuestionMemory(candidate, { status: "too_common" }, readQuestionMemory());
+      setQuestionMemory(nextMemory);
+      saveQuestionMemoryToProfile(supabase, nextMemory).catch((error) => console.warn("Question memory profile save unavailable:", error));
     }
 
     setGroupedCandidates((prev) => ({

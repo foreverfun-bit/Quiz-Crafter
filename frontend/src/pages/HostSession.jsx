@@ -37,6 +37,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
+import { loadHostToolsSessionState, saveHostToolsSessionState } from "../lib/profileState";
 
 const STORAGE_BASE = process.env.REACT_APP_SUPABASE_URL ? `${process.env.REACT_APP_SUPABASE_URL}/storage/v1/object/public/` : "";
 const DEFAULT_PUBLIC_SITE = "https://quizcrafter.com";
@@ -267,12 +268,14 @@ const persistLiveVote = (sessionId, name, payload, makeKey) => {
   const current = readStoredList(key);
   const next = [...current.filter((item) => makeKey(item) !== makeKey(payload)), payload];
   writeStoredList(key, next);
+  saveHostToolsSessionState(sessionId, { [name === "category-feedback" ? "categoryFeedback" : name]: next }).catch((error) => console.warn("Host tools profile save unavailable:", error));
 };
 const persistLiveIdea = (sessionId, payload) => {
   const key = hostToolsStorageKey(sessionId, "ideas");
   const current = readStoredList(key);
   const next = [payload, ...current.filter((item) => !(item.playerId === payload.playerId && item.submittedAt === payload.submittedAt))].slice(0, 200);
   writeStoredList(key, next);
+  saveHostToolsSessionState(sessionId, { ideas: next }).catch((error) => console.warn("Host tools profile save unavailable:", error));
   return next;
 };
 
@@ -393,6 +396,22 @@ const HostSession = () => {
   }, [id, navigate]);
 
   useEffect(() => {
+    const loadProfileHostState = async () => {
+      try {
+        const state = await loadHostToolsSessionState(id);
+        if (Array.isArray(state.leaderboard) && state.leaderboard.length) setLeaderboard(state.leaderboard);
+        if (Array.isArray(state.answers) && state.answers.length) setAnswers(state.answers);
+        if (Array.isArray(state.activity) && state.activity.length) setPlayerActivity(state.activity);
+        if (Array.isArray(state.ideas) && state.ideas.length) setPlayerIdeas(state.ideas);
+        if (Array.isArray(state.disputes) && state.disputes.length) setDisputeNotes(state.disputes);
+      } catch (error) {
+        console.warn("Live host profile state unavailable:", error);
+      }
+    };
+    loadProfileHostState();
+  }, [id]);
+
+  useEffect(() => {
     const loadProfileBranding = async () => {
       try {
         const defaultBranding = await loadDefaultBrandingFromProfile();
@@ -415,7 +434,9 @@ const HostSession = () => {
         if (!payload?.playerId) return;
         setPlayers((current) => {
           const nextPlayer = { id: payload.playerId, name: payload.playerName || "Team", updatePreference: payload.updatePreference || "none", updateContact: payload.updateContact || "", joinedAt: payload.joinedAt };
-          return current.some((player) => player.id === payload.playerId) ? current.map((player) => player.id === payload.playerId ? { ...player, ...nextPlayer } : player) : [...current, nextPlayer];
+          const next = current.some((player) => player.id === payload.playerId) ? current.map((player) => player.id === payload.playerId ? { ...player, ...nextPlayer } : player) : [...current, nextPlayer];
+          saveHostToolsSessionState(id, { players: next }).catch((error) => console.warn("Players profile save unavailable:", error));
+          return next;
         });
         setLeaderboard((teams) => teams.some((team) => team.id === payload.playerId) ? teams : [...teams, { id: payload.playerId, name: payload.playerName || "Team", score: 0 }]);
       })
@@ -425,6 +446,7 @@ const HostSession = () => {
           const filtered = current.filter((answer) => !(answer.playerId === payload.playerId && answer.questionIndex === payload.questionIndex));
           const next = [...filtered, payload].slice(-800);
           writeStoredList(hostToolsStorageKey(id, "answers"), next);
+          saveHostToolsSessionState(id, { answers: next }).catch((error) => console.warn("Answers profile save unavailable:", error));
           return next;
         });
       })
@@ -433,6 +455,7 @@ const HostSession = () => {
         setPlayerActivity((current) => {
           const next = [...current, payload].slice(-800);
           writeStoredList(hostToolsStorageKey(id, "activity"), next);
+          saveHostToolsSessionState(id, { activity: next }).catch((error) => console.warn("Activity profile save unavailable:", error));
           return next;
         });
       })
@@ -483,6 +506,7 @@ const HostSession = () => {
 
   useEffect(() => {
     localStorage.setItem(`quiz-crafter-leaderboard-${id}`, JSON.stringify(leaderboard));
+    saveHostToolsSessionState(id, { leaderboard }).catch((error) => console.warn("Leaderboard profile save unavailable:", error));
   }, [id, leaderboard]);
 
   useEffect(() => {
@@ -654,6 +678,7 @@ const HostSession = () => {
     const next = [{ id: `dispute-${Date.now()}`, questionIndex: currentIndex, questionText: displayedQuestion?.questionText || "", note: body, createdAt: new Date().toISOString() }, ...disputeNotes].slice(0, 100);
     setDisputeNotes(next);
     writeStoredList(hostToolsStorageKey(id, "disputes"), next);
+    saveHostToolsSessionState(id, { disputes: next }).catch((error) => console.warn("Disputes profile save unavailable:", error));
     toast.success("Dispute note saved");
   };
   const openPresentation = () => window.open(`/present-session/${id}`, "_blank", "noopener,noreferrer");

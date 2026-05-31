@@ -7,6 +7,7 @@ import { useAuth } from "../App";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Input } from "../components/ui/input";
+import { profileKeys, saveProfileValue } from "../lib/profileState";
 
 async function tryDelete(table, applyQuery) {
   try {
@@ -103,6 +104,7 @@ export default function ResetData() {
       localStorage.removeItem("trivia-flex-round-builder-state-v2");
       localStorage.removeItem("quiz-crafter-category-preferences");
       localStorage.removeItem("quiz-crafter-rejected-ai-questions");
+      await Promise.allSettled(Object.values(profileKeys).map((key) => saveProfileValue(key, null)));
 
       toast.success("Trivia data cleared. Fresh start ready.");
       navigate("/");

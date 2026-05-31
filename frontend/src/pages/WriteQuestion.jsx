@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { useAuth } from "../App";
@@ -17,6 +17,7 @@ import {
 import { Badge } from "../components/ui/badge";
 import { CheckCircle, List, Loader2, MessageSquare, Save, Sparkles, Wand2 } from "lucide-react";
 import { toast } from "sonner";
+import { profileKeys, syncProfileJson } from "../lib/profileState";
 
 const typeConfig = {
   true_false: { label: "True/False", icon: CheckCircle, color: "text-[#71E0DC]" },
@@ -57,6 +58,10 @@ const WriteQuestion = ({ embedded = false }) => {
   const [saving, setSaving] = useState(false);
   const [assistantNotes, setAssistantNotes] = useState("");
   const [confidence, setConfidence] = useState(null);
+
+  useEffect(() => {
+    syncProfileJson({ localKey: CATEGORY_PREF_KEY, profileKey: profileKeys.categoryPrefs, fallback: { approved: [], rejected: [] }, merge: "categoryPrefs" }).catch((error) => console.warn("Category profile sync unavailable:", error));
+  }, []);
 
   const selectedType = typeConfig[form.question_type] || typeConfig.written;
   const TypeIcon = selectedType.icon;
