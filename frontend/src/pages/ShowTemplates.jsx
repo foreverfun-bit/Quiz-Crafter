@@ -14,6 +14,22 @@ const updatedLabel = (value) => {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "Starter template" : `Updated ${date.toLocaleDateString([], { month: "short", day: "numeric" })}`;
 };
+const resizeTemplateDraft = (template) => {
+  const count = Math.max(1, Math.min(12, Number(template.roundCount) || 1));
+  const existingNames = Array.isArray(template.roundNames) ? template.roundNames : [];
+  const existingDescriptions = Array.isArray(template.roundDescriptions) ? template.roundDescriptions : [];
+  const existingPoints = Array.isArray(template.roundPoints) ? template.roundPoints : [];
+  const existingTimers = Array.isArray(template.roundTimers) ? template.roundTimers : [];
+  const existingWagers = Array.isArray(template.roundWagerLimits) ? template.roundWagerLimits : [];
+  return {
+    ...template,
+    roundNames: Array.from({ length: count }, (_, index) => existingNames[index] ?? (index === count - 1 ? "Final Round" : `Round ${index + 1}`)),
+    roundDescriptions: Array.from({ length: count }, (_, index) => existingDescriptions[index] ?? ""),
+    roundPoints: Array.from({ length: count }, (_, index) => existingPoints[index] ?? template.defaultPoints ?? 25),
+    roundTimers: Array.from({ length: count }, (_, index) => existingTimers[index] ?? template.defaultTimer ?? 30),
+    roundWagerLimits: Array.from({ length: count }, (_, index) => existingWagers[index] ?? template.defaultWagerLimit ?? 0),
+  };
+};
 
 const ShowTemplates = () => {
   const navigate = useNavigate();
@@ -113,14 +129,17 @@ const ShowTemplates = () => {
   };
 
   const startBuild = (template = form) => {
-    writeTemplateBuildDraft(template, selectedVenue);
+    writeTemplateBuildDraft(normalizeTemplate(template), selectedVenue);
     navigate("/build");
   };
 
-  const updateForm = (key, value) => setForm((current) => normalizeTemplate({ ...current, [key]: value, updatedAt: new Date().toISOString() }));
+  const updateForm = (key, value) => setForm((current) => {
+    const next = { ...current, [key]: value, updatedAt: new Date().toISOString() };
+    return key === "roundCount" ? resizeTemplateDraft(next) : next;
+  });
   const updateRound = (index, key, value) => {
     setForm((current) => {
-      const next = normalizeTemplate(current);
+      const next = resizeTemplateDraft(current);
       const names = [...next.roundNames];
       const descriptions = [...next.roundDescriptions];
       const points = [...next.roundPoints];
@@ -131,7 +150,7 @@ const ShowTemplates = () => {
       if (key === "points") points[index] = value;
       if (key === "timer") timers[index] = value;
       if (key === "wager") wagers[index] = value;
-      return normalizeTemplate({ ...next, roundNames: names, roundDescriptions: descriptions, roundPoints: points, roundTimers: timers, roundWagerLimits: wagers, updatedAt: new Date().toISOString() });
+      return { ...next, roundNames: names, roundDescriptions: descriptions, roundPoints: points, roundTimers: timers, roundWagerLimits: wagers, updatedAt: new Date().toISOString() };
     });
   };
 
