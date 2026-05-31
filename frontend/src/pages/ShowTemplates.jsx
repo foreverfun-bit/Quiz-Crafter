@@ -31,7 +31,7 @@ const resizeTemplateDraft = (template) => {
   };
 };
 
-const ShowTemplates = () => {
+const ShowTemplates = ({ embedded = false }) => {
   const navigate = useNavigate();
   const [templates, setTemplates] = useState(readLocalTemplates);
   const [venues, setVenues] = useState(readLocalVenues);
@@ -155,8 +155,8 @@ const ShowTemplates = () => {
   };
 
   return (
-    <div className="p-6 lg:p-8 max-w-7xl mx-auto animate-fade-in" data-testid="show-templates-page">
-      <div className="mb-6 flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+    <div className={`${embedded ? "" : "p-6 lg:p-8 max-w-7xl mx-auto"} animate-fade-in`} data-testid="show-templates-page">
+      {!embedded && <div className="mb-6 flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
         <div>
           <p className="text-sm font-semibold uppercase tracking-[0.18em] text-[#71E0DC]">Reusable Formats</p>
           <h1 className="text-3xl md:text-4xl font-bold text-white mt-2">Show Templates</h1>
@@ -166,7 +166,8 @@ const ShowTemplates = () => {
           <Badge className={syncStatus === "Synced" ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/20" : "bg-zinc-800 text-zinc-300"}>{syncStatus}</Badge>
           <Button onClick={createTemplate} className="gradient-btn"><Plus size={16} className="mr-2" />New Template</Button>
         </div>
-      </div>
+      </div>}
+      {embedded && <div className="mb-5 flex items-center justify-between gap-3 flex-wrap"><div><p className="text-sm font-semibold uppercase tracking-[0.18em] text-[#71E0DC]">Reusable Formats</p><h2 className="text-2xl font-black text-white mt-1">Show Templates</h2><p className="text-zinc-500 mt-1">Pair a reusable show format with a venue and start building.</p></div><div className="flex gap-2 flex-wrap"><Badge className={syncStatus === "Synced" ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/20" : "bg-zinc-800 text-zinc-300"}>{syncStatus}</Badge><Button onClick={createTemplate} className="gradient-btn"><Plus size={16} className="mr-2" />New Template</Button></div></div>}
 
       <Card className="glass-card mb-6"><CardContent className="p-4 grid grid-cols-1 lg:grid-cols-[1fr_1fr_auto] gap-3 items-end"><div><p className="text-xs uppercase tracking-wide text-zinc-500 font-bold">Selected format</p><p className="text-lg font-black text-white truncate">{form.name}</p><p className="text-sm text-zinc-500 truncate">{form.roundCount} rounds / {form.questionsPerRound} questions each / {form.defaultTimer}s timer</p></div><label className="text-sm text-zinc-400">Pair with venue<select value={selectedVenueId} onChange={(event) => setSelectedVenueId(event.target.value)} className="mt-1 h-11 w-full rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60"><option value="">No venue defaults</option>{venues.map((venue) => <option key={venue.id} value={venue.id}>{venue.name}</option>)}</select></label><Button onClick={() => startBuild(form)} className="gradient-btn h-11"><Sparkles size={16} className="mr-2" />Start Build</Button></CardContent></Card>
 

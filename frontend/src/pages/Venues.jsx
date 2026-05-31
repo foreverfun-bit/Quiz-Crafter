@@ -4,9 +4,10 @@ import { supabase } from "../lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
-import { CalendarDays, Clock, ExternalLink, Globe, Instagram, MapPin, Palette, Plus, Save, Trash2, Trophy, Users } from "lucide-react";
+import { CalendarDays, ClipboardList, Clock, ExternalLink, Globe, Instagram, MapPin, Palette, Plus, Save, Trash2, Trophy, Users } from "lucide-react";
 import { toast } from "sonner";
 import { ACTIVE_VENUE_STORAGE_KEY, VENUES_STORAGE_KEY, defaultVenue, normalizeVenue, readActiveVenueId, readLocalVenues, writeActiveVenueId, writeLocalVenues, writeVenueBuildDraft } from "../lib/venues";
+import ShowTemplates from "./ShowTemplates";
 
 const metadataVenuesKey = "quiz_crafter_venues_v1";
 const metadataActiveVenueKey = "quiz_crafter_active_venue_id";
@@ -24,8 +25,9 @@ const updatedLabel = (value) => {
   return Number.isNaN(date.getTime()) ? "Not saved yet" : `Updated ${date.toLocaleDateString([], { month: "short", day: "numeric" })}`;
 };
 
-const Venues = () => {
+const Venues = ({ initialTab = "venues" }) => {
   const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState(initialTab);
   const [venues, setVenues] = useState([]);
   const [activeVenueId, setActiveVenueId] = useState(readActiveVenueId);
   const [selectedVenueId, setSelectedVenueId] = useState("");
@@ -140,17 +142,23 @@ const Venues = () => {
 
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto animate-fade-in" data-testid="venues-page">
-      <div className="mb-6 flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+      <div className="mb-5 flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
         <div>
           <p className="text-sm font-semibold uppercase tracking-[0.18em] text-[#71E0DC]">Host Setup</p>
-          <h1 className="text-3xl md:text-4xl font-bold text-white mt-2">Venues & Events</h1>
-          <p className="text-zinc-500 mt-2">Save recurring trivia nights, default branding, house rules, socials, and build settings in one place.</p>
+          <h1 className="text-3xl md:text-4xl font-bold text-white mt-2">Venues & Templates</h1>
+          <p className="text-zinc-500 mt-2">Manage where you host and how each show is structured from one setup screen.</p>
         </div>
         <div className="flex gap-2 flex-wrap">
           <Badge className={syncStatus === "Synced" ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/20" : "bg-zinc-800 text-zinc-300"}>{syncStatus}</Badge>
-          <Button onClick={createVenue} className="gradient-btn"><Plus size={16} className="mr-2" />New Venue</Button>
+          {activeTab === "venues" && <Button onClick={createVenue} className="gradient-btn"><Plus size={16} className="mr-2" />New Venue</Button>}
         </div>
       </div>
+      <div className="mb-6 grid grid-cols-2 gap-2 rounded-xl border border-white/10 bg-zinc-950/60 p-2">
+        <button type="button" onClick={() => setActiveTab("venues")} className={`h-11 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition ${activeTab === "venues" ? "text-zinc-950" : "text-zinc-300 hover:bg-white/5 hover:text-white"}`} style={activeTab === "venues" ? { background: "linear-gradient(90deg, #71E0DC, #AEB2EF)" } : undefined}><MapPin size={17} />Venues</button>
+        <button type="button" onClick={() => setActiveTab("templates")} className={`h-11 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition ${activeTab === "templates" ? "text-zinc-950" : "text-zinc-300 hover:bg-white/5 hover:text-white"}`} style={activeTab === "templates" ? { background: "linear-gradient(90deg, #71E0DC, #AEB2EF)" } : undefined}><ClipboardList size={17} />Templates</button>
+      </div>
+
+      {activeTab === "templates" ? <ShowTemplates embedded /> : <>
 
       <div className="grid grid-cols-1 xl:grid-cols-[0.9fr_1.1fr] gap-6 items-start">
         <section className="space-y-4">
@@ -194,6 +202,7 @@ const Venues = () => {
 
         <VenueEditor form={form} selectedVenue={selectedVenue} updateForm={updateForm} saveVenue={saveVenue} saving={saving} />
       </div>
+      </>}
     </div>
   );
 };

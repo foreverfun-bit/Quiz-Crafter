@@ -11,7 +11,6 @@ import {
   History,
   MessageSquare,
   MapPin,
-  ClipboardList,
   Trash2,
   FolderOpen,
   Layers,
@@ -46,14 +45,14 @@ const Sidebar = ({ isOpen, onClose }) => {
       links: [
         { path: "/build", icon: PlusCircle, label: "Build" },
         { path: "/past-sessions", icon: History, label: "Sessions" },
-        { path: "/venues", icon: MapPin, label: "Venues" },
-        { path: "/show-templates", icon: ClipboardList, label: "Templates" },
+        { path: "/venues", icon: MapPin, label: "Setup" },
       ],
     },
   ];
 
   const isPathActive = (path) => {
     if (path === "/") return location.pathname === "/";
+    if (path === "/venues" && location.pathname.startsWith("/show-templates")) return true;
     return location.pathname === path || location.pathname.startsWith(`${path}/`);
   };
 
