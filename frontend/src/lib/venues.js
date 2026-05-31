@@ -90,6 +90,7 @@ export const makeVenueRounds = (venue) => Array.from({ length: Number(venue?.rou
 
 export const makeVenueBuildDraft = (venue) => ({
   sessionName: makeVenueSessionName(venue),
+  sessionDate: new Date().toISOString().slice(0, 10),
   rounds: makeVenueRounds(venue),
   activeRoundId: "round-1",
   theme: [venue?.name, venue?.nightName, venue?.houseRules, venue?.hostNotes].filter(Boolean).join("\n"),
@@ -231,9 +232,11 @@ export const writeLocalTemplates = (templates) => {
 export const makeTemplateBuildDraft = (template, venue = null) => {
   const cleanTemplate = normalizeTemplate(template);
   const date = new Date().toLocaleDateString(undefined, { month: "numeric", day: "numeric", year: "numeric" });
+  const inputDate = new Date().toISOString().slice(0, 10);
   const venueName = venue?.nightName || venue?.name || "";
   return {
     sessionName: [date, venueName || cleanTemplate.name].filter(Boolean).join(" "),
+    sessionDate: inputDate,
     rounds: cleanTemplate.roundNames.map((name, index) => ({
       id: `round-${index + 1}`,
       name,

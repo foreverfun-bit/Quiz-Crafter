@@ -60,6 +60,13 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   try {
+    if (req.body?.mode === "image") {
+      const prompt = String(req.body?.prompt || "").trim();
+      if (!prompt) return res.status(400).json({ error: "Missing image prompt" });
+      const image = await requestGeneratedImage(prompt);
+      return res.status(200).json(image);
+    }
+
     const {
       sessionId,
       questionType,
@@ -147,6 +154,38 @@ export default async function handler(req, res) {
     console.error("generate-session-candidates error:", error);
     return res.status(500).json({ error: error?.message || "Failed to generate candidates" });
   }
+}
+
+async function requestGeneratedImage(prompt) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
+
+  const safePrompt = [
+    "Create a clean, modern trivia presentation image.",
+    "It should be useful as a visual clue but must not include readable text, logos, watermarks, celebrity likenesses, or reveal the answer.",
+    "Style: polished, high-contrast, bar-trivia friendly, not cartoonish.",
+    `Trivia image brief: ${prompt}`,
+  ].join("\n");
+
+  const response = await fetch("https://api.openai.com/v1/images/generations", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: process.env.OPENAI_IMAGE_MODEL || "gpt-image-1-mini",
+      prompt: safePrompt,
+      size: "1024x1024",
+      quality: "low",
+      n: 1,
+    }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data?.error?.message || "OpenAI image request failed");
+  const b64 = data?.data?.[0]?.b64_json;
+  if (!b64) throw new Error("No image returned");
+  return { image_url: `data:image/png;base64,${b64}`, revised_prompt: data?.data?.[0]?.revised_prompt || safePrompt };
 }
 
 function clampCount(count) {
