@@ -6,9 +6,10 @@ import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { CalendarDays, Clock, Copy, Layers, MapPin, Plus, Save, Sparkles, Trash2, Trophy, Users } from "lucide-react";
 import { toast } from "sonner";
-import { SHOW_TEMPLATES_STORAGE_KEY, defaultShowTemplates, normalizeTemplate, readLocalTemplates, readLocalVenues, writeLocalTemplates, writeTemplateBuildDraft } from "../lib/venues";
+import { SHOW_TEMPLATES_STORAGE_KEY, defaultShowTemplates, normalizeTemplate, normalizeVenue, readLocalTemplates, readLocalVenues, writeLocalTemplates, writeLocalVenues, writeTemplateBuildDraft } from "../lib/venues";
 
 const metadataTemplatesKey = "quiz_crafter_show_templates_v1";
+const metadataVenuesKey = "quiz_crafter_venues_v1";
 const updatedLabel = (value) => {
   if (!value) return "Starter template";
   const date = new Date(value);
@@ -58,11 +59,20 @@ const ShowTemplates = ({ embedded = false }) => {
         const { data, error } = await supabase.auth.getUser();
         if (error) throw error;
         const remoteTemplates = data?.user?.user_metadata?.[metadataTemplatesKey];
-        const normalized = Array.isArray(remoteTemplates) && remoteTemplates.length ? remoteTemplates.map(normalizeTemplate) : localTemplates;
+        const remoteVenues = data?.user?.user_metadata?.[metadataVenuesKey];
+        const hasRemoteTemplates = Array.isArray(remoteTemplates) && remoteTemplates.length > 0;
+        const normalized = hasRemoteTemplates ? remoteTemplates.map(normalizeTemplate) : localTemplates;
+        const profileVenues = Array.isArray(remoteVenues) && remoteVenues.length > 0 ? remoteVenues.map(normalizeVenue) : localVenues;
         setTemplates(normalized);
+        setVenues(profileVenues);
         writeLocalTemplates(normalized);
+        writeLocalVenues(profileVenues);
         setSelectedTemplateId(normalized[0]?.id || "");
+        setSelectedVenueId(profileVenues[0]?.id || "");
         setForm(normalizeTemplate(normalized[0] || defaultShowTemplates[0]));
+        if (!hasRemoteTemplates && localTemplates.length) {
+          await supabase.auth.updateUser({ data: { [metadataTemplatesKey]: localTemplates.map(normalizeTemplate) } });
+        }
         setSyncStatus("Synced");
       } catch (error) {
         console.warn("Template metadata sync unavailable:", error);
@@ -225,7 +235,7 @@ const TemplateEditor = ({ form, selectedTemplate, selectedVenue, updateForm, upd
           <Metric icon={Layers} label="Per round" value={form.questionsPerRound} />
           <Metric icon={CalendarDays} label="Venue" value={selectedVenue?.name || "Optional"} />
         </div>
-        {selectedVenue && <p className="mt-3 flex items-center gap-2 text-xs text-zinc-500"><MapPin size={13} />Venue defaults from {selectedVenue.name} will be included in the build direction.</p>}
+        {selectedVenue && <p className="mt-3 flex items-center gap-2 text-xs text-zinc-500"><MapPin size={13} />This build will be tagged with {selectedVenue.name}.</p>}
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <Field label="Template name" value={form.name} onChange={(value) => updateForm("name", value)} />

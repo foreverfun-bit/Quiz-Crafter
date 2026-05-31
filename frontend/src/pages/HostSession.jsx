@@ -71,6 +71,7 @@ const buildStorageUrl = (path) => {
   return `${STORAGE_BASE}${value.replace(/^\/+/, "")}`;
 };
 const HOST_DEFAULT_BRANDING_KEY = "quiz-crafter-host-branding-defaults";
+const metadataBrandingKey = "quiz_crafter_host_branding_defaults_v1";
 const hostBrandingKey = (sessionId) => `quiz-crafter-host-branding-${sessionId}`;
 const sanitizeHexColor = (value, fallback) => /^#[0-9a-f]{6}$/i.test(String(value || "")) ? value : fallback;
 const normalizeBranding = (branding = {}) => {
@@ -91,6 +92,18 @@ const readDefaultBranding = () => {
   }
 };
 const writeDefaultBranding = (branding) => { try { localStorage.setItem(HOST_DEFAULT_BRANDING_KEY, JSON.stringify(normalizeBranding(branding))); } catch { /* Ignore storage failures so branding never crashes hosting. */ } };
+const loadDefaultBrandingFromProfile = async () => {
+  const { data, error } = await supabase.auth.getUser();
+  if (error) throw error;
+  const remoteBranding = data?.user?.user_metadata?.[metadataBrandingKey];
+  return remoteBranding && typeof remoteBranding === "object" ? normalizeBranding(remoteBranding) : null;
+};
+const saveDefaultBrandingToProfile = async (branding) => {
+  const cleanBranding = normalizeBranding(branding);
+  const { error } = await supabase.auth.updateUser({ data: { [metadataBrandingKey]: cleanBranding } });
+  if (error) throw error;
+  return cleanBranding;
+};
 const getSessionBranding = (session) => {
   const defaults = readDefaultBranding();
   return {
@@ -380,6 +393,21 @@ const HostSession = () => {
   }, [id, navigate]);
 
   useEffect(() => {
+    const loadProfileBranding = async () => {
+      try {
+        const defaultBranding = await loadDefaultBrandingFromProfile();
+        if (!defaultBranding) return;
+        writeDefaultBranding(defaultBranding);
+        const hasSessionOverride = !!localStorage.getItem(hostBrandingKey(id));
+        if (!hasSessionOverride) setBranding(readStoredBranding(id, session));
+      } catch (error) {
+        console.warn("Host default branding profile sync unavailable:", error);
+      }
+    };
+    loadProfileBranding();
+  }, [id, session]);
+
+  useEffect(() => {
     const channel = supabase.channel(`quiz-crafter-live-${id}`, { config: { broadcast: { self: false } } });
     liveChannelRef.current = channel;
     channel
@@ -655,11 +683,17 @@ const HostSession = () => {
       toast.success("Host branding saved on this device");
     }
   };
-  const saveBrandingAsDefault = (nextBranding) => {
+  const saveBrandingAsDefault = async (nextBranding) => {
     const cleanBranding = normalizeBranding(nextBranding);
     writeDefaultBranding(cleanBranding);
+    try {
+      await saveDefaultBrandingToProfile(cleanBranding);
+      toast.success("Default host branding saved to your profile");
+    } catch (error) {
+      console.warn("Host default branding profile save unavailable:", error);
+      toast.success("Default host branding saved on this device");
+    }
     saveBranding(cleanBranding);
-    toast.success("Default host branding saved");
   };
   const useDefaultBranding = () => {
     const defaults = readDefaultBranding();

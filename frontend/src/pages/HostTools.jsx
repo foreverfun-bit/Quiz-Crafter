@@ -9,6 +9,7 @@ import { readActiveVenueId, readLocalTemplates, readLocalVenues } from "../lib/v
 
 const SOCIAL_STORAGE_KEY = "quiz-crafter-social-links";
 const HOST_DEFAULT_BRANDING_KEY = "quiz-crafter-host-branding-defaults";
+const metadataBrandingKey = "quiz_crafter_host_branding_defaults_v1";
 const DEFAULT_BRANDING = { name: "Forever Fun Events", logoUrl: "/quiz-crafter-logo.svg", primaryColor: "#71E0DC", accentColor: "#AEB2EF" };
 const readJson = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); } catch { return fallback; } };
 const writeJson = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* Keep tools usable if browser storage is full. */ } };
@@ -57,6 +58,27 @@ const HostTools = () => {
   const questionFeedback = useMemo(() => summarize(feedback, "questionText"), [feedback]);
   const categoryRows = useMemo(() => summarize(categoryFeedback, "category"), [categoryFeedback]);
   const analytics = useMemo(() => buildAnalytics({ selectedSession, players, feedback, categoryFeedback, playerIdeas, answers, activity, emailPlayers }), [selectedSession, players, feedback, categoryFeedback, playerIdeas, answers, activity, emailPlayers]);
+
+  useEffect(() => {
+    const loadHostBranding = async () => {
+      const localBranding = readDefaultBranding();
+      try {
+        const { data, error } = await supabase.auth.getUser();
+        if (error) throw error;
+        const remoteBranding = data?.user?.user_metadata?.[metadataBrandingKey];
+        if (remoteBranding && typeof remoteBranding === "object") {
+          const cleanBranding = normalizeBranding(remoteBranding);
+          setBranding(cleanBranding);
+          writeDefaultBranding(cleanBranding);
+        } else if (localBranding.logoUrl || localBranding.name !== DEFAULT_BRANDING.name) {
+          await supabase.auth.updateUser({ data: { [metadataBrandingKey]: localBranding } });
+        }
+      } catch (error) {
+        console.warn("Host branding profile sync unavailable:", error);
+      }
+    };
+    loadHostBranding();
+  }, []);
 
   useEffect(() => {
     const loadSessions = async () => {
@@ -119,11 +141,18 @@ const HostTools = () => {
     setSocialLinks(next);
     writeJson(SOCIAL_STORAGE_KEY, next);
   };
-  const saveDefaultBranding = (nextBranding) => {
+  const saveDefaultBranding = async (nextBranding) => {
     const cleanBranding = normalizeBranding(nextBranding);
     setBranding(cleanBranding);
     writeDefaultBranding(cleanBranding);
-    toast.success("Default host branding saved");
+    try {
+      const { error } = await supabase.auth.updateUser({ data: { [metadataBrandingKey]: cleanBranding } });
+      if (error) throw error;
+      toast.success("Default host branding saved to your profile");
+    } catch (error) {
+      console.warn("Host branding profile save unavailable:", error);
+      toast.success("Default host branding saved on this device");
+    }
   };
 
   const sendUpdate = () => {

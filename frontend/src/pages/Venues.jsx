@@ -77,17 +77,22 @@ const Venues = ({ initialTab = "venues" }) => {
         if (error) throw error;
         const remoteVenues = data?.user?.user_metadata?.[metadataVenuesKey];
         const remoteActive = data?.user?.user_metadata?.[metadataActiveVenueKey];
-        const normalized = Array.isArray(remoteVenues) ? remoteVenues.map(normalizeVenue) : localVenues;
+        const hasRemoteVenues = Array.isArray(remoteVenues) && remoteVenues.length > 0;
+        const normalized = hasRemoteVenues ? remoteVenues.map(normalizeVenue) : localVenues;
         setVenues(normalized);
         writeLocalVenues(normalized);
-        if (remoteActive) {
-          setActiveVenueId(remoteActive);
-          writeActiveVenueId(remoteActive);
+        const nextActive = remoteActive || activeVenueId || normalized[0]?.id || "";
+        if (nextActive) {
+          setActiveVenueId(nextActive);
+          writeActiveVenueId(nextActive);
         }
         const firstVenue = normalized[0] || null;
         if (firstVenue && !selectedVenueId) {
           setSelectedVenueId(firstVenue.id);
           setForm(normalizeVenue(firstVenue));
+        }
+        if (!hasRemoteVenues && localVenues.length) {
+          await supabase.auth.updateUser({ data: { [metadataVenuesKey]: localVenues.map(normalizeVenue), [metadataActiveVenueKey]: nextActive } });
         }
         setSyncStatus("Synced");
       } catch (error) {
