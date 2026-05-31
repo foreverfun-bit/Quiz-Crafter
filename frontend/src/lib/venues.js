@@ -7,7 +7,10 @@ export const defaultVenue = {
   name: "",
   nightName: "",
   dayOfWeek: "Tuesday",
+  frequency: "weekly",
+  monthlyWeek: "first",
   startTime: "19:00",
+  timeZone: "America/Chicago",
   address: "",
   hostName: "",
   logoUrl: "",
@@ -60,12 +63,21 @@ export const writeActiveVenueId = (venueId) => {
 
 export const normalizeVenue = (venue = {}) => {
   const source = venue && typeof venue === "object" ? venue : {};
+  const frequency = ["weekly", "bi_weekly", "monthly"].includes(source.frequency) ? source.frequency : defaultVenue.frequency;
+  const monthlyWeek = ["first", "second", "third", "fourth", "last"].includes(source.monthlyWeek) ? source.monthlyWeek : defaultVenue.monthlyWeek;
   return {
     ...defaultVenue,
     ...source,
     id: source.id || `venue-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     name: String(source.name || "").trim(),
     nightName: String(source.nightName || "").trim(),
+    dayOfWeek: String(source.dayOfWeek || defaultVenue.dayOfWeek).trim(),
+    frequency,
+    monthlyWeek,
+    startTime: String(source.startTime || defaultVenue.startTime).trim(),
+    timeZone: String(source.timeZone || defaultVenue.timeZone).trim(),
+    address: String(source.address || "").trim(),
+    hostName: String(source.hostName || "").trim(),
     roundCount: Math.max(1, Math.min(12, Number(source.roundCount || defaultVenue.roundCount))),
     questionsPerRound: Math.max(1, Math.min(20, Number(source.questionsPerRound || defaultVenue.questionsPerRound))),
     defaultPoints: Math.max(0, Number(source.defaultPoints || defaultVenue.defaultPoints)),
@@ -91,15 +103,15 @@ export const makeVenueRounds = (venue) => Array.from({ length: Number(venue?.rou
 export const makeVenueBuildDraft = (venue) => ({
   sessionName: makeVenueSessionName(venue),
   sessionDate: new Date().toISOString().slice(0, 10),
-  rounds: makeVenueRounds(venue),
+  rounds: makeVenueRounds(defaultVenue),
   activeRoundId: "round-1",
-  theme: [venue?.name, venue?.nightName, venue?.houseRules, venue?.hostNotes].filter(Boolean).join("\n"),
+  theme: "",
   venueId: venue?.id || "",
   venueName: venue?.name || "",
   defaultQuestionSettings: {
-    points: venue?.defaultPoints || defaultVenue.defaultPoints,
-    timer_seconds: venue?.defaultTimer || defaultVenue.defaultTimer,
-    wager_limit: venue?.defaultWagerLimit || 0,
+    points: defaultVenue.defaultPoints,
+    timer_seconds: defaultVenue.defaultTimer,
+    wager_limit: defaultVenue.defaultWagerLimit,
   },
 });
 
@@ -233,7 +245,7 @@ export const makeTemplateBuildDraft = (template, venue = null) => {
   const cleanTemplate = normalizeTemplate(template);
   const date = new Date().toLocaleDateString(undefined, { month: "numeric", day: "numeric", year: "numeric" });
   const inputDate = new Date().toISOString().slice(0, 10);
-  const venueName = venue?.nightName || venue?.name || "";
+  const venueName = venue?.name || "";
   return {
     sessionName: [date, venueName || cleanTemplate.name].filter(Boolean).join(" "),
     sessionDate: inputDate,
@@ -249,7 +261,7 @@ export const makeTemplateBuildDraft = (template, venue = null) => {
       questionIds: [],
     })),
     activeRoundId: "round-1",
-    theme: [venue?.name, venue?.nightName, cleanTemplate.name, cleanTemplate.description, cleanTemplate.hostNotes, venue?.houseRules, venue?.hostNotes].filter(Boolean).join("\n"),
+    theme: [cleanTemplate.name, cleanTemplate.description, cleanTemplate.hostNotes].filter(Boolean).join("\n"),
     venueId: venue?.id || "",
     venueName: venue?.name || "",
     templateId: cleanTemplate.id,
