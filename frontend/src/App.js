@@ -7,8 +7,6 @@ import { Toaster, toast } from "sonner";
 // Pages
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
-import Generate from "./pages/Generate";
-import WriteQuestion from "./pages/WriteQuestion";
 import Library from "./pages/Library";
 import BuildSession from "./pages/BuildSession";
 import ImportCSV from "./pages/ImportCSV";
@@ -328,8 +326,8 @@ function App() {
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/" element={<ProtectedRoute><AppLayout><Dashboard /></AppLayout></ProtectedRoute>} />
-            <Route path="/generate" element={<ProtectedRoute><AppLayout><Generate /></AppLayout></ProtectedRoute>} />
-            <Route path="/write-question" element={<ProtectedRoute><AppLayout><Generate initialCreateMode="write" /></AppLayout></ProtectedRoute>} />
+            <Route path="/generate" element={<ProtectedRoute><Navigate to="/build" replace /></ProtectedRoute>} />
+            <Route path="/write-question" element={<ProtectedRoute><Navigate to="/build" replace /></ProtectedRoute>} />
             <Route path="/library" element={<ProtectedRoute><AppLayout><Library /></AppLayout></ProtectedRoute>} />
             <Route path="/build" element={<ProtectedRoute><AppLayout><BuildErrorBoundary><BuildSession /></BuildErrorBoundary></AppLayout></ProtectedRoute>} />
             <Route path="/build/:sessionId" element={<ProtectedRoute><AppLayout><BuildErrorBoundary><BuildSession /></BuildErrorBoundary></AppLayout></ProtectedRoute>} />

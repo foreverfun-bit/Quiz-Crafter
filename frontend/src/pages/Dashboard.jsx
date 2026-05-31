@@ -172,11 +172,7 @@ const Dashboard = () => {
         <div className="flex gap-2 flex-wrap">
           <Button onClick={() => navigate("/build")} className="gradient-btn" data-testid="dashboard-build-btn">
             <PlusCircle className="mr-2" size={18} />
-            Build Session
-          </Button>
-          <Button onClick={() => navigate("/generate")} className="bg-[#AEB2EF] hover:bg-[#C6C9FF] text-zinc-950 font-bold">
-            <Sparkles className="mr-2" size={18} />
-            Generate
+            Create & Build
           </Button>
         </div>
       </div>
@@ -227,7 +223,7 @@ const Dashboard = () => {
         </Card>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          <PrepCard activeVenue={activeVenue} starterTemplate={starterTemplate} savedBuild={savedBuild} unusedCount={unusedCount} rejectedCount={rejectedCategories.length} onVenue={() => navigate("/venues")} onTemplate={() => navigate("/show-templates")} onLibrary={() => navigate("/library")} onBuild={() => navigate("/build")} onCategories={() => navigate("/categories")} onGenerate={() => navigate("/generate")} />
+          <PrepCard activeVenue={activeVenue} starterTemplate={starterTemplate} savedBuild={savedBuild} unusedCount={unusedCount} rejectedCount={rejectedCategories.length} onVenue={() => navigate("/venues")} onTemplate={() => navigate("/show-templates")} onLibrary={() => navigate("/library")} onBuild={() => navigate("/build")} onCategories={() => navigate("/categories")} />
 
           <BreakdownCard title="Question Mix" items={[
             { icon: CheckCircle, label: "True/False", value: stats.by_type?.true_false || 0, color: "text-[#71E0DC]" },
@@ -272,12 +268,12 @@ const Dashboard = () => {
             <Sparkles className="text-[#71E0DC] mx-auto mb-4" size={36} />
             <h3 className="text-xl font-bold text-white mb-2">Build your first usable set</h3>
             <p className="text-zinc-500 mb-6 max-w-md mx-auto">
-              Generate fresh host-grade questions or import the sets you already have.
+              Create fresh host-grade questions in the builder or import the sets you already have.
             </p>
             <div className="flex gap-3 justify-center flex-wrap">
-              <Button className="gradient-btn" onClick={() => navigate("/generate")} data-testid="cta-generate-btn">
+              <Button className="gradient-btn" onClick={() => navigate("/build")} data-testid="cta-generate-btn">
                 <Sparkles className="mr-2" size={18} />
-                Generate Questions
+                Create & Build
               </Button>
               <Button variant="outline" className="border-white/20 text-white hover:bg-zinc-800" onClick={() => navigate("/import")} data-testid="cta-import-btn">
                 <Upload className="mr-2" size={18} />
@@ -323,9 +319,9 @@ const CommandCenter = ({ nextSession, activeVenue, starterTemplate, savedBuild, 
   </Card>
 );
 
-const PrepCard = ({ activeVenue, starterTemplate, savedBuild, unusedCount, rejectedCount, onVenue, onTemplate, onLibrary, onBuild, onCategories, onGenerate }) => {
+const PrepCard = ({ activeVenue, starterTemplate, savedBuild, unusedCount, rejectedCount, onVenue, onTemplate, onLibrary, onBuild, onCategories }) => {
   const items = [
-    { label: "Create questions", value: "Generate or write", ready: true, onClick: onGenerate },
+    { label: "Create & build", value: "Generate, write, save, or select", ready: true, onClick: onBuild },
     { label: "Default venue", value: activeVenue ? activeVenue.name : "Needs setup", ready: Boolean(activeVenue), onClick: onVenue },
     { label: "Show template", value: starterTemplate ? starterTemplate.name : "Needs setup", ready: Boolean(starterTemplate), onClick: onTemplate },
     { label: "Unused library", value: `${unusedCount} available`, ready: unusedCount > 0, onClick: onLibrary },

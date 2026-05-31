@@ -30,9 +30,8 @@ const Sidebar = ({ isOpen, onClose }) => {
     {
       label: "Questions",
       icon: Sparkles,
-      paths: ["/generate", "/write-question", "/library", "/import", "/categories"],
+      paths: ["/library", "/import", "/categories"],
       links: [
-        { path: "/generate", icon: Sparkles, label: "Create" },
         { path: "/library", icon: Library, label: "Library" },
         { path: "/import", icon: Upload, label: "Import" },
         { path: "/categories", icon: FolderOpen, label: "Categories" },
