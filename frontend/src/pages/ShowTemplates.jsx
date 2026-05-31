@@ -214,11 +214,9 @@ const TemplateEditor = ({ form, selectedTemplate, selectedVenue, updateForm, upd
       </div>
       <div className="rounded-xl border border-white/10 bg-zinc-950/50 p-4 space-y-3">
         <h3 className="font-bold text-white">Format Defaults</h3>
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
           <Field label="Rounds" type="number" value={form.roundCount} onChange={(value) => updateForm("roundCount", value)} />
           <Field label="Per round" type="number" value={form.questionsPerRound} onChange={(value) => updateForm("questionsPerRound", value)} />
-          <Field label="Base points" type="number" value={form.defaultPoints} onChange={(value) => updateForm("defaultPoints", value)} />
-          <Field label="Base timer" type="number" value={form.defaultTimer} onChange={(value) => updateForm("defaultTimer", value)} />
           <Field label="Base wager cap" type="number" value={form.defaultWagerLimit} onChange={(value) => updateForm("defaultWagerLimit", value)} />
         </div>
       </div>
