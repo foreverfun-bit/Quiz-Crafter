@@ -16,7 +16,8 @@ const ALLOWED_TABLES = new Set([
   "session_questions",
 ]);
 
-const getBearerToken = (req) => {
+const getBearerToken = (req, body = {}) => {
+  if (body.authToken) return String(body.authToken);
   const header = req.headers.authorization || "";
   const match = header.match(/^Bearer\s+(.+)$/i);
   return match ? match[1] : "";
@@ -86,7 +87,7 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  const user = await verifyUser(supabaseUrl, anonKey, getBearerToken(req));
+  const user = await verifyUser(supabaseUrl, anonKey, getBearerToken(req, body));
   const isPublicSessionRead = action === "select" && PUBLIC_SESSION_READ_TABLES.has(table) && !user?.id;
 
   if (!user?.id && !isPublicSessionRead) {

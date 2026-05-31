@@ -89,12 +89,12 @@ class ProxyQueryBuilder {
       const { data: sessionData } = await supabaseClient.auth.getSession();
       const headers = { "content-type": "application/json" };
       const accessToken = sessionData?.session?.access_token;
-      if (accessToken) headers.authorization = `Bearer ${accessToken}`;
 
       const response = await fetch(DATA_PROXY_PATH, {
         method: "POST",
         headers,
         body: JSON.stringify({
+          authToken: accessToken,
           table: this.table,
           action: this.action,
           columns: this.columns,
