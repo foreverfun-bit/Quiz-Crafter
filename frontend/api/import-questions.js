@@ -430,8 +430,37 @@ async function parsePdfText(text, requestedSource, extraWarnings = []) {
 async function extractQuestionsWithAi(text) {
   if (!process.env.OPENAI_API_KEY || !text) return [];
 
+  const chunks = splitPdfTextForAi(text);
+  if (chunks.length > 1) {
+    const settled = await Promise.all(chunks.map((chunk) => callQuestionExtractionAi(chunk, 35, 11000)));
+    return settled.flat();
+  }
+
+  return callQuestionExtractionAi(text, 80, 26000);
+}
+
+function splitPdfTextForAi(text) {
+  const lines = normalizePdfText(text).split(/\n+/).filter(Boolean);
+  const chunks = [];
+  let current = [];
+
+  lines.forEach((line) => {
+    if (current.length && isRoundHeading(line)) {
+      chunks.push(current.join("\n"));
+      current = [];
+    }
+    current.push(line);
+  });
+  if (current.length) chunks.push(current.join("\n"));
+
+  const usefulChunks = chunks.filter((chunk) => /(?:\?|true or false|yes or no|bonus|[abcd]\n)/i.test(chunk));
+  if (usefulChunks.length < 2 || normalizePdfText(text).length < 3000) return [text];
+  return usefulChunks;
+}
+
+async function callQuestionExtractionAi(text, limit, timeoutMs) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 26000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -450,7 +479,7 @@ async function extractQuestionsWithAi(text) {
           { role: "system", content: "Extract trivia questions from messy Canva/PDF text for a trivia host. Return strict JSON only." },
           {
             role: "user",
-            content: `Extract up to 80 trivia questions from this Canva/PDF text.
+            content: `Extract up to ${limit} trivia questions from this Canva/PDF text.
 
 Rules:
 - Text may be duplicated because Canva exports animation states or repeated slides; remove duplicate copies of the same question.
