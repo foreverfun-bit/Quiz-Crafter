@@ -149,6 +149,31 @@ export default async function handler(req, res) {
         avoidDuplicates: false,
       });
     }
+    if (!validation.candidates.length && Array.isArray(parsed.candidates) && parsed.candidates.length) {
+      validation = normalizeCandidates({
+        ...validationInput,
+        cleanExcludeCategories: cleanRejectedCategories,
+        cleanApprovedCategories: [],
+        cleanLockedCategories: cleanLockedCategories.length ? cleanLockedCategories : [],
+        existingFingerprints: new Set(),
+        existingAnswerPairs: new Set(),
+        existingAnswers: new Set(),
+        avoidDuplicates: false,
+      });
+    }
+    if (!validation.candidates.length && Array.isArray(parsed.candidates) && parsed.candidates.length && !cleanLockedCategories.length) {
+      validation = normalizeCandidates({
+        ...validationInput,
+        cleanExcludeCategories: [],
+        cleanApprovedCategories: [],
+        cleanLockedCategories: [],
+        rejectedAnswerFingerprints: new Set(),
+        existingFingerprints: new Set(),
+        existingAnswerPairs: new Set(),
+        existingAnswers: new Set(),
+        avoidDuplicates: false,
+      });
+    }
 
     return res.status(200).json({ candidates: validation.candidates.slice(0, safeCount), rejected: validation.rejected, requested: safeCount });
   } catch (error) {
