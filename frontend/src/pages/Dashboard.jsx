@@ -139,6 +139,28 @@ const buildVenueSchedule = (venues) => venues
   .sort((a, b) => a.date - b.date)
   .slice(0, 6);
 
+const fetchDashboardData = async () => {
+  const { data: sessionData } = await supabase.auth.getSession();
+  let accessToken = sessionData?.session?.access_token || "";
+  if (!accessToken) {
+    const { data: refreshed } = await supabase.auth.refreshSession();
+    accessToken = refreshed?.session?.access_token || "";
+  }
+
+  const response = await fetch("/api/dashboard-data", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
+    },
+    body: JSON.stringify({ authToken: accessToken }),
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Dashboard data unavailable");
+  return data;
+};
+
 const Dashboard = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -195,24 +217,12 @@ const Dashboard = () => {
 
       try {
         setLoading(true);
-        const [questionsSettled, sessionsSettled, categorySettled] = await Promise.allSettled([
-          supabase.from("questions").select("*").eq("user_id", user.id),
-          supabase.from("sessions").select("*").eq("user_id", user.id).order("created_at", { ascending: false }),
-          fetchCategoryState(),
-        ]);
-
-        const questionsResult = questionsSettled.status === "fulfilled" ? questionsSettled.value : { data: [], error: questionsSettled.reason };
-        const sessionsResult = sessionsSettled.status === "fulfilled" ? sessionsSettled.value : { data: [], error: sessionsSettled.reason };
-        const categoryState = categorySettled.status === "fulfilled" ? categorySettled.value : { approved: new Set(), rejected: new Set() };
-
-        if (questionsResult.error) console.warn("Dashboard questions unavailable:", questionsResult.error);
-        if (sessionsResult.error) console.warn("Dashboard sessions unavailable:", sessionsResult.error);
-
-        const questions = questionsResult.error ? [] : Array.isArray(questionsResult.data) ? questionsResult.data : [];
-        const sessions = sessionsResult.error ? [] : Array.isArray(sessionsResult.data) ? sessionsResult.data : [];
+        const dashboardData = await fetchDashboardData();
+        const questions = Array.isArray(dashboardData.questions) ? dashboardData.questions : [];
+        const sessions = Array.isArray(dashboardData.sessions) ? dashboardData.sessions : [];
+        const categoryState = buildCategoryStateFromRows(dashboardData.categoryRows);
         setStats(buildStats(questions, sessions, categoryState));
         setRecentSessions(sessions.slice(0, 5));
-        if (questionsResult.error && sessionsResult.error) throw questionsResult.error;
       } catch (error) {
         console.error("Dashboard stats error:", error);
         toast.error("Failed to load dashboard stats");
@@ -816,6 +826,30 @@ async function fetchCategoryState() {
         if (!rejected.has(category)) approved.add(category);
       }
     });
+  });
+
+  return { approved, rejected };
+}
+
+function buildCategoryStateFromRows(categoryRows = {}) {
+  const approved = new Set();
+  const rejected = new Set();
+  const rows = Object.values(categoryRows).flatMap((value) => (Array.isArray(value) ? value : []));
+
+  rows.forEach((row) => {
+    const category = cleanCategory(row.category || row.name || row.category_name || row.value);
+    if (!category) return;
+
+    const status = normalizeStatus(row.status || row.state || row.approval_status || row.preference || row.rating);
+    const rejectedByFlag = isTruthy(row.rejected) || isTruthy(row.is_rejected) || isTruthy(row.hidden) || isTruthy(row.is_hidden) || isTruthy(row.disliked) || isTruthy(row.is_disliked);
+    const approvedByFlag = isTruthy(row.approved) || isTruthy(row.is_approved) || isTruthy(row.active) || isTruthy(row.is_active);
+
+    if (rejectedValues.has(status) || rejectedByFlag) {
+      rejected.add(category);
+      approved.delete(category);
+    } else if (approvedValues.has(status) || approvedByFlag || !status) {
+      if (!rejected.has(category)) approved.add(category);
+    }
   });
 
   return { approved, rejected };
