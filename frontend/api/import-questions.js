@@ -432,7 +432,7 @@ async function extractQuestionsWithAi(text) {
 
   const chunks = splitPdfTextForAi(text);
   if (chunks.length > 1) {
-    const settled = await Promise.all(chunks.map((chunk) => callQuestionExtractionAi(chunk, 35, 11000)));
+    const settled = await Promise.all(chunks.map((chunk) => callQuestionExtractionAi(chunk, 35, 18000)));
     return settled.flat();
   }
 
