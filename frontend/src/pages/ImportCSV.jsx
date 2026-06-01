@@ -24,6 +24,7 @@ import {
 import { toast } from "sonner";
 
 const SERVER_UPLOAD_LIMIT_BYTES = 4 * 1024 * 1024;
+const PDF_DIRECT_UPLOAD_LIMIT_BYTES = 3.8 * 1024 * 1024;
 
 const sourceOptions = [
   { value: "auto", label: "Auto Detect", description: "Best choice for most files" },
@@ -38,11 +39,14 @@ const getLargeFileMessage = (selectedFile) => {
 
   const sizeMb = (selectedFile.size / 1024 / 1024).toFixed(1);
   if (selectedFile.name.toLowerCase().endsWith(".pdf")) {
-    return `This PDF is ${sizeMb} MB, which is too large for Vercel's direct preview upload limit. Export it from the source as CSV/text, split the PDF into smaller files under 4 MB, or compress it before importing.`;
+    return `This PDF is ${sizeMb} MB, so Quiz Crafter will extract its text in your browser before importing. Canva PDFs can take a few extra seconds.`;
   }
 
   return `This file is ${sizeMb} MB, which is too large for direct preview. Try a smaller export or split it into smaller files under 4 MB.`;
 };
+
+const isPdfFile = (selectedFile) => selectedFile?.name?.toLowerCase().endsWith(".pdf") || selectedFile?.type === "application/pdf";
+const shouldExtractPdfInBrowser = (selectedFile) => isPdfFile(selectedFile) && selectedFile.size > PDF_DIRECT_UPLOAD_LIMIT_BYTES;
 
 const ImportCSV = () => {
   const [file, setFile] = useState(null);
@@ -72,7 +76,7 @@ const ImportCSV = () => {
     setResult(null);
 
     const largeFileMessage = getLargeFileMessage(selectedFile);
-    if (largeFileMessage) {
+    if (largeFileMessage && !isPdfFile(selectedFile)) {
       setPreviewError(largeFileMessage);
       return;
     }
@@ -133,20 +137,22 @@ const ImportCSV = () => {
     if (!selectedFile) return;
 
     const largeFileMessage = getLargeFileMessage(selectedFile);
-    if (largeFileMessage) {
+    if (largeFileMessage && !isPdfFile(selectedFile)) {
       setPreview(null);
       setPreviewError(largeFileMessage);
       return;
     }
 
     setPreviewing(true);
-    setPreviewError(null);
+    setPreviewError(isPdfFile(selectedFile) && largeFileMessage ? largeFileMessage : null);
 
     try {
-      const response = await fetch("/api/import-questions", {
-        method: "POST",
-        body: buildFormData(selectedFile, "preview", selectedSource),
-      });
+      const response = shouldExtractPdfInBrowser(selectedFile)
+        ? await postExtractedPdf(selectedFile, "preview", selectedSource)
+        : await fetch("/api/import-questions", {
+          method: "POST",
+          body: buildFormData(selectedFile, "preview", selectedSource),
+        });
 
       const data = await parseJsonResponse(response, "Failed to preview import file");
       setPreview(data);
@@ -175,7 +181,7 @@ const ImportCSV = () => {
     }
 
     const largeFileMessage = getLargeFileMessage(file);
-    if (largeFileMessage) {
+    if (largeFileMessage && !isPdfFile(file)) {
       setPreviewError(largeFileMessage);
       return;
     }
@@ -190,10 +196,9 @@ const ImportCSV = () => {
       const userId = session?.user?.id;
       if (!userId) throw new Error("You must be signed in");
 
-      const formData = buildFormData(file, "import", source);
-      formData.append("sessionUserId", userId);
-
-      const data = await postFormData(formData, "Import failed");
+      const data = shouldExtractPdfInBrowser(file)
+        ? await parseJsonResponse(await postExtractedPdf(file, "import", source, userId), "Import failed")
+        : await postFormData(buildImportFormData(file, source, userId), "Import failed");
       setResult(data);
 
       if (data.imported > 0) toast.success(`Imported ${data.imported} question${data.imported === 1 ? "" : "s"}`);
@@ -414,5 +419,88 @@ const ImportCSV = () => {
     </div>
   );
 };
+
+const buildImportFormData = (selectedFile, selectedSource, userId) => {
+  const formData = new FormData();
+  formData.append("file", selectedFile, selectedFile.name);
+  formData.append("action", "import");
+  formData.append("source", selectedSource);
+  formData.append("sessionUserId", userId);
+  return formData;
+};
+
+async function loadPdfJs() {
+  if (window.pdfjsLib) return window.pdfjsLib;
+
+  await new Promise((resolve, reject) => {
+    const existing = document.querySelector("script[data-pdfjs-loader='true']");
+    if (existing) {
+      existing.addEventListener("load", resolve, { once: true });
+      existing.addEventListener("error", reject, { once: true });
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js";
+    script.async = true;
+    script.dataset.pdfjsLoader = "true";
+    script.onload = resolve;
+    script.onerror = () => reject(new Error("Could not load the browser PDF reader. Please check your connection and retry."));
+    document.head.appendChild(script);
+  });
+
+  if (!window.pdfjsLib) throw new Error("Could not start the browser PDF reader.");
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js";
+  return window.pdfjsLib;
+}
+
+async function extractPdfTextInBrowser(file) {
+  const pdfjs = await loadPdfJs();
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const loadingTask = pdfjs.getDocument({ data: bytes, disableWorker: true });
+  const pdf = await loadingTask.promise;
+  const pages = [];
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
+    const lines = [];
+    let lastY = null;
+    let currentLine = [];
+
+    content.items.forEach((item) => {
+      const text = String(item.str || "").trim();
+      if (!text) return;
+      const y = Math.round(item.transform?.[5] || 0);
+      if (lastY !== null && Math.abs(y - lastY) > 4 && currentLine.length) {
+        lines.push(currentLine.join(" "));
+        currentLine = [];
+      }
+      currentLine.push(text);
+      lastY = y;
+    });
+
+    if (currentLine.length) lines.push(currentLine.join(" "));
+    pages.push(lines.join("\n"));
+  }
+
+  return pages.join("\n\n");
+}
+
+async function postExtractedPdf(file, action, selectedSource, userId = "") {
+  const pdfText = await extractPdfTextInBrowser(file);
+  return fetch("/api/import-questions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      action,
+      source: selectedSource === "auto" ? "pdf" : selectedSource,
+      filename: file.name,
+      contentType: file.type || "application/pdf",
+      pdfText,
+      sessionUserId: userId,
+    }),
+  });
+}
 
 export default ImportCSV;

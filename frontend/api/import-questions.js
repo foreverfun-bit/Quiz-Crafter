@@ -75,10 +75,41 @@ function extractMultipartParts(req, buffer) {
   return parts;
 }
 
+function extractJsonParts(req, buffer) {
+  const contentType = req.headers["content-type"] || "";
+  if (!contentType.toLowerCase().includes("application/json")) return null;
+
+  const parsed = JSON.parse(buffer.toString("utf8") || "{}");
+  if (!parsed || typeof parsed !== "object") return {};
+
+  const pdfText = String(parsed.pdfText || parsed.text || "");
+  return {
+    action: parsed.action,
+    source: parsed.source,
+    sessionUserId: parsed.sessionUserId,
+    file: pdfText
+      ? {
+        filename: parsed.filename || "Imported PDF.pdf",
+        contentType: parsed.contentType || "application/pdf",
+        buffer: Buffer.from(pdfText, "utf8"),
+        text: pdfText,
+        extractedText: true,
+      }
+      : null,
+  };
+}
+
 function clean(value) {
   return String(value || "")
     .replace(/<[^>]*>/g, " ")
     .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cleanLine(value) {
+  return String(value || "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/[ \t]+/g, " ")
     .trim();
 }
 
@@ -164,6 +195,15 @@ function compareRoundNames(a, b) {
 
 function sortQuestionsByRound(questions) {
   return [...questions].sort(compareRoundNames);
+}
+
+function normalizePdfText(value) {
+  return String(value || "")
+    .replace(/\r/g, "\n")
+    .split(/\n+/)
+    .map(cleanLine)
+    .filter(Boolean)
+    .join("\n");
 }
 
 function normalizeRecord(record) {
@@ -349,26 +389,41 @@ async function parsePdf(buffer, requestedSource) {
   try {
     const pdfParse = loadPdfParser();
     const parsed = await pdfParse(buffer);
-    text = clean(parsed.text || "");
+    text = normalizePdfText(parsed.text || "");
   } catch (error) {
     throw new Error(`Could not read PDF text. If this is a scanned/image-only PDF, export it as CSV or text first. ${error.message}`);
   }
 
+  return parsePdfText(text, requestedSource);
+}
+
+async function parsePdfText(text, requestedSource, extraWarnings = []) {
+  const normalizedText = normalizePdfText(text);
   const aiQuestions = await extractQuestionsWithAi(text);
   if (aiQuestions.length) {
     return {
       source: requestedSource === "auto" ? "pdf" : requestedSource,
       columns: ["PDF Text"],
-      questions: sortQuestionsByRound(aiQuestions.map((question, index) => normalizeRecord({ ...question, source_order: index + 1 })).filter(Boolean)),
-      warnings: [],
+      questions: sortQuestionsByRound(aiQuestions.map((question, index) => normalizeRecord({ ...question, source_order: question.source_order || index + 1 })).filter(Boolean)),
+      warnings: extraWarnings,
+    };
+  }
+
+  const canvaQuestions = parseCanvaTriviaText(normalizedText);
+  if (canvaQuestions.length) {
+    return {
+      source: requestedSource === "auto" ? "pdf" : requestedSource,
+      columns: ["PDF Text"],
+      questions: sortQuestionsByRound(canvaQuestions),
+      warnings: [...extraWarnings, "Used Canva-style PDF text parsing. Review the preview before importing."],
     };
   }
 
   return {
     source: "pdf",
     columns: ["PDF Text"],
-    questions: sortQuestionsByRound(parseQuestionsFromText(text)),
-    warnings: ["Used simple PDF text parsing. Review the preview before importing."],
+    questions: sortQuestionsByRound(parseQuestionsFromText(normalizedText)),
+    warnings: [...extraWarnings, "Used simple PDF text parsing. Review the preview before importing."],
   };
 }
 
@@ -386,20 +441,232 @@ async function extractQuestionsWithAi(text) {
       temperature: 0.1,
       response_format: { type: "json_object" },
       messages: [
-        { role: "system", content: "Extract trivia questions from messy PDF text. Return strict JSON only." },
+        { role: "system", content: "Extract trivia questions from messy Canva/PDF text for a trivia host. Return strict JSON only." },
         {
           role: "user",
-          content: `Extract up to 150 trivia questions from this text. Return {"questions":[{"category":"","round_name":"Round 1","question_text":"...","correct_answer":"...","question_type":"true_false|multiple_choice|written|picture","incorrect_answers":["..."],"fun_fact":"..."}]}\n\nTEXT:\n${text.slice(0, 60000)}`,
+          content: `Extract up to 150 trivia questions from this Canva/PDF text.
+
+Rules:
+- Text may be duplicated because Canva exports animation states or repeated slides; remove duplicate copies of the same question.
+- Preserve round order and question order.
+- Recognize headings like "Easy Round", "ROUND 1 (25 POINTS)", "BONUS", "Average Round", and "Difficult Round".
+- Ignore rules pages, winner/drumroll slides, icons pages, and decorative text.
+- For true/false or yes/no questions, use question_type "true_false" and correct_answer "True" or "False" when the answer can be inferred from the answer/fun fact text. If the answer cannot be inferred, omit that question.
+- For multiple choice, collect choices as incorrect_answers excluding correct_answer. Infer the correct answer from answer text, fun facts, or common trivia knowledge when it is clear.
+- Fun facts often follow "FUN FACT"; attach the fun fact to the previous question.
+- Media/picture questions are not a separate type unless no written prompt exists; keep them as written if the answer can be extracted.
+
+Return {"questions":[{"category":"","round_name":"Round 1","round_order":1,"source_order":1,"question_text":"...","correct_answer":"...","question_type":"true_false|multiple_choice|written|picture","incorrect_answers":["..."],"fun_fact":"..."}]}
+
+TEXT:
+${text.slice(0, 70000)}`,
         },
       ],
     }),
   });
 
   if (!response.ok) return [];
-  const json = await response.json();
-  const content = json.choices?.[0]?.message?.content || "{}";
-  const parsed = JSON.parse(content);
-  return Array.isArray(parsed.questions) ? parsed.questions : [];
+  try {
+    const json = await response.json();
+    const content = json.choices?.[0]?.message?.content || "{}";
+    const parsed = JSON.parse(content);
+    return Array.isArray(parsed.questions) ? parsed.questions : [];
+  } catch {
+    return [];
+  }
+}
+
+function isPdfHeading(line) {
+  const text = clean(line);
+  if (!text) return true;
+  if (/^\d+$/.test(text)) return true;
+  return /^(trivia night|rules!?|bonus rules!?|drumroll|please!|and the winner|insert name|icons page|fun factfun fact|truefalse|truetrue|falsefalse)$/i.test(text);
+}
+
+function isRoundHeading(line) {
+  return /^(easy|average|difficult)\s+round$/i.test(clean(line)) || /^round\s+\d+/i.test(clean(line));
+}
+
+function getRoundFromHeading(line, currentRound) {
+  const text = clean(line);
+  const numbered = text.match(/^round\s+(\d+)/i);
+  if (numbered) return { name: `Round ${Number(numbered[1])}`, order: Number(numbered[1]) };
+  if (/^easy round$/i.test(text)) return { name: "Round 1", order: 1 };
+  if (/^average round$/i.test(text)) return { name: "Round 2", order: 2 };
+  if (/^difficult round$/i.test(text)) return { name: "Round 3", order: 3 };
+  return currentRound;
+}
+
+function blockEquals(lines, aStart, bStart, length) {
+  for (let offset = 0; offset < length; offset += 1) {
+    if (compactKey(lines[aStart + offset]) !== compactKey(lines[bStart + offset])) return false;
+  }
+  return true;
+}
+
+function findRepeatedBlockLength(lines, start) {
+  for (let length = 1; length <= 6; length += 1) {
+    if (start + length * 2 > lines.length) continue;
+    const text = clean(lines.slice(start, start + length).join(" "));
+    if (text.length < 14 || isPdfHeading(text) || isRoundHeading(text)) continue;
+    if (blockEquals(lines, start, start + length, length)) return length;
+  }
+  return 0;
+}
+
+function startsWithQuestionBlock(lines, start, questionLines) {
+  if (start + questionLines.length > lines.length) return false;
+  return questionLines.every((line, index) => compactKey(lines[start + index]) === compactKey(line));
+}
+
+function looksLikeRepeatedQuestionStart(lines, start) {
+  return findRepeatedBlockLength(lines, start) > 0;
+}
+
+function looksLikeQuestionLead(line) {
+  return /^(what|which|who|where|when|why|how|did|is|was|relative to|the eiffel tower|alaska had)\b/i.test(clean(line));
+}
+
+function collectFunFact(lines, start) {
+  let cursor = start;
+  if (!/^fun fact$/i.test(clean(lines[cursor] || ""))) return { funFact: "", next: start };
+  cursor += 1;
+  const factLines = [];
+  while (cursor < lines.length) {
+    const line = clean(lines[cursor]);
+    if (!line || isRoundHeading(line) || /^bonus$/i.test(line) || /\?$/.test(line)) break;
+    if (/^(yes or no|true or false)$/i.test(line)) break;
+    factLines.push(line);
+    cursor += 1;
+  }
+  return { funFact: factLines.join(" "), next: cursor };
+}
+
+function skipTrailingFactBlock(lines, start) {
+  for (let cursor = start; cursor < Math.min(lines.length, start + 12); cursor += 1) {
+    const line = clean(lines[cursor]);
+    if (/^fun fact$/i.test(line)) return cursor + 1;
+    if (cursor > start && (looksLikeRepeatedQuestionStart(lines, cursor) || looksLikeQuestionLead(line))) return start;
+    if (isRoundHeading(line) || /^bonus$/i.test(line)) return start;
+  }
+  return start;
+}
+
+function parseCanvaTriviaText(text) {
+  const lines = normalizePdfText(text).split(/\n+/).map(cleanLine).filter(Boolean);
+  const questions = [];
+  const seen = new Set();
+  const seenQuestions = new Set();
+  let currentRound = { name: "PDF", order: 1 };
+  let sourceOrder = 1;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = clean(lines[i]);
+    if (isRoundHeading(line)) {
+      currentRound = getRoundFromHeading(line, currentRound);
+      continue;
+    }
+    if (/^bonus$/i.test(line)) {
+      const questionText = clean(lines[i + 1]);
+      const answer = clean(lines[i + 2]);
+      if (questionText && /\?$/.test(questionText) && answer && !isRoundHeading(answer) && !isPdfHeading(answer)) {
+        const key = compactKey(`${currentRound.name}:bonus:${questionText}:${answer}`);
+        if (!seen.has(key)) {
+          seen.add(key);
+          const normalized = normalizeRecord({
+            category: "Bonus",
+            round_name: currentRound.name,
+            round_order: currentRound.order,
+            source_order: sourceOrder,
+            import_order: sourceOrder,
+            question_text: questionText,
+            correct_answer: answer,
+            question_type: "written",
+            incorrect_answers: [],
+          });
+          if (normalized) questions.push(normalized);
+          sourceOrder += 1;
+        }
+      }
+      continue;
+    }
+    if (isPdfHeading(line) || /^fun fact$/i.test(line) || /^(yes or no|true or false)$/i.test(line)) continue;
+    if (currentRound.order < 3) continue;
+
+    let questionLines = [];
+    let answerStart = -1;
+    const repeatedLength = findRepeatedBlockLength(lines, i);
+    if (repeatedLength) {
+      questionLines = lines.slice(i, i + repeatedLength);
+      answerStart = i + repeatedLength * 2;
+    } else {
+      for (let length = 1; length <= 6 && i + length <= lines.length; length += 1) {
+        questionLines = lines.slice(i, i + length);
+        if (/\?$/.test(clean(questionLines.join(" ")))) {
+          answerStart = i + length;
+          break;
+        }
+      }
+    }
+
+    if (answerStart === -1) continue;
+
+    const questionText = clean(questionLines.join(" "));
+    if (!questionText || questionText.length < 12 || isPdfHeading(questionText)) continue;
+    if (/\b(?:yes or no|true or false|[abcd]\s+[A-Z][a-z])/i.test(questionText)) continue;
+
+    let answerCursor = answerStart;
+    if (startsWithQuestionBlock(lines, answerCursor, questionLines)) answerCursor += questionLines.length;
+
+    const answerLines = [];
+    while (answerCursor < lines.length && answerLines.length < 3) {
+      const answerLine = clean(lines[answerCursor]);
+      if (!answerLine || isRoundHeading(answerLine) || isPdfHeading(answerLine) || /^fun fact$/i.test(answerLine)) break;
+      if (startsWithQuestionBlock(lines, answerCursor, questionLines)) break;
+      if (answerLines.length && looksLikeRepeatedQuestionStart(lines, answerCursor)) break;
+      if (answerLines.length && looksLikeQuestionLead(answerLine)) break;
+      if (/\?$/.test(answerLine) && answerLines.length) break;
+      if (answerLines.length) {
+        const previous = answerLines[answerLines.length - 1];
+        const shortContinuation = answerLines.length === 1 && previous.length <= 25 && answerLine.length <= 25;
+        if (!/,\s*$/.test(previous) && !/^&/.test(answerLine) && !shortContinuation) break;
+      }
+      answerLines.push(answerLine);
+      answerCursor += 1;
+    }
+
+    if (startsWithQuestionBlock(lines, answerCursor, questionLines)) answerCursor += questionLines.length;
+    const fact = collectFunFact(lines, answerCursor);
+    if (!fact.funFact) fact.next = skipTrailingFactBlock(lines, answerCursor);
+    const answer = clean(answerLines.join(" "));
+    const key = compactKey(`${currentRound.name}:${questionText}:${answer}`);
+    const questionKey = compactKey(`${currentRound.name}:${questionText}`);
+    if (/^(yes or no|true or false|[abcd])$/i.test(answer) || /\b[abcd]\s+[A-Z][a-z]/.test(answer)) continue;
+
+    if (answer && !seen.has(key) && !seenQuestions.has(questionKey)) {
+      seen.add(key);
+      seenQuestions.add(questionKey);
+      const questionType = /^(true|false)$/i.test(answer) ? "true_false" : "written";
+      const normalized = normalizeRecord({
+        category: "",
+        round_name: currentRound.name,
+        round_order: currentRound.order,
+        source_order: sourceOrder,
+        import_order: sourceOrder,
+        question_text: questionText,
+        correct_answer: answer,
+        question_type: questionType,
+        incorrect_answers: [],
+        fun_fact: fact.funFact || null,
+      });
+      if (normalized) questions.push(normalized);
+      sourceOrder += 1;
+    }
+
+    i = Math.max(i, (fact.next || answerCursor) - 1);
+  }
+
+  return questions;
 }
 
 function parseQuestionsFromText(text) {
@@ -430,6 +697,9 @@ async function parseUploadedFile(file, requestedSource) {
   const source = requestedSource || "auto";
 
   if (lower.endsWith(".pdf") || file.contentType.includes("pdf") || source === "pdf") {
+    if (file.extractedText) {
+      return parsePdfText(file.text, source, ["Extracted PDF text in your browser to avoid the hosted upload size limit."]);
+    }
     return parsePdf(file.buffer, source);
   }
 
@@ -632,7 +902,7 @@ async function handler(req, res) {
     if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
     const buffer = await readRequestBuffer(req);
-    const parts = extractMultipartParts(req, buffer);
+    const parts = extractJsonParts(req, buffer) || extractMultipartParts(req, buffer);
     const file = parts.file;
     const action = clean(parts.action || "preview");
     const requestedSource = clean(parts.source || "auto").toLowerCase();
