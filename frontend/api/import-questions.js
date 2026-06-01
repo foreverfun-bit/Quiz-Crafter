@@ -431,7 +431,7 @@ async function extractQuestionsWithAi(text) {
   if (!process.env.OPENAI_API_KEY || !text) return [];
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 18000);
+  const timeout = setTimeout(() => controller.abort(), 26000);
 
   try {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
