@@ -128,6 +128,28 @@ const makeRoundGroups = (entries) => {
   return [...groups.values()];
 };
 
+const saveSessionPatch = async (sessionId, patch) => {
+  const { data: sessionData } = await supabase.auth.getSession();
+  let accessToken = sessionData?.session?.access_token || "";
+  if (!accessToken) {
+    const { data: refreshed } = await supabase.auth.refreshSession();
+    accessToken = refreshed?.session?.access_token || "";
+  }
+
+  const response = await fetch("/api/save-session", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
+    },
+    body: JSON.stringify({ authToken: accessToken, sessionId, patch }),
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Failed to save session");
+  return data.session;
+};
+
 const SessionDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -379,14 +401,9 @@ const SessionDetail = () => {
       };
 
       const finalName = editableSessionName || "Imported Session";
-      const { error } = await supabase
-        .from("sessions")
-        .update({ name: finalName, session_name: finalName, ...cleaned })
-        .eq("id", id);
+      const savedSession = await saveSessionPatch(id, { name: finalName, session_name: finalName, ...cleaned });
 
-      if (error) throw error;
-
-      setSession((prev) => ({ ...prev, name: finalName, session_name: finalName, ...cleaned }));
+      setSession((prev) => ({ ...prev, ...savedSession, name: finalName, session_name: finalName, ...cleaned }));
       setEditableQuestions(cleaned);
       setIsEditingImported(false);
       toast.success("Session updated!");
