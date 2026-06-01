@@ -1,6 +1,7 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { useAuth } from "../App";
 import { Card, CardContent } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -19,26 +20,18 @@ import { toast } from "sonner";
 
 const PastSessions = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [allSessions, setAllSessions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState("all");
 
-  useEffect(() => {
-    fetchSessions();
-  }, []);
-
-  const fetchSessions = async () => {
+  const fetchSessions = useCallback(async (authUserId = user?.id) => {
     try {
       setLoading(true);
 
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      const userId = session?.user?.id;
+      const userId = authUserId;
       if (!userId) {
-        toast.error("You must be signed in");
         setAllSessions([]);
         return;
       }
@@ -58,7 +51,11 @@ const PastSessions = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (user?.id) fetchSessions(user.id);
+  }, [fetchSessions, user?.id]);
 
   const handleDelete = async (sessionId, e) => {
     e.stopPropagation();

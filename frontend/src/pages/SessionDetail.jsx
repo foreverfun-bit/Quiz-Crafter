@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { useAuth } from "../App";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
@@ -130,6 +131,7 @@ const makeRoundGroups = (entries) => {
 const SessionDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const [session, setSession] = useState(null);
   const [rounds, setRounds] = useState([]);
@@ -197,7 +199,9 @@ const SessionDetail = () => {
     setLoading(true);
 
     try {
-      const { data: sessionData, error: sessionError } = await supabase.from("sessions").select("*").eq("id", id).single();
+      let sessionQuery = supabase.from("sessions").select("*").eq("id", id);
+      if (user?.id) sessionQuery = sessionQuery.eq("user_id", user.id);
+      const { data: sessionData, error: sessionError } = await sessionQuery.single();
       if (sessionError) throw sessionError;
 
       const importedArrays = normalizeImportedArrays(sessionData);
