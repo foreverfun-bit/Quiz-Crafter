@@ -430,21 +430,27 @@ async function parsePdfText(text, requestedSource, extraWarnings = []) {
 async function extractQuestionsWithAi(text) {
   if (!process.env.OPENAI_API_KEY || !text) return [];
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "gpt-4.1-mini",
-      temperature: 0.1,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: "Extract trivia questions from messy Canva/PDF text for a trivia host. Return strict JSON only." },
-        {
-          role: "user",
-          content: `Extract up to 150 trivia questions from this Canva/PDF text.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 18000);
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-4.1-mini",
+        temperature: 0.1,
+        max_tokens: 8000,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: "Extract trivia questions from messy Canva/PDF text for a trivia host. Return strict JSON only." },
+          {
+            role: "user",
+            content: `Extract up to 80 trivia questions from this Canva/PDF text.
 
 Rules:
 - Text may be duplicated because Canva exports animation states or repeated slides; remove duplicate copies of the same question.
@@ -460,19 +466,20 @@ Return {"questions":[{"category":"","round_name":"Round 1","round_order":1,"sour
 
 TEXT:
 ${text.slice(0, 70000)}`,
-        },
-      ],
-    }),
-  });
+          },
+        ],
+      }),
+    });
 
-  if (!response.ok) return [];
-  try {
+    if (!response.ok) return [];
     const json = await response.json();
     const content = json.choices?.[0]?.message?.content || "{}";
     const parsed = JSON.parse(content);
     return Array.isArray(parsed.questions) ? parsed.questions : [];
   } catch {
     return [];
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
