@@ -204,6 +204,15 @@ const SessionDetail = () => {
       setEditableSessionName(sessionData.name || sessionData.session_name || "Untitled Session");
       setEditableQuestions(importedArrays);
 
+      const importedQuestionCount = Object.values(importedArrays).reduce((sum, items) => sum + items.length, 0);
+      if (sessionData.is_past || importedQuestionCount > 0) {
+        setSession(sessionData);
+        setRounds([]);
+        setSlots([]);
+        setQuestionsById({});
+        return;
+      }
+
       const { data: roundData, error: roundsError } = await supabase
         .from("session_rounds")
         .select("*")
