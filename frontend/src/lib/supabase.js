@@ -11,6 +11,14 @@ const supabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
   },
 })
 
+const directDataClient = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+  },
+})
+
 const DATA_PROXY_PATH = "/api/supabase-data";
 
 const makeProxyError = (message, details = null) => ({
@@ -24,6 +32,27 @@ const getAccessToken = async () => {
 
   const { data: refreshed } = await supabaseClient.auth.refreshSession();
   return refreshed?.session?.access_token || "";
+};
+
+const applyDirectFilters = (query, filters = []) => {
+  let next = query;
+  filters.forEach((filter) => {
+    if (!filter?.column) return;
+    if (filter.op === "in") {
+      next = next.in(filter.column, Array.isArray(filter.value) ? filter.value : []);
+    } else {
+      next = next.eq(filter.column, filter.value);
+    }
+  });
+  return next;
+};
+
+const applyDirectOrders = (query, orders = []) => {
+  let next = query;
+  orders.forEach((order) => {
+    if (order?.column) next = next.order(order.column, { ascending: order.ascending !== false });
+  });
+  return next;
 };
 
 class ProxyQueryBuilder {
@@ -96,7 +125,10 @@ class ProxyQueryBuilder {
     try {
       const runRequest = async (authToken) => fetch(DATA_PROXY_PATH, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          ...(authToken ? { authorization: `Bearer ${authToken}` } : {}),
+        },
         body: JSON.stringify({
           authToken,
           table: this.table,
@@ -120,9 +152,32 @@ class ProxyQueryBuilder {
 
       const result = await response.json().catch(() => ({}));
       if (!response.ok) {
+        if (response.status === 401 && accessToken) return this.executeDirect();
         return { data: null, error: makeProxyError(result.error || response.statusText, result.details) };
       }
       return { data: result.data ?? null, error: result.error ?? null };
+    } catch (error) {
+      return { data: null, error: makeProxyError(error.message) };
+    }
+  }
+
+  async executeDirect() {
+    try {
+      let query;
+      if (this.action === "insert") query = directDataClient.from(this.table).insert(this.payload);
+      else if (this.action === "update") query = directDataClient.from(this.table).update(this.payload || {});
+      else if (this.action === "upsert") query = directDataClient.from(this.table).upsert(this.payload);
+      else if (this.action === "delete") query = directDataClient.from(this.table).delete();
+      else query = directDataClient.from(this.table).select(this.columns);
+
+      query = applyDirectFilters(query, this.filters);
+      if (this.action !== "delete") query = applyDirectOrders(query, this.orders);
+      if (Number.isFinite(Number(this.limitValue))) query = query.limit(Number(this.limitValue));
+      if (this.action !== "select" && this.columns) query = query.select(this.columns);
+      if (this.singleResult) query = query.single();
+
+      const { data, error } = await query;
+      return { data: data ?? null, error: error ? makeProxyError(error.message, error.details || error.hint || null) : null };
     } catch (error) {
       return { data: null, error: makeProxyError(error.message) };
     }

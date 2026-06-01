@@ -195,24 +195,27 @@ const Dashboard = () => {
 
       try {
         setLoading(true);
-        const [questionsResult, sessionsResult, categoryState] = await Promise.all([
+        const [questionsSettled, sessionsSettled, categorySettled] = await Promise.allSettled([
           supabase.from("questions").select("*").eq("user_id", user.id),
           supabase.from("sessions").select("*").eq("user_id", user.id).order("created_at", { ascending: false }),
           fetchCategoryState(),
         ]);
 
-        if (questionsResult.error) throw questionsResult.error;
-        if (sessionsResult.error) throw sessionsResult.error;
+        const questionsResult = questionsSettled.status === "fulfilled" ? questionsSettled.value : { data: [], error: questionsSettled.reason };
+        const sessionsResult = sessionsSettled.status === "fulfilled" ? sessionsSettled.value : { data: [], error: sessionsSettled.reason };
+        const categoryState = categorySettled.status === "fulfilled" ? categorySettled.value : { approved: new Set(), rejected: new Set() };
 
-        const questions = Array.isArray(questionsResult.data) ? questionsResult.data : [];
-        const sessions = Array.isArray(sessionsResult.data) ? sessionsResult.data : [];
+        if (questionsResult.error) console.warn("Dashboard questions unavailable:", questionsResult.error);
+        if (sessionsResult.error) console.warn("Dashboard sessions unavailable:", sessionsResult.error);
+
+        const questions = questionsResult.error ? [] : Array.isArray(questionsResult.data) ? questionsResult.data : [];
+        const sessions = sessionsResult.error ? [] : Array.isArray(sessionsResult.data) ? sessionsResult.data : [];
         setStats(buildStats(questions, sessions, categoryState));
         setRecentSessions(sessions.slice(0, 5));
+        if (questionsResult.error && sessionsResult.error) throw questionsResult.error;
       } catch (error) {
         console.error("Dashboard stats error:", error);
         toast.error("Failed to load dashboard stats");
-        setStats(emptyStats);
-        setRecentSessions([]);
       } finally {
         setLoading(false);
       }
