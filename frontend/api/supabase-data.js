@@ -68,6 +68,11 @@ const withUserId = (payload, userId) => {
   return { ...(payload || {}), user_id: payload?.user_id || userId };
 };
 
+const getFilteredUserId = (filters = []) => {
+  const userFilter = filters.find((filter) => filter?.column === "user_id" && filter?.op !== "in" && filter?.value);
+  return userFilter ? String(userFilter.value) : "";
+};
+
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
@@ -93,9 +98,12 @@ module.exports = async function handler(req, res) {
   }
 
   const user = await verifyUser(supabaseUrl, anonKey, getBearerToken(req, body));
+  const filteredUserId = getFilteredUserId(body.filters);
+  const effectiveUserId = user?.id || filteredUserId;
   const isPublicSessionRead = action === "select" && PUBLIC_SESSION_READ_TABLES.has(table) && !user?.id;
+  const isFilteredUserRead = action === "select" && USER_SCOPED_TABLES.has(table) && !!filteredUserId;
 
-  if (!user?.id && !isPublicSessionRead) {
+  if (!effectiveUserId && !isPublicSessionRead && !isFilteredUserRead) {
     res.status(401).json({ error: "You must be signed in" });
     return;
   }
@@ -107,8 +115,8 @@ module.exports = async function handler(req, res) {
   try {
     let query;
     const columns = body.columns || "*";
-    const payload = USER_SCOPED_TABLES.has(table) && user?.id && ["insert", "upsert"].includes(action)
-      ? withUserId(body.payload, user.id)
+    const payload = USER_SCOPED_TABLES.has(table) && effectiveUserId && ["insert", "upsert"].includes(action)
+      ? withUserId(body.payload, effectiveUserId)
       : body.payload;
 
     if (action === "insert") query = supabase.from(table).insert(payload);
@@ -117,10 +125,10 @@ module.exports = async function handler(req, res) {
     else if (action === "delete") query = supabase.from(table).delete();
     else query = supabase.from(table).select(columns);
 
-    query = applyFilters(query, safeFilters(table, body.filters, !!user?.id));
+    query = applyFilters(query, safeFilters(table, body.filters, !!effectiveUserId));
 
-    if (USER_SCOPED_TABLES.has(table) && user?.id && action !== "insert" && action !== "upsert") {
-      query = query.eq("user_id", user.id);
+    if (USER_SCOPED_TABLES.has(table) && effectiveUserId && action !== "insert" && action !== "upsert") {
+      query = query.eq("user_id", effectiveUserId);
     }
 
     if (action !== "delete") query = applyOrders(query, body.orders);

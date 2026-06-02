@@ -383,6 +383,7 @@ const SessionDetail = () => {
         .from("sessions")
         .update({ name: finalName, session_name: finalName, ...cleaned })
         .eq("id", id)
+        .eq("user_id", user?.id)
         .select()
         .single();
 
@@ -404,7 +405,7 @@ const SessionDetail = () => {
     if (!window.confirm("Are you sure you want to delete this session?")) return;
     setDeleting(true);
     try {
-      const { error } = await supabase.from("sessions").delete().eq("id", id);
+      const { error } = await supabase.from("sessions").delete().eq("id", id).eq("user_id", user?.id);
       if (error) throw error;
       toast.success("Session deleted");
       navigate("/past-sessions");
