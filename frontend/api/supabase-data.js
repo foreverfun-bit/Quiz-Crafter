@@ -49,6 +49,11 @@ const applyFilters = (query, filters = []) => {
   return next;
 };
 
+const safeFilters = (table, filters = [], hasVerifiedUser = false) => {
+  if (!hasVerifiedUser || !USER_SCOPED_TABLES.has(table)) return filters;
+  return filters.filter((filter) => filter?.column !== "user_id");
+};
+
 const applyOrders = (query, orders = []) => {
   let next = query;
   orders.forEach((order) => {
@@ -112,7 +117,7 @@ module.exports = async function handler(req, res) {
     else if (action === "delete") query = supabase.from(table).delete();
     else query = supabase.from(table).select(columns);
 
-    query = applyFilters(query, body.filters);
+    query = applyFilters(query, safeFilters(table, body.filters, !!user?.id));
 
     if (USER_SCOPED_TABLES.has(table) && user?.id && action !== "insert" && action !== "upsert") {
       query = query.eq("user_id", user.id);
