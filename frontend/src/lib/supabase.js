@@ -18,11 +18,19 @@ const makeProxyError = (message, details = null) => ({
   details,
 });
 
-const getAccessToken = async () => {
+const getSessionContext = async () => {
   const { data: sessionData } = await supabaseClient.auth.getSession();
-  if (sessionData?.session?.access_token) return sessionData.session.access_token;
+  if (sessionData?.session?.access_token) {
+    return {
+      accessToken: sessionData.session.access_token,
+      clientUserId: sessionData.session.user?.id || "",
+    };
+  }
   const { data: refreshed } = await supabaseClient.auth.refreshSession();
-  return refreshed?.session?.access_token || "";
+  return {
+    accessToken: refreshed?.session?.access_token || "",
+    clientUserId: refreshed?.session?.user?.id || "",
+  };
 };
 
 class ProxyQueryBuilder {
@@ -94,13 +102,14 @@ class ProxyQueryBuilder {
   async execute() {
     try {
       const headers = { "content-type": "application/json" };
-      let accessToken = await getAccessToken();
+      let { accessToken, clientUserId } = await getSessionContext();
 
       const runRequest = (authToken) => fetch(DATA_PROXY_PATH, {
         method: "POST",
         headers,
         body: JSON.stringify({
           authToken,
+          clientUserId,
           table: this.table,
           action: this.action,
           columns: this.columns,
@@ -116,6 +125,7 @@ class ProxyQueryBuilder {
       if (response.status === 401) {
         const { data: refreshed } = await supabaseClient.auth.refreshSession();
         accessToken = refreshed?.session?.access_token || "";
+        clientUserId = refreshed?.session?.user?.id || clientUserId;
         if (accessToken) response = await runRequest(accessToken);
       }
 

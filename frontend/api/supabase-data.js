@@ -73,6 +73,11 @@ const getFilteredUserId = (filters = []) => {
   return userFilter ? String(userFilter.value) : "";
 };
 
+const getClientUserId = (body = {}) => {
+  const value = String(body.clientUserId || "");
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) ? value : "";
+};
+
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
@@ -99,7 +104,8 @@ module.exports = async function handler(req, res) {
 
   const user = await verifyUser(supabaseUrl, anonKey, getBearerToken(req, body));
   const filteredUserId = getFilteredUserId(body.filters);
-  const effectiveUserId = user?.id || filteredUserId;
+  const clientUserId = getClientUserId(body);
+  const effectiveUserId = user?.id || filteredUserId || clientUserId;
   const isPublicSessionRead = action === "select" && PUBLIC_SESSION_READ_TABLES.has(table) && !user?.id;
   const isFilteredUserRead = action === "select" && USER_SCOPED_TABLES.has(table) && !!filteredUserId;
 

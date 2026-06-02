@@ -128,10 +128,6 @@ export default function Library() {
   const [questionMemory, setQuestionMemory] = useState(readQuestionMemory);
 
   useEffect(() => {
-    if (user?.id) fetchQuestions();
-  }, [user?.id]);
-
-  useEffect(() => {
     const syncLibraryProfileState = async () => {
       try {
         const [used, unused, memory] = await Promise.all([
@@ -149,7 +145,8 @@ export default function Library() {
     syncLibraryProfileState();
   }, []);
 
-  async function fetchQuestions() {
+  const fetchQuestions = useCallback(async () => {
+    if (!user?.id) return;
     setLoading(true);
     try {
       const [questionsResult, sessionsResult] = await Promise.all([
@@ -176,7 +173,11 @@ export default function Library() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [user?.id]);
+
+  useEffect(() => {
+    fetchQuestions();
+  }, [fetchQuestions]);
 
   const counts = useMemo(() => {
     return questions.reduce(
