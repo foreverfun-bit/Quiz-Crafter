@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
+import { useAuth } from "../App";
 import { Card, CardContent } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -112,6 +113,7 @@ const toEditForm = (question) => ({
 });
 
 export default function Library() {
+  const { user } = useAuth();
   const [questions, setQuestions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -126,8 +128,8 @@ export default function Library() {
   const [questionMemory, setQuestionMemory] = useState(readQuestionMemory);
 
   useEffect(() => {
-    fetchQuestions();
-  }, []);
+    if (user?.id) fetchQuestions();
+  }, [user?.id]);
 
   useEffect(() => {
     const syncLibraryProfileState = async () => {
@@ -151,8 +153,8 @@ export default function Library() {
     setLoading(true);
     try {
       const [questionsResult, sessionsResult] = await Promise.all([
-        supabase.from("questions").select("*").order("created_at", { ascending: false }),
-        supabase.from("sessions").select("*"),
+        supabase.from("questions").select("*").eq("user_id", user?.id).order("created_at", { ascending: false }),
+        supabase.from("sessions").select("*").eq("user_id", user?.id),
       ]);
 
       if (questionsResult.error) throw questionsResult.error;
@@ -254,7 +256,7 @@ export default function Library() {
     ];
 
     for (const payload of possiblePayloads) {
-      const { error } = await supabase.from("questions").update(payload).eq("id", question.id);
+      const { error } = await supabase.from("questions").update(payload).eq("id", question.id).eq("user_id", user?.id);
       if (!error) break;
       if (!/schema cache|column|could not find/i.test(error.message || "")) break;
     }
@@ -271,7 +273,7 @@ export default function Library() {
       { memory_status: status === "available" ? null : status },
     ];
     for (const payload of possiblePayloads) {
-      const { error } = await supabase.from("questions").update(payload).eq("id", question.id);
+      const { error } = await supabase.from("questions").update(payload).eq("id", question.id).eq("user_id", user?.id);
       if (!error) break;
       if (!/schema cache|column|could not find/i.test(error.message || "")) break;
     }
@@ -325,12 +327,12 @@ export default function Library() {
     setSavingId(questionId);
     try {
       let payload = buildPayload();
-      let result = await supabase.from("questions").update(payload).eq("id", questionId).select("*").single();
+      let result = await supabase.from("questions").update(payload).eq("id", questionId).eq("user_id", user?.id).select("*").single();
 
       if (result.error && /image_url/i.test(result.error.message || "")) {
         const { image_url, ...withoutImage } = payload;
         payload = withoutImage;
-        result = await supabase.from("questions").update(payload).eq("id", questionId).select("*").single();
+        result = await supabase.from("questions").update(payload).eq("id", questionId).eq("user_id", user?.id).select("*").single();
       }
 
       if (result.error) throw result.error;
