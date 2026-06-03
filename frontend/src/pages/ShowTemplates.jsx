@@ -6,10 +6,10 @@ import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { CalendarDays, Clock, Copy, Layers, MapPin, Plus, Save, Sparkles, Trash2, Trophy, Users } from "lucide-react";
 import { toast } from "sonner";
-import { SHOW_TEMPLATES_STORAGE_KEY, defaultShowTemplates, normalizeTemplate, normalizeVenue, readLocalTemplates, readLocalVenues, writeLocalTemplates, writeLocalVenues, writeTemplateBuildDraft } from "../lib/venues";
+import { PROFILE_SHOW_TEMPLATES_KEY, PROFILE_VENUES_KEY, SHOW_TEMPLATES_STORAGE_KEY, defaultShowTemplates, mergeProfileRecords, normalizeTemplate, normalizeVenue, readLocalTemplates, readLocalVenues, recordsChanged, writeLocalTemplates, writeLocalVenues, writeTemplateBuildDraft } from "../lib/venues";
 
-const metadataTemplatesKey = "quiz_crafter_show_templates_v1";
-const metadataVenuesKey = "quiz_crafter_venues_v1";
+const metadataTemplatesKey = PROFILE_SHOW_TEMPLATES_KEY;
+const metadataVenuesKey = PROFILE_VENUES_KEY;
 const updatedLabel = (value) => {
   if (!value) return "Starter template";
   const date = new Date(value);
@@ -60,9 +60,10 @@ const ShowTemplates = ({ embedded = false }) => {
         if (error) throw error;
         const remoteTemplates = data?.user?.user_metadata?.[metadataTemplatesKey];
         const remoteVenues = data?.user?.user_metadata?.[metadataVenuesKey];
-        const hasRemoteTemplates = Array.isArray(remoteTemplates) && remoteTemplates.length > 0;
-        const normalized = hasRemoteTemplates ? remoteTemplates.map(normalizeTemplate) : localTemplates;
-        const profileVenues = Array.isArray(remoteVenues) && remoteVenues.length > 0 ? remoteVenues.map(normalizeVenue) : localVenues;
+        const normalizedRemoteTemplates = Array.isArray(remoteTemplates) ? remoteTemplates.map(normalizeTemplate) : [];
+        const normalizedRemoteVenues = Array.isArray(remoteVenues) ? remoteVenues.map(normalizeVenue) : [];
+        const normalized = mergeProfileRecords(normalizedRemoteTemplates, localTemplates, normalizeTemplate);
+        const profileVenues = mergeProfileRecords(normalizedRemoteVenues, localVenues, normalizeVenue);
         setTemplates(normalized);
         setVenues(profileVenues);
         writeLocalTemplates(normalized);
@@ -70,8 +71,15 @@ const ShowTemplates = ({ embedded = false }) => {
         setSelectedTemplateId(normalized[0]?.id || "");
         setSelectedVenueId(profileVenues[0]?.id || "");
         setForm(normalizeTemplate(normalized[0] || defaultShowTemplates[0]));
-        if (!hasRemoteTemplates && localTemplates.length) {
-          await supabase.auth.updateUser({ data: { [metadataTemplatesKey]: localTemplates.map(normalizeTemplate) } });
+        const profilePatch = {};
+        if (normalized.length && recordsChanged(normalizedRemoteTemplates, normalized)) {
+          profilePatch[metadataTemplatesKey] = normalized;
+        }
+        if (profileVenues.length && recordsChanged(normalizedRemoteVenues, profileVenues)) {
+          profilePatch[metadataVenuesKey] = profileVenues;
+        }
+        if (Object.keys(profilePatch).length) {
+          await supabase.auth.updateUser({ data: profilePatch });
         }
         setSyncStatus("Synced");
       } catch (error) {

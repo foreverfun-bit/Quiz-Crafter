@@ -5,11 +5,11 @@ import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { CalendarDays, ClipboardList, MapPin, Plus, Save, Trash2, UserRound } from "lucide-react";
 import { toast } from "sonner";
-import { ACTIVE_VENUE_STORAGE_KEY, VENUES_STORAGE_KEY, defaultVenue, normalizeVenue, readActiveVenueId, readLocalVenues, writeActiveVenueId, writeLocalVenues } from "../lib/venues";
+import { ACTIVE_VENUE_STORAGE_KEY, PROFILE_ACTIVE_VENUE_KEY, PROFILE_VENUES_KEY, VENUES_STORAGE_KEY, defaultVenue, mergeProfileRecords, normalizeVenue, readActiveVenueId, readLocalVenues, recordsChanged, writeActiveVenueId, writeLocalVenues } from "../lib/venues";
 import ShowTemplates from "./ShowTemplates";
 
-const metadataVenuesKey = "quiz_crafter_venues_v1";
-const metadataActiveVenueKey = "quiz_crafter_active_venue_id";
+const metadataVenuesKey = PROFILE_VENUES_KEY;
+const metadataActiveVenueKey = PROFILE_ACTIVE_VENUE_KEY;
 const weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday", "Varies"];
 const frequencies = [
   { value: "weekly", label: "Weekly" },
@@ -77,11 +77,15 @@ const Venues = ({ initialTab = "venues" }) => {
         if (error) throw error;
         const remoteVenues = data?.user?.user_metadata?.[metadataVenuesKey];
         const remoteActive = data?.user?.user_metadata?.[metadataActiveVenueKey];
-        const hasRemoteVenues = Array.isArray(remoteVenues) && remoteVenues.length > 0;
-        const normalized = hasRemoteVenues ? remoteVenues.map(normalizeVenue) : localVenues;
+        const normalizedRemote = Array.isArray(remoteVenues) ? remoteVenues.map(normalizeVenue) : [];
+        const normalized = mergeProfileRecords(normalizedRemote, localVenues, normalizeVenue);
         setVenues(normalized);
         writeLocalVenues(normalized);
-        const nextActive = remoteActive || activeVenueId || normalized[0]?.id || "";
+        const nextActive = normalized.some((venue) => venue.id === remoteActive)
+          ? remoteActive
+          : normalized.some((venue) => venue.id === activeVenueId)
+            ? activeVenueId
+            : normalized[0]?.id || "";
         if (nextActive) {
           setActiveVenueId(nextActive);
           writeActiveVenueId(nextActive);
@@ -91,8 +95,8 @@ const Venues = ({ initialTab = "venues" }) => {
           setSelectedVenueId(firstVenue.id);
           setForm(normalizeVenue(firstVenue));
         }
-        if (!hasRemoteVenues && localVenues.length) {
-          await supabase.auth.updateUser({ data: { [metadataVenuesKey]: localVenues.map(normalizeVenue), [metadataActiveVenueKey]: nextActive } });
+        if (normalized.length && (recordsChanged(normalizedRemote, normalized) || remoteActive !== nextActive)) {
+          await supabase.auth.updateUser({ data: { [metadataVenuesKey]: normalized, [metadataActiveVenueKey]: nextActive } });
         }
         setSyncStatus("Synced");
       } catch (error) {

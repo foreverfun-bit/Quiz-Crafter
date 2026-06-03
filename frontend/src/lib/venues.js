@@ -2,6 +2,9 @@ export const VENUES_STORAGE_KEY = "quiz-crafter-venues-v1";
 export const ACTIVE_VENUE_STORAGE_KEY = "quiz-crafter-active-venue-id";
 export const VENUE_BUILD_DRAFT_KEY = "quiz-crafter-venue-build-draft";
 export const SHOW_TEMPLATES_STORAGE_KEY = "quiz-crafter-show-templates-v1";
+export const PROFILE_VENUES_KEY = "quiz_crafter_venues_v1";
+export const PROFILE_ACTIVE_VENUE_KEY = "quiz_crafter_active_venue_id";
+export const PROFILE_SHOW_TEMPLATES_KEY = "quiz_crafter_show_templates_v1";
 
 export const defaultVenue = {
   name: "",
@@ -83,7 +86,7 @@ export const normalizeVenue = (venue = {}) => {
     defaultPoints: Math.max(0, Number(source.defaultPoints || defaultVenue.defaultPoints)),
     defaultTimer: Math.max(0, Number(source.defaultTimer || defaultVenue.defaultTimer)),
     defaultWagerLimit: Math.max(0, Number(source.defaultWagerLimit || 0)),
-    updatedAt: source.updatedAt || new Date().toISOString(),
+    updatedAt: source.updatedAt || "",
   };
 };
 
@@ -238,6 +241,35 @@ export const writeLocalTemplates = (templates) => {
     localStorage.setItem(SHOW_TEMPLATES_STORAGE_KEY, JSON.stringify(Array.isArray(templates) ? templates : []));
   } catch {
     // Template tools should still work in memory if storage is unavailable.
+  }
+};
+
+const itemUpdatedTime = (item) => {
+  const time = new Date(item?.updatedAt || item?.updated_at || 0).getTime();
+  return Number.isNaN(time) ? 0 : time;
+};
+
+export const mergeProfileRecords = (remoteRecords, localRecords, normalize) => {
+  const map = new Map();
+  const add = (record) => {
+    const normalized = normalize(record);
+    const key = normalized.id;
+    const current = map.get(key);
+    if (!current || itemUpdatedTime(normalized) >= itemUpdatedTime(current)) {
+      map.set(key, normalized);
+    }
+  };
+
+  (Array.isArray(remoteRecords) ? remoteRecords : []).forEach(add);
+  (Array.isArray(localRecords) ? localRecords : []).forEach(add);
+  return [...map.values()];
+};
+
+export const recordsChanged = (left, right) => {
+  try {
+    return JSON.stringify(left || []) !== JSON.stringify(right || []);
+  } catch {
+    return true;
   }
 };
 

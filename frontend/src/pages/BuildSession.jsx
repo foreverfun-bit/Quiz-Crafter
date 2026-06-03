@@ -12,7 +12,7 @@ import { ScrollArea } from "../components/ui/scroll-area";
 import { Badge } from "../components/ui/badge";
 import { ArrowDown, ArrowUp, Ban, Check, CheckCircle, ChevronDown, Clock, Coins, Image, Layers, Link, List, Loader2, MessageSquare, Pencil, Plus, RefreshCw, Save, Search, Settings, Sparkles, Tag, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
-import { makeTemplateBuildDraft, readActiveVenueId, readLocalTemplates, readLocalVenues, readVenueBuildDraft, VENUE_BUILD_DRAFT_KEY, writeTemplateBuildDraft } from "../lib/venues";
+import { PROFILE_SHOW_TEMPLATES_KEY, PROFILE_VENUES_KEY, makeTemplateBuildDraft, mergeProfileRecords, normalizeTemplate, normalizeVenue, readActiveVenueId, readLocalTemplates, readLocalVenues, readVenueBuildDraft, recordsChanged, VENUE_BUILD_DRAFT_KEY, writeLocalTemplates, writeLocalVenues, writeTemplateBuildDraft } from "../lib/venues";
 import { isMemoryBlocked, memoryRejectedQuestionTexts, readQuestionMemory, saveQuestionMemoryToProfile, syncQuestionMemoryFromProfile, upsertQuestionMemory } from "../lib/questionMemory";
 import { profileKeys, saveProfileValue, syncProfileJson } from "../lib/profileState";
 
@@ -249,7 +249,7 @@ const BuildSession = () => {
   const [editingSessionId, setEditingSessionId] = useState(sessionId || null);
   const [editingSessionWasPast, setEditingSessionWasPast] = useState(false);
   const [templates, setTemplates] = useState(() => readLocalTemplates());
-  const [venues] = useState(() => readLocalVenues());
+  const [venues, setVenues] = useState(() => readLocalVenues());
   const [selectedTemplateId, setSelectedTemplateId] = useState(() => readLocalTemplates()[0]?.id || "");
   const [profileBuildHydrated, setProfileBuildHydrated] = useState(Boolean(sessionId));
   const selectedVenue = useMemo(() => venues.find((venue) => venue.id === selectedVenueId) || null, [venues, selectedVenueId]);
@@ -355,7 +355,40 @@ const BuildSession = () => {
   }, [sessionId, loading, profileBuildHydrated]);
   const handleBrowseLibrary = () => { setUsedQuestionIds(readUsedIds()); setUnusedQuestionIds(readUnusedIds()); setQuestionMemory(readQuestionMemory()); setShowLibrary(true); setShowWriteForm(false); setShowAiPanel(false); };
   useEffect(() => { localStorage.removeItem("quiz-crafter-build-recovery-attempted"); }, []);
-  useEffect(() => { const latestTemplates = readLocalTemplates(); setTemplates(latestTemplates); setSelectedTemplateId((current) => current || latestTemplates[0]?.id || ""); }, []);
+  useEffect(() => {
+    const syncSetup = async () => {
+      const localTemplates = readLocalTemplates();
+      const localVenues = readLocalVenues();
+      setTemplates(localTemplates);
+      setVenues(localVenues);
+      setSelectedTemplateId((current) => current || localTemplates[0]?.id || "");
+      try {
+        const { data, error } = await supabase.auth.getUser();
+        if (error) throw error;
+        const metadata = data?.user?.user_metadata || {};
+        const remoteTemplates = Array.isArray(metadata[PROFILE_SHOW_TEMPLATES_KEY]) ? metadata[PROFILE_SHOW_TEMPLATES_KEY].map(normalizeTemplate) : [];
+        const remoteVenues = Array.isArray(metadata[PROFILE_VENUES_KEY]) ? metadata[PROFILE_VENUES_KEY].map(normalizeVenue) : [];
+        const mergedTemplates = mergeProfileRecords(remoteTemplates, localTemplates, normalizeTemplate);
+        const mergedVenues = mergeProfileRecords(remoteVenues, localVenues, normalizeVenue);
+        if (mergedTemplates.length) {
+          setTemplates(mergedTemplates);
+          writeLocalTemplates(mergedTemplates);
+          setSelectedTemplateId((current) => current || mergedTemplates[0]?.id || "");
+        }
+        if (mergedVenues.length) {
+          setVenues(mergedVenues);
+          writeLocalVenues(mergedVenues);
+        }
+        const profilePatch = {};
+        if (mergedTemplates.length && recordsChanged(remoteTemplates, mergedTemplates)) profilePatch[PROFILE_SHOW_TEMPLATES_KEY] = mergedTemplates;
+        if (mergedVenues.length && recordsChanged(remoteVenues, mergedVenues)) profilePatch[PROFILE_VENUES_KEY] = mergedVenues;
+        if (Object.keys(profilePatch).length) await supabase.auth.updateUser({ data: profilePatch });
+      } catch (error) {
+        console.warn("Builder host setup sync unavailable:", error);
+      }
+    };
+    syncSetup();
+  }, []);
 
   const fetchBuilderData = async () => { try { setLoading(true); const [questionsResult, sessionsResult] = await Promise.all([supabase.from("questions").select("*").order("created_at", { ascending: false }), supabase.from("sessions").select("*").order("created_at", { ascending: false })]); if (questionsResult.error) throw questionsResult.error; if (sessionsResult.error) throw sessionsResult.error; const sessions = sessionsResult.data || []; const sessionToEdit = sessionId ? sessions.find((session) => String(session.id) === String(sessionId)) : null; if (sessionId && !sessionToEdit) throw new Error("Saved session not found"); const localUsed = readUsedIds(); const localUnused = readUnusedIds(); const used = new Set(); sessions.forEach((session) => { if (sessionToEdit && String(session.id) === String(sessionToEdit.id)) return; collectSessionQuestions(session).forEach((question) => { const text = question?.question_text || question?.question; if (text) used.add(fingerprint(text)); }); }); (questionsResult.data || []).forEach((question) => { if (!localUnused.has(String(question.id)) && isQuestionMarkedUsed(question, localUsed)) used.add(fingerprint(question.question_text)); }); const prefs = loadLocalCategoryPrefs(); const approved = new Set(prefs.approved); const rejected = new Set(prefs.rejected); (questionsResult.data || []).forEach((question) => { const category = normalizeText(question.category); if (category && !rejected.has(category)) approved.add(category); }); setUsedQuestionIds(localUsed); setUnusedQuestionIds(localUnused); setQuestionMemory(readQuestionMemory()); setUsedFingerprints(used); setApprovedCategories([...approved].sort((a, b) => a.localeCompare(b))); setRejectedCategories([...rejected]); const libraryQuestions = safeQuestions(questionsResult.data); if (sessionToEdit) { const builderState = buildStateFromSavedSession(sessionToEdit); setEditingSessionId(sessionToEdit.id); setEditingSessionWasPast(Boolean(sessionToEdit.is_past)); setSessionName(sessionToEdit.name || sessionToEdit.session_name || "Untitled Session"); setSessionDate(String(sessionToEdit.session_date || sessionToEdit.event_date || "").slice(0, 10) || savedState?.sessionDate || todayInputDate()); setSelectedVenueId(sessionToEdit.venue_id || savedState?.venueId || venueDraft?.venueId || ""); setRounds(builderState.rounds); setActiveRoundId(builderState.activeRoundId); setQuestions([...builderState.questions, ...libraryQuestions]); await clearSavedState(); } else { setEditingSessionId(null); setEditingSessionWasPast(false); setQuestions([...safeQuestions(savedState?.questions), ...libraryQuestions]); } } catch (error) { console.error("Build session load error:", error); toast.error(error.message || "Failed to load builder"); if (sessionId) navigate("/past-sessions"); } finally { setLoading(false); } };
   const safeRounds = useMemo(() => normalizeRounds(rounds), [rounds]);

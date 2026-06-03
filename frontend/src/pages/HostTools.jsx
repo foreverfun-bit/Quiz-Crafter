@@ -20,8 +20,17 @@ const normalizeBranding = (branding = {}) => {
   const logoUrl = String(source.logoUrl || "").trim();
   return { name: String(source.name || "").trim() || DEFAULT_BRANDING.name, logoUrl: logoUrl === "/forever-fun-logo.png" ? DEFAULT_BRANDING.logoUrl : logoUrl, primaryColor: sanitizeHexColor(source.primaryColor, DEFAULT_BRANDING.primaryColor), accentColor: sanitizeHexColor(source.accentColor, DEFAULT_BRANDING.accentColor) };
 };
+const readSavedDefaultBranding = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(HOST_DEFAULT_BRANDING_KEY) || "null");
+    return parsed && typeof parsed === "object" ? normalizeBranding(parsed) : null;
+  } catch {
+    return null;
+  }
+};
 const readDefaultBranding = () => normalizeBranding({ ...DEFAULT_BRANDING, ...readJson(HOST_DEFAULT_BRANDING_KEY, {}) });
 const writeDefaultBranding = (branding) => writeJson(HOST_DEFAULT_BRANDING_KEY, normalizeBranding(branding));
+const brandingChanged = (left, right) => JSON.stringify(normalizeBranding(left || {})) !== JSON.stringify(normalizeBranding(right || {}));
 const sessionStorageKey = (sessionId, name) => `quiz-crafter-host-tools-${sessionId}-${name}`;
 const sessionQuestions = (session) => [session?.true_false_questions, session?.multiple_choice_questions, session?.written_questions, session?.picture_questions].flatMap((value) => Array.isArray(value) ? value : []);
 const fileToDataUrl = (file) => new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file); });
@@ -62,7 +71,8 @@ const HostTools = () => {
 
   useEffect(() => {
     const loadHostBranding = async () => {
-      const localBranding = readDefaultBranding();
+      const savedLocalBranding = readSavedDefaultBranding();
+      const localBranding = savedLocalBranding || readDefaultBranding();
       try {
         const { data, error } = await supabase.auth.getUser();
         if (error) throw error;
@@ -71,7 +81,7 @@ const HostTools = () => {
           const cleanBranding = normalizeBranding(remoteBranding);
           setBranding(cleanBranding);
           writeDefaultBranding(cleanBranding);
-        } else if (localBranding.logoUrl || localBranding.name !== DEFAULT_BRANDING.name) {
+        } else if (savedLocalBranding && brandingChanged(savedLocalBranding, DEFAULT_BRANDING)) {
           await supabase.auth.updateUser({ data: { [metadataBrandingKey]: localBranding } });
         }
       } catch (error) {

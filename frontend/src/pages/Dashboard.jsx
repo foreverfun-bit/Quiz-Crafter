@@ -24,7 +24,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { normalizeTemplate, normalizeVenue, readActiveVenueId, readLocalTemplates, readLocalVenues, writeLocalTemplates, writeLocalVenues } from "../lib/venues";
+import { PROFILE_ACTIVE_VENUE_KEY, PROFILE_SHOW_TEMPLATES_KEY, PROFILE_VENUES_KEY, mergeProfileRecords, normalizeTemplate, normalizeVenue, readActiveVenueId, readLocalTemplates, readLocalVenues, recordsChanged, writeActiveVenueId, writeLocalTemplates, writeLocalVenues } from "../lib/venues";
 import { loadProfileValue, saveProfileValue } from "../lib/profileState";
 
 const BUILD_STORAGE_KEYS = [
@@ -75,9 +75,9 @@ const compactDate = (value) => {
   if (Number.isNaN(date.getTime())) return "No date";
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 };
-const venueMetadataKey = "quiz_crafter_venues_v1";
-const templateMetadataKey = "quiz_crafter_show_templates_v1";
-const activeVenueMetadataKey = "quiz_crafter_active_venue_id";
+const venueMetadataKey = PROFILE_VENUES_KEY;
+const templateMetadataKey = PROFILE_SHOW_TEMPLATES_KEY;
+const activeVenueMetadataKey = PROFILE_ACTIVE_VENUE_KEY;
 const dayIndex = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
 const weekIndex = { first: 1, second: 2, third: 3, fourth: 4 };
 const formatScheduleTime = (time, timeZone) => {
@@ -166,17 +166,30 @@ const Dashboard = () => {
         const { data, error } = await supabase.auth.getUser();
         if (error) throw error;
         const metadata = data?.user?.user_metadata || {};
-        const remoteVenues = Array.isArray(metadata[venueMetadataKey]) ? metadata[venueMetadataKey].map(normalizeVenue) : null;
-        const remoteTemplates = Array.isArray(metadata[templateMetadataKey]) ? metadata[templateMetadataKey].map(normalizeTemplate) : null;
-        if (remoteVenues) {
-          setVenues(remoteVenues);
-          writeLocalVenues(remoteVenues);
+        const remoteVenues = Array.isArray(metadata[venueMetadataKey]) ? metadata[venueMetadataKey].map(normalizeVenue) : [];
+        const remoteTemplates = Array.isArray(metadata[templateMetadataKey]) ? metadata[templateMetadataKey].map(normalizeTemplate) : [];
+        const mergedVenues = mergeProfileRecords(remoteVenues, localVenues, normalizeVenue);
+        const mergedTemplates = mergeProfileRecords(remoteTemplates, localTemplates, normalizeTemplate);
+        if (mergedVenues.length) {
+          setVenues(mergedVenues);
+          writeLocalVenues(mergedVenues);
         }
-        if (remoteTemplates) {
-          setTemplates(remoteTemplates);
-          writeLocalTemplates(remoteTemplates);
+        if (mergedTemplates.length) {
+          setTemplates(mergedTemplates);
+          writeLocalTemplates(mergedTemplates);
         }
-        setActiveVenueId(metadata[activeVenueMetadataKey] || readActiveVenueId());
+        const nextActiveVenueId = mergedVenues.some((venue) => venue.id === metadata[activeVenueMetadataKey])
+          ? metadata[activeVenueMetadataKey]
+          : mergedVenues.some((venue) => venue.id === readActiveVenueId())
+            ? readActiveVenueId()
+            : mergedVenues[0]?.id || "";
+        setActiveVenueId(nextActiveVenueId);
+        writeActiveVenueId(nextActiveVenueId);
+        const setupPatch = {};
+        if (mergedVenues.length && recordsChanged(remoteVenues, mergedVenues)) setupPatch[venueMetadataKey] = mergedVenues;
+        if (mergedTemplates.length && recordsChanged(remoteTemplates, mergedTemplates)) setupPatch[templateMetadataKey] = mergedTemplates;
+        if (nextActiveVenueId !== metadata[activeVenueMetadataKey]) setupPatch[activeVenueMetadataKey] = nextActiveVenueId;
+        if (Object.keys(setupPatch).length) await supabase.auth.updateUser({ data: setupPatch });
         const remoteTodos = Array.isArray(metadata[todoProfileKey]) ? metadata[todoProfileKey] : null;
         if (remoteTodos) {
           setTodos(remoteTodos);

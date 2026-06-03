@@ -95,7 +95,16 @@ const readDefaultBranding = () => {
     return DEFAULT_BRANDING;
   }
 };
+const readSavedDefaultBranding = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(HOST_DEFAULT_BRANDING_KEY) || "null");
+    return parsed && typeof parsed === "object" ? normalizeBranding(parsed) : null;
+  } catch {
+    return null;
+  }
+};
 const writeDefaultBranding = (branding) => { try { localStorage.setItem(HOST_DEFAULT_BRANDING_KEY, JSON.stringify(normalizeBranding(branding))); } catch { /* Ignore storage failures so branding never crashes hosting. */ } };
+const brandingChanged = (left, right) => JSON.stringify(normalizeBranding(left || {})) !== JSON.stringify(normalizeBranding(right || {}));
 const loadDefaultBrandingFromProfile = async () => {
   const { data, error } = await supabase.auth.getUser();
   if (error) throw error;
@@ -450,8 +459,14 @@ const HostSession = () => {
     const loadProfileBranding = async () => {
       try {
         const defaultBranding = await loadDefaultBrandingFromProfile();
-        if (!defaultBranding) return;
-        writeDefaultBranding(defaultBranding);
+        const savedLocalBranding = readSavedDefaultBranding();
+        if (defaultBranding) {
+          writeDefaultBranding(defaultBranding);
+        } else if (savedLocalBranding && brandingChanged(savedLocalBranding, DEFAULT_BRANDING)) {
+          await saveDefaultBrandingToProfile(savedLocalBranding);
+        } else {
+          return;
+        }
         const hasSessionOverride = !!localStorage.getItem(hostBrandingKey(id));
         if (!hasSessionOverride) setBranding(readStoredBranding(id, session));
       } catch (error) {
