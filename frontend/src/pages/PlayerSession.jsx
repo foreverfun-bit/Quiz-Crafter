@@ -18,8 +18,23 @@ const arrayConfig = [
   { key: "picture_questions", type: "written" },
 ];
 
+const playerStorageKey = (sessionId) => `quiz-crafter-player-${sessionId}`;
+const readJsonStorage = (storage, key) => {
+  try {
+    const parsed = JSON.parse(storage.getItem(key) || "null");
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+};
 const getStoredPlayer = (sessionId) => {
-  try { return JSON.parse(sessionStorage.getItem(`quiz-crafter-player-${sessionId}`) || "null"); } catch { return null; }
+  if (typeof window === "undefined") return null;
+  return readJsonStorage(sessionStorage, playerStorageKey(sessionId)) || readJsonStorage(localStorage, playerStorageKey(sessionId));
+};
+const saveStoredPlayer = (sessionId, player) => {
+  const value = JSON.stringify(player);
+  try { sessionStorage.setItem(playerStorageKey(sessionId), value); } catch { /* Ignore storage failures. */ }
+  try { localStorage.setItem(playerStorageKey(sessionId), value); } catch { /* Ignore storage failures. */ }
 };
 const getStoredFeedback = (sessionId, name) => {
   try {
@@ -227,7 +242,7 @@ const PlayerSession = () => {
     if (!trimmed) return toast.error("Enter a team name");
     if (updatePreference === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact)) return toast.error("Enter a valid email address");
     const nextPlayer = { id: makePlayerId(), name: trimmed.slice(0, 32), updatePreference, updateContact: updatePreference === "none" ? "" : contact };
-    sessionStorage.setItem(`quiz-crafter-player-${id}`, JSON.stringify(nextPlayer));
+    saveStoredPlayer(id, nextPlayer);
     setPlayer(nextPlayer);
   };
 

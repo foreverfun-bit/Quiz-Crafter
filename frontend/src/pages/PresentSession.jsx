@@ -163,9 +163,12 @@ const makeRounds = (questions) => {
 
 const readPresentState = (sessionId) => {
   try {
-    return JSON.parse(localStorage.getItem(`quiz-crafter-present-state-${sessionId}`) || "{}");
+    const raw = localStorage.getItem(`quiz-crafter-present-state-${sessionId}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
   } catch {
-    return {};
+    return null;
   }
 };
 
@@ -180,7 +183,7 @@ const PresentSession = () => {
   const { id } = useParams();
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [presentState, setPresentState] = useState(() => readPresentState(id));
+  const [presentState, setPresentState] = useState(() => readPresentState(id) || {});
 
   useEffect(() => {
     const loadSession = async () => {
@@ -195,10 +198,15 @@ const PresentSession = () => {
 
   useEffect(() => {
     const syncState = (event) => {
-      if (event.key === `quiz-crafter-present-state-${id}`) setPresentState(readPresentState(id));
+      if (event.key !== `quiz-crafter-present-state-${id}`) return;
+      const nextState = readPresentState(id);
+      if (nextState) setPresentState((current) => ({ ...current, ...nextState }));
     };
 
-    const interval = window.setInterval(() => setPresentState(readPresentState(id)), 1200);
+    const interval = window.setInterval(() => {
+      const nextState = readPresentState(id);
+      if (nextState) setPresentState((current) => ({ ...current, ...nextState }));
+    }, 1200);
     window.addEventListener("storage", syncState);
     return () => {
       window.removeEventListener("storage", syncState);
@@ -210,8 +218,8 @@ const PresentSession = () => {
     const channel = supabase.channel(`quiz-crafter-live-${id}`, { config: { broadcast: { self: false } } });
     channel
       .on("broadcast", { event: "host_state" }, ({ payload }) => {
-        if (!payload) return;
-        setPresentState(payload);
+        if (!payload || typeof payload !== "object") return;
+        setPresentState((current) => ({ ...current, ...payload }));
         try {
           localStorage.setItem(`quiz-crafter-present-state-${id}`, JSON.stringify(payload));
         } catch {
@@ -237,7 +245,7 @@ const PresentSession = () => {
   const displayRound = mode === "categories" ? introRound : currentRound;
   const sessionName = presentState.sessionName || session?.name || session?.session_name || "Trivia Session";
   const joinUrl = presentState.joinUrl || `${getPublicOrigin()}/join?session=${id}`;
-  const showLobby = !hasPresentationStarted(presentState, currentIndex);
+  const showLobby = mode === "qr" || !hasPresentationStarted(presentState, currentIndex);
 
   if (loading) {
     return <div className="min-h-screen bg-[#09090B] flex items-center justify-center"><Loader2 className="text-[#71E0DC] animate-spin" size={42} /></div>;
@@ -279,10 +287,12 @@ const PresentSession = () => {
           {mode === "winners" && <WinnersView leaderboard={presentState.leaderboard || []} sessionName={sessionName} />}
           {mode === "feedback" && <FeedbackView />}
           {mode === "bonus_pause" && <BonusPauseView round={presentState.pendingBonusRound || currentRound} leaderboard={presentState.leaderboard || []} />}
-          {mode !== "categories" && mode !== "leaderboard" && mode !== "winners" && mode !== "feedback" && mode !== "bonus_pause" && (
+          {mode === "qr" && <LobbyView sessionName={sessionName} joinUrl={joinUrl} players={presentState.players || []} compact={false} />}
+          {mode !== "qr" && mode !== "categories" && mode !== "leaderboard" && mode !== "winners" && mode !== "feedback" && mode !== "bonus_pause" && (
             <QuestionView question={currentQuestion} index={currentIndex} total={questions.length} showAnswer={presentState.showAnswer} showFunFact={presentState.showFunFact} />
           )}
         </main>
+        {hasPresentationStarted(presentState, currentIndex) && mode !== "qr" && <CornerJoinQr joinUrl={joinUrl} />}
       </div>
     </div>
   );
@@ -383,6 +393,18 @@ const LeaderboardView = ({ leaderboard }) => {
     </div>
   );
 };
+
+const CornerJoinQr = ({ joinUrl }) => (
+  <div className="fixed bottom-5 right-5 z-20 hidden items-center gap-3 rounded-xl border border-white/10 bg-zinc-950/85 px-3 py-2 shadow-2xl shadow-black/40 backdrop-blur md:flex">
+    <div className="rounded-md bg-white p-1.5">
+      <QRCodeCanvas value={joinUrl} size={86} marginSize={1} level="M" />
+    </div>
+    <div className="max-w-52 text-left">
+      <p className="text-xs font-black uppercase tracking-wide text-[#71E0DC]">Late teams</p>
+      <p className="break-all text-[11px] leading-snug text-zinc-300">{joinUrl}</p>
+    </div>
+  </div>
+);
 
 const WinnersView = ({ leaderboard, sessionName }) => {
   const sorted = [...leaderboard].sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
