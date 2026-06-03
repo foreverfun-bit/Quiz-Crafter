@@ -121,7 +121,7 @@ const Venues = ({ initialTab = "venues" }) => {
     }
   };
 
-  const updateForm = (key, value) => setForm((current) => normalizeVenue({ ...current, [key]: value, updatedAt: new Date().toISOString() }));
+  const updateForm = (key, value) => setForm((current) => ({ ...current, [key]: value, updatedAt: new Date().toISOString() }));
 
   const createVenue = () => {
     const venue = normalizeVenue({ ...defaultVenue, name: "New Venue" });
