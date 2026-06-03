@@ -259,9 +259,24 @@ const readStoredList = (key) => {
     return [];
   }
 };
+const readStoredObject = (key) => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
 const writeStoredList = (key, value) => {
   try {
     localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Live hosting should keep running even if browser storage is unavailable.
+  }
+};
+const writeStoredObject = (key, value) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(value && typeof value === "object" ? value : {}));
   } catch {
     // Live hosting should keep running even if browser storage is unavailable.
   }
@@ -358,15 +373,16 @@ const HostSession = () => {
   const [leaderboard, setLeaderboard] = useState(() => readStoredLeaderboard(id));
   const [teamName, setTeamName] = useState("");
   const [teamScore, setTeamScore] = useState("");
-  const [players, setPlayers] = useState([]);
+  const [players, setPlayers] = useState(() => readStoredList(hostToolsStorageKey(id, "players")));
   const [answers, setAnswers] = useState(() => readStoredList(hostToolsStorageKey(id, "answers")));
   const [playerActivity, setPlayerActivity] = useState(() => readStoredList(hostToolsStorageKey(id, "activity")));
   const [feedback, setFeedback] = useState(() => readStoredList(hostToolsStorageKey(id, "feedback")));
   const [categoryFeedback, setCategoryFeedback] = useState(() => readStoredList(hostToolsStorageKey(id, "category-feedback")));
   const [playerIdeas, setPlayerIdeas] = useState(() => readStoredList(hostToolsStorageKey(id, "ideas")));
-  const [gradedAnswers, setGradedAnswers] = useState({});
+  const [gradedAnswers, setGradedAnswers] = useState(() => readStoredObject(hostToolsStorageKey(id, "graded-answers")));
   const [scoreModal, setScoreModal] = useState(null);
   const [liveStatus, setLiveStatus] = useState("connecting");
+  const [hostStateLoaded, setHostStateLoaded] = useState(false);
   const [pointsPerQuestion, setPointsPerQuestion] = useState(25);
   const [wagerMode, setWagerMode] = useState(false);
   const [wagerLimit, setWagerLimit] = useState(0);
@@ -406,15 +422,25 @@ const HostSession = () => {
     const loadProfileHostState = async () => {
       try {
         const state = await loadHostToolsSessionState(id);
-        if (Array.isArray(state.leaderboard) && state.leaderboard.length) setLeaderboard(state.leaderboard);
-        if (Array.isArray(state.answers) && state.answers.length) setAnswers(state.answers);
-        if (Array.isArray(state.activity) && state.activity.length) setPlayerActivity(state.activity);
-        if (Array.isArray(state.feedback) && state.feedback.length) setFeedback(state.feedback);
-        if (Array.isArray(state.categoryFeedback) && state.categoryFeedback.length) setCategoryFeedback(state.categoryFeedback);
-        if (Array.isArray(state.ideas) && state.ideas.length) setPlayerIdeas(state.ideas);
-        if (Array.isArray(state.disputes) && state.disputes.length) setDisputeNotes(state.disputes);
+        const snapshot = state.results && typeof state.results === "object" ? { ...state, ...state.results } : state;
+        if (Array.isArray(snapshot.players)) setPlayers(snapshot.players);
+        if (Array.isArray(snapshot.leaderboard)) setLeaderboard(snapshot.leaderboard);
+        if (Array.isArray(snapshot.answers)) setAnswers(snapshot.answers);
+        if (Array.isArray(snapshot.activity)) setPlayerActivity(snapshot.activity);
+        if (Array.isArray(snapshot.feedback)) setFeedback(snapshot.feedback);
+        if (Array.isArray(snapshot.categoryFeedback)) setCategoryFeedback(snapshot.categoryFeedback);
+        if (Array.isArray(snapshot.ideas)) setPlayerIdeas(snapshot.ideas);
+        if (Array.isArray(snapshot.disputes)) setDisputeNotes(snapshot.disputes);
+        if (snapshot.gradedAnswers && typeof snapshot.gradedAnswers === "object") setGradedAnswers(snapshot.gradedAnswers);
+        if (Number.isFinite(Number(snapshot.currentIndex))) setCurrentIndex(Math.max(0, Number(snapshot.currentIndex)));
+        if (snapshot.endedAt) {
+          setGameStarted(true);
+          setPresentMode(snapshot.presentMode || "winners");
+        }
       } catch (error) {
         console.warn("Live host profile state unavailable:", error);
+      } finally {
+        setHostStateLoaded(true);
       }
     };
     loadProfileHostState();
@@ -518,9 +544,22 @@ const HostSession = () => {
   }, [liveDisplayedQuestion, isReviewing]);
 
   useEffect(() => {
+    if (!hostStateLoaded) return;
     localStorage.setItem(`quiz-crafter-leaderboard-${id}`, JSON.stringify(leaderboard));
     saveHostToolsSessionState(id, { leaderboard }).catch((error) => console.warn("Leaderboard profile save unavailable:", error));
-  }, [id, leaderboard]);
+  }, [id, leaderboard, hostStateLoaded]);
+
+  useEffect(() => {
+    if (!hostStateLoaded) return;
+    writeStoredList(hostToolsStorageKey(id, "players"), players);
+    saveHostToolsSessionState(id, { players }).catch((error) => console.warn("Players profile save unavailable:", error));
+  }, [id, players, hostStateLoaded]);
+
+  useEffect(() => {
+    if (!hostStateLoaded) return;
+    writeStoredObject(hostToolsStorageKey(id, "graded-answers"), gradedAnswers);
+    saveHostToolsSessionState(id, { gradedAnswers }).catch((error) => console.warn("Graded answers profile save unavailable:", error));
+  }, [id, gradedAnswers, hostStateLoaded]);
 
   useEffect(() => {
     if (!session || !questions.length || !liveDisplayedQuestion) return;
@@ -740,9 +779,11 @@ const HostSession = () => {
       activity: playerActivity,
       disputes: disputeNotes,
       questionCount: questions.length,
+      currentIndex,
+      presentMode: "winners",
     };
     try {
-      await saveHostToolsSessionState(id, { endedAt, results, leaderboard, players, answers, gradedAnswers, feedback, categoryFeedback, ideas: playerIdeas, activity: playerActivity, disputes: disputeNotes });
+      await saveHostToolsSessionState(id, { endedAt, results, leaderboard, players, answers, gradedAnswers, feedback, categoryFeedback, ideas: playerIdeas, activity: playerActivity, disputes: disputeNotes, currentIndex, presentMode: "winners" });
       try {
         await supabase.from("sessions").update({ hosted_at: endedAt, hosted_results: results }).eq("id", id);
       } catch (error) {
