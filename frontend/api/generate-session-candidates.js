@@ -82,6 +82,7 @@ export default async function handler(req, res) {
       lockedCategories = [],
       rejectedQuestions = [],
       currentBatchQuestions = [],
+      sessionContext = null,
     } = req.body || {};
 
     if (!sessionId || !questionType) return res.status(400).json({ error: "Missing sessionId or questionType" });
@@ -99,6 +100,7 @@ export default async function handler(req, res) {
     const cleanRejectedCategories = dedupeStrings(normalizeStringArray(rejectedCategories).filter((category) => !containsCategory(cleanLockedCategories, category)));
     const cleanExcludeCategories = dedupeStrings([...normalizeStringArray(excludeCategories), ...cleanRejectedCategories].filter((category) => !containsCategory(cleanLockedCategories, category)));
     const cleanRejectedQuestions = dedupeStrings([...normalizeStringArray(rejectedQuestions), ...normalizeStringArray(currentBatchQuestions)]);
+    const cleanSessionContext = normalizeSessionContext(sessionContext);
     const existingQuestions = avoidDuplicates || excludeUsed ? await fetchExistingQuestions() : [];
     const styleExamples = buildStyleExamples(existingQuestions, normalizedQuestionType, cleanApprovedCategories);
     const existingFingerprints = new Set(existingQuestions.map((q) => fingerprint(q.question_text)));
@@ -117,6 +119,7 @@ export default async function handler(req, res) {
       cleanApprovedCategories,
       cleanLockedCategories,
       cleanRejectedQuestions,
+      cleanSessionContext,
       existingQuestions,
       styleExamples,
       excludeUsed,
@@ -246,7 +249,31 @@ function categoryKey(value) {
   return cleanText(value).toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, cleanRejectedQuestions = [], existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt }) {
+function normalizeSessionContext(value) {
+  if (!value || typeof value !== "object") return null;
+  const cleanQuestion = (question) => ({
+    category: cleanText(question?.category).slice(0, 60),
+    question_text: cleanText(question?.question_text || question?.questionText).slice(0, 220),
+    correct_answer: cleanText(question?.correct_answer || question?.answer).slice(0, 80),
+    question_type: cleanText(question?.question_type || question?.type).slice(0, 40),
+    round: cleanText(question?.round || question?.roundName).slice(0, 80),
+  });
+  const builtQuestions = Array.isArray(value.builtQuestions) ? value.builtQuestions.map(cleanQuestion).filter((q) => q.question_text && q.correct_answer).slice(0, 18) : [];
+  const activeRoundQuestions = Array.isArray(value.activeRoundQuestions) ? value.activeRoundQuestions.map(cleanQuestion).filter((q) => q.question_text && q.correct_answer).slice(0, 8) : [];
+  const roundDescriptions = Array.isArray(value.roundDescriptions) ? value.roundDescriptions.map((round) => ({
+    name: cleanText(round?.name).slice(0, 80),
+    description: cleanText(round?.description).slice(0, 180),
+    categories: normalizeStringArray(round?.categories).slice(0, 8),
+  })).filter((round) => round.name || round.description || round.categories.length).slice(0, 8) : [];
+  const categories = normalizeStringArray(value.categories).slice(0, 30);
+  return { builtQuestions, activeRoundQuestions, roundDescriptions, categories };
+}
+
+function formatContextQuestion(question) {
+  return `- [${question.round || "Session"} / ${question.category || "Uncategorized"} / ${question.question_type || "written"}] ${question.question_text} Answer: ${question.correct_answer}`;
+}
+
+function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, cleanRejectedQuestions = [], cleanSessionContext = null, existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt }) {
   const overGenerateCount = Math.min(18, Math.max(safeCount + 4, Math.ceil(safeCount * 1.7)));
   const lockedCategoryText = cleanLockedCategories.length ? `Locked categories are active. The category field must exactly match one of these locked categories: ${cleanLockedCategories.join(", ")}. Generate all candidates inside these locked categories until the host unlocks them.` : "";
   const approvedCategoryText = cleanLockedCategories.length
@@ -257,6 +284,14 @@ function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, clea
   const excludedCategoryText = cleanExcludeCategories.length ? `Do not use these rejected or avoided categories: ${cleanExcludeCategories.join(", ")}.` : "";
   const themeText = cleanTheme ? `Theme/vibe/category guidance: ${cleanTheme}. Stay useful to that direction, but avoid repetitive question angles.` : "";
   const styleText = styleExamples.length ? `Use these saved library questions as calibration for the host's style and difficulty. Match the readability, category feel, and answerability. Do not copy, lightly rewrite, reuse their answers, or generate the same topic angles:\n${styleExamples.map(formatStyleExample).join("\n")}` : "";
+  const sessionContextText = cleanSessionContext && (cleanSessionContext.builtQuestions.length || cleanSessionContext.activeRoundQuestions.length || cleanSessionContext.roundDescriptions.length)
+    ? [
+        "Current build context. Use this to match the session's pacing, tone, readability, and clue style. Do not copy these questions, reuse their answers, or force the same categories if those categories are excluded:",
+        cleanSessionContext.roundDescriptions.length ? `Round plan:\n${cleanSessionContext.roundDescriptions.map((round) => `- ${round.name || "Round"}${round.description ? `: ${round.description}` : ""}${round.categories?.length ? ` Categories already present: ${round.categories.join(", ")}` : ""}`).join("\n")}` : "",
+        cleanSessionContext.activeRoundQuestions.length ? `Questions already in the active round:\n${cleanSessionContext.activeRoundQuestions.map(formatContextQuestion).join("\n")}` : "",
+        cleanSessionContext.builtQuestions.length ? `Questions already selected in the full session:\n${cleanSessionContext.builtQuestions.map(formatContextQuestion).join("\n")}` : "",
+      ].filter(Boolean).join("\n")
+    : "";
   const duplicateExamples = existingQuestions.slice(0, DUPLICATE_EXAMPLE_LIMIT).map((q) => `- ${q.question_text}${q.correct_answer ? ` Answer: ${q.correct_answer}` : ""}`).join("\n");
   const duplicateText = avoidDuplicates && duplicateExamples ? `Avoid duplicating, lightly rewording, using the same answer, or using the same answer-angle as these existing and past-session questions:\n${duplicateExamples}` : "";
   const rejectedText = cleanRejectedQuestions.length ? `The host explicitly rejected these generated questions. Do not return them, close rewrites, same-answer variations, or same topic-angle cousins:\n${cleanRejectedQuestions.map((question) => `- ${question}`).join("\n")}` : "";
@@ -276,6 +311,7 @@ Use the novelty seed to deliberately choose less-common subject matter and avoid
 
 Host context:
 - The host runs live trivia and wants an assistant, not a generic question bank.
+- The host is based in the United States and usually hosts for a US bar-trivia audience.
 - The host builds flexible rounds with true/false, multiple choice, and written answer questions.
 - Pictures are not a question type. Any question can have media attached later.
 - The biggest need is fresh categories, fun angles, and non-generic questions.
@@ -301,6 +337,9 @@ Use this exact shape:
 
 Freshness rules:
 - Do not produce classic bar-trivia staples or their reworded cousins.
+- Default to general US-friendly trivia: recognizable subjects, broadly playable categories, and clues a US mixed team can reasonably follow.
+- International or foreign-country questions are welcome only occasionally. When used, make the subject globally recognizable or give a very clear clue path; do not depend on obscure foreign place names, politicians, monarchs, local festivals, minor wars, regional foods, or untranslated terms.
+- For Geography and World Culture, prefer accessible angles with context over "name this foreign thing" recall.
 - Avoid these angles entirely: capitals, first presidents, tallest/highest/largest/longest records, basic planets, basic elements, basic Shakespeare, Mona Lisa, Harry Potter author, obvious Oscar winners, obvious Disney facts, and common holiday myths.
 - Prefer second-order facts: unusual origins, production details, regional names, near-misses, odd rules, forgotten firsts, surprising constraints, etymology, hidden design choices, or real-world quirks.
 - Ask yourself: "Would this feel fresh to someone who has hosted weekly trivia for years?" If not, replace it.
@@ -321,6 +360,7 @@ Trivia host style:
 - difficulty must be "${difficultyKey}".
 ${imagePromptRule}
 ${hostHardText}
+${sessionContextText}
 ${styleText}
 ${themeText}
 ${excludedCategoryText}
