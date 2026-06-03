@@ -7,6 +7,7 @@ import { Badge } from "../components/ui/badge";
 import { CalendarDays, Clock, Copy, Layers, MapPin, Plus, Save, Sparkles, Trash2, Trophy, Users } from "lucide-react";
 import { toast } from "sonner";
 import { PROFILE_SHOW_TEMPLATES_KEY, PROFILE_VENUES_KEY, SHOW_TEMPLATES_STORAGE_KEY, defaultShowTemplates, mergeProfileRecords, normalizeTemplate, normalizeVenue, readLocalTemplates, readLocalVenues, recordsChanged, writeLocalTemplates, writeLocalVenues, writeTemplateBuildDraft } from "../lib/venues";
+import { updateUserMetadata } from "../lib/profileState";
 
 const metadataTemplatesKey = PROFILE_SHOW_TEMPLATES_KEY;
 const metadataVenuesKey = PROFILE_VENUES_KEY;
@@ -79,7 +80,7 @@ const ShowTemplates = ({ embedded = false }) => {
           profilePatch[metadataVenuesKey] = profileVenues;
         }
         if (Object.keys(profilePatch).length) {
-          await supabase.auth.updateUser({ data: profilePatch });
+          await updateUserMetadata(profilePatch);
         }
         setSyncStatus("Synced");
       } catch (error) {
@@ -95,8 +96,7 @@ const ShowTemplates = ({ embedded = false }) => {
     setTemplates(normalized);
     writeLocalTemplates(normalized);
     try {
-      const { error } = await supabase.auth.updateUser({ data: { [metadataTemplatesKey]: normalized } });
-      if (error) throw error;
+      await updateUserMetadata({ [metadataTemplatesKey]: normalized });
       localStorage.setItem(SHOW_TEMPLATES_STORAGE_KEY, JSON.stringify(normalized));
       setSyncStatus("Synced");
     } catch (error) {

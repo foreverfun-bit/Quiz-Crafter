@@ -32,9 +32,17 @@ export const writeLocalJson = (localKey, value) => {
 const isPlainObject = (value) => value && typeof value === "object" && !Array.isArray(value);
 const mergeArrays = (remote, local) => [...new Set([...(Array.isArray(remote) ? remote : []), ...(Array.isArray(local) ? local : [])].filter(Boolean))];
 
-export const saveProfileValue = async (profileKey, value) => {
-  const { error } = await supabase.auth.updateUser({ data: { [profileKey]: value } });
+export const updateUserMetadata = async (patch) => {
+  const { data, error: loadError } = await supabase.auth.getUser();
+  if (loadError) throw loadError;
+  const currentMetadata = isPlainObject(data?.user?.user_metadata) ? data.user.user_metadata : {};
+  const { error } = await supabase.auth.updateUser({ data: { ...currentMetadata, ...(isPlainObject(patch) ? patch : {}) } });
   if (error) throw error;
+  return { ...currentMetadata, ...(isPlainObject(patch) ? patch : {}) };
+};
+
+export const saveProfileValue = async (profileKey, value) => {
+  await updateUserMetadata({ [profileKey]: value });
   return value;
 };
 

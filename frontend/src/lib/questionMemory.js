@@ -1,3 +1,5 @@
+import { updateUserMetadata } from "./profileState";
+
 export const QUESTION_MEMORY_KEY = "quiz-crafter-question-memory-v1";
 export const QUESTION_MEMORY_PROFILE_KEY = "quiz_crafter_question_memory_v1";
 
@@ -37,14 +39,14 @@ export const syncQuestionMemoryFromProfile = async (supabase) => {
   const nextMemory = remoteMemory && typeof remoteMemory === "object" ? { ...remoteMemory, ...localMemory } : localMemory;
   writeQuestionMemory(nextMemory);
   if (!remoteMemory || JSON.stringify(remoteMemory) !== JSON.stringify(nextMemory)) {
-    await supabase.auth.updateUser({ data: { [QUESTION_MEMORY_PROFILE_KEY]: nextMemory } });
+    await updateUserMetadata({ [QUESTION_MEMORY_PROFILE_KEY]: nextMemory });
   }
   return nextMemory;
 };
 
 export const saveQuestionMemoryToProfile = async (supabase, memory) => {
   const safeMemory = memory && typeof memory === "object" ? memory : {};
-  await supabase.auth.updateUser({ data: { [QUESTION_MEMORY_PROFILE_KEY]: safeMemory } });
+  await updateUserMetadata({ [QUESTION_MEMORY_PROFILE_KEY]: safeMemory });
   return safeMemory;
 };
 

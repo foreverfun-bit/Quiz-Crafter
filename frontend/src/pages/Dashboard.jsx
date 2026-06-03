@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { PROFILE_ACTIVE_VENUE_KEY, PROFILE_SHOW_TEMPLATES_KEY, PROFILE_VENUES_KEY, mergeProfileRecords, normalizeTemplate, normalizeVenue, readActiveVenueId, readLocalTemplates, readLocalVenues, recordsChanged, writeActiveVenueId, writeLocalTemplates, writeLocalVenues } from "../lib/venues";
-import { loadProfileValue, saveProfileValue } from "../lib/profileState";
+import { loadProfileValue, saveProfileValue, updateUserMetadata } from "../lib/profileState";
 
 const BUILD_STORAGE_KEYS = [
   "trivia-flex-round-builder-state-v5",
@@ -189,7 +189,7 @@ const Dashboard = () => {
         if (mergedVenues.length && recordsChanged(remoteVenues, mergedVenues)) setupPatch[venueMetadataKey] = mergedVenues;
         if (mergedTemplates.length && recordsChanged(remoteTemplates, mergedTemplates)) setupPatch[templateMetadataKey] = mergedTemplates;
         if (nextActiveVenueId !== metadata[activeVenueMetadataKey]) setupPatch[activeVenueMetadataKey] = nextActiveVenueId;
-        if (Object.keys(setupPatch).length) await supabase.auth.updateUser({ data: setupPatch });
+        if (Object.keys(setupPatch).length) await updateUserMetadata(setupPatch);
         const remoteTodos = Array.isArray(metadata[todoProfileKey]) ? metadata[todoProfileKey] : null;
         if (remoteTodos) {
           setTodos(remoteTodos);

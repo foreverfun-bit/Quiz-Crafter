@@ -6,7 +6,7 @@ import { Badge } from "../components/ui/badge";
 import { BarChart3, Copy, ExternalLink, Image, Lightbulb, Mail, MessageSquare, Palette, Save, Send, Sparkles, ThumbsDown, ThumbsUp, TrendingUp, Upload, Users } from "lucide-react";
 import { toast } from "sonner";
 import { readActiveVenueId, readLocalTemplates, readLocalVenues } from "../lib/venues";
-import { loadHostToolsSessionState, profileKeys, saveHostToolsSessionState, saveProfileValue, syncProfileJson } from "../lib/profileState";
+import { loadHostToolsSessionState, profileKeys, saveHostToolsSessionState, saveProfileValue, syncProfileJson, updateUserMetadata } from "../lib/profileState";
 
 const SOCIAL_STORAGE_KEY = "quiz-crafter-social-links";
 const HOST_DEFAULT_BRANDING_KEY = "quiz-crafter-host-branding-defaults";
@@ -82,7 +82,7 @@ const HostTools = () => {
           setBranding(cleanBranding);
           writeDefaultBranding(cleanBranding);
         } else if (savedLocalBranding && brandingChanged(savedLocalBranding, DEFAULT_BRANDING)) {
-          await supabase.auth.updateUser({ data: { [metadataBrandingKey]: localBranding } });
+          await updateUserMetadata({ [metadataBrandingKey]: localBranding });
         }
       } catch (error) {
         console.warn("Host branding profile sync unavailable:", error);
@@ -202,8 +202,7 @@ const HostTools = () => {
     setBranding(cleanBranding);
     writeDefaultBranding(cleanBranding);
     try {
-      const { error } = await supabase.auth.updateUser({ data: { [metadataBrandingKey]: cleanBranding } });
-      if (error) throw error;
+      await updateUserMetadata({ [metadataBrandingKey]: cleanBranding });
       toast.success("Default host branding saved to your profile");
     } catch (error) {
       console.warn("Host branding profile save unavailable:", error);

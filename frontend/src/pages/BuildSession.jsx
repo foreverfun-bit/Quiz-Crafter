@@ -14,7 +14,7 @@ import { ArrowDown, ArrowUp, Ban, Check, CheckCircle, ChevronDown, Clock, Coins,
 import { toast } from "sonner";
 import { PROFILE_SHOW_TEMPLATES_KEY, PROFILE_VENUES_KEY, makeTemplateBuildDraft, mergeProfileRecords, normalizeTemplate, normalizeVenue, readActiveVenueId, readLocalTemplates, readLocalVenues, readVenueBuildDraft, recordsChanged, VENUE_BUILD_DRAFT_KEY, writeLocalTemplates, writeLocalVenues, writeTemplateBuildDraft } from "../lib/venues";
 import { isMemoryBlocked, memoryRejectedQuestionTexts, readQuestionMemory, saveQuestionMemoryToProfile, syncQuestionMemoryFromProfile, upsertQuestionMemory } from "../lib/questionMemory";
-import { profileKeys, saveProfileValue, syncProfileJson } from "../lib/profileState";
+import { profileKeys, saveProfileValue, syncProfileJson, updateUserMetadata } from "../lib/profileState";
 
 const questionTypes = [
   { value: "all", label: "All", shortLabel: "All", icon: List, color: "text-zinc-300" },
@@ -286,7 +286,7 @@ const BuildSession = () => {
     localStorage.setItem(BUILD_STORAGE_KEY, JSON.stringify(snapshot));
     const saveTimer = window.setTimeout(async () => {
       try {
-        await supabase.auth.updateUser({ data: { [metadataBuildKey]: snapshot, [metadataBuildClearedKey]: null } });
+        await updateUserMetadata({ [metadataBuildKey]: snapshot, [metadataBuildClearedKey]: null });
       } catch (error) {
         console.warn("Build profile autosave unavailable:", error);
       }
@@ -303,7 +303,7 @@ const BuildSession = () => {
     localStorage.removeItem("trivia-flex-round-builder-state-v2");
     localStorage.removeItem(VENUE_BUILD_DRAFT_KEY);
     try {
-      await supabase.auth.updateUser({ data: { [metadataBuildKey]: null, [metadataBuildClearedKey]: new Date().toISOString() } });
+      await updateUserMetadata({ [metadataBuildKey]: null, [metadataBuildClearedKey]: new Date().toISOString() });
     } catch (error) {
       console.warn("Build profile clear unavailable:", error);
     }
@@ -345,7 +345,7 @@ const BuildSession = () => {
         if (remoteIsFresh && (!localIsFresh || buildStateUpdatedAt(remoteState) >= buildStateUpdatedAt(localState))) {
           applySavedBuildState(remoteState);
         } else if (localIsFresh) {
-          await supabase.auth.updateUser({ data: { [metadataBuildKey]: localState, [metadataBuildClearedKey]: null } });
+          await updateUserMetadata({ [metadataBuildKey]: localState, [metadataBuildClearedKey]: null });
         }
       } catch (error) {
         console.warn("Build profile restore unavailable:", error);
@@ -384,7 +384,7 @@ const BuildSession = () => {
         const profilePatch = {};
         if (mergedTemplates.length && recordsChanged(remoteTemplates, mergedTemplates)) profilePatch[PROFILE_SHOW_TEMPLATES_KEY] = mergedTemplates;
         if (mergedVenues.length && recordsChanged(remoteVenues, mergedVenues)) profilePatch[PROFILE_VENUES_KEY] = mergedVenues;
-        if (Object.keys(profilePatch).length) await supabase.auth.updateUser({ data: profilePatch });
+        if (Object.keys(profilePatch).length) await updateUserMetadata(profilePatch);
       } catch (error) {
         console.warn("Builder host setup sync unavailable:", error);
       }

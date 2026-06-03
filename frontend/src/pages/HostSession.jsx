@@ -40,7 +40,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
-import { loadHostToolsSessionState, saveHostToolsSessionState } from "../lib/profileState";
+import { loadHostToolsSessionState, saveHostToolsSessionState, updateUserMetadata } from "../lib/profileState";
 
 const STORAGE_BASE = process.env.REACT_APP_SUPABASE_URL ? `${process.env.REACT_APP_SUPABASE_URL}/storage/v1/object/public/` : "";
 const DEFAULT_PUBLIC_SITE = "https://quizcrafter.com";
@@ -113,8 +113,7 @@ const loadDefaultBrandingFromProfile = async () => {
 };
 const saveDefaultBrandingToProfile = async (branding) => {
   const cleanBranding = normalizeBranding(branding);
-  const { error } = await supabase.auth.updateUser({ data: { [metadataBrandingKey]: cleanBranding } });
-  if (error) throw error;
+  await updateUserMetadata({ [metadataBrandingKey]: cleanBranding });
   return cleanBranding;
 };
 const getSessionBranding = (session) => {

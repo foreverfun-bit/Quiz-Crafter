@@ -6,6 +6,7 @@ import { Badge } from "../components/ui/badge";
 import { CalendarDays, ClipboardList, MapPin, Plus, Save, Trash2, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import { ACTIVE_VENUE_STORAGE_KEY, PROFILE_ACTIVE_VENUE_KEY, PROFILE_VENUES_KEY, VENUES_STORAGE_KEY, defaultVenue, mergeProfileRecords, normalizeVenue, readActiveVenueId, readLocalVenues, recordsChanged, writeActiveVenueId, writeLocalVenues } from "../lib/venues";
+import { updateUserMetadata } from "../lib/profileState";
 import ShowTemplates from "./ShowTemplates";
 
 const metadataVenuesKey = PROFILE_VENUES_KEY;
@@ -96,7 +97,7 @@ const Venues = ({ initialTab = "venues" }) => {
           setForm(normalizeVenue(firstVenue));
         }
         if (normalized.length && (recordsChanged(normalizedRemote, normalized) || remoteActive !== nextActive)) {
-          await supabase.auth.updateUser({ data: { [metadataVenuesKey]: normalized, [metadataActiveVenueKey]: nextActive } });
+          await updateUserMetadata({ [metadataVenuesKey]: normalized, [metadataActiveVenueKey]: nextActive });
         }
         setSyncStatus("Synced");
       } catch (error) {
@@ -114,8 +115,7 @@ const Venues = ({ initialTab = "venues" }) => {
     setVenues(nextVenues);
     setActiveVenueId(nextActiveVenueId);
     try {
-      const { error } = await supabase.auth.updateUser({ data: { [metadataVenuesKey]: nextVenues, [metadataActiveVenueKey]: nextActiveVenueId } });
-      if (error) throw error;
+      await updateUserMetadata({ [metadataVenuesKey]: nextVenues, [metadataActiveVenueKey]: nextActiveVenueId });
       localStorage.setItem(VENUES_STORAGE_KEY, JSON.stringify(nextVenues));
       localStorage.setItem(ACTIVE_VENUE_STORAGE_KEY, nextActiveVenueId || "");
       setSyncStatus("Synced");
