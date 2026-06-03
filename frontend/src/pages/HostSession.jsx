@@ -29,6 +29,8 @@ import {
   Save,
   Sparkles,
   Tags,
+  ThumbsDown,
+  ThumbsUp,
   Timer,
   Trash2,
   Trophy,
@@ -270,6 +272,7 @@ const persistLiveVote = (sessionId, name, payload, makeKey) => {
   const next = [...current.filter((item) => makeKey(item) !== makeKey(payload)), payload];
   writeStoredList(key, next);
   saveHostToolsSessionState(sessionId, { [name === "category-feedback" ? "categoryFeedback" : name]: next }).catch((error) => console.warn("Host tools profile save unavailable:", error));
+  return next;
 };
 const persistLiveIdea = (sessionId, payload) => {
   const key = hostToolsStorageKey(sessionId, "ideas");
@@ -358,6 +361,8 @@ const HostSession = () => {
   const [players, setPlayers] = useState([]);
   const [answers, setAnswers] = useState(() => readStoredList(hostToolsStorageKey(id, "answers")));
   const [playerActivity, setPlayerActivity] = useState(() => readStoredList(hostToolsStorageKey(id, "activity")));
+  const [feedback, setFeedback] = useState(() => readStoredList(hostToolsStorageKey(id, "feedback")));
+  const [categoryFeedback, setCategoryFeedback] = useState(() => readStoredList(hostToolsStorageKey(id, "category-feedback")));
   const [playerIdeas, setPlayerIdeas] = useState(() => readStoredList(hostToolsStorageKey(id, "ideas")));
   const [gradedAnswers, setGradedAnswers] = useState({});
   const [scoreModal, setScoreModal] = useState(null);
@@ -404,6 +409,8 @@ const HostSession = () => {
         if (Array.isArray(state.leaderboard) && state.leaderboard.length) setLeaderboard(state.leaderboard);
         if (Array.isArray(state.answers) && state.answers.length) setAnswers(state.answers);
         if (Array.isArray(state.activity) && state.activity.length) setPlayerActivity(state.activity);
+        if (Array.isArray(state.feedback) && state.feedback.length) setFeedback(state.feedback);
+        if (Array.isArray(state.categoryFeedback) && state.categoryFeedback.length) setCategoryFeedback(state.categoryFeedback);
         if (Array.isArray(state.ideas) && state.ideas.length) setPlayerIdeas(state.ideas);
         if (Array.isArray(state.disputes) && state.disputes.length) setDisputeNotes(state.disputes);
       } catch (error) {
@@ -463,11 +470,11 @@ const HostSession = () => {
       })
       .on("broadcast", { event: "feedback_submit" }, ({ payload }) => {
         if (!payload?.playerId || payload.questionIndex === undefined) return;
-        persistLiveVote(id, "feedback", payload, (item) => `${item.playerId}-${item.questionIndex}`);
+        setFeedback(() => persistLiveVote(id, "feedback", payload, (item) => `${item.playerId}-${item.questionIndex}`));
       })
       .on("broadcast", { event: "category_feedback_submit" }, ({ payload }) => {
         if (!payload?.playerId || !payload.category) return;
-        persistLiveVote(id, "category-feedback", payload, (item) => `${item.playerId}-${item.roundKey || item.roundName}-${item.category}`);
+        setCategoryFeedback(() => persistLiveVote(id, "category-feedback", payload, (item) => `${item.playerId}-${item.roundKey || item.roundName}-${item.category}`));
       })
       .on("broadcast", { event: "idea_submit" }, ({ payload }) => {
         if (!payload?.playerId) return;
@@ -716,6 +723,39 @@ const HostSession = () => {
     saveHostToolsSessionState(id, { disputes: next }).catch((error) => console.warn("Disputes profile save unavailable:", error));
     toast.success("Dispute note saved");
   };
+  const endSession = async () => {
+    if (!window.confirm("End this hosted session and save the live results?")) return;
+    const endedAt = new Date().toISOString();
+    const results = {
+      endedAt,
+      sessionId: id,
+      sessionName,
+      leaderboard: [...leaderboard].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)),
+      players,
+      answers,
+      gradedAnswers,
+      feedback,
+      categoryFeedback,
+      ideas: playerIdeas,
+      activity: playerActivity,
+      disputes: disputeNotes,
+      questionCount: questions.length,
+    };
+    try {
+      await saveHostToolsSessionState(id, { endedAt, results, leaderboard, players, answers, gradedAnswers, feedback, categoryFeedback, ideas: playerIdeas, activity: playerActivity, disputes: disputeNotes });
+      try {
+        await supabase.from("sessions").update({ hosted_at: endedAt, hosted_results: results }).eq("id", id);
+      } catch (error) {
+        console.warn("Session hosted results columns unavailable:", error);
+      }
+      setGameStarted(true);
+      setPresentMode("winners");
+      toast.success("Hosted session results saved");
+    } catch (error) {
+      console.error("End session save error:", error);
+      toast.error(error.message || "Could not save hosted results");
+    }
+  };
   const openPresentation = () => window.open(`/present-session/${id}`, "_blank", "noopener,noreferrer");
   const copyJoinLink = async () => {
     try {
@@ -819,7 +859,7 @@ const HostSession = () => {
   const viewWagerTiming = isReviewing ? normalizeWagerTiming(displayedQuestion.wagerTiming) : wagerTiming;
   const brandStyle = { "--host-primary": branding.primaryColor, "--host-accent": branding.accentColor };
   return <div className="min-h-screen bg-[#09090B] text-white" data-testid="host-session-page" style={brandStyle}>
-    {!focusMode && <TopBar navigate={navigate} id={id} sessionName={sessionName} questions={questions} players={players} currentIndex={currentIndex} liveStatus={liveStatus} openPresentation={openPresentation} setFocusMode={setFocusMode} progress={progress} branding={branding} customizeOpen={customizeOpen} setCustomizeOpen={setCustomizeOpen} />}
+    {!focusMode && <TopBar navigate={navigate} id={id} sessionName={sessionName} questions={questions} players={players} currentIndex={currentIndex} liveStatus={liveStatus} openPresentation={openPresentation} setFocusMode={setFocusMode} progress={progress} branding={branding} customizeOpen={customizeOpen} setCustomizeOpen={setCustomizeOpen} endSession={endSession} />}
     <div className={`max-w-[1680px] mx-auto p-4 lg:p-8 ${focusMode ? "min-h-screen flex flex-col" : ""}`}>
       {focusMode && <div className="flex justify-between items-center mb-4"><Badge className="bg-zinc-800 text-zinc-300">{currentRound?.name || "Round"} - {currentIndex + 1} / {questions.length}</Badge><Button variant="outline" onClick={() => setFocusMode(false)} className="border-white/10 text-zinc-300 hover:text-white">Exit Focus</Button></div>}
       <div className={focusMode ? "flex-1 flex items-center" : "grid grid-cols-1 2xl:grid-cols-[minmax(0,1fr)_430px] gap-7"}>
@@ -830,14 +870,14 @@ const HostSession = () => {
           {presentMode === "categories" && !isReviewing ? <RoundIntroStage round={introRound} gameStarted={gameStarted} onStartIntro={startTriviaIntro} onStartQuestion={startIntroQuestion} /> : presentMode === "bonus_pause" && !isReviewing ? <BonusPauseStage round={rounds.find((round) => pendingBonusIndex >= round.startIndex && pendingBonusIndex < round.startIndex + round.questions.length)} leaderboard={leaderboard} /> : presentMode === "winners" && !isReviewing ? <WinnersStage leaderboard={leaderboard} /> : presentMode === "feedback" && !isReviewing ? <FeedbackStage ideas={playerIdeas} /> : <QuestionStage question={displayedQuestion} index={hostIndex} total={questions.length} roundName={currentRound?.name} showAnswer={isReviewing ? true : showAnswer} showFunFact={isReviewing ? false : showFunFact} focusMode={focusMode} pointsPerQuestion={viewPointsPerQuestion} setPointsPerQuestion={isReviewing ? () => {} : setPointsPerQuestion} timerSeconds={viewTimerSeconds} setTimerSeconds={isReviewing ? () => {} : setTimerSeconds} timeRemaining={isReviewing ? null : timeRemaining} startTimer={startTimer} resetTimer={isReviewing ? () => {} : resetTimer} wagerMode={viewWagerMode} setWagerMode={isReviewing ? () => {} : setWagerMode} wagerLimit={viewWagerLimit} setWagerLimit={isReviewing ? () => {} : setWagerLimit} wagerTiming={viewWagerTiming} setWagerTiming={isReviewing ? () => {} : setWagerTiming} branding={branding} />}
           <div className="mt-4 flex items-center justify-between gap-3 flex-wrap"><Button variant="outline" onClick={() => reviewQuestion(hostIndex - 1)} disabled={hostIndex === 0} className="border-white/10 text-zinc-300 hover:text-white"><ChevronLeft size={18} className="mr-2" />Previous</Button><div className="flex gap-2 flex-wrap justify-end"><Button onClick={toggleAnswer} disabled={isReviewing || presentMode === "bonus_pause" || presentMode === "winners" || presentMode === "feedback"} className={showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-50" : "gradient-btn disabled:opacity-50"}>{showAnswer ? <EyeOff size={18} className="mr-2" /> : <Eye size={18} className="mr-2" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button><Button onClick={toggleFunFact} disabled={isReviewing || presentMode === "bonus_pause" || presentMode === "winners" || presentMode === "feedback" || !displayedQuestion.funFact} className="bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-50"><Sparkles size={18} className="mr-2" />Fun Fact</Button>{isReviewing ? <Button onClick={() => hostIndex < currentIndex ? reviewQuestion(hostIndex + 1) : returnToLiveQuestion()} className="bg-[#AEB2EF] text-zinc-950 hover:bg-[#AEB2EF]/90"><ChevronRight size={18} className="mr-2" />{hostIndex < currentIndex ? "Next Review" : "Return Live"}</Button> : <Button onClick={() => presentMode === "bonus_pause" && pendingBonusIndex !== null ? goToQuestion(pendingBonusIndex, { startTimer: true, pauseBeforeBonus: false }) : goToQuestion(currentIndex + 1, { startTimer: true })} disabled={presentMode !== "bonus_pause" && currentIndex === questions.length - 1} className="bg-[#AEB2EF] text-zinc-950 hover:bg-[#AEB2EF]/90"><ChevronRight size={18} className="mr-2" />{presentMode === "bonus_pause" ? "Start Bonus" : "Next"}</Button>}</div></div>
         </main>
-        {!focusMode && <HostSidePanel activeTab={sidePanelTab} setActiveTab={setSidePanelTab} joinUrl={joinUrl} copyJoinLink={copyJoinLink} players={players} answers={answers} currentAnswers={currentAnswers} currentActivity={currentActivity} fairPlayStats={fairPlayStats} leaderboard={leaderboard} gradedAnswers={gradedAnswers} markAnswer={markAnswer} openScoreModal={openScoreModal} pointsPerQuestion={Number(viewPointsPerQuestion) || getDefaultPoints(displayedQuestion)} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} setMode={releaseMode} teamName={teamName} teamScore={teamScore} setTeamName={setTeamName} setTeamScore={setTeamScore} addTeam={addTeam} adjustScore={adjustScore} removeTeam={removeTeam} showLeaderboard={() => releaseMode("leaderboard")} rounds={rounds} currentIndex={hostIndex} goToQuestion={goToQuestion} reviewQuestion={reviewQuestion} editBuild={() => navigate(`/build/${id}`)} ideas={playerIdeas} displayedQuestion={displayedQuestion} emergencyOverride={emergencyOverride} generatedEmergency={generatedEmergency} emergencyLoading={emergencyLoading} generateEmergencyQuestion={generateEmergencyQuestion} activateEmergencyQuestion={activateEmergencyQuestion} clearEmergency={() => setEmergencyOverride(null)} startTimerOnly={startTimerOnly} addDisputeNote={addDisputeNote} disputeNotes={disputeNotes} />}
+        {!focusMode && <HostSidePanel activeTab={sidePanelTab} setActiveTab={setSidePanelTab} joinUrl={joinUrl} copyJoinLink={copyJoinLink} players={players} answers={answers} currentAnswers={currentAnswers} currentActivity={currentActivity} fairPlayStats={fairPlayStats} leaderboard={leaderboard} gradedAnswers={gradedAnswers} markAnswer={markAnswer} openScoreModal={openScoreModal} pointsPerQuestion={Number(viewPointsPerQuestion) || getDefaultPoints(displayedQuestion)} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} setMode={releaseMode} teamName={teamName} teamScore={teamScore} setTeamName={setTeamName} setTeamScore={setTeamScore} addTeam={addTeam} adjustScore={adjustScore} removeTeam={removeTeam} showLeaderboard={() => releaseMode("leaderboard")} rounds={rounds} currentIndex={hostIndex} goToQuestion={goToQuestion} reviewQuestion={reviewQuestion} editBuild={() => navigate(`/build/${id}`)} ideas={playerIdeas} feedback={feedback} categoryFeedback={categoryFeedback} displayedQuestion={displayedQuestion} emergencyOverride={emergencyOverride} generatedEmergency={generatedEmergency} emergencyLoading={emergencyLoading} generateEmergencyQuestion={generateEmergencyQuestion} activateEmergencyQuestion={activateEmergencyQuestion} clearEmergency={() => setEmergencyOverride(null)} startTimerOnly={startTimerOnly} addDisputeNote={addDisputeNote} disputeNotes={disputeNotes} />}
       </div>
     </div>
     {scoreModal && <ScoreAdjustModal modal={scoreModal} setModal={setScoreModal} adjustScore={adjustScore} setScore={setScore} />}
   </div>;
 };
 
-const TopBar = ({ navigate, id, sessionName, questions, players, currentIndex, liveStatus, openPresentation, setFocusMode, progress, branding, customizeOpen, setCustomizeOpen }) => <div className="border-b border-white/10 bg-zinc-950/80 sticky top-0 z-20"><div className="max-w-7xl mx-auto px-4 lg:px-6 py-3 flex items-center justify-between gap-3"><div className="flex items-center gap-3 min-w-0"><Button variant="ghost" onClick={() => navigate(`/session/${id}`)} className="text-zinc-400 hover:text-white h-9 w-9 p-0" aria-label="Back to session"><ArrowLeft size={18} /></Button>{branding?.logoUrl && <img src={branding.logoUrl} alt={branding.name || "Host logo"} className="h-10 w-10 rounded-md bg-white object-contain p-1" />}<div className="min-w-0"><p className="text-xs font-bold uppercase tracking-wide" style={{ color: "var(--host-primary)" }}>{branding?.name || "Host"}</p><h1 className="font-bold truncate">{sessionName}</h1><p className="text-xs text-zinc-500">Hosting view - {questions.length} questions - {players.length} players</p></div></div><div className="flex items-center gap-2 flex-wrap justify-end"><Badge className={liveStatus === "live" ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/20" : "bg-zinc-800 text-zinc-300"}><Wifi size={13} className="mr-1" />{liveStatus === "live" ? "Live" : "Connecting"}</Badge><Badge className="bg-zinc-800 text-zinc-300">{currentIndex + 1} / {questions.length}</Badge><Button variant="outline" onClick={() => setCustomizeOpen((value) => !value)} className={customizeOpen ? "border-white/10 text-zinc-950 hover:opacity-90" : "border-white/10 text-zinc-300 hover:text-white"} style={customizeOpen ? { backgroundColor: "var(--host-primary)" } : undefined}><Palette size={16} className="mr-2" />Customize</Button><Button variant="outline" onClick={openPresentation} className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />Presentation</Button><Button variant="outline" onClick={() => setFocusMode(true)} className="border-white/10 text-zinc-300 hover:text-white"><Maximize2 size={16} className="mr-2" />Focus</Button></div></div><div className="h-1 bg-zinc-900"><div className="h-1 transition-all" style={{ width: `${progress}%`, background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" }} /></div></div>;
+const TopBar = ({ navigate, id, sessionName, questions, players, currentIndex, liveStatus, openPresentation, setFocusMode, progress, branding, customizeOpen, setCustomizeOpen, endSession }) => <div className="border-b border-white/10 bg-zinc-950/80 sticky top-0 z-20"><div className="max-w-7xl mx-auto px-4 lg:px-6 py-3 flex items-center justify-between gap-3"><div className="flex items-center gap-3 min-w-0"><Button variant="ghost" onClick={() => navigate(`/session/${id}`)} className="text-zinc-400 hover:text-white h-9 w-9 p-0" aria-label="Back to session"><ArrowLeft size={18} /></Button>{branding?.logoUrl && <img src={branding.logoUrl} alt={branding.name || "Host logo"} className="h-10 w-10 rounded-md bg-white object-contain p-1" />}<div className="min-w-0"><p className="text-xs font-bold uppercase tracking-wide" style={{ color: "var(--host-primary)" }}>{branding?.name || "Host"}</p><h1 className="font-bold truncate">{sessionName}</h1><p className="text-xs text-zinc-500">Hosting view - {questions.length} questions - {players.length} players</p></div></div><div className="flex items-center gap-2 flex-wrap justify-end"><Badge className={liveStatus === "live" ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/20" : "bg-zinc-800 text-zinc-300"}><Wifi size={13} className="mr-1" />{liveStatus === "live" ? "Live" : "Connecting"}</Badge><Badge className="bg-zinc-800 text-zinc-300">{currentIndex + 1} / {questions.length}</Badge><Button variant="outline" onClick={() => setCustomizeOpen((value) => !value)} className={customizeOpen ? "border-white/10 text-zinc-950 hover:opacity-90" : "border-white/10 text-zinc-300 hover:text-white"} style={customizeOpen ? { backgroundColor: "var(--host-primary)" } : undefined}><Palette size={16} className="mr-2" />Customize</Button><Button variant="outline" onClick={openPresentation} className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />Presentation</Button><Button variant="outline" onClick={() => setFocusMode(true)} className="border-white/10 text-zinc-300 hover:text-white"><Maximize2 size={16} className="mr-2" />Focus</Button><Button onClick={endSession} className="bg-amber-300 text-zinc-950 hover:bg-amber-200"><Save size={16} className="mr-2" />End Session</Button></div></div><div className="h-1 bg-zinc-900"><div className="h-1 transition-all" style={{ width: `${progress}%`, background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" }} /></div></div>;
 
 const PresentationControls = ({ mode, setMode, rounds, currentIndex, currentRound, introRoundKey, setIntroRoundKey }) => {
   const nextRound = rounds.find((round) => round.startIndex > currentIndex);
@@ -868,16 +908,34 @@ const HostCustomizePanel = ({ branding, defaultBranding, onSave, onSaveDefault, 
 
 const ColorField = ({ label, value, onChange }) => { const safeValue = sanitizeHexColor(value, DEFAULT_BRANDING.primaryColor); return <label className="text-xs text-zinc-400">{label}<div className="mt-1 flex h-10 rounded-md border border-white/10 bg-zinc-950 overflow-hidden focus-within:border-[#71E0DC]/60"><input type="color" value={safeValue} onChange={(event) => onChange(event.target.value)} className="h-10 w-12 border-0 bg-transparent p-1" /><input value={value || ""} onChange={(event) => onChange(event.target.value)} className="min-w-0 flex-1 bg-transparent px-2 text-white outline-none" /></div></label>; };
 
-const HostSidePanel = ({ activeTab, setActiveTab, joinUrl, copyJoinLink, players, answers, currentAnswers, currentActivity, fairPlayStats, leaderboard, gradedAnswers, markAnswer, openScoreModal, pointsPerQuestion, wagerMode, wagerLimit, setMode, teamName, teamScore, setTeamName, setTeamScore, addTeam, adjustScore, removeTeam, showLeaderboard, rounds, currentIndex, goToQuestion, reviewQuestion, editBuild, ideas, displayedQuestion, emergencyOverride, generatedEmergency, emergencyLoading, generateEmergencyQuestion, activateEmergencyQuestion, clearEmergency, startTimerOnly, addDisputeNote, disputeNotes }) => {
+const HostSidePanel = ({ activeTab, setActiveTab, joinUrl, copyJoinLink, players, answers, currentAnswers, currentActivity, fairPlayStats, leaderboard, gradedAnswers, markAnswer, openScoreModal, pointsPerQuestion, wagerMode, wagerLimit, setMode, teamName, teamScore, setTeamName, setTeamScore, addTeam, adjustScore, removeTeam, showLeaderboard, rounds, currentIndex, goToQuestion, reviewQuestion, editBuild, ideas, feedback, categoryFeedback, displayedQuestion, emergencyOverride, generatedEmergency, emergencyLoading, generateEmergencyQuestion, activateEmergencyQuestion, clearEmergency, startTimerOnly, addDisputeNote, disputeNotes }) => {
   const tabs = [
     { key: "answers", label: "Answers", icon: MessageSquare },
+    { key: "feedback", label: "Feedback", icon: ThumbsUp },
     { key: "teams", label: "Teams", icon: Trophy },
     { key: "run", label: "Run Sheet", icon: MonitorPlay },
     { key: "emergency", label: "Rescue", icon: Timer },
     { key: "ideas", label: "Ideas", icon: Sparkles },
   ];
-  return <aside className="space-y-4"><Card className="glass-card"><CardContent className="p-2"><div className="grid grid-cols-5 gap-1">{tabs.map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => setActiveTab(key)} className={`h-10 rounded-md text-xs font-bold flex items-center justify-center gap-1.5 transition ${activeTab === key ? "text-zinc-950" : "text-zinc-300 hover:bg-white/5 hover:text-white"}`} style={activeTab === key ? { background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" } : undefined}><Icon size={14} />{label}</button>)}</div></CardContent></Card>{activeTab === "answers" && <PhonePlayPanel players={players} answers={currentAnswers} activity={currentActivity} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} pointsPerQuestion={pointsPerQuestion} setMode={setMode} />}{activeTab === "teams" && <LeaderboardPanel leaderboard={leaderboard} teamName={teamName} teamScore={teamScore} setTeamName={setTeamName} setTeamScore={setTeamScore} addTeam={addTeam} adjustScore={adjustScore} openScoreModal={openScoreModal} removeTeam={removeTeam} showLeaderboard={showLeaderboard} fairPlayStats={fairPlayStats} />}{activeTab === "run" && <RunSheet rounds={rounds} currentIndex={currentIndex} goToQuestion={reviewQuestion} answers={answers} players={players} gradedAnswers={gradedAnswers} editBuild={editBuild} />}{activeTab === "emergency" && <EmergencyPanel currentIndex={currentIndex} displayedQuestion={displayedQuestion} emergencyOverride={emergencyOverride} generatedEmergency={generatedEmergency} emergencyLoading={emergencyLoading} generateEmergencyQuestion={generateEmergencyQuestion} activateEmergencyQuestion={activateEmergencyQuestion} clearEmergency={clearEmergency} startTimerOnly={startTimerOnly} goToQuestion={goToQuestion} editBuild={editBuild} addDisputeNote={addDisputeNote} disputeNotes={disputeNotes} />}{activeTab === "ideas" && <IdeasPanel ideas={ideas} />}</aside>;
+  return <aside className="space-y-4"><Card className="glass-card"><CardContent className="p-2"><div className="grid grid-cols-3 sm:grid-cols-6 gap-1">{tabs.map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => setActiveTab(key)} className={`h-10 rounded-md text-xs font-bold flex items-center justify-center gap-1.5 transition ${activeTab === key ? "text-zinc-950" : "text-zinc-300 hover:bg-white/5 hover:text-white"}`} style={activeTab === key ? { background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" } : undefined}><Icon size={14} />{label}</button>)}</div></CardContent></Card>{activeTab === "answers" && <PhonePlayPanel players={players} answers={currentAnswers} activity={currentActivity} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} pointsPerQuestion={pointsPerQuestion} setMode={setMode} />}{activeTab === "feedback" && <LiveFeedbackPanel feedback={feedback} categoryFeedback={categoryFeedback} currentIndex={currentIndex} displayedQuestion={displayedQuestion} />}{activeTab === "teams" && <LeaderboardPanel leaderboard={leaderboard} teamName={teamName} teamScore={teamScore} setTeamName={setTeamName} setTeamScore={setTeamScore} addTeam={addTeam} adjustScore={adjustScore} openScoreModal={openScoreModal} removeTeam={removeTeam} showLeaderboard={showLeaderboard} fairPlayStats={fairPlayStats} />}{activeTab === "run" && <RunSheet rounds={rounds} currentIndex={currentIndex} goToQuestion={reviewQuestion} answers={answers} players={players} gradedAnswers={gradedAnswers} editBuild={editBuild} />}{activeTab === "emergency" && <EmergencyPanel currentIndex={currentIndex} displayedQuestion={displayedQuestion} emergencyOverride={emergencyOverride} generatedEmergency={generatedEmergency} emergencyLoading={emergencyLoading} generateEmergencyQuestion={generateEmergencyQuestion} activateEmergencyQuestion={activateEmergencyQuestion} clearEmergency={clearEmergency} startTimerOnly={startTimerOnly} goToQuestion={goToQuestion} editBuild={editBuild} addDisputeNote={addDisputeNote} disputeNotes={disputeNotes} />}{activeTab === "ideas" && <IdeasPanel ideas={ideas} />}</aside>;
 };
+
+const sentimentCounts = (items) => ({
+  like: items.filter((item) => item.sentiment === "like").length,
+  dislike: items.filter((item) => item.sentiment === "dislike").length,
+});
+
+const LiveFeedbackPanel = ({ feedback, categoryFeedback, currentIndex, displayedQuestion }) => {
+  const currentFeedback = feedback.filter((item) => Number(item.questionIndex) === Number(currentIndex));
+  const questionCounts = sentimentCounts(currentFeedback);
+  const currentCategoryFeedback = categoryFeedback.filter((item) => item.roundName === displayedQuestion?.roundName || item.category === displayedQuestion?.category || Number(item.questionIndex) === Number(currentIndex));
+  const categoryCounts = sentimentCounts(currentCategoryFeedback);
+  const recentVotes = [...feedback.map((item) => ({ ...item, kind: "Question" })), ...categoryFeedback.map((item) => ({ ...item, kind: "Category" }))].sort((a, b) => String(b.submittedAt || "").localeCompare(String(a.submittedAt || ""))).slice(0, 14);
+
+  return <Card className="glass-card"><CardContent className="p-4 space-y-4"><div className="flex items-center justify-between gap-2"><div className="flex items-center gap-2 text-white font-semibold"><ThumbsUp size={18} className="text-[#71E0DC]" />Live Feedback</div><Badge className="bg-zinc-800 text-zinc-300">{feedback.length + categoryFeedback.length}</Badge></div><div className="grid grid-cols-2 gap-3"><FeedbackMetric title="This Question" likes={questionCounts.like} dislikes={questionCounts.dislike} /><FeedbackMetric title="Round/Categories" likes={categoryCounts.like} dislikes={categoryCounts.dislike} /></div><div><p className="mb-2 text-xs font-bold uppercase tracking-wide text-zinc-500">Recent responses</p><div className="space-y-2 max-h-[460px] overflow-y-auto pr-1">{recentVotes.map((vote, index) => <div key={`${vote.kind}-${vote.playerId}-${vote.submittedAt}-${index}`} className="rounded-md border border-white/10 bg-zinc-950/60 p-3"><div className="flex items-center justify-between gap-2"><span className="text-sm font-bold text-white truncate">{vote.playerName || "Team"}</span><Badge className={vote.sentiment === "like" ? "bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20" : "bg-red-400/15 text-red-300 border border-red-400/20"}>{vote.sentiment === "like" ? <ThumbsUp size={12} className="mr-1" /> : <ThumbsDown size={12} className="mr-1" />}{vote.sentiment === "like" ? "Liked" : "Disliked"}</Badge></div><p className="mt-1 text-xs text-zinc-500">{vote.kind}: {vote.kind === "Category" ? vote.category : (vote.questionText || `Question ${Number(vote.questionIndex || 0) + 1}`)}</p></div>)}{!recentVotes.length && <p className="rounded-lg border border-white/10 bg-zinc-950/50 p-4 text-center text-xs text-zinc-500">Thumbs-up and thumbs-down responses will appear here live.</p>}</div></div></CardContent></Card>;
+};
+
+const FeedbackMetric = ({ title, likes, dislikes }) => <div className="rounded-lg border border-white/10 bg-zinc-950/60 p-3"><p className="text-xs font-bold uppercase tracking-wide text-zinc-500">{title}</p><div className="mt-3 flex items-center gap-3"><span className="inline-flex items-center gap-1.5 rounded-full bg-[#71E0DC]/15 px-2.5 py-1 text-sm font-bold text-[#71E0DC]"><ThumbsUp size={15} />{likes}</span><span className="inline-flex items-center gap-1.5 rounded-full bg-red-400/15 px-2.5 py-1 text-sm font-bold text-red-300"><ThumbsDown size={15} />{dislikes}</span></div></div>;
 
 const EmergencyPanel = ({ currentIndex, displayedQuestion, emergencyOverride, generatedEmergency, emergencyLoading, generateEmergencyQuestion, activateEmergencyQuestion, clearEmergency, startTimerOnly, goToQuestion, editBuild, addDisputeNote, disputeNotes }) => {
   const [note, setNote] = useState("");
