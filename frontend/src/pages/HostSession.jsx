@@ -340,6 +340,7 @@ const HostSession = () => {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [reviewIndex, setReviewIndex] = useState(null);
   const [emergencyOverride, setEmergencyOverride] = useState(null);
   const [generatedEmergency, setGeneratedEmergency] = useState(null);
   const [emergencyLoading, setEmergencyLoading] = useState(false);
@@ -481,14 +482,18 @@ const HostSession = () => {
 
   const questions = useMemo(() => flattenSession(session), [session]);
   const rounds = useMemo(() => makeRounds(questions), [questions]);
+  const isReviewing = reviewIndex !== null;
+  const hostIndex = isReviewing ? reviewIndex : currentIndex;
   const currentQuestion = questions[currentIndex] || null;
-  const displayedQuestion = emergencyOverride || currentQuestion;
-  const currentRound = rounds.find((round) => currentIndex >= round.startIndex && currentIndex < round.startIndex + round.questions.length);
+  const liveDisplayedQuestion = emergencyOverride || currentQuestion;
+  const displayedQuestion = isReviewing ? questions[hostIndex] : liveDisplayedQuestion;
+  const currentRound = rounds.find((round) => hostIndex >= round.startIndex && hostIndex < round.startIndex + round.questions.length);
+  const liveRound = rounds.find((round) => currentIndex >= round.startIndex && currentIndex < round.startIndex + round.questions.length);
   const nextRound = rounds.find((round) => round.startIndex > currentIndex);
-  const defaultIntroRound = currentRound && currentIndex >= currentRound.startIndex + currentRound.questions.length - 1 && nextRound ? nextRound : currentRound;
-  const introRound = rounds.find((round) => round.key === (introRoundKey || defaultIntroRound?.key)) || defaultIntroRound || currentRound;
-  const currentAnswers = answers.filter((answer) => answer.questionIndex === currentIndex).sort((a, b) => String(a.submittedAt).localeCompare(String(b.submittedAt)));
-  const currentActivity = playerActivity.filter((activity) => Number(activity.questionIndex) === Number(currentIndex));
+  const defaultIntroRound = liveRound && currentIndex >= liveRound.startIndex + liveRound.questions.length - 1 && nextRound ? nextRound : liveRound;
+  const introRound = rounds.find((round) => round.key === (introRoundKey || defaultIntroRound?.key)) || defaultIntroRound || liveRound;
+  const currentAnswers = answers.filter((answer) => answer.questionIndex === hostIndex).sort((a, b) => String(a.submittedAt).localeCompare(String(b.submittedAt)));
+  const currentActivity = playerActivity.filter((activity) => Number(activity.questionIndex) === Number(hostIndex));
   const fairPlayStats = useMemo(() => buildFairPlayStats(players, answers, gradedAnswers, playerActivity), [players, answers, gradedAnswers, playerActivity]);
   const progress = questions.length ? Math.round(((currentIndex + 1) / questions.length) * 100) : 0;
   const sessionName = session?.name || session?.session_name || "Trivia Session";
@@ -497,13 +502,13 @@ const HostSession = () => {
   const acceptingAnswers = timeRemaining === null || timeRemaining > 0;
 
   useEffect(() => {
-    if (!displayedQuestion) return;
-    setPointsPerQuestion(getQuestionPoints(displayedQuestion));
-    setTimerSeconds(Number(displayedQuestion.timerSeconds || 30));
-    setWagerLimit(Number(displayedQuestion.wagerLimit || 0));
-    setWagerTiming(normalizeWagerTiming(displayedQuestion.wagerTiming));
-    setWagerMode(Number(displayedQuestion.wagerLimit || 0) > 0);
-  }, [displayedQuestion]);
+    if (!liveDisplayedQuestion || isReviewing) return;
+    setPointsPerQuestion(getQuestionPoints(liveDisplayedQuestion));
+    setTimerSeconds(Number(liveDisplayedQuestion.timerSeconds || 30));
+    setWagerLimit(Number(liveDisplayedQuestion.wagerLimit || 0));
+    setWagerTiming(normalizeWagerTiming(liveDisplayedQuestion.wagerTiming));
+    setWagerMode(Number(liveDisplayedQuestion.wagerLimit || 0) > 0);
+  }, [liveDisplayedQuestion, isReviewing]);
 
   useEffect(() => {
     localStorage.setItem(`quiz-crafter-leaderboard-${id}`, JSON.stringify(leaderboard));
@@ -511,8 +516,8 @@ const HostSession = () => {
   }, [id, leaderboard]);
 
   useEffect(() => {
-    if (!session || !questions.length || !displayedQuestion) return;
-    const publicQuestion = { ...displayedQuestion, answer: showAnswer ? displayedQuestion.answer : "" };
+    if (!session || !questions.length || !liveDisplayedQuestion) return;
+    const publicQuestion = { ...liveDisplayedQuestion, answer: showAnswer ? liveDisplayedQuestion.answer : "" };
     const state = {
       sessionId: id,
       sessionName,
@@ -525,11 +530,11 @@ const HostSession = () => {
       currentQuestion: publicQuestion,
       introRound: serializeRoundIntro(introRound),
       showAnswer,
-      revealedAnswer: showAnswer ? displayedQuestion.answer : "",
+      revealedAnswer: showAnswer ? liveDisplayedQuestion.answer : "",
       showFunFact,
       leaderboard,
       players,
-      pointsPerQuestion: Number(pointsPerQuestion) || getDefaultPoints(displayedQuestion),
+      pointsPerQuestion: Number(pointsPerQuestion) || getDefaultPoints(liveDisplayedQuestion),
       wagerMode,
       wagerLimit: Number(wagerLimit || 0),
       wagerTiming,
@@ -541,7 +546,7 @@ const HostSession = () => {
     };
     localStorage.setItem(`quiz-crafter-present-state-${id}`, JSON.stringify(state));
     liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: state });
-  }, [id, session, sessionName, questions.length, displayedQuestion, currentIndex, pendingBonusIndex, rounds, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, leaderboard, players, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerEndAt, timeRemaining, acceptingAnswers, branding]);
+  }, [id, session, sessionName, questions.length, liveDisplayedQuestion, currentIndex, pendingBonusIndex, rounds, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, leaderboard, players, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerEndAt, timeRemaining, acceptingAnswers, branding]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -557,6 +562,11 @@ const HostSession = () => {
 
   const goToQuestion = (index, options = {}) => {
     if (index < 0 || index >= questions.length) return;
+    if (options.reviewOnly) {
+      setReviewIndex(index);
+      setSidePanelTab("answers");
+      return;
+    }
     const targetQuestion = questions[index];
     const targetRound = rounds.find((round) => index >= round.startIndex && index < round.startIndex + round.questions.length);
     const isRoundBonus = targetRound && targetRound.questions.length > 1 && index === targetRound.startIndex + targetRound.questions.length - 1;
@@ -569,6 +579,7 @@ const HostSession = () => {
       setGameStarted(true);
       return;
     }
+    setReviewIndex(null);
     setCurrentIndex(index);
     setEmergencyOverride(null);
     setPendingBonusIndex(null);
@@ -579,6 +590,13 @@ const HostSession = () => {
     if (options.startTimer) setGameStarted(true);
   };
 
+  const reviewQuestion = (index) => goToQuestion(index, { reviewOnly: true });
+  const returnToLiveQuestion = () => setReviewIndex(null);
+  const releaseReviewedQuestion = () => {
+    if (!isReviewing) return;
+    goToQuestion(reviewIndex, { startTimer: false, pauseBeforeBonus: false });
+  };
+
   const releaseMode = (mode, roundKey = null) => {
     if (mode === "categories") setIntroRoundKey(roundKey || introRound?.key || currentRound?.key || null);
     setPresentMode(mode);
@@ -587,18 +605,21 @@ const HostSession = () => {
   };
 
   const toggleAnswer = () => {
+    if (isReviewing) return;
     setShowAnswer((value) => !value);
     setGameStarted(true);
     setPresentMode("question");
   };
 
   const toggleFunFact = () => {
+    if (isReviewing) return;
     setShowFunFact((value) => !value);
     setGameStarted(true);
     releaseMode("question");
   };
 
   const startTimer = () => {
+    if (isReviewing) return;
     setTimerEndAt(Date.now() + Math.max(1, Number(timerSeconds) || 30) * 1000);
     setGameStarted(true);
     setPresentMode("question");
@@ -761,8 +782,12 @@ const HostSession = () => {
     const key = answerKey(answer);
     const previous = gradedAnswers[key];
     const previousPoints = Number(previous?.points || 0);
-    const award = wagerMode && Number(answer.wagerAmount) > 0 ? getWagerAward(answer, leaderboard, wagerLimit, previousPoints) : Number(pointsPerQuestion) || getDefaultPoints(displayedQuestion);
-    const wagerPenalty = wagerMode && Number(answer.wagerAmount) > 0 ? getWagerAward(answer, leaderboard, wagerLimit, previousPoints) : 0;
+    const answerQuestion = questions[Number(answer.questionIndex)] || displayedQuestion;
+    const answerPoints = Number(answer.points || 0) || Number(answerQuestion?.points || 0) || getDefaultPoints(answerQuestion);
+    const answerWagerLimit = Number(answer.wagerLimit || 0) || Number(answerQuestion?.wagerLimit || 0) || wagerLimit;
+    const answerUsesWager = Boolean(answer.wagerMode) || Number(answer.wagerAmount || 0) > 0;
+    const award = answerUsesWager && Number(answer.wagerAmount) > 0 ? getWagerAward(answer, leaderboard, answerWagerLimit, previousPoints) : answerPoints;
+    const wagerPenalty = answerUsesWager && Number(answer.wagerAmount) > 0 ? getWagerAward(answer, leaderboard, answerWagerLimit, previousPoints) : 0;
     const nextPoints = status === "correct" ? award : status === "incorrect" && wagerPenalty > 0 ? -wagerPenalty : 0;
     const delta = nextPoints - previousPoints;
     if (delta) adjustScore(answer.playerId, delta);
@@ -787,6 +812,11 @@ const HostSession = () => {
     return <div className="min-h-screen bg-[#09090B] flex items-center justify-center p-6 text-center"><div><p className="text-white text-2xl font-bold mb-2">No questions to host</p><p className="text-zinc-500 mb-4">Add questions to this session first.</p><Button onClick={() => navigate(`/session/${id}`)} className="gradient-btn">Back to Session</Button></div></div>;
   }
 
+  const viewPointsPerQuestion = isReviewing ? getQuestionPoints(displayedQuestion) : pointsPerQuestion;
+  const viewTimerSeconds = isReviewing ? Number(displayedQuestion.timerSeconds || 30) : timerSeconds;
+  const viewWagerLimit = isReviewing ? Number(displayedQuestion.wagerLimit || 0) : wagerLimit;
+  const viewWagerMode = isReviewing ? Number(displayedQuestion.wagerLimit || 0) > 0 : wagerMode;
+  const viewWagerTiming = isReviewing ? normalizeWagerTiming(displayedQuestion.wagerTiming) : wagerTiming;
   const brandStyle = { "--host-primary": branding.primaryColor, "--host-accent": branding.accentColor };
   return <div className="min-h-screen bg-[#09090B] text-white" data-testid="host-session-page" style={brandStyle}>
     {!focusMode && <TopBar navigate={navigate} id={id} sessionName={sessionName} questions={questions} players={players} currentIndex={currentIndex} liveStatus={liveStatus} openPresentation={openPresentation} setFocusMode={setFocusMode} progress={progress} branding={branding} customizeOpen={customizeOpen} setCustomizeOpen={setCustomizeOpen} />}
@@ -796,10 +826,11 @@ const HostSession = () => {
         <main className="w-full">
           {!focusMode && <PresentationControls mode={presentMode} setMode={releaseMode} rounds={rounds} currentIndex={currentIndex} currentRound={currentRound} introRoundKey={introRound?.key || introRoundKey} setIntroRoundKey={setIntroRoundKey} />}
           {!focusMode && customizeOpen && <HostCustomizePanel branding={branding} defaultBranding={readDefaultBranding()} onSave={saveBranding} onSaveDefault={saveBrandingAsDefault} onUseDefault={useDefaultBranding} onClose={() => setCustomizeOpen(false)} />}
-          {presentMode === "categories" ? <RoundIntroStage round={introRound} gameStarted={gameStarted} onStartIntro={startTriviaIntro} onStartQuestion={startIntroQuestion} /> : presentMode === "bonus_pause" ? <BonusPauseStage round={rounds.find((round) => pendingBonusIndex >= round.startIndex && pendingBonusIndex < round.startIndex + round.questions.length)} leaderboard={leaderboard} /> : presentMode === "winners" ? <WinnersStage leaderboard={leaderboard} /> : presentMode === "feedback" ? <FeedbackStage ideas={playerIdeas} /> : <QuestionStage question={displayedQuestion} index={currentIndex} total={questions.length} roundName={currentRound?.name} showAnswer={showAnswer} showFunFact={showFunFact} focusMode={focusMode} pointsPerQuestion={pointsPerQuestion} setPointsPerQuestion={setPointsPerQuestion} timerSeconds={timerSeconds} setTimerSeconds={setTimerSeconds} timeRemaining={timeRemaining} startTimer={startTimer} resetTimer={resetTimer} wagerMode={wagerMode} setWagerMode={setWagerMode} wagerLimit={wagerLimit} setWagerLimit={setWagerLimit} wagerTiming={wagerTiming} setWagerTiming={setWagerTiming} branding={branding} />}
-          <div className="mt-4 flex items-center justify-between gap-3 flex-wrap"><Button variant="outline" onClick={() => goToQuestion(currentIndex - 1)} disabled={currentIndex === 0} className="border-white/10 text-zinc-300 hover:text-white"><ChevronLeft size={18} className="mr-2" />Previous</Button><div className="flex gap-2 flex-wrap justify-end"><Button onClick={toggleAnswer} disabled={presentMode === "bonus_pause" || presentMode === "winners" || presentMode === "feedback"} className={showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-50" : "gradient-btn disabled:opacity-50"}>{showAnswer ? <EyeOff size={18} className="mr-2" /> : <Eye size={18} className="mr-2" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button><Button onClick={toggleFunFact} disabled={presentMode === "bonus_pause" || presentMode === "winners" || presentMode === "feedback" || !displayedQuestion.funFact} className="bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-50"><Sparkles size={18} className="mr-2" />Fun Fact</Button><Button onClick={() => presentMode === "bonus_pause" && pendingBonusIndex !== null ? goToQuestion(pendingBonusIndex, { startTimer: true, pauseBeforeBonus: false }) : goToQuestion(currentIndex + 1, { startTimer: true })} disabled={presentMode !== "bonus_pause" && currentIndex === questions.length - 1} className="bg-[#AEB2EF] text-zinc-950 hover:bg-[#AEB2EF]/90"><ChevronRight size={18} className="mr-2" />{presentMode === "bonus_pause" ? "Start Bonus" : "Next"}</Button></div></div>
+          {isReviewing && <Card className="mb-4 border-amber-300/25 bg-amber-300/10"><CardContent className="p-3 flex flex-wrap items-center justify-between gap-3"><div><p className="text-sm font-bold text-amber-100">Reviewing previous results</p><p className="text-xs text-amber-100/70">Players and presentation are still on question {currentIndex + 1}.</p></div><div className="flex gap-2"><Button size="sm" variant="outline" onClick={returnToLiveQuestion} className="border-amber-200/30 text-amber-100 hover:text-white">Return Live</Button><Button size="sm" onClick={releaseReviewedQuestion} className="bg-amber-200 text-zinc-950 hover:bg-amber-100">Release This Live</Button></div></CardContent></Card>}
+          {presentMode === "categories" && !isReviewing ? <RoundIntroStage round={introRound} gameStarted={gameStarted} onStartIntro={startTriviaIntro} onStartQuestion={startIntroQuestion} /> : presentMode === "bonus_pause" && !isReviewing ? <BonusPauseStage round={rounds.find((round) => pendingBonusIndex >= round.startIndex && pendingBonusIndex < round.startIndex + round.questions.length)} leaderboard={leaderboard} /> : presentMode === "winners" && !isReviewing ? <WinnersStage leaderboard={leaderboard} /> : presentMode === "feedback" && !isReviewing ? <FeedbackStage ideas={playerIdeas} /> : <QuestionStage question={displayedQuestion} index={hostIndex} total={questions.length} roundName={currentRound?.name} showAnswer={isReviewing ? true : showAnswer} showFunFact={isReviewing ? false : showFunFact} focusMode={focusMode} pointsPerQuestion={viewPointsPerQuestion} setPointsPerQuestion={isReviewing ? () => {} : setPointsPerQuestion} timerSeconds={viewTimerSeconds} setTimerSeconds={isReviewing ? () => {} : setTimerSeconds} timeRemaining={isReviewing ? null : timeRemaining} startTimer={startTimer} resetTimer={isReviewing ? () => {} : resetTimer} wagerMode={viewWagerMode} setWagerMode={isReviewing ? () => {} : setWagerMode} wagerLimit={viewWagerLimit} setWagerLimit={isReviewing ? () => {} : setWagerLimit} wagerTiming={viewWagerTiming} setWagerTiming={isReviewing ? () => {} : setWagerTiming} branding={branding} />}
+          <div className="mt-4 flex items-center justify-between gap-3 flex-wrap"><Button variant="outline" onClick={() => reviewQuestion(hostIndex - 1)} disabled={hostIndex === 0} className="border-white/10 text-zinc-300 hover:text-white"><ChevronLeft size={18} className="mr-2" />Previous</Button><div className="flex gap-2 flex-wrap justify-end"><Button onClick={toggleAnswer} disabled={isReviewing || presentMode === "bonus_pause" || presentMode === "winners" || presentMode === "feedback"} className={showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-50" : "gradient-btn disabled:opacity-50"}>{showAnswer ? <EyeOff size={18} className="mr-2" /> : <Eye size={18} className="mr-2" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button><Button onClick={toggleFunFact} disabled={isReviewing || presentMode === "bonus_pause" || presentMode === "winners" || presentMode === "feedback" || !displayedQuestion.funFact} className="bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-50"><Sparkles size={18} className="mr-2" />Fun Fact</Button>{isReviewing ? <Button onClick={() => hostIndex < currentIndex ? reviewQuestion(hostIndex + 1) : returnToLiveQuestion()} className="bg-[#AEB2EF] text-zinc-950 hover:bg-[#AEB2EF]/90"><ChevronRight size={18} className="mr-2" />{hostIndex < currentIndex ? "Next Review" : "Return Live"}</Button> : <Button onClick={() => presentMode === "bonus_pause" && pendingBonusIndex !== null ? goToQuestion(pendingBonusIndex, { startTimer: true, pauseBeforeBonus: false }) : goToQuestion(currentIndex + 1, { startTimer: true })} disabled={presentMode !== "bonus_pause" && currentIndex === questions.length - 1} className="bg-[#AEB2EF] text-zinc-950 hover:bg-[#AEB2EF]/90"><ChevronRight size={18} className="mr-2" />{presentMode === "bonus_pause" ? "Start Bonus" : "Next"}</Button>}</div></div>
         </main>
-        {!focusMode && <HostSidePanel activeTab={sidePanelTab} setActiveTab={setSidePanelTab} joinUrl={joinUrl} copyJoinLink={copyJoinLink} players={players} answers={answers} currentAnswers={currentAnswers} currentActivity={currentActivity} fairPlayStats={fairPlayStats} leaderboard={leaderboard} gradedAnswers={gradedAnswers} markAnswer={markAnswer} openScoreModal={openScoreModal} pointsPerQuestion={Number(pointsPerQuestion) || getDefaultPoints(displayedQuestion)} wagerMode={wagerMode} wagerLimit={wagerLimit} setMode={releaseMode} teamName={teamName} teamScore={teamScore} setTeamName={setTeamName} setTeamScore={setTeamScore} addTeam={addTeam} adjustScore={adjustScore} removeTeam={removeTeam} showLeaderboard={() => releaseMode("leaderboard")} rounds={rounds} currentIndex={currentIndex} goToQuestion={goToQuestion} editBuild={() => navigate(`/build/${id}`)} ideas={playerIdeas} displayedQuestion={displayedQuestion} emergencyOverride={emergencyOverride} generatedEmergency={generatedEmergency} emergencyLoading={emergencyLoading} generateEmergencyQuestion={generateEmergencyQuestion} activateEmergencyQuestion={activateEmergencyQuestion} clearEmergency={() => setEmergencyOverride(null)} startTimerOnly={startTimerOnly} addDisputeNote={addDisputeNote} disputeNotes={disputeNotes} />}
+        {!focusMode && <HostSidePanel activeTab={sidePanelTab} setActiveTab={setSidePanelTab} joinUrl={joinUrl} copyJoinLink={copyJoinLink} players={players} answers={answers} currentAnswers={currentAnswers} currentActivity={currentActivity} fairPlayStats={fairPlayStats} leaderboard={leaderboard} gradedAnswers={gradedAnswers} markAnswer={markAnswer} openScoreModal={openScoreModal} pointsPerQuestion={Number(viewPointsPerQuestion) || getDefaultPoints(displayedQuestion)} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} setMode={releaseMode} teamName={teamName} teamScore={teamScore} setTeamName={setTeamName} setTeamScore={setTeamScore} addTeam={addTeam} adjustScore={adjustScore} removeTeam={removeTeam} showLeaderboard={() => releaseMode("leaderboard")} rounds={rounds} currentIndex={hostIndex} goToQuestion={goToQuestion} reviewQuestion={reviewQuestion} editBuild={() => navigate(`/build/${id}`)} ideas={playerIdeas} displayedQuestion={displayedQuestion} emergencyOverride={emergencyOverride} generatedEmergency={generatedEmergency} emergencyLoading={emergencyLoading} generateEmergencyQuestion={generateEmergencyQuestion} activateEmergencyQuestion={activateEmergencyQuestion} clearEmergency={() => setEmergencyOverride(null)} startTimerOnly={startTimerOnly} addDisputeNote={addDisputeNote} disputeNotes={disputeNotes} />}
       </div>
     </div>
     {scoreModal && <ScoreAdjustModal modal={scoreModal} setModal={setScoreModal} adjustScore={adjustScore} setScore={setScore} />}
@@ -837,7 +868,7 @@ const HostCustomizePanel = ({ branding, defaultBranding, onSave, onSaveDefault, 
 
 const ColorField = ({ label, value, onChange }) => { const safeValue = sanitizeHexColor(value, DEFAULT_BRANDING.primaryColor); return <label className="text-xs text-zinc-400">{label}<div className="mt-1 flex h-10 rounded-md border border-white/10 bg-zinc-950 overflow-hidden focus-within:border-[#71E0DC]/60"><input type="color" value={safeValue} onChange={(event) => onChange(event.target.value)} className="h-10 w-12 border-0 bg-transparent p-1" /><input value={value || ""} onChange={(event) => onChange(event.target.value)} className="min-w-0 flex-1 bg-transparent px-2 text-white outline-none" /></div></label>; };
 
-const HostSidePanel = ({ activeTab, setActiveTab, joinUrl, copyJoinLink, players, answers, currentAnswers, currentActivity, fairPlayStats, leaderboard, gradedAnswers, markAnswer, openScoreModal, pointsPerQuestion, wagerMode, wagerLimit, setMode, teamName, teamScore, setTeamName, setTeamScore, addTeam, adjustScore, removeTeam, showLeaderboard, rounds, currentIndex, goToQuestion, editBuild, ideas, displayedQuestion, emergencyOverride, generatedEmergency, emergencyLoading, generateEmergencyQuestion, activateEmergencyQuestion, clearEmergency, startTimerOnly, addDisputeNote, disputeNotes }) => {
+const HostSidePanel = ({ activeTab, setActiveTab, joinUrl, copyJoinLink, players, answers, currentAnswers, currentActivity, fairPlayStats, leaderboard, gradedAnswers, markAnswer, openScoreModal, pointsPerQuestion, wagerMode, wagerLimit, setMode, teamName, teamScore, setTeamName, setTeamScore, addTeam, adjustScore, removeTeam, showLeaderboard, rounds, currentIndex, goToQuestion, reviewQuestion, editBuild, ideas, displayedQuestion, emergencyOverride, generatedEmergency, emergencyLoading, generateEmergencyQuestion, activateEmergencyQuestion, clearEmergency, startTimerOnly, addDisputeNote, disputeNotes }) => {
   const tabs = [
     { key: "answers", label: "Answers", icon: MessageSquare },
     { key: "teams", label: "Teams", icon: Trophy },
@@ -845,7 +876,7 @@ const HostSidePanel = ({ activeTab, setActiveTab, joinUrl, copyJoinLink, players
     { key: "emergency", label: "Rescue", icon: Timer },
     { key: "ideas", label: "Ideas", icon: Sparkles },
   ];
-  return <aside className="space-y-4"><Card className="glass-card"><CardContent className="p-2"><div className="grid grid-cols-5 gap-1">{tabs.map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => setActiveTab(key)} className={`h-10 rounded-md text-xs font-bold flex items-center justify-center gap-1.5 transition ${activeTab === key ? "text-zinc-950" : "text-zinc-300 hover:bg-white/5 hover:text-white"}`} style={activeTab === key ? { background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" } : undefined}><Icon size={14} />{label}</button>)}</div></CardContent></Card>{activeTab === "answers" && <PhonePlayPanel players={players} answers={currentAnswers} activity={currentActivity} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} pointsPerQuestion={pointsPerQuestion} setMode={setMode} />}{activeTab === "teams" && <LeaderboardPanel leaderboard={leaderboard} teamName={teamName} teamScore={teamScore} setTeamName={setTeamName} setTeamScore={setTeamScore} addTeam={addTeam} adjustScore={adjustScore} openScoreModal={openScoreModal} removeTeam={removeTeam} showLeaderboard={showLeaderboard} fairPlayStats={fairPlayStats} />}{activeTab === "run" && <RunSheet rounds={rounds} currentIndex={currentIndex} goToQuestion={goToQuestion} answers={answers} players={players} gradedAnswers={gradedAnswers} editBuild={editBuild} />}{activeTab === "emergency" && <EmergencyPanel currentIndex={currentIndex} displayedQuestion={displayedQuestion} emergencyOverride={emergencyOverride} generatedEmergency={generatedEmergency} emergencyLoading={emergencyLoading} generateEmergencyQuestion={generateEmergencyQuestion} activateEmergencyQuestion={activateEmergencyQuestion} clearEmergency={clearEmergency} startTimerOnly={startTimerOnly} goToQuestion={goToQuestion} editBuild={editBuild} addDisputeNote={addDisputeNote} disputeNotes={disputeNotes} />}{activeTab === "ideas" && <IdeasPanel ideas={ideas} />}</aside>;
+  return <aside className="space-y-4"><Card className="glass-card"><CardContent className="p-2"><div className="grid grid-cols-5 gap-1">{tabs.map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => setActiveTab(key)} className={`h-10 rounded-md text-xs font-bold flex items-center justify-center gap-1.5 transition ${activeTab === key ? "text-zinc-950" : "text-zinc-300 hover:bg-white/5 hover:text-white"}`} style={activeTab === key ? { background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" } : undefined}><Icon size={14} />{label}</button>)}</div></CardContent></Card>{activeTab === "answers" && <PhonePlayPanel players={players} answers={currentAnswers} activity={currentActivity} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} pointsPerQuestion={pointsPerQuestion} setMode={setMode} />}{activeTab === "teams" && <LeaderboardPanel leaderboard={leaderboard} teamName={teamName} teamScore={teamScore} setTeamName={setTeamName} setTeamScore={setTeamScore} addTeam={addTeam} adjustScore={adjustScore} openScoreModal={openScoreModal} removeTeam={removeTeam} showLeaderboard={showLeaderboard} fairPlayStats={fairPlayStats} />}{activeTab === "run" && <RunSheet rounds={rounds} currentIndex={currentIndex} goToQuestion={reviewQuestion} answers={answers} players={players} gradedAnswers={gradedAnswers} editBuild={editBuild} />}{activeTab === "emergency" && <EmergencyPanel currentIndex={currentIndex} displayedQuestion={displayedQuestion} emergencyOverride={emergencyOverride} generatedEmergency={generatedEmergency} emergencyLoading={emergencyLoading} generateEmergencyQuestion={generateEmergencyQuestion} activateEmergencyQuestion={activateEmergencyQuestion} clearEmergency={clearEmergency} startTimerOnly={startTimerOnly} goToQuestion={goToQuestion} editBuild={editBuild} addDisputeNote={addDisputeNote} disputeNotes={disputeNotes} />}{activeTab === "ideas" && <IdeasPanel ideas={ideas} />}</aside>;
 };
 
 const EmergencyPanel = ({ currentIndex, displayedQuestion, emergencyOverride, generatedEmergency, emergencyLoading, generateEmergencyQuestion, activateEmergencyQuestion, clearEmergency, startTimerOnly, goToQuestion, editBuild, addDisputeNote, disputeNotes }) => {
