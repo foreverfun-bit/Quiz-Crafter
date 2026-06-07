@@ -14,7 +14,7 @@ import { ArrowDown, ArrowUp, Ban, Check, CheckCircle, ChevronDown, Clock, Coins,
 import { toast } from "sonner";
 import { PROFILE_SHOW_TEMPLATES_KEY, PROFILE_VENUES_KEY, makeTemplateBuildDraft, mergeProfileRecords, normalizeTemplate, normalizeVenue, readActiveVenueId, readLocalTemplates, readLocalVenues, readVenueBuildDraft, recordsChanged, VENUE_BUILD_DRAFT_KEY, writeLocalTemplates, writeLocalVenues, writeTemplateBuildDraft } from "../lib/venues";
 import { isMemoryBlocked, memoryRejectedQuestionTexts, readQuestionMemory, saveQuestionMemoryToProfile, syncQuestionMemoryFromProfile, upsertQuestionMemory } from "../lib/questionMemory";
-import { profileKeys, saveProfileValue, syncProfileJson, updateUserMetadata } from "../lib/profileState";
+import { loadHostSetupSettings, profileKeys, saveHostSetupSettings, saveProfileValue, syncProfileJson, updateUserMetadata } from "../lib/profileState";
 
 const questionTypes = [
   { value: "all", label: "All", shortLabel: "All", icon: List, color: "text-zinc-300" },
@@ -368,10 +368,13 @@ const BuildSession = () => {
         const { data, error } = await supabase.auth.getUser();
         if (error) throw error;
         const metadata = data?.user?.user_metadata || {};
+        const setupSettings = await loadHostSetupSettings().catch(() => ({}));
+        const setupTemplates = Array.isArray(setupSettings.templates) ? setupSettings.templates.map(normalizeTemplate) : [];
+        const setupVenues = Array.isArray(setupSettings.venues) ? setupSettings.venues.map(normalizeVenue) : [];
         const remoteTemplates = Array.isArray(metadata[PROFILE_SHOW_TEMPLATES_KEY]) ? metadata[PROFILE_SHOW_TEMPLATES_KEY].map(normalizeTemplate) : [];
         const remoteVenues = Array.isArray(metadata[PROFILE_VENUES_KEY]) ? metadata[PROFILE_VENUES_KEY].map(normalizeVenue) : [];
-        const mergedTemplates = mergeProfileRecords(remoteTemplates, localTemplates, normalizeTemplate);
-        const mergedVenues = mergeProfileRecords(remoteVenues, localVenues, normalizeVenue);
+        const mergedTemplates = mergeProfileRecords([...setupTemplates, ...remoteTemplates], localTemplates, normalizeTemplate);
+        const mergedVenues = mergeProfileRecords([...setupVenues, ...remoteVenues], localVenues, normalizeVenue);
         if (mergedTemplates.length) {
           setTemplates(mergedTemplates);
           writeLocalTemplates(mergedTemplates);
@@ -385,6 +388,9 @@ const BuildSession = () => {
         if (mergedTemplates.length && recordsChanged(remoteTemplates, mergedTemplates)) profilePatch[PROFILE_SHOW_TEMPLATES_KEY] = mergedTemplates;
         if (mergedVenues.length && recordsChanged(remoteVenues, mergedVenues)) profilePatch[PROFILE_VENUES_KEY] = mergedVenues;
         if (Object.keys(profilePatch).length) await updateUserMetadata(profilePatch);
+        if ((mergedTemplates.length && recordsChanged(setupTemplates, mergedTemplates)) || (mergedVenues.length && recordsChanged(setupVenues, mergedVenues))) {
+          await saveHostSetupSettings({ templates: mergedTemplates, venues: mergedVenues });
+        }
       } catch (error) {
         console.warn("Builder host setup sync unavailable:", error);
       }

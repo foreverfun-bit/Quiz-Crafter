@@ -6,7 +6,7 @@ import { Badge } from "../components/ui/badge";
 import { BarChart3, Copy, ExternalLink, Image, Lightbulb, Mail, MessageSquare, Palette, Save, Send, Sparkles, ThumbsDown, ThumbsUp, TrendingUp, Upload, Users } from "lucide-react";
 import { toast } from "sonner";
 import { readActiveVenueId, readLocalTemplates, readLocalVenues } from "../lib/venues";
-import { loadHostToolsSessionState, profileKeys, saveHostToolsSessionState, saveProfileValue, syncProfileJson, updateUserMetadata } from "../lib/profileState";
+import { loadHostSetupSettings, loadHostToolsSessionState, profileKeys, saveHostSetupSettings, saveHostToolsSessionState, saveProfileValue, syncProfileJson, updateUserMetadata } from "../lib/profileState";
 
 const SOCIAL_STORAGE_KEY = "quiz-crafter-social-links";
 const HOST_DEFAULT_BRANDING_KEY = "quiz-crafter-host-branding-defaults";
@@ -76,13 +76,17 @@ const HostTools = () => {
       try {
         const { data, error } = await supabase.auth.getUser();
         if (error) throw error;
+        const setupSettings = await loadHostSetupSettings().catch(() => ({}));
+        const setupBranding = setupSettings.branding && typeof setupSettings.branding === "object" ? normalizeBranding(setupSettings.branding) : null;
         const remoteBranding = data?.user?.user_metadata?.[metadataBrandingKey];
-        if (remoteBranding && typeof remoteBranding === "object") {
-          const cleanBranding = normalizeBranding(remoteBranding);
+        if (setupBranding || (remoteBranding && typeof remoteBranding === "object")) {
+          const cleanBranding = normalizeBranding(setupBranding || remoteBranding);
           setBranding(cleanBranding);
           writeDefaultBranding(cleanBranding);
+          if (!setupBranding) await saveHostSetupSettings({ branding: cleanBranding });
         } else if (savedLocalBranding && brandingChanged(savedLocalBranding, DEFAULT_BRANDING)) {
           await updateUserMetadata({ [metadataBrandingKey]: localBranding });
+          await saveHostSetupSettings({ branding: localBranding });
         }
       } catch (error) {
         console.warn("Host branding profile sync unavailable:", error);
@@ -203,6 +207,7 @@ const HostTools = () => {
     writeDefaultBranding(cleanBranding);
     try {
       await updateUserMetadata({ [metadataBrandingKey]: cleanBranding });
+      await saveHostSetupSettings({ branding: cleanBranding });
       toast.success("Default host branding saved to your profile");
     } catch (error) {
       console.warn("Host branding profile save unavailable:", error);

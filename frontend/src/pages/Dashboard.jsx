@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { PROFILE_ACTIVE_VENUE_KEY, PROFILE_SHOW_TEMPLATES_KEY, PROFILE_VENUES_KEY, mergeProfileRecords, normalizeTemplate, normalizeVenue, readActiveVenueId, readLocalTemplates, readLocalVenues, recordsChanged, writeActiveVenueId, writeLocalTemplates, writeLocalVenues } from "../lib/venues";
-import { loadProfileValue, saveProfileValue, updateUserMetadata } from "../lib/profileState";
+import { HOST_SETUP_CATEGORY, loadHostSetupSettings, loadProfileValue, saveHostSetupSettings, saveProfileValue, updateUserMetadata } from "../lib/profileState";
 
 const BUILD_STORAGE_KEYS = [
   "trivia-flex-round-builder-state-v5",
@@ -166,10 +166,13 @@ const Dashboard = () => {
         const { data, error } = await supabase.auth.getUser();
         if (error) throw error;
         const metadata = data?.user?.user_metadata || {};
+        const setupSettings = await loadHostSetupSettings().catch(() => ({}));
+        const setupVenues = Array.isArray(setupSettings.venues) ? setupSettings.venues.map(normalizeVenue) : [];
+        const setupTemplates = Array.isArray(setupSettings.templates) ? setupSettings.templates.map(normalizeTemplate) : [];
         const remoteVenues = Array.isArray(metadata[venueMetadataKey]) ? metadata[venueMetadataKey].map(normalizeVenue) : [];
         const remoteTemplates = Array.isArray(metadata[templateMetadataKey]) ? metadata[templateMetadataKey].map(normalizeTemplate) : [];
-        const mergedVenues = mergeProfileRecords(remoteVenues, localVenues, normalizeVenue);
-        const mergedTemplates = mergeProfileRecords(remoteTemplates, localTemplates, normalizeTemplate);
+        const mergedVenues = mergeProfileRecords([...setupVenues, ...remoteVenues], localVenues, normalizeVenue);
+        const mergedTemplates = mergeProfileRecords([...setupTemplates, ...remoteTemplates], localTemplates, normalizeTemplate);
         if (mergedVenues.length) {
           setVenues(mergedVenues);
           writeLocalVenues(mergedVenues);
@@ -190,6 +193,9 @@ const Dashboard = () => {
         if (mergedTemplates.length && recordsChanged(remoteTemplates, mergedTemplates)) setupPatch[templateMetadataKey] = mergedTemplates;
         if (nextActiveVenueId !== metadata[activeVenueMetadataKey]) setupPatch[activeVenueMetadataKey] = nextActiveVenueId;
         if (Object.keys(setupPatch).length) await updateUserMetadata(setupPatch);
+        if ((mergedVenues.length && recordsChanged(setupVenues, mergedVenues)) || (mergedTemplates.length && recordsChanged(setupTemplates, mergedTemplates))) {
+          await saveHostSetupSettings({ venues: mergedVenues, templates: mergedTemplates, activeVenueId: nextActiveVenueId });
+        }
         const remoteTodos = Array.isArray(metadata[todoProfileKey]) ? metadata[todoProfileKey] : null;
         if (remoteTodos) {
           setTodos(remoteTodos);
@@ -817,6 +823,7 @@ async function fetchCategoryState() {
     result.value.data.forEach((row) => {
       const category = cleanCategory(row.category || row.name || row.category_name || row.value);
       if (!category) return;
+      if (category === HOST_SETUP_CATEGORY) return;
 
       const status = normalizeStatus(row.status || row.state || row.approval_status || row.preference || row.rating);
       const rejectedByFlag = isTruthy(row.rejected) || isTruthy(row.is_rejected) || isTruthy(row.hidden) || isTruthy(row.is_hidden) || isTruthy(row.disliked) || isTruthy(row.is_disliked);

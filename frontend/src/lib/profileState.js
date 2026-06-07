@@ -12,6 +12,8 @@ export const profileKeys = {
   hostToolsBySession: "quiz_crafter_host_tools_by_session_v1",
 };
 
+export const HOST_SETUP_CATEGORY = "__quiz_crafter_host_setup_v1";
+
 export const readLocalJson = (localKey, fallback) => {
   try {
     const parsed = JSON.parse(localStorage.getItem(localKey) || JSON.stringify(fallback));
@@ -44,6 +46,42 @@ export const updateUserMetadata = async (patch) => {
 export const saveProfileValue = async (profileKey, value) => {
   await updateUserMetadata({ [profileKey]: value });
   return value;
+};
+
+const parseSetupStatus = (value) => {
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    return isPlainObject(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+export const loadHostSetupSettings = async () => {
+  const { data, error } = await supabase
+    .from("category_preferences")
+    .select("*")
+    .eq("category", HOST_SETUP_CATEGORY);
+  if (error) throw error;
+  return (Array.isArray(data) ? data : [])
+    .map((row) => parseSetupStatus(row?.status || row?.preference || row?.value || row?.rating))
+    .filter((item) => Object.keys(item).length)
+    .sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime())[0] || {};
+};
+
+export const saveHostSetupSettings = async (patch) => {
+  const current = await loadHostSetupSettings().catch(() => ({}));
+  const next = { ...current, ...(isPlainObject(patch) ? patch : {}), updatedAt: new Date().toISOString() };
+  const payload = { category: HOST_SETUP_CATEGORY, status: JSON.stringify(next) };
+  const upsertResult = await supabase.from("category_preferences").upsert(payload);
+  if (!upsertResult.error) return next;
+
+  const updateResult = await supabase.from("category_preferences").update(payload).eq("category", HOST_SETUP_CATEGORY);
+  if (!updateResult.error && Array.isArray(updateResult.data) && updateResult.data.length) return next;
+
+  const insertResult = await supabase.from("category_preferences").insert(payload);
+  if (insertResult.error) throw insertResult.error;
+  return next;
 };
 
 export const loadProfileValue = async (profileKey) => {

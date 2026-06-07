@@ -7,7 +7,7 @@ import { Badge } from "../components/ui/badge";
 import { CalendarDays, Clock, Copy, Layers, MapPin, Plus, Save, Sparkles, Trash2, Trophy, Users } from "lucide-react";
 import { toast } from "sonner";
 import { PROFILE_SHOW_TEMPLATES_KEY, PROFILE_VENUES_KEY, SHOW_TEMPLATES_STORAGE_KEY, defaultShowTemplates, mergeProfileRecords, normalizeTemplate, normalizeVenue, readLocalTemplates, readLocalVenues, recordsChanged, writeLocalTemplates, writeLocalVenues, writeTemplateBuildDraft } from "../lib/venues";
-import { updateUserMetadata } from "../lib/profileState";
+import { loadHostSetupSettings, saveHostSetupSettings, updateUserMetadata } from "../lib/profileState";
 
 const metadataTemplatesKey = PROFILE_SHOW_TEMPLATES_KEY;
 const metadataVenuesKey = PROFILE_VENUES_KEY;
@@ -61,10 +61,13 @@ const ShowTemplates = ({ embedded = false }) => {
         if (error) throw error;
         const remoteTemplates = data?.user?.user_metadata?.[metadataTemplatesKey];
         const remoteVenues = data?.user?.user_metadata?.[metadataVenuesKey];
+        const setupSettings = await loadHostSetupSettings().catch(() => ({}));
+        const setupTemplates = Array.isArray(setupSettings.templates) ? setupSettings.templates.map(normalizeTemplate) : [];
+        const setupVenues = Array.isArray(setupSettings.venues) ? setupSettings.venues.map(normalizeVenue) : [];
         const normalizedRemoteTemplates = Array.isArray(remoteTemplates) ? remoteTemplates.map(normalizeTemplate) : [];
         const normalizedRemoteVenues = Array.isArray(remoteVenues) ? remoteVenues.map(normalizeVenue) : [];
-        const normalized = mergeProfileRecords(normalizedRemoteTemplates, localTemplates, normalizeTemplate);
-        const profileVenues = mergeProfileRecords(normalizedRemoteVenues, localVenues, normalizeVenue);
+        const normalized = mergeProfileRecords([...setupTemplates, ...normalizedRemoteTemplates], localTemplates, normalizeTemplate);
+        const profileVenues = mergeProfileRecords([...setupVenues, ...normalizedRemoteVenues], localVenues, normalizeVenue);
         setTemplates(normalized);
         setVenues(profileVenues);
         writeLocalTemplates(normalized);
@@ -82,6 +85,9 @@ const ShowTemplates = ({ embedded = false }) => {
         if (Object.keys(profilePatch).length) {
           await updateUserMetadata(profilePatch);
         }
+        if ((normalized.length && recordsChanged(setupTemplates, normalized)) || (profileVenues.length && recordsChanged(setupVenues, profileVenues))) {
+          await saveHostSetupSettings({ templates: normalized, venues: profileVenues });
+        }
         setSyncStatus("Synced");
       } catch (error) {
         console.warn("Template metadata sync unavailable:", error);
@@ -97,6 +103,7 @@ const ShowTemplates = ({ embedded = false }) => {
     writeLocalTemplates(normalized);
     try {
       await updateUserMetadata({ [metadataTemplatesKey]: normalized });
+      await saveHostSetupSettings({ templates: normalized });
       localStorage.setItem(SHOW_TEMPLATES_STORAGE_KEY, JSON.stringify(normalized));
       setSyncStatus("Synced");
     } catch (error) {

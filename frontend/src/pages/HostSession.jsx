@@ -40,7 +40,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
-import { loadHostToolsSessionState, saveHostToolsSessionState, updateUserMetadata } from "../lib/profileState";
+import { loadHostSetupSettings, loadHostToolsSessionState, saveHostSetupSettings, saveHostToolsSessionState, updateUserMetadata } from "../lib/profileState";
 
 const STORAGE_BASE = process.env.REACT_APP_SUPABASE_URL ? `${process.env.REACT_APP_SUPABASE_URL}/storage/v1/object/public/` : "";
 const DEFAULT_PUBLIC_SITE = "https://quizcrafter.com";
@@ -106,6 +106,8 @@ const readSavedDefaultBranding = () => {
 const writeDefaultBranding = (branding) => { try { localStorage.setItem(HOST_DEFAULT_BRANDING_KEY, JSON.stringify(normalizeBranding(branding))); } catch { /* Ignore storage failures so branding never crashes hosting. */ } };
 const brandingChanged = (left, right) => JSON.stringify(normalizeBranding(left || {})) !== JSON.stringify(normalizeBranding(right || {}));
 const loadDefaultBrandingFromProfile = async () => {
+  const setupSettings = await loadHostSetupSettings().catch(() => ({}));
+  if (setupSettings.branding && typeof setupSettings.branding === "object") return normalizeBranding(setupSettings.branding);
   const { data, error } = await supabase.auth.getUser();
   if (error) throw error;
   const remoteBranding = data?.user?.user_metadata?.[metadataBrandingKey];
@@ -114,6 +116,7 @@ const loadDefaultBrandingFromProfile = async () => {
 const saveDefaultBrandingToProfile = async (branding) => {
   const cleanBranding = normalizeBranding(branding);
   await updateUserMetadata({ [metadataBrandingKey]: cleanBranding });
+  await saveHostSetupSettings({ branding: cleanBranding });
   return cleanBranding;
 };
 const getSessionBranding = (session) => {

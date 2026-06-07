@@ -13,7 +13,7 @@ import {
   ArrowLeft,
 } from "lucide-react";
 import { toast } from "sonner";
-import { profileKeys, saveProfileValue, syncProfileJson } from "../lib/profileState";
+import { HOST_SETUP_CATEGORY, profileKeys, saveProfileValue, syncProfileJson } from "../lib/profileState";
 
 const STORAGE_KEY = "quiz-crafter-category-preferences";
 const rejectedValues = new Set(["rejected", "reject", "hidden", "hide", "disliked", "dislike", "bad"]);
@@ -255,6 +255,7 @@ async function fetchCategoryState() {
     result.value.data.forEach((row) => {
       const category = cleanCategory(row.category || row.name || row.category_name || row.value);
       if (!category) return;
+      if (category === HOST_SETUP_CATEGORY) return;
 
       const status = normalizeStatus(row.status || row.state || row.approval_status || row.preference || row.rating);
       const rejectedByFlag = isTruthy(row.rejected) || isTruthy(row.is_rejected) || isTruthy(row.hidden) || isTruthy(row.is_hidden) || isTruthy(row.disliked) || isTruthy(row.is_disliked);
