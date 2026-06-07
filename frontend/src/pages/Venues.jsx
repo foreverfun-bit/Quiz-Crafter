@@ -125,9 +125,11 @@ const Venues = ({ initialTab = "venues" }) => {
       localStorage.setItem(VENUES_STORAGE_KEY, JSON.stringify(nextVenues));
       localStorage.setItem(ACTIVE_VENUE_STORAGE_KEY, nextActiveVenueId || "");
       setSyncStatus("Synced");
+      return true;
     } catch (error) {
       console.warn("Venue metadata save unavailable:", error);
       setSyncStatus("Local only");
+      return false;
     }
   };
 
@@ -152,11 +154,12 @@ const Venues = ({ initialTab = "venues" }) => {
       ? venues.map((item) => item.id === venue.id ? venue : item)
       : [venue, ...venues];
     const nextActive = activeVenueId || venue.id;
-    await persistVenues(nextVenues, nextActive);
+    const synced = await persistVenues(nextVenues, nextActive);
     setSelectedVenueId(venue.id);
     setForm(venue);
     setSaving(false);
-    toast.success("Venue saved");
+    if (synced) toast.success("Venue saved to your account");
+    else toast.error("Venue saved only on this browser. Account sync failed.");
   };
 
   const deleteVenue = async (venueId) => {

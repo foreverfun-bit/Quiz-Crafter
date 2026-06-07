@@ -106,9 +106,11 @@ const ShowTemplates = ({ embedded = false }) => {
       await saveHostSetupSettings({ templates: normalized });
       localStorage.setItem(SHOW_TEMPLATES_STORAGE_KEY, JSON.stringify(normalized));
       setSyncStatus("Synced");
+      return true;
     } catch (error) {
       console.warn("Template metadata save unavailable:", error);
       setSyncStatus("Local only");
+      return false;
     }
   };
 
@@ -137,11 +139,12 @@ const ShowTemplates = ({ embedded = false }) => {
     const nextTemplates = templates.some((template) => template.id === clean.id)
       ? templates.map((template) => template.id === clean.id ? clean : template)
       : [clean, ...templates];
-    await persistTemplates(nextTemplates);
+    const synced = await persistTemplates(nextTemplates);
     setSelectedTemplateId(clean.id);
     setForm(clean);
     setSaving(false);
-    toast.success("Template saved");
+    if (synced) toast.success("Template saved to your account");
+    else toast.error("Template saved only on this browser. Account sync failed.");
   };
 
   const deleteTemplate = async (templateId) => {

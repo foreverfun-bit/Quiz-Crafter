@@ -11,6 +11,10 @@ export const profileKeys = {
   socialLinks: "quiz_crafter_social_links_v1",
   hostToolsBySession: "quiz_crafter_host_tools_by_session_v1",
   hostSetup: "quiz_crafter_host_setup_v1",
+  venues: "quiz_crafter_venues_v1",
+  showTemplates: "quiz_crafter_show_templates_v1",
+  activeVenueId: "quiz_crafter_active_venue_id",
+  brandingDefaults: "quiz_crafter_host_branding_defaults_v1",
 };
 
 export const HOST_SETUP_CATEGORY = "__quiz_crafter_host_setup_v1";
@@ -58,6 +62,18 @@ const parseSetupStatus = (value) => {
   }
 };
 
+const mergeSetupSettings = (primary, mirror) => {
+  const next = { ...(isPlainObject(primary) ? primary : {}), ...(isPlainObject(mirror) ? mirror : {}) };
+  ["venues", "templates"].forEach((key) => {
+    const primaryList = Array.isArray(primary?.[key]) ? primary[key] : [];
+    const mirrorList = Array.isArray(mirror?.[key]) ? mirror[key] : [];
+    if (mirrorList.length) next[key] = mirrorList;
+    else if (primaryList.length) next[key] = primaryList;
+  });
+  next.activeVenueId = mirror?.activeVenueId || primary?.activeVenueId || next.activeVenueId || "";
+  return next;
+};
+
 export const loadHostSetupSettings = async () => {
   const { data: userData } = await supabase.auth.getUser().catch(() => ({ data: null }));
   const metadataSetup = parseSetupStatus(userData?.user?.user_metadata?.[profileKeys.hostSetup]);
@@ -70,13 +86,18 @@ export const loadHostSetupSettings = async () => {
     .map((row) => parseSetupStatus(row?.status || row?.preference || row?.value || row?.rating))
     .filter((item) => Object.keys(item).length)
     .sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime())[0] || {};
-  return { ...metadataSetup, ...rowSetup };
+  return mergeSetupSettings(metadataSetup, rowSetup);
 };
 
 export const saveHostSetupSettings = async (patch) => {
   const current = await loadHostSetupSettings().catch(() => ({}));
   const next = { ...current, ...(isPlainObject(patch) ? patch : {}), updatedAt: new Date().toISOString() };
-  await updateUserMetadata({ [profileKeys.hostSetup]: next });
+  const metadataPatch = { [profileKeys.hostSetup]: next };
+  if (Array.isArray(next.venues)) metadataPatch[profileKeys.venues] = next.venues;
+  if (Array.isArray(next.templates)) metadataPatch[profileKeys.showTemplates] = next.templates;
+  if (next.activeVenueId !== undefined) metadataPatch[profileKeys.activeVenueId] = next.activeVenueId;
+  if (isPlainObject(next.branding)) metadataPatch[profileKeys.brandingDefaults] = next.branding;
+  await updateUserMetadata(metadataPatch);
   const payload = { category: HOST_SETUP_CATEGORY, status: JSON.stringify(next) };
   const upsertResult = await supabase.from("category_preferences").upsert(payload).select("*");
   if (!upsertResult.error) return next;
