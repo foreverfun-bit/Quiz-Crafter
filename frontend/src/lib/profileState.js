@@ -10,6 +10,7 @@ export const profileKeys = {
   unusedQuestionIds: "quiz_crafter_unused_question_ids_v1",
   socialLinks: "quiz_crafter_social_links_v1",
   hostToolsBySession: "quiz_crafter_host_tools_by_session_v1",
+  hostSetup: "quiz_crafter_host_setup_v1",
 };
 
 export const HOST_SETUP_CATEGORY = "__quiz_crafter_host_setup_v1";
@@ -58,29 +59,32 @@ const parseSetupStatus = (value) => {
 };
 
 export const loadHostSetupSettings = async () => {
+  const { data: userData } = await supabase.auth.getUser().catch(() => ({ data: null }));
+  const metadataSetup = parseSetupStatus(userData?.user?.user_metadata?.[profileKeys.hostSetup]);
   const { data, error } = await supabase
     .from("category_preferences")
     .select("*")
     .eq("category", HOST_SETUP_CATEGORY);
-  if (error) throw error;
-  return (Array.isArray(data) ? data : [])
+  if (error) return metadataSetup;
+  const rowSetup = (Array.isArray(data) ? data : [])
     .map((row) => parseSetupStatus(row?.status || row?.preference || row?.value || row?.rating))
     .filter((item) => Object.keys(item).length)
     .sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime())[0] || {};
+  return { ...metadataSetup, ...rowSetup };
 };
 
 export const saveHostSetupSettings = async (patch) => {
   const current = await loadHostSetupSettings().catch(() => ({}));
   const next = { ...current, ...(isPlainObject(patch) ? patch : {}), updatedAt: new Date().toISOString() };
+  await updateUserMetadata({ [profileKeys.hostSetup]: next });
   const payload = { category: HOST_SETUP_CATEGORY, status: JSON.stringify(next) };
-  const upsertResult = await supabase.from("category_preferences").upsert(payload);
+  const upsertResult = await supabase.from("category_preferences").upsert(payload).select("*");
   if (!upsertResult.error) return next;
 
-  const updateResult = await supabase.from("category_preferences").update(payload).eq("category", HOST_SETUP_CATEGORY);
+  const updateResult = await supabase.from("category_preferences").update(payload).eq("category", HOST_SETUP_CATEGORY).select("*");
   if (!updateResult.error && Array.isArray(updateResult.data) && updateResult.data.length) return next;
 
-  const insertResult = await supabase.from("category_preferences").insert(payload);
-  if (insertResult.error) throw insertResult.error;
+  await supabase.from("category_preferences").insert(payload).select("*");
   return next;
 };
 
