@@ -344,6 +344,11 @@ Freshness rules:
 - Prefer second-order facts: unusual origins, production details, regional names, near-misses, odd rules, forgotten firsts, surprising constraints, etymology, hidden design choices, or real-world quirks.
 - Ask yourself: "Would this feel fresh to someone who has hosted weekly trivia for years?" If not, replace it.
 
+Game-show inspiration:
+- You may take high-level inspiration from game-show clue craft: strong hooks, clean clue paths, satisfying reveals, category variety, and answerability under pressure.
+- Do not copy actual game-show questions, recurring clue wording, proprietary formats, catchphrases, or the exact voice of any specific show.
+- Aim for the feel of a polished trivia room: concise like a good quiz clue, fair like a well-edited game show, and fresh enough for a host who has heard the obvious versions before.
+
 Trivia host style:
 - ${config.roundGuidance}
 - Difficulty: ${difficultyProfile.label}. ${difficultyProfile.guidance}
