@@ -33,6 +33,7 @@ const DIFFICULTY_PROFILES = {
 };
 
 const BROAD_CATEGORIES = ["Art", "Books", "Food & Drink", "Geography", "History", "Internet Culture", "Local Flavor", "Movies", "Music", "Nature", "Pop Culture", "Science", "Sports", "Television", "Theater", "Video Games", "Weird Science", "World Culture"];
+const APPROVED_CATEGORY_STRICT_THRESHOLD = 14;
 const EXISTING_QUESTIONS_CACHE_MS = 5 * 60 * 1000;
 const STYLE_EXAMPLE_LIMIT = 12;
 const DUPLICATE_EXAMPLE_LIMIT = 55;
@@ -101,6 +102,8 @@ export default async function handler(req, res) {
     const cleanExcludeCategories = dedupeStrings([...normalizeStringArray(excludeCategories), ...cleanRejectedCategories].filter((category) => !containsCategory(cleanLockedCategories, category)));
     const cleanRejectedQuestions = dedupeStrings([...normalizeStringArray(rejectedQuestions), ...normalizeStringArray(currentBatchQuestions)]);
     const cleanSessionContext = normalizeSessionContext(sessionContext);
+    const requireApprovedCategories = cleanLockedCategories.length > 0 || cleanApprovedCategories.length >= APPROVED_CATEGORY_STRICT_THRESHOLD;
+    const categoryExpansionMode = !cleanLockedCategories.length && cleanApprovedCategories.length > 0 && cleanApprovedCategories.length < APPROVED_CATEGORY_STRICT_THRESHOLD;
     const existingQuestions = avoidDuplicates || excludeUsed ? await fetchExistingQuestions() : [];
     const styleExamples = buildStyleExamples(existingQuestions, normalizedQuestionType, cleanApprovedCategories);
     const existingFingerprints = new Set(existingQuestions.map((q) => fingerprint(q.question_text)));
@@ -118,6 +121,7 @@ export default async function handler(req, res) {
       cleanExcludeCategories,
       cleanApprovedCategories,
       cleanLockedCategories,
+      categoryExpansionMode,
       cleanRejectedQuestions,
       cleanSessionContext,
       existingQuestions,
@@ -135,6 +139,7 @@ export default async function handler(req, res) {
       cleanExcludeCategories,
       cleanApprovedCategories,
       cleanLockedCategories,
+      requireApprovedCategories,
       existingFingerprints,
       existingAnswerPairs,
       existingAnswers,
@@ -149,6 +154,7 @@ export default async function handler(req, res) {
       validation = normalizeCandidates({
         ...validationInput,
         cleanApprovedCategories: [],
+        requireApprovedCategories: false,
         avoidDuplicates: false,
       });
     }
@@ -157,6 +163,7 @@ export default async function handler(req, res) {
         ...validationInput,
         cleanExcludeCategories: cleanRejectedCategories,
         cleanApprovedCategories: [],
+        requireApprovedCategories: false,
         cleanLockedCategories: cleanLockedCategories.length ? cleanLockedCategories : [],
         existingFingerprints: new Set(),
         existingAnswerPairs: new Set(),
@@ -169,6 +176,7 @@ export default async function handler(req, res) {
         ...validationInput,
         cleanExcludeCategories: [],
         cleanApprovedCategories: [],
+        requireApprovedCategories: false,
         cleanLockedCategories: [],
         rejectedAnswerFingerprints: new Set(),
         existingFingerprints: new Set(),
@@ -273,12 +281,14 @@ function formatContextQuestion(question) {
   return `- [${question.round || "Session"} / ${question.category || "Uncategorized"} / ${question.question_type || "written"}] ${question.question_text} Answer: ${question.correct_answer}`;
 }
 
-function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, cleanRejectedQuestions = [], cleanSessionContext = null, existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt }) {
+function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, categoryExpansionMode, cleanRejectedQuestions = [], cleanSessionContext = null, existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt }) {
   const overGenerateCount = Math.min(18, Math.max(safeCount + 4, Math.ceil(safeCount * 1.7)));
   const lockedCategoryText = cleanLockedCategories.length ? `Locked categories are active. The category field must exactly match one of these locked categories: ${cleanLockedCategories.join(", ")}. Generate all candidates inside these locked categories until the host unlocks them.` : "";
   const approvedCategoryText = cleanLockedCategories.length
     ? lockedCategoryText
-    : cleanApprovedCategories.length
+    : categoryExpansionMode
+      ? `The approved category list is still small, so use it as a style guide, not a cage. Approved category seeds: ${cleanApprovedCategories.join(", ")}. Roughly half the candidates should use one of those exact categories; the rest may introduce fresh adjacent categories that feel like the same host's vibe. New categories should be broad, reusable, US-friendly, and not one-off answer labels.`
+      : cleanApprovedCategories.length
       ? `Use these pre-approved categories first. The category field should exactly match one of these names unless the user typed a specific category in the current request: ${cleanApprovedCategories.join(", ")}.`
       : `Use varied broad categories such as: ${BROAD_CATEGORIES.join(", ")}.`;
   const excludedCategoryText = cleanExcludeCategories.length ? `Do not use these rejected or avoided categories: ${cleanExcludeCategories.join(", ")}.` : "";
@@ -450,7 +460,7 @@ async function requestCandidates(prompt) {
   }
 }
 
-function normalizeCandidates({ candidates, config, questionType, difficultyKey, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, existingFingerprints, existingAnswerPairs, existingAnswers, rejectedQuestionFingerprints, rejectedAnswerFingerprints, avoidDuplicates, includeImagePrompt }) {
+function normalizeCandidates({ candidates, config, questionType, difficultyKey, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, requireApprovedCategories = true, existingFingerprints, existingAnswerPairs, existingAnswers, rejectedQuestionFingerprints, rejectedAnswerFingerprints, avoidDuplicates, includeImagePrompt }) {
   const rejected = [];
   const accepted = [];
   const batchFingerprints = new Set();
@@ -483,7 +493,7 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
       rejected.push({ index, question: item.question_text, reason: "not_locked_category" });
       return;
     }
-    if (approvedCategorySet.size > 0 && !approvedCategorySet.has(itemCategoryKey)) {
+    if (requireApprovedCategories && approvedCategorySet.size > 0 && !approvedCategorySet.has(itemCategoryKey)) {
       rejected.push({ index, question: item.question_text, reason: "not_approved_category" });
       return;
     }
