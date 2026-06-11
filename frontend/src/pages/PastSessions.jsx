@@ -15,8 +15,51 @@ import {
   FileText,
   Search,
   PlusCircle,
+  ArrowUpDown,
 } from "lucide-react";
 import { toast } from "sonner";
+
+const titleDatePatterns = [
+  /\b(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})\b/,
+  /\b(\d{1,2})\s+(\d{1,2})\s+(\d{2,4})\b/,
+];
+
+const normalizeYear = (year) => {
+  const parsed = Number(year);
+  if (parsed < 100) return parsed >= 70 ? 1900 + parsed : 2000 + parsed;
+  return parsed;
+};
+
+const parseDateParts = (month, day, year) => {
+  const date = new Date(normalizeYear(year), Number(month) - 1, Number(day));
+  if (date.getMonth() !== Number(month) - 1 || date.getDate() !== Number(day)) return null;
+  return date;
+};
+
+const getSessionTitle = (session) => session.name || session.session_name || "Untitled Session";
+
+const getHostDate = (session) => {
+  const explicitDate = session.hosted_at || session.session_date || session.event_date || session.host_date || session.date;
+  if (explicitDate) {
+    const parsed = new Date(explicitDate);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+
+  const title = getSessionTitle(session);
+  for (const pattern of titleDatePatterns) {
+    const match = title.match(pattern);
+    if (match) {
+      const parsed = parseDateParts(match[1], match[2], match[3]);
+      if (parsed) return parsed;
+    }
+  }
+  return null;
+};
+
+const formatHostDate = (session) => {
+  const hostDate = getHostDate(session);
+  return hostDate ? hostDate.toLocaleDateString() : "No host date";
+};
 
 const PastSessions = () => {
   const navigate = useNavigate();
@@ -25,6 +68,8 @@ const PastSessions = () => {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState("all");
+  const [sortMode, setSortMode] = useState("host_desc");
+  const [dateFilter, setDateFilter] = useState("all");
 
   const fetchSessions = useCallback(async (authUserId = user?.id) => {
     try {
@@ -100,19 +145,43 @@ const PastSessions = () => {
   );
 
   const filteredSessions = useMemo(() => {
-    return allSessions.filter((session) => {
+    const now = new Date();
+    const yearStart = new Date(now.getFullYear(), 0, 1);
+    const lastYearStart = new Date(now.getFullYear() - 1, 0, 1);
+    const lastYearEnd = new Date(now.getFullYear(), 0, 1);
+
+    const filtered = allSessions.filter((session) => {
       if (activeTab === "built" && session.is_past) return false;
       if (activeTab === "imported" && !session.is_past) return false;
+
+      const hostDate = getHostDate(session);
+      if (dateFilter === "with_date" && !hostDate) return false;
+      if (dateFilter === "missing_date" && hostDate) return false;
+      if (dateFilter === "this_year" && (!hostDate || hostDate < yearStart)) return false;
+      if (dateFilter === "last_year" && (!hostDate || hostDate < lastYearStart || hostDate >= lastYearEnd)) return false;
 
       if (!searchQuery.trim()) return true;
 
       const query = searchQuery.toLowerCase();
       return (
-        String(session.name || "").toLowerCase().includes(query) ||
-        String(session.venue || "").toLowerCase().includes(query)
+        getSessionTitle(session).toLowerCase().includes(query) ||
+        String(session.venue || session.venue_name || "").toLowerCase().includes(query)
       );
     });
-  }, [allSessions, activeTab, searchQuery]);
+
+    return [...filtered].sort((a, b) => {
+      const aHost = getHostDate(a)?.getTime() || 0;
+      const bHost = getHostDate(b)?.getTime() || 0;
+      const aCreated = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const bCreated = b.created_at ? new Date(b.created_at).getTime() : 0;
+      if (sortMode === "host_asc") return (aHost || Number.MAX_SAFE_INTEGER) - (bHost || Number.MAX_SAFE_INTEGER);
+      if (sortMode === "created_desc") return bCreated - aCreated;
+      if (sortMode === "created_asc") return aCreated - bCreated;
+      if (sortMode === "name_asc") return getSessionTitle(a).localeCompare(getSessionTitle(b));
+      if (sortMode === "name_desc") return getSessionTitle(b).localeCompare(getSessionTitle(a));
+      return bHost - aHost || bCreated - aCreated;
+    });
+  }, [allSessions, activeTab, searchQuery, sortMode, dateFilter]);
 
   if (loading) {
     return (
@@ -146,7 +215,7 @@ const PastSessions = () => {
 
       <Card className="glass-card mb-6">
         <CardContent className="p-4">
-          <div className="flex flex-col md:flex-row gap-4 items-center">
+          <div className="flex flex-col xl:flex-row gap-4 items-center">
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full md:w-auto">
               <TabsList className="bg-zinc-800/50">
                 <TabsTrigger value="all" className="data-[state=active]:bg-zinc-700">
@@ -170,6 +239,40 @@ const PastSessions = () => {
                 className="pl-9 bg-zinc-950/50 border-white/10 text-white"
                 data-testid="search-sessions-input"
               />
+            </div>
+
+            <div className="flex w-full md:w-auto gap-2">
+              <label className="relative flex-1 md:flex-none">
+                <ArrowUpDown className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
+                <select
+                  value={sortMode}
+                  onChange={(event) => setSortMode(event.target.value)}
+                  className="h-10 w-full md:w-[190px] rounded-md bg-zinc-950/50 border border-white/10 pl-9 pr-3 text-sm text-white outline-none focus:border-[#71E0DC]/60"
+                  aria-label="Sort sessions"
+                >
+                  <option value="host_desc">Host date newest</option>
+                  <option value="host_asc">Host date oldest</option>
+                  <option value="created_desc">Created newest</option>
+                  <option value="created_asc">Created oldest</option>
+                  <option value="name_asc">Name A-Z</option>
+                  <option value="name_desc">Name Z-A</option>
+                </select>
+              </label>
+              <label className="relative flex-1 md:flex-none">
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
+                <select
+                  value={dateFilter}
+                  onChange={(event) => setDateFilter(event.target.value)}
+                  className="h-10 w-full md:w-[160px] rounded-md bg-zinc-950/50 border border-white/10 pl-9 pr-3 text-sm text-white outline-none focus:border-[#71E0DC]/60"
+                  aria-label="Filter by host date"
+                >
+                  <option value="all">All dates</option>
+                  <option value="this_year">This year</option>
+                  <option value="last_year">Last year</option>
+                  <option value="with_date">Has host date</option>
+                  <option value="missing_date">Missing host date</option>
+                </select>
+              </label>
             </div>
           </div>
         </CardContent>
@@ -224,7 +327,7 @@ const PastSessions = () => {
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex-1">
                     <h3 className="text-white font-semibold mb-2 line-clamp-2">
-                      {session.name || "Untitled Session"}
+                      {getSessionTitle(session)}
                     </h3>
 
                     <div className="flex flex-wrap gap-2">
@@ -264,9 +367,7 @@ const PastSessions = () => {
 
                 <div className="mt-4 pt-4 border-t border-white/10 flex items-center justify-between">
                   <span className="text-zinc-600 text-xs">
-                    {session.created_at
-                      ? new Date(session.created_at).toLocaleDateString()
-                      : "No date"}
+                    Host: {formatHostDate(session)}
                   </span>
 
                   <div className="flex gap-1">
