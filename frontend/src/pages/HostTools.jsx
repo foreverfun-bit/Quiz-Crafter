@@ -62,6 +62,7 @@ const HostTools = () => {
   const [generating, setGenerating] = useState(false);
   const [connected, setConnected] = useState(false);
   const channelRef = useRef(null);
+  const loadedDraftSessionRef = useRef("");
 
   const selectedSession = useMemo(() => sessions.find((session) => session.id === selectedSessionId) || null, [sessions, selectedSessionId]);
   const emailPlayers = useMemo(() => players.filter((player) => player.updatePreference === "email" && player.updateContact), [players]);
@@ -120,7 +121,9 @@ const HostTools = () => {
 
   useEffect(() => {
     if (!selectedSessionId) return undefined;
+    loadedDraftSessionRef.current = "";
     const loadStoredHostTools = async () => {
+      const localDrafts = readJson(sessionStorageKey(selectedSessionId, "drafts"), {});
       const localState = {
         players: readJson(sessionStorageKey(selectedSessionId, "players"), []),
         feedback: readJson(sessionStorageKey(selectedSessionId, "feedback"), []),
@@ -131,6 +134,7 @@ const HostTools = () => {
       };
       try {
         const profileState = await loadHostToolsSessionState(selectedSessionId);
+        const drafts = { ...localDrafts, ...(profileState.drafts && typeof profileState.drafts === "object" ? profileState.drafts : {}) };
         const nextState = {
           players: mergeByKey(profileState.players, localState.players, (item) => item.id),
           feedback: mergeByKey(profileState.feedback, localState.feedback, (item) => `${item.playerId}-${item.questionIndex}`),
@@ -145,7 +149,14 @@ const HostTools = () => {
         setPlayerIdeas(nextState.ideas);
         setAnswers(nextState.answers);
         setActivity(nextState.activity);
+        setMessage(drafts.message || "");
+        setSocialPost(drafts.socialPost || "");
+        setAiDirection(drafts.aiDirection || "Make it playful, punny, and useful without giving away answers.");
+        setAssistantRequest(drafts.assistantRequest || "Look at this session and tell me what feels too easy, too hard, repetitive, or missing for my regular trivia crowd.");
+        setAssistantAnswer(drafts.assistantAnswer || "");
         Object.entries(nextState).forEach(([key, value]) => writeJson(sessionStorageKey(selectedSessionId, key === "categoryFeedback" ? "category-feedback" : key), value));
+        writeJson(sessionStorageKey(selectedSessionId, "drafts"), drafts);
+        loadedDraftSessionRef.current = selectedSessionId;
         saveHostToolsSessionState(selectedSessionId, nextState).catch((error) => console.warn("Host tools profile save unavailable:", error));
       } catch (error) {
         console.warn("Host tools profile sync unavailable:", error);
@@ -155,6 +166,12 @@ const HostTools = () => {
         setPlayerIdeas(localState.ideas);
         setAnswers(localState.answers);
         setActivity(localState.activity);
+        setMessage(localDrafts.message || "");
+        setSocialPost(localDrafts.socialPost || "");
+        setAiDirection(localDrafts.aiDirection || "Make it playful, punny, and useful without giving away answers.");
+        setAssistantRequest(localDrafts.assistantRequest || "Look at this session and tell me what feels too easy, too hard, repetitive, or missing for my regular trivia crowd.");
+        setAssistantAnswer(localDrafts.assistantAnswer || "");
+        loadedDraftSessionRef.current = selectedSessionId;
       }
     };
     loadStoredHostTools();
@@ -194,6 +211,16 @@ const HostTools = () => {
       setConnected(false);
     };
   }, [selectedSessionId]);
+
+  useEffect(() => {
+    if (!selectedSessionId || loadedDraftSessionRef.current !== selectedSessionId) return undefined;
+    const drafts = { message, socialPost, aiDirection, assistantRequest, assistantAnswer };
+    const timeout = window.setTimeout(() => {
+      writeJson(sessionStorageKey(selectedSessionId, "drafts"), drafts);
+      saveHostToolsSessionState(selectedSessionId, { drafts }).catch((error) => console.warn("Host tools draft save unavailable:", error));
+    }, 500);
+    return () => window.clearTimeout(timeout);
+  }, [selectedSessionId, message, socialPost, aiDirection, assistantRequest, assistantAnswer]);
 
   const updateSocialLink = (key, value) => {
     const next = { ...socialLinks, [key]: value };

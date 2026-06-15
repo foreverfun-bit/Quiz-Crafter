@@ -38,14 +38,20 @@ export const writeLocalJson = (localKey, value) => {
 
 const isPlainObject = (value) => value && typeof value === "object" && !Array.isArray(value);
 const mergeArrays = (remote, local) => [...new Set([...(Array.isArray(remote) ? remote : []), ...(Array.isArray(local) ? local : [])].filter(Boolean))];
+let metadataUpdateQueue = Promise.resolve();
 
-export const updateUserMetadata = async (patch) => {
-  const { data, error: loadError } = await supabase.auth.getUser();
-  if (loadError) throw loadError;
-  const currentMetadata = isPlainObject(data?.user?.user_metadata) ? data.user.user_metadata : {};
-  const { error } = await supabase.auth.updateUser({ data: { ...currentMetadata, ...(isPlainObject(patch) ? patch : {}) } });
-  if (error) throw error;
-  return { ...currentMetadata, ...(isPlainObject(patch) ? patch : {}) };
+export const updateUserMetadata = (patch) => {
+  const task = metadataUpdateQueue.catch(() => {}).then(async () => {
+    const { data, error: loadError } = await supabase.auth.getUser();
+    if (loadError) throw loadError;
+    const currentMetadata = isPlainObject(data?.user?.user_metadata) ? data.user.user_metadata : {};
+    const nextMetadata = { ...currentMetadata, ...(isPlainObject(patch) ? patch : {}) };
+    const { error } = await supabase.auth.updateUser({ data: nextMetadata });
+    if (error) throw error;
+    return nextMetadata;
+  });
+  metadataUpdateQueue = task;
+  return task;
 };
 
 export const saveProfileValue = async (profileKey, value) => {
@@ -141,10 +147,16 @@ export const loadHostToolsSessionState = async (sessionId) => {
   return isPlainObject(allState?.[sessionId]) ? allState[sessionId] : {};
 };
 
-export const saveHostToolsSessionState = async (sessionId, patch) => {
-  const allState = await loadProfileValue(profileKeys.hostToolsBySession);
-  const safeState = isPlainObject(allState) ? allState : {};
-  const next = { ...safeState, [sessionId]: { ...(safeState[sessionId] || {}), ...patch } };
-  await saveProfileValue(profileKeys.hostToolsBySession, next);
-  return next[sessionId];
+let hostToolsSessionSaveQueue = Promise.resolve();
+
+export const saveHostToolsSessionState = (sessionId, patch) => {
+  const task = hostToolsSessionSaveQueue.catch(() => {}).then(async () => {
+    const allState = await loadProfileValue(profileKeys.hostToolsBySession);
+    const safeState = isPlainObject(allState) ? allState : {};
+    const next = { ...safeState, [sessionId]: { ...(safeState[sessionId] || {}), ...patch } };
+    await saveProfileValue(profileKeys.hostToolsBySession, next);
+    return next[sessionId];
+  });
+  hostToolsSessionSaveQueue = task;
+  return task;
 };

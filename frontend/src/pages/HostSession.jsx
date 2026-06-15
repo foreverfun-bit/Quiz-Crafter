@@ -664,8 +664,13 @@ const HostSession = () => {
   const releaseMode = (mode, roundKey = null) => {
     if (mode === "categories") setIntroRoundKey(roundKey || introRound?.key || currentRound?.key || null);
     setPresentMode(mode);
-    if (mode === "qr") return;
-    setGameStarted(true);
+    const nextGameStarted = mode === "qr" ? gameStarted : true;
+    if (mode !== "qr") setGameStarted(true);
+    liveChannelRef.current?.send({
+      type: "broadcast",
+      event: "host_mode",
+      payload: { mode, gameStarted: nextGameStarted, introRoundKey: roundKey || null, updatedAt: new Date().toISOString() },
+    });
   };
 
   const toggleAnswer = () => {

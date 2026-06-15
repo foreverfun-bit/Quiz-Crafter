@@ -151,6 +151,10 @@ const PlayerSession = () => {
       .on("broadcast", { event: "host_state" }, ({ payload }) => {
         setHostState(payload || null);
       })
+      .on("broadcast", { event: "host_mode" }, ({ payload }) => {
+        if (!payload?.mode) return;
+        setHostState((current) => ({ ...(current || {}), ...payload }));
+      })
       .subscribe();
     return () => {
       supabase.removeChannel(channel);
@@ -168,6 +172,10 @@ const PlayerSession = () => {
           if (!previous) return null;
           return previous.questionIndex === payload?.currentIndex ? previous : null;
         });
+      })
+      .on("broadcast", { event: "host_mode" }, ({ payload }) => {
+        if (!payload?.mode) return;
+        setHostState((current) => ({ ...(current || {}), ...payload }));
       })
       .on("broadcast", { event: "host_update" }, ({ payload }) => {
         if (!payload?.message) return;
@@ -318,7 +326,7 @@ const PlayerSession = () => {
         {hostUpdate && <HostUpdateBanner update={hostUpdate} onDismiss={() => setHostUpdate(null)} />}
         {gameStarted && hostState?.mode === "leaderboard" && <LeaderboardView leaderboard={leaderboard} playerId={player.id} />}
         {gameStarted && hostState?.mode === "winners" && <LeaderboardView leaderboard={leaderboard} playerId={player.id} title="Final Winners" />}
-        {gameStarted && hostState?.mode === "feedback" && <IdeasView form={ideaForm} setForm={setIdeaForm} onSubmit={submitIdeas} />}
+        {hostState?.mode === "feedback" && <IdeasView form={ideaForm} setForm={setIdeaForm} onSubmit={submitIdeas} />}
         {gameStarted && hostState?.mode === "bonus_pause" && <LeaderboardView leaderboard={leaderboard} playerId={player.id} title="Bonus Question Next" />}
         {gameStarted && hostState?.mode === "categories" && <RoundIntroFeedback roundName={activeRoundName} description={activeRoundDescription} categories={activeRoundCategories} selectedByCategory={feedbackByCategory} currentIndex={categoryFeedbackKey} onSelect={submitCategoryFeedback} />}
         {gameStarted && hostState && hostState.mode !== "leaderboard" && hostState.mode !== "winners" && hostState.mode !== "feedback" && hostState.mode !== "categories" && hostState.mode !== "bonus_pause" && !currentQuestion && <div className="text-center"><p className="text-zinc-400">Waiting for the next question.</p></div>}
