@@ -907,13 +907,23 @@ const HostSession = () => {
     currentAnswers.forEach((answer) => {
       const key = answerKey(answer);
       const grade = gradedAnswers[key];
+      const submittedWager = hasSubmittedWager(answer);
+      if (wagerMode && wagerTiming === "after_answer" && !submittedWager) return;
       if (grade?.scoreApplied === false) {
         markAnswer(answer, grade.status, { silent: true, applyScore: true });
         return;
       }
-      if (grade || !isCorrectSubmission(answer, displayedQuestion)) return;
-      if (wagerMode && wagerTiming === "after_answer" && !hasSubmittedWager(answer)) return;
-      markAnswer(answer, "correct", { silent: true });
+      if (wagerMode && submittedWager && grade && Number(answer.wagerAmount || 0) > 0 && Number(grade.points || 0) === 0) {
+        markAnswer(answer, grade.status, { silent: true, applyScore: true });
+        return;
+      }
+      if (grade) return;
+      const correct = isCorrectSubmission(answer, displayedQuestion);
+      if (correct) {
+        markAnswer(answer, "correct", { silent: true });
+      } else if (wagerMode && submittedWager) {
+        markAnswer(answer, "incorrect", { silent: true });
+      }
     });
   // markAnswer intentionally stays outside the deps so this effect only reacts to answer/game state changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
