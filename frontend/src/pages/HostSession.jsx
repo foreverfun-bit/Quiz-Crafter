@@ -880,7 +880,7 @@ const HostSession = () => {
   const markAnswer = (answer, status, options = {}) => {
     const key = answerKey(answer);
     const previous = gradedAnswers[key];
-    const previousPoints = Number(previous?.points || 0);
+    const previousPoints = previous?.scoreApplied === false ? 0 : Number(previous?.points || 0);
     const answerQuestion = questions[Number(answer.questionIndex)] || displayedQuestion;
     const answerPoints = Number(answer.points || 0) || Number(answerQuestion?.points || 0) || getDefaultPoints(answerQuestion);
     const answerWagerLimit = Number(answer.wagerLimit || 0) || Number(answerQuestion?.wagerLimit || 0) || wagerLimit;
@@ -888,23 +888,29 @@ const HostSession = () => {
     const award = answerUsesWager ? getWagerAward(answer, leaderboard, answerWagerLimit, previousPoints) : answerPoints;
     const wagerPenalty = answerUsesWager ? getWagerAward(answer, leaderboard, answerWagerLimit, previousPoints) : 0;
     const nextPoints = status === "correct" ? award : status === "incorrect" && wagerPenalty > 0 ? -wagerPenalty : 0;
-    const delta = nextPoints - previousPoints;
+    const scoreApplied = Boolean(showAnswer || options.applyScore || previous?.scoreApplied === true);
+    const delta = scoreApplied ? nextPoints - previousPoints : 0;
     if (delta) adjustScore(answer.playerId, delta);
-    setGradedAnswers((current) => ({ ...current, [key]: { status, points: nextPoints, gradedAt: new Date().toISOString() } }));
-    if (!options.silent) toast.success(status === "correct" ? `Marked correct (+${delta || 0})` : delta ? `Marked incorrect (${delta})` : "Marked incorrect");
+    setGradedAnswers((current) => ({ ...current, [key]: { status, points: nextPoints, scoreApplied, gradedAt: new Date().toISOString() } }));
+    if (!options.silent) toast.success(!scoreApplied ? `Marked ${status}; score updates on reveal` : status === "correct" ? `Marked correct (+${delta || 0})` : delta ? `Marked incorrect (${delta})` : "Marked incorrect");
   };
 
   useEffect(() => {
-    if (!displayedQuestion) return;
+    if (!displayedQuestion || !showAnswer) return;
     currentAnswers.forEach((answer) => {
       const key = answerKey(answer);
-      if (gradedAnswers[key] || !isCorrectSubmission(answer, displayedQuestion)) return;
+      const grade = gradedAnswers[key];
+      if (grade?.scoreApplied === false) {
+        markAnswer(answer, grade.status, { silent: true, applyScore: true });
+        return;
+      }
+      if (grade || !isCorrectSubmission(answer, displayedQuestion)) return;
       if (wagerMode && wagerTiming === "after_answer" && !hasSubmittedWager(answer)) return;
       markAnswer(answer, "correct", { silent: true });
     });
   // markAnswer intentionally stays outside the deps so this effect only reacts to answer/game state changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentAnswers, displayedQuestion, gradedAnswers, wagerMode, wagerTiming]);
+  }, [currentAnswers, displayedQuestion, gradedAnswers, wagerMode, wagerTiming, showAnswer]);
 
   if (loading) return <div className="min-h-screen bg-[#09090B] flex items-center justify-center"><Loader2 className="text-[#71E0DC] animate-spin" size={34} /></div>;
   if (!session || !displayedQuestion) {
