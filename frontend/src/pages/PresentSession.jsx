@@ -410,6 +410,7 @@ const WinnersView = ({ leaderboard, sessionName }) => {
   const sorted = [...leaderboard].sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
   const winners = sorted.slice(0, 3);
   const first = winners[0];
+  const runnersUp = winners.slice(1);
 
   return (
     <div className="w-full max-w-6xl">
@@ -420,17 +421,8 @@ const WinnersView = ({ leaderboard, sessionName }) => {
           </div>
           <p className="text-[#71E0DC] text-xl font-black uppercase tracking-[0.3em]">{sessionName}</p>
           <h2 className="mt-4 text-6xl lg:text-9xl font-black leading-none text-white">Winners</h2>
-          {first && <p className="mt-5 text-3xl lg:text-5xl font-black text-amber-200">{first.name}</p>}
-          <div className="mt-10 grid grid-cols-1 md:grid-cols-3 gap-5 text-left">
-            {winners.map((team, index) => (
-              <div key={team.id || team.name} className={`rounded-xl border p-6 ${index === 0 ? "border-amber-300/50 bg-amber-300/15 md:order-2 md:scale-105" : index === 1 ? "border-[#AEB2EF]/35 bg-[#AEB2EF]/10 md:order-1" : "border-[#71E0DC]/35 bg-[#71E0DC]/10 md:order-3"}`}>
-                <p className="text-sm font-black uppercase tracking-wide text-zinc-400">{index === 0 ? "Champion" : index === 1 ? "Second Place" : "Third Place"}</p>
-                <p className="mt-4 text-3xl font-black text-white truncate">{team.name}</p>
-                <p className="mt-3 text-5xl font-black" style={{ color: index === 0 ? "#FDE68A" : index === 1 ? "#AEB2EF" : "#71E0DC" }}>{Number(team.score || 0)}</p>
-              </div>
-            ))}
-            {!winners.length && <p className="md:col-span-3 rounded-lg border border-white/10 bg-zinc-950/70 p-8 text-center text-2xl text-zinc-400">Winners will appear once teams have scores.</p>}
-          </div>
+          {first ? <div className="mx-auto mt-10 max-w-3xl rounded-xl border-2 border-amber-300/60 bg-amber-300/15 p-8 text-center shadow-2xl shadow-amber-300/10"><div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-amber-300 text-2xl font-black text-zinc-950">1</div><p className="mt-4 text-lg font-black uppercase tracking-[0.2em] text-amber-200">Champion</p><p className="mt-3 truncate text-4xl font-black text-white lg:text-6xl">{first.name}</p><p className="mt-3 text-6xl font-black text-amber-200 lg:text-7xl">{Number(first.score || 0)}</p></div> : <p className="mt-10 rounded-lg border border-white/10 bg-zinc-950/70 p-8 text-center text-2xl text-zinc-400">Winners will appear once teams have scores.</p>}
+          {runnersUp.length > 0 && <div className="mx-auto mt-5 grid max-w-4xl grid-cols-1 gap-5 text-left md:grid-cols-2">{runnersUp.map((team, index) => { const place = index + 2; return <div key={team.id || team.name} className={`rounded-xl border p-6 ${place === 2 ? "border-[#AEB2EF]/35 bg-[#AEB2EF]/10" : "border-[#71E0DC]/35 bg-[#71E0DC]/10"}`}><div className="flex items-center gap-3"><span className={`flex h-10 w-10 items-center justify-center rounded-full text-lg font-black ${place === 2 ? "bg-[#AEB2EF] text-zinc-950" : "bg-[#71E0DC] text-zinc-950"}`}>{place}</span><p className="text-sm font-black uppercase tracking-wide text-zinc-400">{place === 2 ? "Second Place" : "Third Place"}</p></div><p className="mt-4 truncate text-3xl font-black text-white">{team.name}</p><p className="mt-3 text-5xl font-black" style={{ color: place === 2 ? "#AEB2EF" : "#71E0DC" }}>{Number(team.score || 0)}</p></div>; })}</div>}
           <p className="mt-10 text-3xl font-black text-zinc-200">Thanks for playing!</p>
         </CardContent>
       </Card>
