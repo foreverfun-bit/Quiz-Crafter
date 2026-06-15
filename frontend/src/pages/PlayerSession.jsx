@@ -4,7 +4,7 @@ import { supabase } from "../lib/supabase";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent } from "../components/ui/card";
-import { CheckCircle, Send, Tags, ThumbsDown, ThumbsUp, Timer, Trophy } from "lucide-react";
+import { CheckCircle, Send, Sparkles, Tags, ThumbsDown, ThumbsUp, Timer, Trophy } from "lucide-react";
 import { toast } from "sonner";
 
 const makePlayerId = () => `player-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
