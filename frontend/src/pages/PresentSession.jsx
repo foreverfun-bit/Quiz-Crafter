@@ -324,45 +324,30 @@ const LobbyView = ({ sessionName, joinUrl, players }) => {
   );
 };
 
-const CategoriesView = ({ round, rounds }) => {
+const CategoriesView = ({ round }) => {
   const categories = round?.categories || [...new Set((round?.questions || []).map((question) => question.category).filter(Boolean))];
 
   return (
-    <div className="h-full w-full max-w-6xl">
-      <div className="grid h-full grid-cols-1 lg:grid-cols-[1fr_280px] gap-4 items-center">
-        <Card className="glass-card">
-          <CardContent className="p-5 lg:p-6">
-            <div className="flex items-center gap-3 mb-4">
-              <Tags className="text-[#71E0DC]" size={32} />
+    <div className="h-full w-full max-w-6xl flex items-start">
+        <Card className="glass-card w-full">
+          <CardContent className="p-6 lg:p-8">
+            <div className="flex items-center gap-4 mb-5">
+              <Tags className="text-[#71E0DC]" size={38} />
               <div>
-                <p className="text-zinc-400">Current round</p>
-                <h2 className="text-3xl font-black">{round?.name || "Round"}</h2>
+                <p className="text-lg text-zinc-400">Current round</p>
+                <h2 className="text-4xl lg:text-5xl font-black">{round?.name || "Round"}</h2>
               </div>
             </div>
-            {round?.description && <p className="text-xl lg:text-2xl text-zinc-200 leading-snug mb-5">{round.description}</p>}
-            <p className="text-zinc-400 uppercase tracking-wider text-sm font-semibold mb-3">Round Categories</p>
-            <div className="flex flex-wrap gap-3">
+            {round?.description && <p className="text-2xl lg:text-3xl text-zinc-200 leading-snug mb-7">{round.description}</p>}
+            <p className="text-zinc-400 uppercase tracking-wider text-base font-semibold mb-4">Round Categories</p>
+            <div className="flex flex-wrap gap-4">
               {categories.map((category) => (
-                <div key={category} className="rounded-lg border border-[#71E0DC]/30 bg-[#71E0DC]/10 px-4 py-2.5 text-xl font-bold text-[#71E0DC]">{category}</div>
+                <div key={category} className="rounded-lg border border-[#71E0DC]/30 bg-[#71E0DC]/10 px-5 py-3 text-2xl lg:text-3xl font-bold text-[#71E0DC]">{category}</div>
               ))}
               {!categories.length && <p className="text-zinc-400 text-2xl">No categories saved for this round yet.</p>}
             </div>
           </CardContent>
         </Card>
-
-        <Card className="glass-card">
-          <CardContent className="p-4 grid grid-cols-2 lg:grid-cols-1 gap-2">
-            {rounds.map((item) => (
-              <div key={item.key} className={`rounded-lg border px-3 py-2 ${item.key === round?.key ? "border-[#71E0DC]/50 bg-[#71E0DC]/10" : "border-white/10 bg-zinc-950/60"}`}>
-                <div className="flex justify-between gap-3">
-                  <span className="font-bold">{item.name}</span>
-                  <span className="text-zinc-400">{item.questions.length}</span>
-                </div>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      </div>
     </div>
   );
 };
