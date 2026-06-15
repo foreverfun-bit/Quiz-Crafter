@@ -278,7 +278,10 @@ const PresentSession = () => {
             <p className="text-[#71E0DC] font-semibold tracking-wide uppercase text-sm">{sessionName}</p>
             <h1 className="text-2xl lg:text-3xl font-black mt-0.5">{mode === "categories" ? "Round Intro" : mode === "leaderboard" ? "Leaderboard" : mode === "winners" ? "Winners" : mode === "feedback" ? "Feedback" : mode === "bonus_pause" ? "Bonus Coming Up" : currentRound?.name || "Question"}</h1>
           </div>
-          <Badge className="bg-white/10 text-zinc-200 border border-white/10 text-base px-4 py-2">{displayRound?.name || "Round"}</Badge>
+          <div className="flex items-center gap-3">
+            <Badge className="bg-white/10 text-zinc-200 border border-white/10 text-base px-4 py-2">{displayRound?.name || "Round"}</Badge>
+            {hasPresentationStarted(presentState, currentIndex) && mode !== "qr" && <HeaderJoinQr joinUrl={joinUrl} />}
+          </div>
         </header>
 
         <main className="min-h-0 flex-1 flex items-center justify-center overflow-hidden py-3">
@@ -292,7 +295,6 @@ const PresentSession = () => {
             <QuestionView question={currentQuestion} index={currentIndex} total={questions.length} showAnswer={presentState.showAnswer} showFunFact={presentState.showFunFact} />
           )}
         </main>
-        {hasPresentationStarted(presentState, currentIndex) && mode !== "qr" && <CornerJoinQr joinUrl={joinUrl} />}
       </div>
     </div>
   );
@@ -379,14 +381,14 @@ const LeaderboardView = ({ leaderboard }) => {
   );
 };
 
-const CornerJoinQr = ({ joinUrl }) => (
-  <div className="fixed bottom-5 right-5 z-20 hidden items-center gap-3 rounded-xl border border-white/10 bg-zinc-950/85 px-3 py-2 shadow-2xl shadow-black/40 backdrop-blur md:flex">
-    <div className="rounded-md bg-white p-1.5">
-      <QRCodeCanvas value={joinUrl} size={86} marginSize={1} level="M" />
+const HeaderJoinQr = ({ joinUrl }) => (
+  <div className="hidden items-center gap-2 rounded-lg border border-white/10 bg-zinc-950/80 px-2 py-1.5 md:flex">
+    <div className="rounded bg-white p-1">
+      <QRCodeCanvas value={joinUrl} size={54} marginSize={1} level="M" />
     </div>
-    <div className="max-w-52 text-left">
+    <div className="pr-1 text-left">
       <p className="text-xs font-black uppercase tracking-wide text-[#71E0DC]">Late teams</p>
-      <p className="break-all text-[11px] leading-snug text-zinc-300">{joinUrl}</p>
+      <p className="text-[11px] text-zinc-400">Scan to join</p>
     </div>
   </div>
 );
