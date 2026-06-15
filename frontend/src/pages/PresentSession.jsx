@@ -271,17 +271,17 @@ const PresentSession = () => {
   }
 
   return (
-    <div className="min-h-screen bg-[#09090B] text-white overflow-hidden" data-testid="present-session-page">
-      <div className="min-h-screen flex flex-col p-6 lg:p-10">
-        <header className="flex items-center justify-between gap-4 border-b border-white/10 pb-5">
+    <div className="h-screen bg-[#09090B] text-white overflow-hidden" data-testid="present-session-page">
+      <div className="h-screen flex flex-col p-3 lg:p-5">
+        <header className="shrink-0 flex items-center justify-between gap-4 border-b border-white/10 pb-3">
           <div>
             <p className="text-[#71E0DC] font-semibold tracking-wide uppercase text-sm">{sessionName}</p>
-            <h1 className="text-3xl lg:text-5xl font-black mt-1">{mode === "categories" ? "Round Intro" : mode === "leaderboard" ? "Leaderboard" : mode === "winners" ? "Winners" : mode === "feedback" ? "Feedback" : mode === "bonus_pause" ? "Bonus Coming Up" : currentRound?.name || "Question"}</h1>
+            <h1 className="text-2xl lg:text-3xl font-black mt-0.5">{mode === "categories" ? "Round Intro" : mode === "leaderboard" ? "Leaderboard" : mode === "winners" ? "Winners" : mode === "feedback" ? "Feedback" : mode === "bonus_pause" ? "Bonus Coming Up" : currentRound?.name || "Question"}</h1>
           </div>
           <Badge className="bg-white/10 text-zinc-200 border border-white/10 text-base px-4 py-2">{displayRound?.name || "Round"}</Badge>
         </header>
 
-        <main className="flex-1 flex items-center justify-center py-8">
+        <main className="min-h-0 flex-1 flex items-center justify-center overflow-hidden py-3">
           {mode === "categories" && <CategoriesView round={introRound} rounds={rounds} />}
           {mode === "leaderboard" && <LeaderboardView leaderboard={presentState.leaderboard || []} />}
           {mode === "winners" && <WinnersView leaderboard={presentState.leaderboard || []} sessionName={sessionName} />}
@@ -302,18 +302,18 @@ const LobbyView = ({ sessionName, joinUrl, players }) => {
   const playerCount = players.length;
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-8 text-center">
+    <div className="h-full flex items-center justify-center p-4 text-center">
       <div className="w-full max-w-5xl">
         <p className="text-[#71E0DC] font-semibold tracking-wide uppercase text-sm mb-3">{sessionName}</p>
-        <h1 className="text-5xl lg:text-8xl font-black leading-none mb-8">Join Trivia</h1>
-        <div className="flex justify-center mb-7">
+        <h1 className="text-4xl lg:text-6xl font-black leading-none mb-4">Join Trivia</h1>
+        <div className="flex justify-center mb-4">
           <div className="rounded-2xl bg-white p-4 shadow-2xl shadow-[#71E0DC]/10">
-            <QRCodeCanvas value={joinUrl} size={320} marginSize={2} level="M" className="h-72 w-72 lg:h-80 lg:w-80" />
+            <QRCodeCanvas value={joinUrl} size={260} marginSize={2} level="M" className="h-52 w-52 lg:h-64 lg:w-64" />
           </div>
         </div>
         <p className="text-xl lg:text-2xl text-zinc-300 mb-3">Scan to play from your phone</p>
         <p className="mx-auto max-w-4xl break-all text-lg lg:text-2xl font-semibold text-[#71E0DC]">{joinUrl}</p>
-        <div className="mt-8 inline-flex items-center gap-3 rounded-full border border-white/10 bg-white/5 px-6 py-3 text-zinc-200">
+        <div className="mt-4 inline-flex items-center gap-3 rounded-full border border-white/10 bg-white/5 px-5 py-2 text-zinc-200">
           <Users size={20} className="text-[#71E0DC]" />
           <span>{playerCount} {playerCount === 1 ? "team" : "teams"} joined</span>
           <span className="text-zinc-500">·</span>
@@ -328,22 +328,22 @@ const CategoriesView = ({ round, rounds }) => {
   const categories = round?.categories || [...new Set((round?.questions || []).map((question) => question.category).filter(Boolean))];
 
   return (
-    <div className="w-full max-w-6xl">
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 items-start">
+    <div className="h-full w-full max-w-6xl">
+      <div className="grid h-full grid-cols-1 lg:grid-cols-[1fr_280px] gap-4 items-center">
         <Card className="glass-card">
-          <CardContent className="p-8 lg:p-10">
-            <div className="flex items-center gap-3 mb-8">
+          <CardContent className="p-5 lg:p-6">
+            <div className="flex items-center gap-3 mb-4">
               <Tags className="text-[#71E0DC]" size={32} />
               <div>
                 <p className="text-zinc-400">Current round</p>
-                <h2 className="text-4xl font-black">{round?.name || "Round"}</h2>
+                <h2 className="text-3xl font-black">{round?.name || "Round"}</h2>
               </div>
             </div>
-            {round?.description && <p className="text-2xl lg:text-3xl text-zinc-200 leading-relaxed mb-8">{round.description}</p>}
+            {round?.description && <p className="text-xl lg:text-2xl text-zinc-200 leading-snug mb-5">{round.description}</p>}
             <p className="text-zinc-400 uppercase tracking-wider text-sm font-semibold mb-3">Round Categories</p>
-            <div className="flex flex-wrap gap-4">
+            <div className="flex flex-wrap gap-3">
               {categories.map((category) => (
-                <div key={category} className="rounded-lg border border-[#71E0DC]/30 bg-[#71E0DC]/10 px-6 py-4 text-2xl font-bold text-[#71E0DC]">{category}</div>
+                <div key={category} className="rounded-lg border border-[#71E0DC]/30 bg-[#71E0DC]/10 px-4 py-2.5 text-xl font-bold text-[#71E0DC]">{category}</div>
               ))}
               {!categories.length && <p className="text-zinc-400 text-2xl">No categories saved for this round yet.</p>}
             </div>
@@ -351,9 +351,9 @@ const CategoriesView = ({ round, rounds }) => {
         </Card>
 
         <Card className="glass-card">
-          <CardContent className="p-5 space-y-3">
+          <CardContent className="p-4 grid grid-cols-2 lg:grid-cols-1 gap-2">
             {rounds.map((item) => (
-              <div key={item.key} className={`rounded-lg border px-4 py-3 ${item.key === round?.key ? "border-[#71E0DC]/50 bg-[#71E0DC]/10" : "border-white/10 bg-zinc-950/60"}`}>
+              <div key={item.key} className={`rounded-lg border px-3 py-2 ${item.key === round?.key ? "border-[#71E0DC]/50 bg-[#71E0DC]/10" : "border-white/10 bg-zinc-950/60"}`}>
                 <div className="flex justify-between gap-3">
                   <span className="font-bold">{item.name}</span>
                   <span className="text-zinc-400">{item.questions.length}</span>
@@ -371,14 +371,14 @@ const LeaderboardView = ({ leaderboard }) => {
   const sorted = [...leaderboard].sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
 
   return (
-    <div className="w-full max-w-4xl">
-      <Card className="glass-card">
-        <CardContent className="p-8 lg:p-10">
-          <div className="flex items-center justify-center gap-3 mb-8">
-            <Trophy className="text-amber-300" size={40} />
-            <h2 className="text-5xl font-black">Leaderboard</h2>
+    <div className="h-full w-full max-w-6xl">
+      <Card className="glass-card h-full">
+        <CardContent className="flex h-full flex-col p-4 lg:p-5">
+          <div className="flex shrink-0 items-center justify-center gap-3 mb-3">
+            <Trophy className="text-amber-300" size={30} />
+            <h2 className="text-3xl font-black">Leaderboard</h2>
           </div>
-          <div className="space-y-4">
+          <div className="min-h-0 flex-1 grid grid-cols-1 md:grid-cols-2 auto-rows-fr gap-2">
             {sorted.map((team, index) => (
               <div key={team.id || team.name} className="grid grid-cols-[64px_1fr_auto] items-center gap-4 rounded-lg border border-white/10 bg-zinc-950/70 px-5 py-4">
                 <div className={`h-12 w-12 rounded-full flex items-center justify-center font-black text-xl ${index === 0 ? "bg-amber-300 text-zinc-950" : "bg-white/10 text-zinc-200"}`}>{index + 1}</div>
@@ -413,17 +413,17 @@ const WinnersView = ({ leaderboard, sessionName }) => {
   const runnersUp = winners.slice(1);
 
   return (
-    <div className="w-full max-w-6xl">
-      <Card className="glass-card overflow-hidden">
-        <CardContent className="p-8 lg:p-12 text-center">
-          <div className="mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-full border border-amber-300/40 bg-amber-300/15 shadow-2xl shadow-amber-300/10">
-            <Trophy className="text-amber-300" size={52} />
+    <div className="h-full w-full max-w-6xl">
+      <Card className="glass-card h-full overflow-hidden">
+        <CardContent className="flex h-full flex-col justify-center p-4 lg:p-6 text-center">
+          <div className="mx-auto mb-2 flex h-14 w-14 items-center justify-center rounded-full border border-amber-300/40 bg-amber-300/15 shadow-2xl shadow-amber-300/10">
+            <Trophy className="text-amber-300" size={32} />
           </div>
           <p className="text-[#71E0DC] text-xl font-black uppercase tracking-[0.3em]">{sessionName}</p>
-          <h2 className="mt-4 text-6xl lg:text-9xl font-black leading-none text-white">Winners</h2>
-          {first ? <div className="mx-auto mt-10 max-w-3xl rounded-xl border-2 border-amber-300/60 bg-amber-300/15 p-8 text-center shadow-2xl shadow-amber-300/10"><div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-amber-300 text-2xl font-black text-zinc-950">1</div><p className="mt-4 text-lg font-black uppercase tracking-[0.2em] text-amber-200">Champion</p><p className="mt-3 truncate text-4xl font-black text-white lg:text-6xl">{first.name}</p><p className="mt-3 text-6xl font-black text-amber-200 lg:text-7xl">{Number(first.score || 0)}</p></div> : <p className="mt-10 rounded-lg border border-white/10 bg-zinc-950/70 p-8 text-center text-2xl text-zinc-400">Winners will appear once teams have scores.</p>}
-          {runnersUp.length > 0 && <div className="mx-auto mt-5 grid max-w-4xl grid-cols-1 gap-5 text-left md:grid-cols-2">{runnersUp.map((team, index) => { const place = index + 2; return <div key={team.id || team.name} className={`rounded-xl border p-6 ${place === 2 ? "border-[#AEB2EF]/35 bg-[#AEB2EF]/10" : "border-[#71E0DC]/35 bg-[#71E0DC]/10"}`}><div className="flex items-center gap-3"><span className={`flex h-10 w-10 items-center justify-center rounded-full text-lg font-black ${place === 2 ? "bg-[#AEB2EF] text-zinc-950" : "bg-[#71E0DC] text-zinc-950"}`}>{place}</span><p className="text-sm font-black uppercase tracking-wide text-zinc-400">{place === 2 ? "Second Place" : "Third Place"}</p></div><p className="mt-4 truncate text-3xl font-black text-white">{team.name}</p><p className="mt-3 text-5xl font-black" style={{ color: place === 2 ? "#AEB2EF" : "#71E0DC" }}>{Number(team.score || 0)}</p></div>; })}</div>}
-          <p className="mt-10 text-3xl font-black text-zinc-200">Thanks for playing!</p>
+          <h2 className="mt-1 text-4xl lg:text-5xl font-black leading-none text-white">Winners</h2>
+          {first ? <div className="mx-auto mt-3 w-full max-w-3xl rounded-xl border-2 border-amber-300/60 bg-amber-300/15 p-4 text-center shadow-2xl shadow-amber-300/10"><div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-amber-300 text-xl font-black text-zinc-950">1</div><p className="mt-2 text-sm font-black uppercase tracking-[0.2em] text-amber-200">Champion</p><p className="mt-1 truncate text-3xl font-black text-white lg:text-4xl">{first.name}</p><p className="mt-1 text-4xl font-black text-amber-200 lg:text-5xl">{Number(first.score || 0)}</p></div> : <p className="mt-4 rounded-lg border border-white/10 bg-zinc-950/70 p-5 text-center text-xl text-zinc-400">Winners will appear once teams have scores.</p>}
+          {runnersUp.length > 0 && <div className="mx-auto mt-3 grid w-full max-w-4xl grid-cols-2 gap-3 text-left">{runnersUp.map((team, index) => { const place = index + 2; return <div key={team.id || team.name} className={`rounded-xl border p-3 ${place === 2 ? "border-[#AEB2EF]/35 bg-[#AEB2EF]/10" : "border-[#71E0DC]/35 bg-[#71E0DC]/10"}`}><div className="flex items-center gap-2"><span className={`flex h-8 w-8 items-center justify-center rounded-full font-black ${place === 2 ? "bg-[#AEB2EF] text-zinc-950" : "bg-[#71E0DC] text-zinc-950"}`}>{place}</span><p className="text-xs font-black uppercase tracking-wide text-zinc-400">{place === 2 ? "Second Place" : "Third Place"}</p></div><p className="mt-2 truncate text-2xl font-black text-white">{team.name}</p><p className="mt-1 text-3xl font-black" style={{ color: place === 2 ? "#AEB2EF" : "#71E0DC" }}>{Number(team.score || 0)}</p></div>; })}</div>}
+          <p className="mt-3 text-xl font-black text-zinc-200">Thanks for playing!</p>
         </CardContent>
       </Card>
     </div>
@@ -431,16 +431,16 @@ const WinnersView = ({ leaderboard, sessionName }) => {
 };
 
 const FeedbackView = () => (
-  <div className="w-full max-w-5xl">
-    <Card className="glass-card overflow-hidden">
-      <CardContent className="p-8 lg:p-12 text-center">
-        <div className="mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-full border border-[#71E0DC]/40 bg-[#71E0DC]/15 shadow-2xl shadow-[#71E0DC]/10">
-          <Sparkles className="text-[#71E0DC]" size={52} />
+  <div className="h-full w-full max-w-5xl">
+    <Card className="glass-card h-full overflow-hidden">
+      <CardContent className="flex h-full flex-col justify-center p-5 lg:p-7 text-center">
+        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full border border-[#71E0DC]/40 bg-[#71E0DC]/15 shadow-2xl shadow-[#71E0DC]/10">
+          <Sparkles className="text-[#71E0DC]" size={36} />
         </div>
         <p className="text-[#71E0DC] text-xl font-black uppercase tracking-[0.3em]">One More Thing</p>
-        <h2 className="mt-4 text-5xl lg:text-8xl font-black leading-none text-white">Send Us Ideas</h2>
-        <p className="mx-auto mt-8 max-w-3xl text-3xl text-zinc-300">Use your phone to send category ideas, question ideas, or topics you want at a future trivia night.</p>
-        <p className="mt-10 text-3xl font-black text-zinc-200">Thanks for playing!</p>
+        <h2 className="mt-3 text-4xl lg:text-6xl font-black leading-none text-white">Send Us Ideas</h2>
+        <p className="mx-auto mt-5 max-w-3xl text-2xl text-zinc-300">Use your phone to send category ideas, question ideas, or topics you want at a future trivia night.</p>
+        <p className="mt-6 text-2xl font-black text-zinc-200">Thanks for playing!</p>
       </CardContent>
     </Card>
   </div>
@@ -450,21 +450,21 @@ const BonusPauseView = ({ round, leaderboard }) => {
   const sorted = [...leaderboard].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)).slice(0, 8);
 
   return (
-    <div className="w-full max-w-5xl">
-      <Card className="glass-card">
-        <CardContent className="p-8 lg:p-12 text-center">
-          <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full border border-[#71E0DC]/30 bg-[#71E0DC]/10">
-            <Loader2 className="animate-spin text-[#71E0DC]" size={38} />
+    <div className="h-full w-full max-w-6xl">
+      <Card className="glass-card h-full">
+        <CardContent className="flex h-full flex-col p-4 lg:p-5 text-center">
+          <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full border border-[#71E0DC]/30 bg-[#71E0DC]/10">
+            <Loader2 className="animate-spin text-[#71E0DC]" size={28} />
           </div>
           <p className="text-[#71E0DC] font-bold uppercase tracking-wide mb-2">Bonus question next</p>
-          <h2 className="text-5xl lg:text-8xl font-black leading-none mb-5">{round?.name || "Round"} Bonus</h2>
-          <p className="text-2xl text-zinc-300 mb-8">Current leaderboard</p>
-          <div className="mx-auto max-w-4xl space-y-3 text-left">
+          <h2 className="text-3xl lg:text-5xl font-black leading-none mb-2">{round?.name || "Round"} Bonus</h2>
+          <p className="text-xl text-zinc-300 mb-3">Current leaderboard</p>
+          <div className="mx-auto min-h-0 w-full max-w-5xl flex-1 grid grid-cols-1 md:grid-cols-2 auto-rows-fr gap-2 text-left">
             {sorted.map((team, index) => (
-              <div key={team.id || team.name} className="grid grid-cols-[64px_1fr_auto] items-center gap-4 rounded-lg border border-white/10 bg-zinc-950/70 px-5 py-4">
-                <div className={`h-12 w-12 rounded-full flex items-center justify-center font-black text-xl ${index === 0 ? "bg-amber-300 text-zinc-950" : "bg-white/10 text-zinc-200"}`}>{index + 1}</div>
-                <div className="text-3xl font-bold truncate">{team.name}</div>
-                <div className="text-4xl font-black text-[#71E0DC]">{Number(team.score || 0)}</div>
+              <div key={team.id || team.name} className="grid min-h-0 grid-cols-[42px_1fr_auto] items-center gap-3 rounded-lg border border-white/10 bg-zinc-950/70 px-3 py-2">
+                <div className={`h-9 w-9 rounded-full flex items-center justify-center font-black ${index === 0 ? "bg-amber-300 text-zinc-950" : "bg-white/10 text-zinc-200"}`}>{index + 1}</div>
+                <div className="text-xl font-bold truncate">{team.name}</div>
+                <div className="text-2xl font-black text-[#71E0DC]">{Number(team.score || 0)}</div>
               </div>
             ))}
             {!sorted.length && <p className="rounded-lg border border-white/10 bg-zinc-950/70 p-8 text-center text-2xl text-zinc-400">Leaderboard will appear once teams join or are added.</p>}
@@ -485,10 +485,10 @@ const QuestionView = ({ question, index, total, showAnswer, showFunFact }) => {
   const funFactOnly = Boolean(showFunFact && (question.funFact || shouldShowFunFactImage));
 
   return (
-    <div className="w-full max-w-6xl">
-      <Card className="glass-card overflow-hidden">
-        <CardContent className="p-8 lg:p-12">
-          <div className="flex items-center justify-between gap-3 flex-wrap mb-8">
+    <div className="h-full w-full max-w-6xl">
+      <Card className="glass-card h-full overflow-hidden">
+        <CardContent className="flex h-full flex-col justify-center p-4 lg:p-6">
+          <div className="flex shrink-0 items-center justify-between gap-3 flex-wrap mb-3">
             <div className="flex items-center gap-2 flex-wrap">
               <Badge variant="outline" className="border-zinc-700 text-zinc-300 text-base px-4 py-2">{question.category}</Badge>
               <Badge className="bg-zinc-800 text-zinc-300 text-base px-4 py-2"><Icon size={16} className={`mr-2 ${meta.color}`} />{meta.label}</Badge>
@@ -498,36 +498,36 @@ const QuestionView = ({ question, index, total, showAnswer, showFunFact }) => {
           </div>
 
           {funFactOnly ? (
-            <div className="min-h-[50vh] flex items-center justify-center">
-              <div className="w-full rounded-lg border border-[#AEB2EF]/30 bg-[#AEB2EF]/10 p-8 lg:p-12 text-center">
-                {shouldShowFunFactImage && <div className="mb-8 flex justify-center"><img src={imageUrl} alt="Fun fact media" className="max-h-[42vh] max-w-full rounded-lg border border-white/10 object-contain" /></div>}
-                <div className="flex items-center justify-center gap-3 text-[#AEB2EF] font-black mb-5 text-2xl"><Sparkles size={28} />{question.funFact ? "Fun Fact" : "Media"}</div>
-                {question.funFact && <p className="text-4xl lg:text-6xl font-black leading-tight text-white max-w-5xl mx-auto">{question.funFact}</p>}
+            <div className="min-h-0 flex flex-1 items-center justify-center">
+              <div className="w-full rounded-lg border border-[#AEB2EF]/30 bg-[#AEB2EF]/10 p-4 lg:p-6 text-center">
+                {shouldShowFunFactImage && <div className="mb-3 flex justify-center"><img src={imageUrl} alt="Fun fact media" className="max-h-[38vh] max-w-full rounded-lg border border-white/10 object-contain" /></div>}
+                <div className="flex items-center justify-center gap-3 text-[#AEB2EF] font-black mb-3 text-xl"><Sparkles size={24} />{question.funFact ? "Fun Fact" : "Media"}</div>
+                {question.funFact && <p className="text-3xl lg:text-4xl font-black leading-tight text-white max-w-5xl mx-auto">{question.funFact}</p>}
               </div>
             </div>
           ) : (
             <>
-              {shouldShowImage && <div className="mb-8 flex justify-center"><img src={imageUrl} alt="Question" className="max-h-[44vh] max-w-full rounded-lg border border-white/10 object-contain" /></div>}
+              {shouldShowImage && <div className="mb-3 flex justify-center"><img src={imageUrl} alt="Question" className="max-h-[28vh] max-w-full rounded-lg border border-white/10 object-contain" /></div>}
 
-              <h2 className="text-4xl lg:text-7xl font-black leading-tight text-white text-center mb-10">{question.questionText}</h2>
+              <h2 className="text-3xl lg:text-5xl font-black leading-tight text-white text-center mb-4">{question.questionText}</h2>
 
               {question.type === "true_false" && (
-                <div className="grid grid-cols-2 gap-5 max-w-3xl mx-auto mb-8">
-                  <div className="rounded-lg border-2 border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-center font-black py-6 text-4xl">True</div>
-                  <div className="rounded-lg border-2 border-red-500/30 bg-red-500/10 text-red-300 text-center font-black py-6 text-4xl">False</div>
+                <div className="grid grid-cols-2 gap-4 max-w-3xl mx-auto mb-3">
+                  <div className="rounded-lg border-2 border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-center font-black py-3 text-3xl">True</div>
+                  <div className="rounded-lg border-2 border-red-500/30 bg-red-500/10 text-red-300 text-center font-black py-3 text-3xl">False</div>
                 </div>
               )}
 
               {question.type === "multiple_choice" && question.options.length > 0 && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-4xl mx-auto mb-8">
-                  {question.options.map((option, optionIndex) => <div key={optionIndex} className="rounded-lg border border-white/10 bg-zinc-900/80 px-5 py-4 text-zinc-100 text-2xl font-semibold">{option}</div>)}
+                <div className="grid grid-cols-2 gap-3 max-w-4xl mx-auto mb-3">
+                  {question.options.map((option, optionIndex) => <div key={optionIndex} className="rounded-lg border border-white/10 bg-zinc-900/80 px-4 py-2.5 text-zinc-100 text-xl font-semibold">{option}</div>)}
                 </div>
               )}
 
               {showAnswer && (
-                <div className="mt-8 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-6 text-center">
+                <div className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-center">
                   <p className="text-zinc-400 text-sm uppercase tracking-wider mb-2">Answer</p>
-                  <p className="text-4xl lg:text-5xl font-black text-emerald-300">{question.answer}</p>
+                  <p className="text-3xl lg:text-4xl font-black text-emerald-300">{question.answer}</p>
                 </div>
               )}
             </>
