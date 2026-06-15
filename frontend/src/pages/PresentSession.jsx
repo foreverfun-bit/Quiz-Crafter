@@ -499,15 +499,15 @@ const QuestionView = ({ question, index, total, showAnswer, showFunFact }) => {
               <h2 className="text-3xl lg:text-5xl font-black leading-tight text-white text-center mb-4">{question.questionText}</h2>
 
               {question.type === "true_false" && (
-                <div className="grid grid-cols-2 gap-4 max-w-3xl mx-auto mb-3">
-                  <div className="rounded-lg border-2 border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-center font-black py-3 text-3xl">True</div>
-                  <div className="rounded-lg border-2 border-red-500/30 bg-red-500/10 text-red-300 text-center font-black py-3 text-3xl">False</div>
+                <div className={`grid w-full grid-cols-2 gap-4 max-w-4xl mx-auto mb-3 ${showAnswer ? "" : "min-h-32 flex-1 max-h-[34vh]"}`}>
+                  <div className="flex min-h-0 items-center justify-center rounded-lg border-2 border-emerald-500/30 bg-emerald-500/10 px-5 py-4 text-center text-4xl font-black text-emerald-300 lg:text-5xl">True</div>
+                  <div className="flex min-h-0 items-center justify-center rounded-lg border-2 border-red-500/30 bg-red-500/10 px-5 py-4 text-center text-4xl font-black text-red-300 lg:text-5xl">False</div>
                 </div>
               )}
 
               {question.type === "multiple_choice" && question.options.length > 0 && (
-                <div className="grid grid-cols-2 gap-3 max-w-4xl mx-auto mb-3">
-                  {question.options.map((option, optionIndex) => <div key={optionIndex} className="rounded-lg border border-white/10 bg-zinc-900/80 px-4 py-2.5 text-zinc-100 text-xl font-semibold">{option}</div>)}
+                <div className={`grid w-full grid-cols-2 gap-4 max-w-5xl mx-auto mb-3 ${showAnswer ? "" : "min-h-52 flex-1 max-h-[38vh] auto-rows-fr"}`}>
+                  {question.options.map((option, optionIndex) => <div key={optionIndex} className="flex min-h-0 items-center rounded-lg border border-white/10 bg-zinc-900/80 px-6 py-4 text-2xl font-bold leading-tight text-zinc-100 lg:text-3xl">{option}</div>)}
                 </div>
               )}
 
