@@ -9,6 +9,7 @@ export const profileKeys = {
   usedQuestionIds: "quiz_crafter_used_question_ids_v1",
   unusedQuestionIds: "quiz_crafter_unused_question_ids_v1",
   socialLinks: "quiz_crafter_social_links_v1",
+  outreachContacts: "quiz_crafter_outreach_contacts_v1",
   hostToolsBySession: "quiz_crafter_host_tools_by_session_v1",
   hostSetup: "quiz_crafter_host_setup_v1",
   venues: "quiz_crafter_venues_v1",

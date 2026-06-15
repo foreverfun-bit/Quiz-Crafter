@@ -5,10 +5,10 @@ import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { BarChart3, CheckCircle, Copy, ExternalLink, Image, Lightbulb, Mail, MessageSquare, Palette, Save, Send, Sparkles, ThumbsDown, ThumbsUp, TrendingUp, Upload, Users, XCircle } from "lucide-react";
 import { toast } from "sonner";
-import { readActiveVenueId, readLocalTemplates, readLocalVenues } from "../lib/venues";
 import { loadHostSetupSettings, loadHostToolsSessionState, profileKeys, saveHostSetupSettings, saveHostToolsSessionState, saveProfileValue, syncProfileJson, updateUserMetadata } from "../lib/profileState";
 
 const SOCIAL_STORAGE_KEY = "quiz-crafter-social-links";
+const OUTREACH_CONTACTS_STORAGE_KEY = "quiz-crafter-outreach-contacts-v1";
 const HOST_DEFAULT_BRANDING_KEY = "quiz-crafter-host-branding-defaults";
 const metadataBrandingKey = "quiz_crafter_host_branding_defaults_v1";
 const DEFAULT_BRANDING = { name: "Forever Fun Events", logoUrl: "/quiz-crafter-logo.svg", primaryColor: "#71E0DC", accentColor: "#AEB2EF" };
@@ -38,7 +38,6 @@ const hostToolTabs = [
   { key: "feedback", label: "Feedback", icon: ThumbsUp },
   { key: "game", label: "Game Data", icon: BarChart3 },
   { key: "outreach", label: "Outreach", icon: Mail },
-  { key: "assistant", label: "Assistant", icon: Sparkles },
   { key: "branding", label: "Branding", icon: Palette },
 ];
 
@@ -56,11 +55,9 @@ const HostTools = () => {
   const [gradedAnswers, setGradedAnswers] = useState({});
   const [message, setMessage] = useState("");
   const [socialPost, setSocialPost] = useState("");
-  const [assistantRequest, setAssistantRequest] = useState("Look at this session and tell me what feels too easy, too hard, repetitive, or missing for my regular trivia crowd.");
-  const [assistantAnswer, setAssistantAnswer] = useState("");
-  const [assistantLoading, setAssistantLoading] = useState(false);
   const [aiDirection, setAiDirection] = useState("Make it playful, punny, and useful without giving away answers.");
   const [socialLinks, setSocialLinks] = useState(() => readJson(SOCIAL_STORAGE_KEY, { facebook: "", instagram: "", x: "" }));
+  const [outreachContacts, setOutreachContacts] = useState(() => readJson(OUTREACH_CONTACTS_STORAGE_KEY, []));
   const [branding, setBranding] = useState(readDefaultBranding);
   const [generating, setGenerating] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -69,6 +66,7 @@ const HostTools = () => {
 
   const selectedSession = useMemo(() => sessions.find((session) => session.id === selectedSessionId) || null, [sessions, selectedSessionId]);
   const emailPlayers = useMemo(() => players.filter((player) => player.updatePreference === "email" && player.updateContact), [players]);
+  const allEmailContacts = useMemo(() => mergeContacts(outreachContacts, contactRowsFromPlayers(emailPlayers, selectedSession)), [outreachContacts, emailPlayers, selectedSession]);
   const questionFeedback = useMemo(() => summarize(feedback, "questionText"), [feedback]);
   const categoryRows = useMemo(() => summarize(categoryFeedback, "category"), [categoryFeedback]);
   const analytics = useMemo(() => buildAnalytics({ selectedSession, players, feedback, categoryFeedback, playerIdeas, answers, activity, emailPlayers, leaderboard, gradedAnswers }), [selectedSession, players, feedback, categoryFeedback, playerIdeas, answers, activity, emailPlayers, leaderboard, gradedAnswers]);
@@ -109,6 +107,18 @@ const HostTools = () => {
       }
     };
     syncSocialLinks();
+  }, []);
+
+  useEffect(() => {
+    const syncOutreachContacts = async () => {
+      try {
+        const contacts = await syncProfileJson({ localKey: OUTREACH_CONTACTS_STORAGE_KEY, profileKey: profileKeys.outreachContacts, fallback: [], merge: "array" });
+        setOutreachContacts(normalizeContacts(contacts));
+      } catch (error) {
+        console.warn("Outreach contacts profile sync unavailable:", error);
+      }
+    };
+    syncOutreachContacts();
   }, []);
 
   useEffect(() => {
@@ -162,8 +172,6 @@ const HostTools = () => {
         setMessage(drafts.message || "");
         setSocialPost(drafts.socialPost || "");
         setAiDirection(drafts.aiDirection || "Make it playful, punny, and useful without giving away answers.");
-        setAssistantRequest(drafts.assistantRequest || "Look at this session and tell me what feels too easy, too hard, repetitive, or missing for my regular trivia crowd.");
-        setAssistantAnswer(drafts.assistantAnswer || "");
         Object.entries(nextState).forEach(([key, value]) => writeJson(sessionStorageKey(selectedSessionId, key === "categoryFeedback" ? "category-feedback" : key === "gradedAnswers" ? "graded-answers" : key), value));
         writeJson(sessionStorageKey(selectedSessionId, "drafts"), drafts);
         loadedDraftSessionRef.current = selectedSessionId;
@@ -181,8 +189,6 @@ const HostTools = () => {
         setMessage(localDrafts.message || "");
         setSocialPost(localDrafts.socialPost || "");
         setAiDirection(localDrafts.aiDirection || "Make it playful, punny, and useful without giving away answers.");
-        setAssistantRequest(localDrafts.assistantRequest || "Look at this session and tell me what feels too easy, too hard, repetitive, or missing for my regular trivia crowd.");
-        setAssistantAnswer(localDrafts.assistantAnswer || "");
         loadedDraftSessionRef.current = selectedSessionId;
       }
     };
@@ -226,13 +232,22 @@ const HostTools = () => {
 
   useEffect(() => {
     if (!selectedSessionId || loadedDraftSessionRef.current !== selectedSessionId) return undefined;
-    const drafts = { message, socialPost, aiDirection, assistantRequest, assistantAnswer };
+    const drafts = { message, socialPost, aiDirection };
     const timeout = window.setTimeout(() => {
       writeJson(sessionStorageKey(selectedSessionId, "drafts"), drafts);
       saveHostToolsSessionState(selectedSessionId, { drafts }).catch((error) => console.warn("Host tools draft save unavailable:", error));
     }, 500);
     return () => window.clearTimeout(timeout);
-  }, [selectedSessionId, message, socialPost, aiDirection, assistantRequest, assistantAnswer]);
+  }, [selectedSessionId, message, socialPost, aiDirection]);
+
+  useEffect(() => {
+    if (!emailPlayers.length) return;
+    const nextContacts = mergeContacts(outreachContacts, contactRowsFromPlayers(emailPlayers, selectedSession));
+    if (JSON.stringify(nextContacts) === JSON.stringify(outreachContacts)) return;
+    setOutreachContacts(nextContacts);
+    writeJson(OUTREACH_CONTACTS_STORAGE_KEY, nextContacts);
+    saveProfileValue(profileKeys.outreachContacts, nextContacts).catch((error) => console.warn("Outreach contacts profile save unavailable:", error));
+  }, [emailPlayers, outreachContacts, selectedSession]);
 
   const updateSocialLink = (key, value) => {
     const next = { ...socialLinks, [key]: value };
@@ -263,16 +278,16 @@ const HostTools = () => {
   };
 
   const copyEmails = async () => {
-    if (!emailPlayers.length) return toast.error("No email opt-ins yet");
-    await navigator.clipboard.writeText(emailPlayers.map((player) => player.updateContact).join(", "));
+    if (!allEmailContacts.length) return toast.error("No email opt-ins yet");
+    await navigator.clipboard.writeText(allEmailContacts.map((contact) => contact.email).join(", "));
     toast.success("Email list copied");
   };
 
   const openEmailDraft = () => {
-    if (!emailPlayers.length) return toast.error("No email opt-ins yet");
+    if (!allEmailContacts.length) return toast.error("No email opt-ins yet");
     const subject = encodeURIComponent(selectedSession?.name || selectedSession?.session_name || "Trivia update");
     const body = encodeURIComponent(message || socialPost || "");
-    const bcc = encodeURIComponent(emailPlayers.map((player) => player.updateContact).join(","));
+    const bcc = encodeURIComponent(allEmailContacts.map((contact) => contact.email).join(","));
     window.location.href = `mailto:?bcc=${bcc}&subject=${subject}&body=${body}`;
   };
 
@@ -317,32 +332,6 @@ const HostTools = () => {
     }
   };
 
-  const askHostAssistant = async () => {
-    const request = assistantRequest.trim();
-    if (!request) return toast.error("Ask the assistant for something first");
-    setAssistantLoading(true);
-    try {
-      const venues = readLocalVenues();
-      const templates = readLocalTemplates();
-      const activeVenueId = readActiveVenueId();
-      const activeVenue = venues.find((venue) => venue.id === activeVenueId) || venues[0] || null;
-      const questions = sessionQuestions(selectedSession).slice(0, 40).map((question) => ({ category: question.category || "", question: question.question_text || question.question || "", answer: question.correct_answer || question.answer || "", fun_fact: question.fun_fact || "" }));
-      const response = await fetch("/api/host-assistant", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ request, context: { session: selectedSession, venue: activeVenue, template: templates[0] || null, questions, feedback, ideas: playerIdeas } }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data?.error || "Could not run host assistant");
-      setAssistantAnswer(data.answer || "");
-      toast.success("Assistant response ready");
-    } catch (error) {
-      toast.error(error.message || "Could not run host assistant");
-    } finally {
-      setAssistantLoading(false);
-    }
-  };
-
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto animate-fade-in" data-testid="host-tools-page">
       <div className="mb-6 flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
@@ -353,17 +342,15 @@ const HostTools = () => {
         <Badge className={connected ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/20" : "bg-zinc-800 text-zinc-300"}>{connected ? "Listening live" : "Choose a session"}</Badge>
       </div>
 
-      <Card className="glass-card mb-6"><CardContent className="p-4 grid grid-cols-1 lg:grid-cols-[1fr_auto] gap-3 items-end"><label className="text-sm text-zinc-400">Session<select value={selectedSessionId} onChange={(event) => setSelectedSessionId(event.target.value)} className="mt-1 w-full h-11 rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60">{sessions.map((session) => <option key={session.id} value={session.id}>{session.name || session.session_name || "Untitled Session"}</option>)}</select></label><Badge className="h-10 justify-center bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20"><Users size={15} className="mr-1" />{emailPlayers.length} email opt-ins</Badge></CardContent></Card>
+      <Card className="glass-card mb-6"><CardContent className="p-4 grid grid-cols-1 lg:grid-cols-[1fr_auto_auto] gap-3 items-end"><label className="text-sm text-zinc-400">Session<select value={selectedSessionId} onChange={(event) => setSelectedSessionId(event.target.value)} className="mt-1 w-full h-11 rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60">{sessions.map((session) => <option key={session.id} value={session.id}>{session.name || session.session_name || "Untitled Session"}</option>)}</select></label><Badge className="h-10 justify-center bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20"><Users size={15} className="mr-1" />{emailPlayers.length} this session</Badge><Badge className="h-10 justify-center bg-[#AEB2EF]/15 text-[#AEB2EF] border border-[#AEB2EF]/20"><Mail size={15} className="mr-1" />{allEmailContacts.length} total opt-ins</Badge></CardContent></Card>
 
-      <Card className="glass-card mb-6"><CardContent className="p-2 grid grid-cols-2 lg:grid-cols-5 gap-2">{hostToolTabs.map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => setActiveTab(key)} className={`h-12 rounded-lg border px-3 font-semibold flex items-center justify-center gap-2 transition ${activeTab === key ? "bg-[#71E0DC]/20 border-[#71E0DC]/45 text-white shadow-[0_0_24px_rgba(113,224,220,.12)]" : "bg-zinc-950/50 border-white/10 text-zinc-400 hover:text-white hover:border-white/20"}`}><Icon size={17} />{label}</button>)}</CardContent></Card>
+      <Card className="glass-card mb-6"><CardContent className="p-2 grid grid-cols-2 lg:grid-cols-4 gap-2">{hostToolTabs.map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => setActiveTab(key)} className={`h-12 rounded-lg border px-3 font-semibold flex items-center justify-center gap-2 transition ${activeTab === key ? "bg-[#71E0DC]/20 border-[#71E0DC]/45 text-white shadow-[0_0_24px_rgba(113,224,220,.12)]" : "bg-zinc-950/50 border-white/10 text-zinc-400 hover:text-white hover:border-white/20"}`}><Icon size={17} />{label}</button>)}</CardContent></Card>
 
       {activeTab === "feedback" && <FeedbackInsightsPanel analytics={analytics} questionFeedback={questionFeedback} categoryRows={categoryRows} playerIdeas={playerIdeas} />}
 
       {activeTab === "game" && <GameDataPanel analytics={analytics} />}
 
-      {activeTab === "outreach" && <OutreachPanel message={message} setMessage={setMessage} sendUpdate={sendUpdate} openEmailDraft={openEmailDraft} copyEmails={copyEmails} aiDirection={aiDirection} setAiDirection={setAiDirection} generateClues={generateClues} generating={generating} selectedSession={selectedSession} socialPost={socialPost} setSocialPost={setSocialPost} copySocialPost={copySocialPost} openSocialComposer={openSocialComposer} socialLinks={socialLinks} updateSocialLink={updateSocialLink} />}
-
-      {activeTab === "assistant" && <AssistantPanel assistantRequest={assistantRequest} setAssistantRequest={setAssistantRequest} askHostAssistant={askHostAssistant} assistantLoading={assistantLoading} assistantAnswer={assistantAnswer} />}
+      {activeTab === "outreach" && <OutreachPanel message={message} setMessage={setMessage} sendUpdate={sendUpdate} openEmailDraft={openEmailDraft} copyEmails={copyEmails} contacts={allEmailContacts} sessionEmailCount={emailPlayers.length} aiDirection={aiDirection} setAiDirection={setAiDirection} generateClues={generateClues} generating={generating} selectedSession={selectedSession} socialPost={socialPost} setSocialPost={setSocialPost} copySocialPost={copySocialPost} openSocialComposer={openSocialComposer} socialLinks={socialLinks} updateSocialLink={updateSocialLink} />}
 
       {activeTab === "branding" && <section className="max-w-5xl"><BrandingPanel branding={branding} setBranding={setBranding} onSave={saveDefaultBranding} /></section>}
     </div>
@@ -387,9 +374,7 @@ const CrowdActivityCard = ({ rows }) => <Card className="glass-card"><CardHeader
 
 const CorrectBadge = ({ status }) => status === "correct" ? <Badge className="bg-emerald-500/15 text-emerald-300"><CheckCircle size={12} className="mr-1" />Yes</Badge> : status === "incorrect" ? <Badge className="bg-red-500/15 text-red-300"><XCircle size={12} className="mr-1" />No</Badge> : <Badge className="bg-zinc-800 text-zinc-300">Pending</Badge>;
 
-const AssistantPanel = ({ assistantRequest, setAssistantRequest, askHostAssistant, assistantLoading, assistantAnswer }) => <section className="max-w-5xl"><Panel title="AI Host Assistant" icon={Sparkles}><textarea value={assistantRequest} onChange={(event) => setAssistantRequest(event.target.value)} placeholder="Ask for a replacement question, round balance advice, clue rewrite, pacing help, or a plan for this venue..." className="min-h-28 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><div className="flex flex-wrap gap-2"><Button onClick={askHostAssistant} disabled={assistantLoading} className="gradient-btn">{assistantLoading ? <Sparkles className="mr-2 animate-spin" size={16} /> : <Sparkles className="mr-2" size={16} />}Ask Assistant</Button><Button variant="outline" onClick={() => setAssistantRequest("Look at this session and tell me what feels too easy, too hard, repetitive, or missing for my regular trivia crowd.")} className="border-white/10 text-zinc-300 hover:text-white">Review Session</Button><Button variant="outline" onClick={() => setAssistantRequest("Draft a fresh replacement question for the current session that avoids common bar trivia repeats. Include answer and fun fact.")} className="border-white/10 text-zinc-300 hover:text-white">Replacement</Button><Button variant="outline" onClick={() => setAssistantRequest("Help me turn harder questions into fair written-answer questions instead of true/false or multiple choice.")} className="border-white/10 text-zinc-300 hover:text-white">Written Help</Button></div>{assistantAnswer && <div className="rounded-lg border border-white/10 bg-zinc-950/70 p-4 text-sm leading-relaxed text-zinc-200 whitespace-pre-wrap">{assistantAnswer}</div>}<p className="text-xs text-zinc-500">Uses the selected session plus saved venue/template memory and player feedback.</p></Panel></section>;
-
-const OutreachPanel = ({ message, setMessage, sendUpdate, openEmailDraft, copyEmails, aiDirection, setAiDirection, generateClues, generating, selectedSession, socialPost, setSocialPost, copySocialPost, openSocialComposer, socialLinks, updateSocialLink }) => <section className="space-y-6 max-w-5xl"><Panel title="Email and Player Updates" icon={MessageSquare}><textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Type a clue, cancellation, schedule change, or player update..." className="min-h-32 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><div className="grid grid-cols-1 md:grid-cols-3 gap-2"><Button onClick={sendUpdate} className="gradient-btn"><Send size={16} className="mr-2" />Send In-App</Button><Button onClick={openEmailDraft} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Mail size={16} className="mr-2" />Email Draft</Button><Button onClick={copyEmails} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Copy size={16} className="mr-2" />Copy Emails</Button></div></Panel><Panel title="AI Clue Assistant" icon={Sparkles}><textarea value={aiDirection} onChange={(event) => setAiDirection(event.target.value)} className="min-h-20 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><Button onClick={generateClues} disabled={generating || !selectedSession} className="gradient-btn">{generating ? <Sparkles className="mr-2 animate-spin" size={16} /> : <Sparkles className="mr-2" size={16} />}Draft Punny Clues</Button><p className="text-xs text-zinc-500">AI studies the selected session and drafts an update plus a social post without revealing answers.</p></Panel><Panel title="Social Media" icon={ExternalLink}><textarea value={socialPost} onChange={(event) => setSocialPost(event.target.value)} placeholder="Social post text..." className="min-h-28 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><div className="grid grid-cols-1 md:grid-cols-3 gap-2"><Button onClick={copySocialPost} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Copy size={16} className="mr-2" />Copy Post</Button><Button onClick={() => openSocialComposer("facebook")} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />Facebook</Button><Button onClick={() => openSocialComposer("x")} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />X/Twitter</Button></div><div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2"><input value={socialLinks.facebook} onChange={(event) => updateSocialLink("facebook", event.target.value)} placeholder="Facebook page link" className="h-10 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none" /><input value={socialLinks.instagram} onChange={(event) => updateSocialLink("instagram", event.target.value)} placeholder="Instagram profile link" className="h-10 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none" /><input value={socialLinks.x} onChange={(event) => updateSocialLink("x", event.target.value)} placeholder="X/Twitter profile link" className="h-10 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none" /></div><p className="text-xs text-zinc-500">For now this opens/copies posts. Fully automatic posting will need connected social accounts and permissions.</p></Panel></section>;
+const OutreachPanel = ({ message, setMessage, sendUpdate, openEmailDraft, copyEmails, contacts, sessionEmailCount, aiDirection, setAiDirection, generateClues, generating, selectedSession, socialPost, setSocialPost, copySocialPost, openSocialComposer, socialLinks, updateSocialLink }) => <section className="space-y-6 max-w-6xl"><Panel title="Opt-In Email List" icon={Mail}><div className="grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-4"><div className="rounded-xl border border-[#71E0DC]/25 bg-[#71E0DC]/10 p-4"><p className="text-xs font-bold uppercase tracking-wide text-[#71E0DC]">Stored Contacts</p><p className="mt-2 text-4xl font-black text-white">{contacts.length}</p><p className="mt-1 text-sm text-zinc-400">{sessionEmailCount} from this selected session</p><div className="mt-4 grid gap-2"><Button onClick={copyEmails} className="gradient-btn"><Copy size={16} className="mr-2" />Copy All Emails</Button><Button onClick={openEmailDraft} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Mail size={16} className="mr-2" />Email All</Button></div></div><div className="rounded-xl border border-white/10 bg-zinc-950/60 overflow-hidden"><div className="grid grid-cols-[1fr_1fr_140px] gap-3 border-b border-white/10 px-3 py-2 text-xs font-bold uppercase tracking-wide text-zinc-500"><span>Team</span><span>Email</span><span>Source</span></div><div className="max-h-72 overflow-y-auto">{contacts.map((contact) => <div key={contact.email} className="grid grid-cols-[1fr_1fr_140px] gap-3 border-b border-white/5 px-3 py-3 text-sm"><span className="font-semibold text-white truncate">{contact.name || "Team"}</span><span className="text-[#71E0DC] truncate">{contact.email}</span><span className="text-zinc-500 truncate">{contact.sessionName || "Trivia"}</span></div>)}{!contacts.length && <p className="p-6 text-center text-sm text-zinc-500">When players choose Email me on the join screen, they will be stored here across sessions.</p>}</div></div></div></Panel><Panel title="Email and Player Updates" icon={MessageSquare}><textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Type a clue, cancellation, schedule change, or player update..." className="min-h-32 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><div className="grid grid-cols-1 md:grid-cols-3 gap-2"><Button onClick={sendUpdate} className="gradient-btn"><Send size={16} className="mr-2" />Send In-App</Button><Button onClick={openEmailDraft} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Mail size={16} className="mr-2" />Email Draft</Button><Button onClick={copyEmails} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Copy size={16} className="mr-2" />Copy Emails</Button></div></Panel><Panel title="Clue and Social Drafting" icon={Sparkles}><textarea value={aiDirection} onChange={(event) => setAiDirection(event.target.value)} className="min-h-20 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><Button onClick={generateClues} disabled={generating || !selectedSession} className="gradient-btn">{generating ? <Sparkles className="mr-2 animate-spin" size={16} /> : <Sparkles className="mr-2" size={16} />}Draft Punny Clues</Button><p className="text-xs text-zinc-500">Uses the selected session to draft an update and social post without revealing answers.</p></Panel><Panel title="Social Media" icon={ExternalLink}><textarea value={socialPost} onChange={(event) => setSocialPost(event.target.value)} placeholder="Social post text..." className="min-h-28 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><div className="grid grid-cols-1 md:grid-cols-3 gap-2"><Button onClick={copySocialPost} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Copy size={16} className="mr-2" />Copy Post</Button><Button onClick={() => openSocialComposer("facebook")} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />Facebook</Button><Button onClick={() => openSocialComposer("x")} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />X/Twitter</Button></div><div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2"><input value={socialLinks.facebook} onChange={(event) => updateSocialLink("facebook", event.target.value)} placeholder="Facebook page link" className="h-10 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none" /><input value={socialLinks.instagram} onChange={(event) => updateSocialLink("instagram", event.target.value)} placeholder="Instagram profile link" className="h-10 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none" /><input value={socialLinks.x} onChange={(event) => updateSocialLink("x", event.target.value)} placeholder="X/Twitter profile link" className="h-10 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none" /></div><p className="text-xs text-zinc-500">For now this opens/copies posts. Fully automatic posting will need connected social accounts and permissions.</p></Panel></section>;
 
 const BrandingPanel = ({ branding, setBranding, onSave }) => {
   const safeBranding = normalizeBranding(branding);
@@ -404,6 +389,32 @@ const BrandingPanel = ({ branding, setBranding, onSave }) => {
 };
 
 const ColorField = ({ label, value, onChange }) => { const safeValue = sanitizeHexColor(value, DEFAULT_BRANDING.primaryColor); return <label className="text-xs text-zinc-400">{label}<div className="mt-1 flex h-10 rounded-md border border-white/10 bg-zinc-950 overflow-hidden focus-within:border-[#71E0DC]/60"><input type="color" value={safeValue} onChange={(event) => onChange(event.target.value)} className="h-10 w-12 border-0 bg-transparent p-1" /><input value={value || ""} onChange={(event) => onChange(event.target.value)} className="min-w-0 flex-1 bg-transparent px-2 text-white outline-none" /></div></label>; };
+
+const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
+const normalizeContacts = (contacts) => mergeContacts([], contacts);
+const contactRowsFromPlayers = (players, session) => {
+  const sessionName = session?.name || session?.session_name || "Trivia";
+  return (Array.isArray(players) ? players : [])
+    .filter((player) => player.updatePreference === "email" && normalizeEmail(player.updateContact))
+    .map((player) => ({ name: player.name || "Team", email: normalizeEmail(player.updateContact), sessionName, joinedAt: player.joinedAt || new Date().toISOString() }));
+};
+const mergeContacts = (...lists) => {
+  const map = new Map();
+  lists.flatMap((list) => Array.isArray(list) ? list : []).forEach((contact) => {
+    const email = normalizeEmail(contact?.email || contact?.updateContact);
+    if (!email) return;
+    const existing = map.get(email) || {};
+    map.set(email, {
+      ...existing,
+      ...contact,
+      email,
+      name: contact?.name || contact?.playerName || existing.name || "Team",
+      sessionName: contact?.sessionName || existing.sessionName || "Trivia",
+      joinedAt: contact?.joinedAt || existing.joinedAt || "",
+    });
+  });
+  return [...map.values()].sort((a, b) => String(b.joinedAt || "").localeCompare(String(a.joinedAt || "")) || a.email.localeCompare(b.email));
+};
 
 const mergeByKey = (remote, local, makeKey) => {
   const map = new Map();
