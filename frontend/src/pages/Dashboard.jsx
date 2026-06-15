@@ -16,6 +16,7 @@ import {
   List,
   MapPin,
   MessageSquare,
+  MonitorPlay,
   PlusCircle,
   Save,
   Sparkles,
@@ -255,6 +256,7 @@ const Dashboard = () => {
   const activeVenue = venues.find((venue) => venue.id === activeVenueId) || venues[0] || null;
   const starterTemplate = templates[0] || null;
   const nextSession = recentSessions.find((session) => !session.is_past) || null;
+  const liveSession = nextSession || recentSessions[0] || null;
   const upcomingSchedule = useMemo(() => buildVenueSchedule(venues), [venues]);
   const likedCategories = stats.liked_categories || [];
 
@@ -320,6 +322,15 @@ const Dashboard = () => {
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
+          <Button
+            onClick={() => liveSession ? navigate(`/host-session/${liveSession.id}`) : navigate("/past-sessions")}
+            variant="outline"
+            className="border-[#71E0DC]/35 bg-[#71E0DC]/10 text-[#71E0DC] hover:bg-[#71E0DC]/15 hover:text-white"
+            data-testid="dashboard-live-hosting-btn"
+          >
+            <MonitorPlay className="mr-2" size={18} />
+            Open Live Hosting
+          </Button>
           <Button onClick={handleContinueBuild} variant="outline" className="border-white/20 text-white hover:bg-zinc-800" data-testid="dashboard-continue-build-btn">
             <Save className="mr-2" size={18} />
             Continue Build
