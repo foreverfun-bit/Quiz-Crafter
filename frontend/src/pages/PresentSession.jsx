@@ -487,7 +487,7 @@ const QuestionView = ({ question, index, total, showAnswer, showFunFact }) => {
   return (
     <div className="h-full w-full max-w-6xl">
       <Card className="glass-card h-full overflow-hidden">
-        <CardContent className="flex h-full flex-col justify-center p-4 lg:p-6">
+        <CardContent className="flex h-full flex-col justify-start p-4 lg:p-5">
           <div className="flex shrink-0 items-center justify-between gap-3 flex-wrap mb-3">
             <div className="flex items-center gap-2 flex-wrap">
               <Badge variant="outline" className="border-zinc-700 text-zinc-300 text-base px-4 py-2">{question.category}</Badge>
