@@ -3,7 +3,7 @@ import { supabase } from "../lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
-import { BarChart3, Copy, ExternalLink, Image, Lightbulb, Mail, MessageSquare, Palette, Save, Send, Sparkles, ThumbsDown, ThumbsUp, TrendingUp, Upload, Users } from "lucide-react";
+import { BarChart3, CheckCircle, Copy, ExternalLink, Image, Lightbulb, Mail, MessageSquare, Palette, Save, Send, Sparkles, ThumbsDown, ThumbsUp, TrendingUp, Upload, Users, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { readActiveVenueId, readLocalTemplates, readLocalVenues } from "../lib/venues";
 import { loadHostSetupSettings, loadHostToolsSessionState, profileKeys, saveHostSetupSettings, saveHostToolsSessionState, saveProfileValue, syncProfileJson, updateUserMetadata } from "../lib/profileState";
@@ -52,6 +52,8 @@ const HostTools = () => {
   const [playerIdeas, setPlayerIdeas] = useState([]);
   const [answers, setAnswers] = useState([]);
   const [activity, setActivity] = useState([]);
+  const [leaderboard, setLeaderboard] = useState([]);
+  const [gradedAnswers, setGradedAnswers] = useState({});
   const [message, setMessage] = useState("");
   const [socialPost, setSocialPost] = useState("");
   const [assistantRequest, setAssistantRequest] = useState("Look at this session and tell me what feels too easy, too hard, repetitive, or missing for my regular trivia crowd.");
@@ -69,7 +71,7 @@ const HostTools = () => {
   const emailPlayers = useMemo(() => players.filter((player) => player.updatePreference === "email" && player.updateContact), [players]);
   const questionFeedback = useMemo(() => summarize(feedback, "questionText"), [feedback]);
   const categoryRows = useMemo(() => summarize(categoryFeedback, "category"), [categoryFeedback]);
-  const analytics = useMemo(() => buildAnalytics({ selectedSession, players, feedback, categoryFeedback, playerIdeas, answers, activity, emailPlayers }), [selectedSession, players, feedback, categoryFeedback, playerIdeas, answers, activity, emailPlayers]);
+  const analytics = useMemo(() => buildAnalytics({ selectedSession, players, feedback, categoryFeedback, playerIdeas, answers, activity, emailPlayers, leaderboard, gradedAnswers }), [selectedSession, players, feedback, categoryFeedback, playerIdeas, answers, activity, emailPlayers, leaderboard, gradedAnswers]);
 
   useEffect(() => {
     const loadHostBranding = async () => {
@@ -132,17 +134,22 @@ const HostTools = () => {
         ideas: readJson(sessionStorageKey(selectedSessionId, "ideas"), []),
         answers: readJson(sessionStorageKey(selectedSessionId, "answers"), []),
         activity: readJson(sessionStorageKey(selectedSessionId, "activity"), []),
+        leaderboard: readJson(sessionStorageKey(selectedSessionId, "leaderboard"), []),
+        gradedAnswers: readJson(sessionStorageKey(selectedSessionId, "graded-answers"), {}),
       };
       try {
         const profileState = await loadHostToolsSessionState(selectedSessionId);
+        const snapshot = profileState.results && typeof profileState.results === "object" ? { ...profileState, ...profileState.results } : profileState;
         const drafts = { ...localDrafts, ...(profileState.drafts && typeof profileState.drafts === "object" ? profileState.drafts : {}) };
         const nextState = {
-          players: mergeByKey(profileState.players, localState.players, (item) => item.id),
-          feedback: mergeByKey(profileState.feedback, localState.feedback, (item) => `${item.playerId}-${item.questionIndex}`),
-          categoryFeedback: mergeByKey(profileState.categoryFeedback, localState.categoryFeedback, (item) => `${item.playerId}-${item.roundKey || item.roundName}-${item.category}`),
-          ideas: mergeByKey(profileState.ideas, localState.ideas, (item) => `${item.playerId}-${item.submittedAt}`),
-          answers: mergeByKey(profileState.answers, localState.answers, (item) => `${item.playerId}-${item.questionIndex}`),
-          activity: [...(Array.isArray(profileState.activity) ? profileState.activity : []), ...(Array.isArray(localState.activity) ? localState.activity : [])].slice(-800),
+          players: mergeByKey(snapshot.players, localState.players, (item) => item.id),
+          feedback: mergeByKey(snapshot.feedback, localState.feedback, (item) => `${item.playerId}-${item.questionIndex}`),
+          categoryFeedback: mergeByKey(snapshot.categoryFeedback, localState.categoryFeedback, (item) => `${item.playerId}-${item.roundKey || item.roundName}-${item.category}`),
+          ideas: mergeByKey(snapshot.ideas, localState.ideas, (item) => `${item.playerId}-${item.submittedAt}`),
+          answers: mergeByKey(snapshot.answers, localState.answers, (item) => `${item.playerId}-${item.questionIndex}`),
+          activity: [...(Array.isArray(snapshot.activity) ? snapshot.activity : []), ...(Array.isArray(localState.activity) ? localState.activity : [])].slice(-800),
+          leaderboard: mergeByKey(snapshot.leaderboard, localState.leaderboard, (item) => item.id),
+          gradedAnswers: { ...(snapshot.gradedAnswers && typeof snapshot.gradedAnswers === "object" ? snapshot.gradedAnswers : {}), ...(localState.gradedAnswers && typeof localState.gradedAnswers === "object" ? localState.gradedAnswers : {}) },
         };
         setPlayers(nextState.players);
         setFeedback(nextState.feedback);
@@ -150,12 +157,14 @@ const HostTools = () => {
         setPlayerIdeas(nextState.ideas);
         setAnswers(nextState.answers);
         setActivity(nextState.activity);
+        setLeaderboard(nextState.leaderboard);
+        setGradedAnswers(nextState.gradedAnswers);
         setMessage(drafts.message || "");
         setSocialPost(drafts.socialPost || "");
         setAiDirection(drafts.aiDirection || "Make it playful, punny, and useful without giving away answers.");
         setAssistantRequest(drafts.assistantRequest || "Look at this session and tell me what feels too easy, too hard, repetitive, or missing for my regular trivia crowd.");
         setAssistantAnswer(drafts.assistantAnswer || "");
-        Object.entries(nextState).forEach(([key, value]) => writeJson(sessionStorageKey(selectedSessionId, key === "categoryFeedback" ? "category-feedback" : key), value));
+        Object.entries(nextState).forEach(([key, value]) => writeJson(sessionStorageKey(selectedSessionId, key === "categoryFeedback" ? "category-feedback" : key === "gradedAnswers" ? "graded-answers" : key), value));
         writeJson(sessionStorageKey(selectedSessionId, "drafts"), drafts);
         loadedDraftSessionRef.current = selectedSessionId;
         saveHostToolsSessionState(selectedSessionId, nextState).catch((error) => console.warn("Host tools profile save unavailable:", error));
@@ -167,6 +176,8 @@ const HostTools = () => {
         setPlayerIdeas(localState.ideas);
         setAnswers(localState.answers);
         setActivity(localState.activity);
+        setLeaderboard(localState.leaderboard);
+        setGradedAnswers(localState.gradedAnswers);
         setMessage(localDrafts.message || "");
         setSocialPost(localDrafts.socialPost || "");
         setAiDirection(localDrafts.aiDirection || "Make it playful, punny, and useful without giving away answers.");
@@ -366,7 +377,15 @@ const FeedbackInsightsPanel = ({ analytics, questionFeedback, categoryRows, play
   return <section className="space-y-6"><div className="grid grid-cols-1 md:grid-cols-3 gap-3"><AnalyticsMetric icon={ThumbsUp} label="Question Votes" value={analytics.totals.questionVotes} sub="thumbs on individual questions" /><AnalyticsMetric icon={BarChart3} label="Category Votes" value={analytics.totals.categoryVotes} sub="round intro category reactions" /><AnalyticsMetric icon={Lightbulb} label="Player Ideas" value={analytics.totals.ideas} sub={`${totalVotes} total likes/dislikes`} /></div><div className="grid grid-cols-1 xl:grid-cols-2 gap-6"><FeedbackCard title="Question Likes & Dislikes" rows={questionFeedback} empty="Question likes and dislikes will appear here after players tap the thumbs during a live session." /><FeedbackCard title="Category Likes & Dislikes" rows={categoryRows} empty="Category likes and dislikes come from the released Round Info screen." /><AnalyticsList title="Questions Players Liked" icon={ThumbsUp} rows={analytics.topQuestions} empty="Question likes will appear here after players rate live questions." render={(row) => <FeedbackAnalyticsRow row={row} />} /><AnalyticsList title="Needs Review" icon={ThumbsDown} rows={analytics.needsReview} empty="Questions with dislikes or low feedback scores will appear here." render={(row) => <FeedbackAnalyticsRow row={row} showResponses />} /><IdeasFeedbackCard ideas={playerIdeas} /></div></section>;
 };
 
-const GameDataPanel = ({ analytics }) => <section className="space-y-6"><div className="grid grid-cols-2 lg:grid-cols-4 gap-3"><AnalyticsMetric icon={Users} label="Players" value={analytics.totals.players} sub={`${analytics.totals.emailOptIns} email opt-in${analytics.totals.emailOptIns === 1 ? "" : "s"}`} /><AnalyticsMetric icon={TrendingUp} label="Answers" value={analytics.totals.answers} sub={`${analytics.totals.answerCoverage}% question coverage`} /><AnalyticsMetric icon={BarChart3} label="Questions" value={analytics.totals.questions} sub="in selected session" /><AnalyticsMetric icon={Users} label="Fair Play" value={analytics.totals.screenExits} sub="screen exit flags" /></div><div className="grid grid-cols-1 xl:grid-cols-2 gap-6"><AnalyticsList title="Answer Volume" icon={TrendingUp} rows={analytics.responseRows} empty="Submitted answer counts will appear during live phone play." render={(row) => <ResponseRow row={row} players={analytics.totals.players} />} /><AnalyticsList title="Fair Play Signals" icon={Users} rows={analytics.exitCounts} empty="Screen-exit signals will appear here when phone play is live." render={(row) => <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-zinc-950/60 p-3"><span className="font-semibold text-zinc-200 truncate">{row.label}</span><Badge className="bg-amber-500/15 text-amber-200">{row.total} exits</Badge></div>} /><AnalyticsList title="Question Type Mix" icon={BarChart3} rows={analytics.typeMix} empty="No session questions found." render={(row) => <ProgressRow row={row} total={analytics.totals.questions} />} /><AnalyticsList title="Category Mix" icon={MessageSquare} rows={analytics.categoryMix} empty="No categories found in this session." render={(row) => <ProgressRow row={row} total={analytics.totals.questions} />} /></div></section>;
+const GameDataPanel = ({ analytics }) => <section className="space-y-6"><div className="grid grid-cols-2 lg:grid-cols-4 gap-3"><AnalyticsMetric icon={Users} label="Players" value={analytics.totals.players} sub={`${analytics.totals.emailOptIns} email opt-in${analytics.totals.emailOptIns === 1 ? "" : "s"}`} /><AnalyticsMetric icon={TrendingUp} label="Answers" value={analytics.totals.answers} sub={`${analytics.totals.answerCoverage}% question coverage`} /><AnalyticsMetric icon={BarChart3} label="Questions" value={analytics.totals.questions} sub="in selected session" /><AnalyticsMetric icon={Users} label="Fair Play" value={analytics.totals.screenExits} sub="screen exit flags" /></div><TeamRankingsCard rows={analytics.teamStats} totalQuestions={analytics.totals.questions} /><QuestionBreakdownCard rows={analytics.questionRows} players={analytics.totals.players} /><CrowdActivityCard rows={analytics.answerRows} /><div className="grid grid-cols-1 xl:grid-cols-2 gap-6"><AnalyticsList title="Fair Play Signals" icon={Users} rows={analytics.exitCounts} empty="Screen-exit signals will appear here when phone play is live." render={(row) => <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-zinc-950/60 p-3"><span className="font-semibold text-zinc-200 truncate">{row.label}</span><Badge className="bg-amber-500/15 text-amber-200">{row.total} exits</Badge></div>} /><AnalyticsList title="Question Type Mix" icon={BarChart3} rows={analytics.typeMix} empty="No session questions found." render={(row) => <ProgressRow row={row} total={analytics.totals.questions} />} /></div></section>;
+
+const TeamRankingsCard = ({ rows, totalQuestions }) => <Card className="glass-card"><CardHeader><CardTitle className="text-white flex items-center gap-2"><Users className="text-[#71E0DC]" />Team Rankings</CardTitle></CardHeader><CardContent className="space-y-2">{rows.map((team, index) => <div key={team.id || team.name} className="grid grid-cols-[44px_1fr_auto] gap-3 rounded-lg border border-white/10 bg-zinc-950/60 p-3 items-center"><div className="text-center"><p className="text-xs text-zinc-500">Rank</p><p className="text-lg font-black text-white">{index + 1}</p></div><div className="min-w-0"><p className="font-bold text-white truncate">{team.name}</p><div className="mt-2 flex items-center gap-2 text-xs text-zinc-400"><span>Answered <strong className="text-white">{team.correct}</strong> of <strong className="text-white">{totalQuestions || team.answered}</strong> correctly</span><span className="text-zinc-600">/</span><span>{team.answered} submitted</span></div><div className="mt-2 h-2 rounded-full bg-zinc-800 overflow-hidden"><div className="h-full rounded-full bg-[#AEB2EF]" style={{ width: `${team.correctPercent}%` }} /></div></div><div className="text-right"><p className="text-xs text-zinc-500">Points</p><p className="text-2xl font-black text-[#71E0DC]">{team.score}</p></div></div>)}{!rows.length && <p className="text-sm text-zinc-500 text-center py-8">Team rankings will appear after players join or scores are saved.</p>}</CardContent></Card>;
+
+const QuestionBreakdownCard = ({ rows, players }) => <Card className="glass-card"><CardHeader><CardTitle className="text-white flex items-center gap-2"><BarChart3 className="text-[#71E0DC]" />Question Answer Breakdown</CardTitle></CardHeader><CardContent className="space-y-4 max-h-[680px] overflow-y-auto">{rows.map((row) => <div key={row.key} className="rounded-lg border border-white/10 bg-zinc-950/60 p-4"><div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2 mb-2"><Badge className="bg-zinc-800 text-zinc-300">Q{row.index + 1}</Badge><Badge className="bg-[#71E0DC]/15 text-[#71E0DC]">{row.responses}/{players || 0} answers</Badge><Badge className={row.correctPercent >= 70 ? "bg-emerald-500/15 text-emerald-300" : row.correctPercent > 0 ? "bg-amber-500/15 text-amber-200" : "bg-zinc-800 text-zinc-300"}>{row.correctPercent}% correct</Badge></div><p className="font-bold text-white line-clamp-2">{row.label}</p><p className="mt-1 text-xs text-zinc-500">{row.category} / {String(row.type || "").replace("_", "/")}</p></div><p className="shrink-0 text-sm font-bold text-emerald-300">Answer: {row.answer || "Not set"}</p></div><div className="mt-4 space-y-2">{row.optionRows.map((option) => <div key={option.label} className={`rounded-md px-3 py-2 ${option.correct ? "bg-emerald-500/10 border border-emerald-500/25" : "bg-zinc-900/80 border border-white/5"}`}><div className="grid grid-cols-[minmax(120px,240px)_1fr_auto] gap-3 items-center"><div className="flex items-center gap-2 min-w-0"><span className="truncate text-sm font-semibold text-zinc-200">{option.label}</span>{option.correct && <Badge className="bg-emerald-500/20 text-emerald-300"><CheckCircle size={12} className="mr-1" />Correct</Badge>}</div><div className="h-3 rounded-full bg-zinc-800 overflow-hidden"><div className={`h-full rounded-full ${option.correct ? "bg-emerald-400" : "bg-[#AEB2EF]"}`} style={{ width: `${option.percent}%` }} /></div><span className="text-xs font-bold text-zinc-300">{option.percent}% / {option.total}</span></div></div>)}</div></div>)}{!rows.length && <p className="text-sm text-zinc-500 text-center py-8">Question results will appear after answers are submitted.</p>}</CardContent></Card>;
+
+const CrowdActivityCard = ({ rows }) => <Card className="glass-card"><CardHeader><CardTitle className="text-white flex items-center gap-2"><TrendingUp className="text-[#71E0DC]" />Crowd Activity</CardTitle></CardHeader><CardContent><div className="overflow-x-auto"><table className="w-full min-w-[920px] text-sm"><thead><tr className="border-b border-white/10 text-left text-xs uppercase tracking-wide text-zinc-500"><th className="py-2 pr-3">Q#</th><th className="py-2 pr-3">Question</th><th className="py-2 pr-3">Team</th><th className="py-2 pr-3">Answer</th><th className="py-2 pr-3">Correct?</th><th className="py-2 pr-3">Points</th><th className="py-2 pr-3">Wager</th><th className="py-2 pr-3">Time</th></tr></thead><tbody>{rows.map((row) => <tr key={row.key} className="border-b border-white/5 text-zinc-300"><td className="py-3 pr-3 font-mono text-zinc-500">{row.questionIndex + 1}</td><td className="py-3 pr-3 max-w-[260px] truncate">{row.question}</td><td className="py-3 pr-3 font-semibold text-white">{row.team}</td><td className="py-3 pr-3 max-w-[220px] truncate">{row.answer}</td><td className="py-3 pr-3"><CorrectBadge status={row.correct} /></td><td className="py-3 pr-3 font-bold">{row.points > 0 ? `+${row.points}` : row.points}</td><td className="py-3 pr-3">{row.wager === null ? "-" : row.wager}</td><td className="py-3 pr-3 text-zinc-500">{formatAnswerTime(row)}</td></tr>)}</tbody></table></div>{!rows.length && <p className="text-sm text-zinc-500 text-center py-8">Every submitted answer will appear here once phone play starts.</p>}</CardContent></Card>;
+
+const CorrectBadge = ({ status }) => status === "correct" ? <Badge className="bg-emerald-500/15 text-emerald-300"><CheckCircle size={12} className="mr-1" />Yes</Badge> : status === "incorrect" ? <Badge className="bg-red-500/15 text-red-300"><XCircle size={12} className="mr-1" />No</Badge> : <Badge className="bg-zinc-800 text-zinc-300">Pending</Badge>;
 
 const AssistantPanel = ({ assistantRequest, setAssistantRequest, askHostAssistant, assistantLoading, assistantAnswer }) => <section className="max-w-5xl"><Panel title="AI Host Assistant" icon={Sparkles}><textarea value={assistantRequest} onChange={(event) => setAssistantRequest(event.target.value)} placeholder="Ask for a replacement question, round balance advice, clue rewrite, pacing help, or a plan for this venue..." className="min-h-28 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><div className="flex flex-wrap gap-2"><Button onClick={askHostAssistant} disabled={assistantLoading} className="gradient-btn">{assistantLoading ? <Sparkles className="mr-2 animate-spin" size={16} /> : <Sparkles className="mr-2" size={16} />}Ask Assistant</Button><Button variant="outline" onClick={() => setAssistantRequest("Look at this session and tell me what feels too easy, too hard, repetitive, or missing for my regular trivia crowd.")} className="border-white/10 text-zinc-300 hover:text-white">Review Session</Button><Button variant="outline" onClick={() => setAssistantRequest("Draft a fresh replacement question for the current session that avoids common bar trivia repeats. Include answer and fun fact.")} className="border-white/10 text-zinc-300 hover:text-white">Replacement</Button><Button variant="outline" onClick={() => setAssistantRequest("Help me turn harder questions into fair written-answer questions instead of true/false or multiple choice.")} className="border-white/10 text-zinc-300 hover:text-white">Written Help</Button></div>{assistantAnswer && <div className="rounded-lg border border-white/10 bg-zinc-950/70 p-4 text-sm leading-relaxed text-zinc-200 whitespace-pre-wrap">{assistantAnswer}</div>}<p className="text-xs text-zinc-500">Uses the selected session plus saved venue/template memory and player feedback.</p></Panel></section>;
 
@@ -443,32 +462,81 @@ const getQuestionText = (question) => question?.question_text || question?.quest
 const getQuestionType = (question) => question?.question_type || (question?.incorrect_answers ? "multiple_choice" : "written");
 const getQuestionCategory = (question) => question?.category || "Uncategorized";
 const getQuestionKey = (question, index) => String(question?.id || `${index}-${getQuestionText(question)}`);
+const getQuestionAnswer = (question) => question?.correct_answer || question?.answer || "";
+const getQuestionOptions = (question) => {
+  const rawOptions = Array.isArray(question?.options) ? question.options : Array.isArray(question?.incorrect_answers) ? [...question.incorrect_answers, getQuestionAnswer(question)] : [];
+  if (getQuestionType(question) === "true_false") return ["True", "False"];
+  return [...new Set(rawOptions.map((option) => String(option || "").trim()).filter(Boolean))];
+};
+const answerKey = (answer) => `${answer.playerId}-${answer.questionIndex}`;
 const percent = (value, total) => total > 0 ? Math.round((value / total) * 100) : 0;
 const compactLabel = (value, fallback = "Unknown") => String(value || fallback).replace(/\s+/g, " ").trim();
 const sortByTotal = (rows) => [...rows].sort((a, b) => (b.total || 0) - (a.total || 0));
 const scoreRows = (rows) => [...rows].map((row) => ({ ...row, score: Number(row.likes || 0) - Number(row.dislikes || 0), total: Number(row.likes || 0) + Number(row.dislikes || 0) }));
 
-const buildAnalytics = ({ selectedSession, players, feedback, categoryFeedback, playerIdeas, answers, activity, emailPlayers }) => {
+const buildAnalytics = ({ selectedSession, players, feedback, categoryFeedback, playerIdeas, answers, activity, emailPlayers, leaderboard, gradedAnswers }) => {
   const questions = sessionQuestions(selectedSession);
   const questionRows = questions.map((question, index) => {
     const text = compactLabel(getQuestionText(question), `Question ${index + 1}`);
     const votes = feedback.filter((item) => Number(item.questionIndex) === index || item.questionText === text);
     const responses = answers.filter((answer) => Number(answer.questionIndex) === index);
+    const correctResponses = responses.filter((answer) => gradedAnswers[answerKey(answer)]?.status === "correct").length;
+    const options = getQuestionOptions(question);
+    const answerGroups = Object.values(responses.reduce((groups, answer) => {
+      const label = compactLabel(answer.answer, "Blank");
+      if (!groups[label]) groups[label] = { label, total: 0, correct: false };
+      groups[label].total += 1;
+      if (gradedAnswers[answerKey(answer)]?.status === "correct" || label.toLowerCase() === compactLabel(getQuestionAnswer(question)).toLowerCase()) groups[label].correct = true;
+      return groups;
+    }, {}));
+    const optionRows = (options.length ? options : answerGroups.map((row) => row.label)).map((option) => {
+      const match = answerGroups.find((row) => row.label === option);
+      return { label: option, total: match?.total || 0, correct: match?.correct || compactLabel(option).toLowerCase() === compactLabel(getQuestionAnswer(question)).toLowerCase(), percent: percent(match?.total || 0, responses.length) };
+    });
+    const extraRows = answerGroups.filter((row) => !optionRows.some((option) => option.label === row.label)).map((row) => ({ ...row, percent: percent(row.total, responses.length) }));
     return {
       key: getQuestionKey(question, index),
       label: text,
+      index,
       category: getQuestionCategory(question),
       type: getQuestionType(question),
+      answer: getQuestionAnswer(question),
       likes: votes.filter((item) => item.sentiment === "like").length,
       dislikes: votes.filter((item) => item.sentiment === "dislike").length,
       responses: responses.length,
+      correct: correctResponses,
+      correctPercent: percent(correctResponses, responses.length),
       responseRate: percent(responses.length, players.length),
+      optionRows: [...optionRows, ...extraRows].sort((a, b) => b.total - a.total),
     };
   });
 
   const categoryRows = scoreRows(summarize(categoryFeedback, "category"));
   const questionVoteRows = scoreRows(questionRows);
   const answeredQuestionIndexes = new Set(answers.map((answer) => Number(answer.questionIndex)));
+  const answerRows = answers.map((answer) => {
+    const questionIndex = Number(answer.questionIndex);
+    const question = questions[questionIndex] || {};
+    const grade = gradedAnswers[answerKey(answer)] || {};
+    return {
+      key: `${answer.playerId}-${answer.questionIndex}-${answer.submittedAt || ""}`,
+      questionIndex,
+      question: compactLabel(getQuestionText(question) || answer.questionText, `Question ${questionIndex + 1}`),
+      team: answer.playerName || players.find((player) => player.id === answer.playerId)?.name || "Team",
+      answer: compactLabel(answer.answer, "Blank"),
+      correct: grade.status || "ungraded",
+      points: Number(grade.points || 0),
+      wager: answer.wagerMode ? Number(answer.wagerAmount || 0) : null,
+      seconds: answer.responseSeconds ?? answer.secondsToSubmit ?? answer.elapsedSeconds ?? null,
+      submittedAt: answer.submittedAt || "",
+    };
+  }).sort((a, b) => a.questionIndex - b.questionIndex || String(a.submittedAt).localeCompare(String(b.submittedAt)));
+  const rankingSource = Array.isArray(leaderboard) && leaderboard.length ? leaderboard : players;
+  const teamStats = rankingSource.map((team) => {
+    const teamAnswers = answers.filter((answer) => answer.playerId === team.id);
+    const correct = teamAnswers.filter((answer) => gradedAnswers[answerKey(answer)]?.status === "correct").length;
+    return { id: team.id, name: team.name || "Team", score: Number(team.score || 0), answered: teamAnswers.length, correct, correctPercent: percent(correct, questions.length) };
+  }).sort((a, b) => b.score - a.score || b.correct - a.correct || a.name.localeCompare(b.name));
   const typeMix = sortByTotal(Object.values(questions.reduce((groups, question) => {
     const label = getQuestionType(question).replace("_", "/");
     if (!groups[label]) groups[label] = { label, total: 0 };
@@ -503,6 +571,9 @@ const buildAnalytics = ({ selectedSession, players, feedback, categoryFeedback, 
     topQuestions: questionVoteRows.filter((row) => row.total > 0).sort((a, b) => b.score - a.score || b.total - a.total).slice(0, 5),
     needsReview: questionVoteRows.filter((row) => row.total > 0 || row.responses > 0).sort((a, b) => a.score - b.score || b.dislikes - a.dislikes).slice(0, 5),
     categoryRows,
+    questionRows,
+    answerRows,
+    teamStats,
     typeMix,
     categoryMix,
     responseRows: questionRows.filter((row) => row.responses > 0).sort((a, b) => b.responses - a.responses).slice(0, 6),
@@ -532,6 +603,14 @@ const formatDateTime = (value) => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
   return date.toLocaleString();
+};
+
+const formatAnswerTime = (row) => {
+  if (row.seconds !== null && row.seconds !== undefined && row.seconds !== "") return `${Number(row.seconds).toFixed(1)}s`;
+  if (!row.submittedAt) return "-";
+  const date = new Date(row.submittedAt);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 };
 
 export default HostTools;
