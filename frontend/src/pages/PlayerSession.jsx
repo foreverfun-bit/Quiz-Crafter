@@ -119,7 +119,7 @@ const PlayerSession = () => {
   const [session, setSession] = useState(null);
   const [hostState, setHostState] = useState(null);
   const [answer, setAnswer] = useState("");
-  const [wagerAmount, setWagerAmount] = useState("");
+  const [wagerAmount, setWagerAmount] = useState("0");
   const [updatePreference, setUpdatePreference] = useState("none");
   const [updateContact, setUpdateContact] = useState("");
   const [hostUpdate, setHostUpdate] = useState(null);
@@ -233,7 +233,7 @@ const PlayerSession = () => {
   }, [currentQuestion, hostState, player]);
 
   useEffect(() => {
-    setWagerAmount("");
+    setWagerAmount("0");
   }, [hostState?.currentIndex, wagerMode]);
 
   const joinGame = () => {
@@ -275,12 +275,12 @@ const PlayerSession = () => {
     const finalAnswer = String(value || answer).trim();
     if (!finalAnswer || !player || !currentQuestion) return;
     const shouldWagerBefore = wagerMode && wagerTiming !== "after_answer";
-    const wager = shouldWagerBefore ? Math.min(Number(wagerAmount || 0), effectiveWagerLimit) : 0;
-    if (shouldWagerBefore && wager <= 0) return toast.error("Enter a wager");
-    if (shouldWagerBefore && effectiveWagerLimit <= 0) return toast.error("You need points to wager");
-    if (shouldWagerBefore && wager > effectiveWagerLimit) return toast.error(`Wager up to ${effectiveWagerLimit}`);
+    const requestedWager = Number(wagerAmount || 0);
+    if (shouldWagerBefore && (!Number.isFinite(requestedWager) || requestedWager < 0)) return toast.error("Enter a wager of 0 or more");
+    if (shouldWagerBefore && requestedWager > effectiveWagerLimit) return toast.error(`Wager up to ${effectiveWagerLimit}`);
+    const wager = shouldWagerBefore ? requestedWager : 0;
     const awardedPoints = wagerMode ? wager : pointsPerQuestion;
-    const payload = { playerId: player.id, playerName: player.name, answer: finalAnswer, points: awardedPoints, wagerAmount: wager, wagerMode, wagerLimit, wagerCap: effectiveWagerLimit, scoreAtWager: Number(myScore || 0), wagerTiming, questionIndex: hostState.currentIndex, questionId: currentQuestion.id, questionText: currentQuestion.questionText, ...submissionTiming(), submittedAt: new Date().toISOString() };
+    const payload = { playerId: player.id, playerName: player.name, answer: finalAnswer, points: awardedPoints, wagerAmount: wager, wagerSubmitted: !wagerMode || wagerTiming !== "after_answer", wagerMode, wagerLimit, wagerCap: effectiveWagerLimit, scoreAtWager: Number(myScore || 0), wagerTiming, questionIndex: hostState.currentIndex, questionId: currentQuestion.id, questionText: currentQuestion.questionText, ...submissionTiming(), submittedAt: new Date().toISOString() };
     channelRef.current?.send({ type: "broadcast", event: "answer_submit", payload });
     setSubmitted(payload);
     setAnswer("");
@@ -289,11 +289,10 @@ const PlayerSession = () => {
 
   const submitWager = () => {
     if (!submitted || !wagerMode || wagerTiming !== "after_answer") return;
-    const wager = Math.min(Number(wagerAmount || 0), effectiveWagerLimit);
-    if (wager <= 0) return toast.error("Enter a wager");
-    if (effectiveWagerLimit <= 0) return toast.error("You need points to wager");
+    const wager = Number(wagerAmount || 0);
+    if (!Number.isFinite(wager) || wager < 0) return toast.error("Enter a wager of 0 or more");
     if (wager > effectiveWagerLimit) return toast.error(`Wager up to ${effectiveWagerLimit}`);
-    const payload = { ...submitted, points: wager, wagerAmount: wager, wagerLimit, wagerCap: effectiveWagerLimit, scoreAtWager: Number(myScore || 0), wagerTiming, ...submissionTiming(), submittedAt: new Date().toISOString() };
+    const payload = { ...submitted, points: wager, wagerAmount: wager, wagerSubmitted: true, wagerLimit, wagerCap: effectiveWagerLimit, scoreAtWager: Number(myScore || 0), wagerTiming, ...submissionTiming(), submittedAt: new Date().toISOString() };
     channelRef.current?.send({ type: "broadcast", event: "answer_submit", payload });
     setSubmitted(payload);
     toast.success("Wager submitted");
@@ -370,7 +369,7 @@ const PlayerQuestionView = ({ currentQuestion, hostState, wagerMode, effectiveWa
       )}
 
       {!hostState.showAnswer && !hostState.showFunFact && (submitted?.questionIndex === hostState.currentIndex ? (
-        <Card className="glass-card"><CardContent className="p-6 text-center"><CheckCircle className="mx-auto text-emerald-300 mb-3" size={42} /><h3 className="text-2xl font-black mb-1">Answer Locked</h3><p className="text-zinc-400">You answered: <span className="text-white font-bold">{submitted.answer}</span></p>{submitted.wagerMode && wagerTiming === "after_answer" && !Number(submitted.wagerAmount) ? <div className="mt-4"><WagerInput wagerMode wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={effectiveWagerLimit} /><Button onClick={submitWager} className="w-full gradient-btn">Submit Wager</Button></div> : submitted.wagerMode && <p className="text-purple-300 font-bold mt-2">Wager: {submitted.wagerAmount}</p>}</CardContent></Card>
+        <Card className="glass-card"><CardContent className="p-6 text-center"><CheckCircle className="mx-auto text-emerald-300 mb-3" size={42} /><h3 className="text-2xl font-black mb-1">Answer Locked</h3><p className="text-zinc-400">You answered: <span className="text-white font-bold">{submitted.answer}</span></p>{submitted.wagerMode && wagerTiming === "after_answer" && !submitted.wagerSubmitted ? <div className="mt-4"><WagerInput wagerMode wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={effectiveWagerLimit} /><Button onClick={submitWager} className="w-full gradient-btn">Submit Wager</Button></div> : submitted.wagerMode && <p className="text-purple-300 font-bold mt-2">Wager: {submitted.wagerAmount}</p>}</CardContent></Card>
       ) : !acceptingAnswers ? (
         <Card className="border-red-500/30 bg-red-500/10"><CardContent className="p-6 text-center"><Timer className="mx-auto text-red-300 mb-3" size={42} /><h3 className="text-2xl font-black">Time&apos;s Up</h3><p className="text-zinc-400 mt-1">Waiting for the answer reveal.</p></CardContent></Card>
       ) : (
@@ -500,7 +499,7 @@ const LeaderboardView = ({ leaderboard, playerId, title = "Leaderboard" }) => <d
 
 const IdeasView = ({ form, setForm, onSubmit }) => <div className="w-full max-w-md"><div className="text-center mb-5"><Sparkles className="mx-auto text-[#71E0DC] mb-2" size={40} /><h2 className="text-3xl font-black">Send Ideas</h2><p className="text-zinc-500 mt-1">Help shape a future trivia night.</p></div><Card className="glass-card"><CardContent className="p-5 space-y-4"><label className="block text-sm text-zinc-400">Category idea<input value={form.category} onChange={(event) => setForm((current) => ({ ...current, category: event.target.value }))} placeholder="e.g. Movie soundtracks" className="mt-1 h-12 w-full rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><label className="block text-sm text-zinc-400">Question idea<textarea value={form.question} onChange={(event) => setForm((current) => ({ ...current, question: event.target.value }))} placeholder="A question, clue idea, or topic you want to see" className="mt-1 min-h-28 w-full rounded-lg bg-zinc-950 border border-white/10 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><Button onClick={onSubmit} className="w-full h-12 gradient-btn font-bold">Send Idea</Button></CardContent></Card></div>;
 
-const WagerInput = ({ wagerMode, wagerAmount, setWagerAmount, wagerLimit }) => wagerMode ? <div className="mb-3"><label className="text-zinc-400 text-sm block mb-1.5">Wager{wagerLimit ? ` up to ${wagerLimit}` : ""}</label><input value={wagerAmount} onChange={(event) => setWagerAmount(event.target.value)} type="number" min="1" max={wagerLimit || undefined} inputMode="numeric" placeholder="Enter wager" className="w-full h-12 rounded-lg bg-zinc-950 border border-purple-500/30 px-3 text-white text-lg outline-none focus:border-purple-400" /></div> : null;
+const WagerInput = ({ wagerMode, wagerAmount, setWagerAmount, wagerLimit }) => wagerMode ? <div className="mb-3"><label className="text-zinc-400 text-sm block mb-1.5">Wager from 0{wagerLimit ? ` to ${wagerLimit}` : ""}</label><input value={wagerAmount} onChange={(event) => setWagerAmount(event.target.value)} type="number" min="0" max={wagerLimit || 0} inputMode="numeric" placeholder="0" className="w-full h-12 rounded-lg bg-zinc-950 border border-purple-500/30 px-3 text-white text-lg outline-none focus:border-purple-400" /></div> : null;
 
 const AnswerForm = ({ question, answer, setAnswer, submitAnswer, wagerMode, wagerAmount, setWagerAmount, wagerLimit }) => {
   if (question.type === "true_false") return <><WagerInput wagerMode={wagerMode} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={wagerLimit} /><div className="grid grid-cols-2 gap-3"><Button onClick={() => submitAnswer("True")} className="h-16 text-xl font-black bg-emerald-500/20 border-2 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30">True</Button><Button onClick={() => submitAnswer("False")} className="h-16 text-xl font-black bg-red-500/20 border-2 border-red-500/40 text-red-300 hover:bg-red-500/30">False</Button></div></>;
