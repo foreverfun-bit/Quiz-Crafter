@@ -4,7 +4,7 @@ import { supabase } from "../lib/supabase";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent } from "../components/ui/card";
-import { CheckCircle, Send, Sparkles, Tags, ThumbsDown, ThumbsUp, Timer, Trophy } from "lucide-react";
+import { CheckCircle, Pencil, Send, Sparkles, Tags, ThumbsDown, ThumbsUp, Timer, Trophy, X } from "lucide-react";
 import { toast } from "sonner";
 
 const makePlayerId = () => `player-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -116,6 +116,8 @@ const PlayerSession = () => {
   const { id } = useParams();
   const [name, setName] = useState("");
   const [player, setPlayer] = useState(() => getStoredPlayer(id));
+  const [editingName, setEditingName] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
   const [session, setSession] = useState(null);
   const [hostState, setHostState] = useState(null);
   const [answer, setAnswer] = useState("");
@@ -254,6 +256,17 @@ const PlayerSession = () => {
     setPlayer(nextPlayer);
   };
 
+  const saveTeamName = () => {
+    const trimmed = renameValue.trim();
+    if (!trimmed || !player) return toast.error("Enter a team name");
+    const nextPlayer = { ...player, name: trimmed.slice(0, 32) };
+    saveStoredPlayer(id, nextPlayer);
+    setPlayer(nextPlayer);
+    setEditingName(false);
+    channelRef.current?.send({ type: "broadcast", event: "player_rename", payload: { playerId: nextPlayer.id, playerName: nextPlayer.name, updatedAt: new Date().toISOString() } });
+    toast.success("Team name updated");
+  };
+
   const submitFeedback = (sentiment) => {
     if (!player || !currentQuestion || !hostState) return;
     const key = String(hostState.currentIndex);
@@ -320,7 +333,7 @@ const PlayerSession = () => {
 
   return (
     <div className="min-h-screen bg-[#09090B] text-white flex flex-col" data-testid="player-session-page">
-      <header className="px-4 py-3 border-b border-white/10 flex items-center justify-between gap-3 bg-zinc-950/80 sticky top-0 z-10"><div className="min-w-0 flex items-center gap-2">{branding.logoUrl && <img src={branding.logoUrl} alt={branding.name} className="h-9 w-9 shrink-0 rounded-full bg-white object-contain p-1" />}<div className="min-w-0"><p className="font-bold truncate">{player.name}</p><p className="text-xs text-zinc-500 truncate">{sessionName}</p></div></div><Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20">{Number(myScore)} pts</Badge></header>
+      <header className="px-4 py-3 border-b border-white/10 flex items-center justify-between gap-3 bg-zinc-950/80 sticky top-0 z-10"><div className="min-w-0 flex items-center gap-2">{branding.logoUrl && <img src={branding.logoUrl} alt={branding.name} className="h-9 w-9 shrink-0 rounded-full bg-white object-contain p-1" />}<div className="min-w-0">{editingName ? <div className="flex items-center gap-1"><input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") saveTeamName(); if (event.key === "Escape") setEditingName(false); }} maxLength={32} className="h-8 min-w-0 rounded-md border border-white/10 bg-zinc-950 px-2 text-sm font-bold text-white outline-none focus:border-[#71E0DC]/60" autoFocus /><button type="button" onClick={saveTeamName} className="h-8 w-8 rounded-md bg-[#71E0DC] text-zinc-950 flex items-center justify-center" aria-label="Save team name"><CheckCircle size={16} /></button><button type="button" onClick={() => setEditingName(false)} className="h-8 w-8 rounded-md border border-white/10 text-zinc-400 flex items-center justify-center" aria-label="Cancel rename"><X size={16} /></button></div> : <div className="flex items-center gap-1 min-w-0"><p className="font-bold truncate">{player.name}</p><button type="button" onClick={() => { setRenameValue(player.name || ""); setEditingName(true); }} className="h-7 w-7 shrink-0 rounded-md text-zinc-500 hover:text-white" aria-label="Change team name"><Pencil size={14} /></button></div>}<p className="text-xs text-zinc-500 truncate">{sessionName}</p></div></div><Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20">{Number(myScore)} pts</Badge></header>
       <main className="flex-1 flex items-center justify-center p-4">
         {!gameStarted && <PlayerLobby sessionName={sessionName} connected={connected} branding={branding} />}
         {hostUpdate && <HostUpdateBanner update={hostUpdate} onDismiss={() => setHostUpdate(null)} />}
