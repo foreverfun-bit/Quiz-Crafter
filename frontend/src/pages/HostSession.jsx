@@ -822,31 +822,22 @@ const HostSession = () => {
       currentIndex,
       presentMode: "winners",
     };
-    try {
-      writeStoredObject(hostToolsStorageKey(id, "results"), results);
-      writeStoredList(hostToolsStorageKey(id, "players"), players);
-      writeStoredList(hostToolsStorageKey(id, "answers"), answers);
-      writeStoredObject(hostToolsStorageKey(id, "graded-answers"), gradedAnswers);
-      writeStoredList(hostToolsStorageKey(id, "feedback"), feedback);
-      writeStoredList(hostToolsStorageKey(id, "category-feedback"), categoryFeedback);
-      writeStoredList(hostToolsStorageKey(id, "ideas"), playerIdeas);
-      writeStoredList(hostToolsStorageKey(id, "activity"), playerActivity);
-      writeStoredList(hostToolsStorageKey(id, "disputes"), disputeNotes);
-      const backups = await Promise.allSettled([
-        saveHostToolsSessionState(id, { endedAt, results, leaderboard, players, answers, gradedAnswers, feedback, categoryFeedback, ideas: playerIdeas, activity: playerActivity, disputes: disputeNotes, currentIndex, presentMode: "winners" }),
-        supabase.from("sessions").update({ hosted_at: endedAt, hosted_results: results }).eq("id", id),
-      ]);
-      backups.forEach((result) => {
-        if (result.status === "rejected") console.warn("End session backup unavailable:", result.reason);
-        else if (result.value?.error) console.warn("End session database backup unavailable:", result.value.error);
-      });
-      setGameStarted(true);
-      setPresentMode("winners");
-      toast.success("Hosted session results saved");
-    } catch (error) {
-      console.error("End session save error:", error);
-      toast.error(error.message || "Could not save hosted results");
-    }
+    writeStoredObject(hostToolsStorageKey(id, "results"), results);
+    writeStoredList(hostToolsStorageKey(id, "players"), players);
+    writeStoredList(hostToolsStorageKey(id, "answers"), answers);
+    writeStoredObject(hostToolsStorageKey(id, "graded-answers"), gradedAnswers);
+    writeStoredList(hostToolsStorageKey(id, "feedback"), feedback);
+    writeStoredList(hostToolsStorageKey(id, "category-feedback"), categoryFeedback);
+    writeStoredList(hostToolsStorageKey(id, "ideas"), playerIdeas);
+    writeStoredList(hostToolsStorageKey(id, "activity"), playerActivity);
+    writeStoredList(hostToolsStorageKey(id, "disputes"), disputeNotes);
+    setGameStarted(true);
+    setPresentMode("winners");
+    toast.success("Hosted session ended");
+    saveHostToolsSessionState(id, { endedAt, currentIndex, presentMode: "winners" }).catch((error) => console.warn("End session profile marker unavailable:", error));
+    supabase.from("sessions").update({ hosted_at: endedAt, hosted_results: results }).eq("id", id).then(({ error }) => {
+      if (error) console.warn("End session database backup unavailable:", error);
+    }).catch((error) => console.warn("End session database backup unavailable:", error));
   };
   const openPresentation = () => window.open(`/present-session/${id}`, "_blank", "noopener,noreferrer");
   const copyJoinLink = async () => {
