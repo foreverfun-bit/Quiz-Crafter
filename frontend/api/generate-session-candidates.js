@@ -293,7 +293,7 @@ function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, clea
       : `Use varied broad categories such as: ${BROAD_CATEGORIES.join(", ")}.`;
   const excludedCategoryText = cleanExcludeCategories.length ? `Do not use these rejected or avoided categories: ${cleanExcludeCategories.join(", ")}.` : "";
   const themeText = cleanTheme ? `Theme/vibe/category guidance: ${cleanTheme}. Stay useful to that direction, but avoid repetitive question angles.` : "";
-  const styleText = styleExamples.length ? `Use these saved library questions as calibration for the host's style and difficulty. Match the readability, category feel, and answerability. Do not copy, lightly rewrite, reuse their answers, or generate the same topic angles:\n${styleExamples.map(formatStyleExample).join("\n")}` : "";
+  const styleText = styleExamples.length ? `Use these saved and previously hosted questions as calibration for the host's style and difficulty. Treat them as examples of the host's taste: readable, obscure-but-fair, US-friendly, and useful for live bar trivia. Match the category feel, clue path, and answerability. Do not copy, lightly rewrite, reuse their answers, or generate the same topic angles:\n${styleExamples.map(formatStyleExample).join("\n")}` : "";
   const sessionContextText = cleanSessionContext && (cleanSessionContext.builtQuestions.length || cleanSessionContext.activeRoundQuestions.length || cleanSessionContext.roundDescriptions.length)
     ? [
         "Current build context. Use this to match the session's pacing, tone, readability, and clue style. Do not copy these questions, reuse their answers, or force the same categories if those categories are excluded:",
@@ -387,11 +387,11 @@ ${duplicateText}
 
 function buildStyleExamples(existingQuestions, questionType, approvedCategories) {
   const approvedSet = new Set(approvedCategories.map(categoryKey));
-  const libraryQuestions = existingQuestions.filter((q) => q.source === "library");
-  const matchingType = libraryQuestions.filter((q) => q.question_type === questionType);
+  const usableQuestions = existingQuestions.filter((q) => q.question_text && q.correct_answer);
+  const matchingType = usableQuestions.filter((q) => q.question_type === questionType);
   const matchingApproved = matchingType.filter((q) => !approvedSet.size || approvedSet.has(categoryKey(q.category)));
-  const candidates = matchingApproved.length >= 8 ? matchingApproved : matchingType.length >= 8 ? matchingType : libraryQuestions;
-  return sampleStable(candidates.filter((q) => q.question_text && q.correct_answer), STYLE_EXAMPLE_LIMIT);
+  const candidates = matchingApproved.length >= 8 ? matchingApproved : matchingType.length >= 8 ? matchingType : usableQuestions;
+  return sampleStable(candidates, STYLE_EXAMPLE_LIMIT);
 }
 
 function sampleStable(items, limit) {
@@ -410,6 +410,7 @@ function sampleStable(items, limit) {
 function scoreStyleExample(question) {
   let score = 0;
   if (question.source === "library") score += 8;
+  if (question.source === "session") score += 8;
   if (question.category) score += 2;
   if (question.fun_fact) score += 2;
   const length = cleanText(question.question_text).length;
@@ -419,7 +420,8 @@ function scoreStyleExample(question) {
 }
 
 function formatStyleExample(q) {
-  const parts = [`- [${q.category || "Uncategorized"} / ${q.question_type || "written"}] ${q.question_text}`, `Answer: ${q.correct_answer}`];
+  const sourceLabel = q.source === "session" ? "past session" : "library";
+  const parts = [`- [${sourceLabel} / ${q.category || "Uncategorized"} / ${q.question_type || "written"}] ${q.question_text}`, `Answer: ${q.correct_answer}`];
   if (q.fun_fact) parts.push(`Fun fact style: ${q.fun_fact}`);
   return parts.join(" ");
 }
@@ -437,7 +439,7 @@ async function requestCandidates(prompt) {
       frequency_penalty: 0.3,
       response_format: { type: "json_object" },
       messages: [
-        { role: "system", content: "You are a careful, inventive trivia co-host for a weekly live trivia host. You learn from the host's saved library style, avoid common quiz-bank questions, and return only valid JSON." },
+        { role: "system", content: "You are a careful, inventive trivia co-host for a weekly live trivia host. You learn from the host's saved library and previously hosted questions, avoid common quiz-bank questions, and return only valid JSON." },
         { role: "user", content: prompt },
       ],
     }),
