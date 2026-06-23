@@ -104,7 +104,7 @@ export const saveHostSetupSettings = async (patch) => {
   if (Array.isArray(next.templates)) metadataPatch[profileKeys.showTemplates] = next.templates;
   if (next.activeVenueId !== undefined) metadataPatch[profileKeys.activeVenueId] = next.activeVenueId;
   if (isPlainObject(next.branding)) metadataPatch[profileKeys.brandingDefaults] = next.branding;
-  await updateUserMetadata(metadataPatch);
+  await updateUserMetadata(metadataPatch).catch((error) => console.warn("Host setup metadata mirror unavailable:", error));
   const payload = { category: HOST_SETUP_CATEGORY, status: JSON.stringify(next) };
   const upsertResult = await supabase.from("category_preferences").upsert(payload).select("*");
   if (!upsertResult.error) return next;

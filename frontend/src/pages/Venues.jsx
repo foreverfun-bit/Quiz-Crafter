@@ -98,11 +98,9 @@ const Venues = ({ initialTab = "venues" }) => {
           setSelectedVenueId(firstVenue.id);
           setForm(normalizeVenue(firstVenue));
         }
-        if (normalized.length && (recordsChanged(normalizedRemote, normalized) || remoteActive !== nextActive)) {
-          await updateUserMetadata({ [metadataVenuesKey]: normalized, [metadataActiveVenueKey]: nextActive });
-        }
+        if (normalized.length && (recordsChanged(normalizedRemote, normalized) || remoteActive !== nextActive)) updateUserMetadata({ [metadataVenuesKey]: normalized, [metadataActiveVenueKey]: nextActive }).catch((error) => console.warn("Venue metadata repair unavailable:", error));
         if (normalized.length && recordsChanged(setupVenues, normalized)) {
-          await saveHostSetupSettings({ venues: normalized, activeVenueId: nextActive });
+          saveHostSetupSettings({ venues: normalized, activeVenueId: nextActive }).catch((error) => console.warn("Venue setup mirror unavailable:", error));
         }
         setSyncStatus("Synced");
       } catch (error) {
@@ -115,21 +113,29 @@ const Venues = ({ initialTab = "venues" }) => {
   }, []);
 
   const persistVenues = async (nextVenues, nextActiveVenueId = activeVenueId) => {
-    writeLocalVenues(nextVenues);
+    const normalized = nextVenues.map(normalizeVenue);
+    writeLocalVenues(normalized);
     writeActiveVenueId(nextActiveVenueId);
-    setVenues(nextVenues);
+    setVenues(normalized);
     setActiveVenueId(nextActiveVenueId);
     try {
-      await updateUserMetadata({ [metadataVenuesKey]: nextVenues, [metadataActiveVenueKey]: nextActiveVenueId });
-      await saveHostSetupSettings({ venues: nextVenues, activeVenueId: nextActiveVenueId });
-      localStorage.setItem(VENUES_STORAGE_KEY, JSON.stringify(nextVenues));
+      await updateUserMetadata({ [metadataVenuesKey]: normalized, [metadataActiveVenueKey]: nextActiveVenueId });
+      saveHostSetupSettings({ venues: normalized, activeVenueId: nextActiveVenueId }).catch((error) => console.warn("Venue setup mirror unavailable:", error));
+      localStorage.setItem(VENUES_STORAGE_KEY, JSON.stringify(normalized));
       localStorage.setItem(ACTIVE_VENUE_STORAGE_KEY, nextActiveVenueId || "");
       setSyncStatus("Synced");
       return true;
     } catch (error) {
       console.warn("Venue metadata save unavailable:", error);
-      setSyncStatus("Local only");
-      return false;
+      try {
+        await saveHostSetupSettings({ venues: normalized, activeVenueId: nextActiveVenueId });
+        setSyncStatus("Synced");
+        return true;
+      } catch (mirrorError) {
+        console.warn("Venue setup mirror unavailable:", mirrorError);
+        setSyncStatus("Local only");
+        return false;
+      }
     }
   };
 

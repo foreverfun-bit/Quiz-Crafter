@@ -95,7 +95,7 @@ const ShowTemplates = ({ embedded = false }) => {
         if (profileVenues.length && recordsChanged(normalizedRemoteVenues, profileVenues)) {
           profilePatch[metadataVenuesKey] = profileVenues;
         }
-        if (Object.keys(profilePatch).length) await updateUserMetadata(profilePatch);
+        if (Object.keys(profilePatch).length) updateUserMetadata(profilePatch).catch((error) => console.warn("Template metadata repair unavailable:", error));
         if ((normalized.length && recordsChanged(setupTemplates, normalized)) || (profileVenues.length && recordsChanged(setupVenues, profileVenues))) {
           saveHostSetupSettings({ templates: normalized, venues: profileVenues }).catch((error) => console.warn("Template setup mirror unavailable:", error));
         }
@@ -120,9 +120,15 @@ const ShowTemplates = ({ embedded = false }) => {
       return true;
     } catch (error) {
       console.warn("Template metadata save unavailable:", error);
-      saveHostSetupSettings({ templates: normalized }).catch((mirrorError) => console.warn("Template setup mirror unavailable:", mirrorError));
-      setSyncStatus("Local only");
-      return false;
+      try {
+        await saveHostSetupSettings({ templates: normalized });
+        setSyncStatus("Synced");
+        return true;
+      } catch (mirrorError) {
+        console.warn("Template setup mirror unavailable:", mirrorError);
+        setSyncStatus("Local only");
+        return false;
+      }
     }
   };
 
