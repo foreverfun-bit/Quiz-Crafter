@@ -35,7 +35,7 @@ const DIFFICULTY_PROFILES = {
 const BROAD_CATEGORIES = ["Art", "Books", "Food & Drink", "Geography", "History", "Internet Culture", "Local Flavor", "Movies", "Music", "Nature", "Pop Culture", "Science", "Sports", "Television", "Theater", "Video Games", "Weird Science", "World Culture"];
 const APPROVED_CATEGORY_STRICT_THRESHOLD = 14;
 const EXISTING_QUESTIONS_CACHE_MS = 5 * 60 * 1000;
-const STYLE_EXAMPLE_LIMIT = 12;
+const STYLE_EXAMPLE_LIMIT = 24;
 const DUPLICATE_EXAMPLE_LIMIT = 55;
 let existingQuestionsCache = { expiresAt: 0, data: null, pending: null };
 
@@ -293,7 +293,8 @@ function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, clea
       : `Use varied broad categories such as: ${BROAD_CATEGORIES.join(", ")}.`;
   const excludedCategoryText = cleanExcludeCategories.length ? `Do not use these rejected or avoided categories: ${cleanExcludeCategories.join(", ")}.` : "";
   const themeText = cleanTheme ? `Theme/vibe/category guidance: ${cleanTheme}. Stay useful to that direction, but avoid repetitive question angles.` : "";
-  const styleText = styleExamples.length ? `Use these saved and previously hosted questions as calibration for the host's style and difficulty. Treat them as examples of the host's taste: readable, obscure-but-fair, US-friendly, and useful for live bar trivia. Match the category feel, clue path, and answerability. Do not copy, lightly rewrite, reuse their answers, or generate the same topic angles:\n${styleExamples.map(formatStyleExample).join("\n")}` : "";
+  const tasteProfileText = buildTasteProfileText(styleExamples, cleanSessionContext);
+  const styleText = styleExamples.length ? `Style calibration examples. These are not a source to copy from; they are the host's taste profile. Match their practical qualities: readable aloud, obscure-but-fair, specific without being tiny-name trivia, playful but clean, and useful for a US live bar crowd. Do not copy, lightly rewrite, reuse their answers, or generate the same topic angles:\n${styleExamples.map(formatStyleExample).join("\n")}` : "";
   const sessionContextText = cleanSessionContext && (cleanSessionContext.builtQuestions.length || cleanSessionContext.activeRoundQuestions.length || cleanSessionContext.roundDescriptions.length)
     ? [
         "Current build context. Use this to match the session's pacing, tone, readability, and clue style. Do not copy these questions, reuse their answers, or force the same categories if those categories are excluded:",
@@ -375,6 +376,7 @@ Trivia host style:
 - difficulty must be "${difficultyKey}".
 ${imagePromptRule}
 ${hostHardText}
+${tasteProfileText}
 ${sessionContextText}
 ${styleText}
 ${themeText}
@@ -390,8 +392,45 @@ function buildStyleExamples(existingQuestions, questionType, approvedCategories)
   const usableQuestions = existingQuestions.filter((q) => q.question_text && q.correct_answer);
   const matchingType = usableQuestions.filter((q) => q.question_type === questionType);
   const matchingApproved = matchingType.filter((q) => !approvedSet.size || approvedSet.has(categoryKey(q.category)));
-  const candidates = matchingApproved.length >= 8 ? matchingApproved : matchingType.length >= 8 ? matchingType : usableQuestions;
+  const liked = usableQuestions.filter(isLikedQuestion);
+  const likedMatchingType = liked.filter((q) => q.question_type === questionType);
+  const candidates = [
+    ...(likedMatchingType.length ? likedMatchingType : liked),
+    ...(matchingApproved.length >= 8 ? matchingApproved : matchingType.length >= 8 ? matchingType : usableQuestions),
+  ];
   return sampleStable(candidates, STYLE_EXAMPLE_LIMIT);
+}
+
+function buildTasteProfileText(styleExamples, cleanSessionContext) {
+  const examples = [...styleExamples, ...(cleanSessionContext?.builtQuestions || []), ...(cleanSessionContext?.activeRoundQuestions || [])]
+    .filter((question) => question?.question_text);
+  if (!examples.length) {
+    return `Host taste contract:
+- Generate for Julie's Forever Fun style, not a generic trivia site.
+- Favor questions with a hook, a fair clue path, and a satisfying reveal.
+- Avoid sterile encyclopedia facts, hyper-specific foreign recall, and one-word category dumps.`;
+  }
+  const categoryCounts = new Map();
+  const typeCounts = new Map();
+  let totalLength = 0;
+  examples.forEach((question) => {
+    const category = cleanText(question.category) || "Uncategorized";
+    categoryCounts.set(category, (categoryCounts.get(category) || 0) + 1);
+    const type = normalizeFetchedType(question.question_type);
+    typeCounts.set(type, (typeCounts.get(type) || 0) + 1);
+    totalLength += cleanText(question.question_text).length;
+  });
+  const topCategories = [...categoryCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([category]) => category);
+  const typeMix = [...typeCounts.entries()].sort((a, b) => b[1] - a[1]).map(([type, count]) => `${type}: ${count}`).join(", ");
+  const averageLength = Math.round(totalLength / examples.length);
+  return `Host taste contract:
+- Treat this as a custom question-writing assignment for the Forever Fun host. Style match matters more than novelty for novelty's sake.
+- Preferred category feel from saved/hosted material: ${topCategories.join(", ") || "varied broad categories"}.
+- Current observed type mix: ${typeMix || "mixed"}.
+- Typical question length is about ${averageLength} characters; stay readable aloud in one breath unless the clue needs a setup.
+- Good candidates should feel like a clever live-host clue: a concrete hook, a fair path to the answer, and a little "oh, that's neat" reveal.
+- Bad candidates are generic quiz-bank facts, sterile textbook definitions, obscure foreign recall with no context, answer-only categories, and claims that feel like a coin flip.
+- If the prompt or round direction conflicts with this taste profile, follow the host taste profile first.`;
 }
 
 function sampleStable(items, limit) {
@@ -409,6 +448,8 @@ function sampleStable(items, limit) {
 
 function scoreStyleExample(question) {
   let score = 0;
+  if (isLikedQuestion(question)) score += 30;
+  if (isDislikedQuestion(question)) score -= 20;
   if (question.source === "library") score += 8;
   if (question.source === "session") score += 8;
   if (question.category) score += 2;
@@ -424,6 +465,16 @@ function formatStyleExample(q) {
   const parts = [`- [${sourceLabel} / ${q.category || "Uncategorized"} / ${q.question_type || "written"}] ${q.question_text}`, `Answer: ${q.correct_answer}`];
   if (q.fun_fact) parts.push(`Fun fact style: ${q.fun_fact}`);
   return parts.join(" ");
+}
+
+function isLikedQuestion(question) {
+  const rating = cleanText(question.rating || question.status).toLowerCase();
+  return Boolean(question.is_liked || question.liked || rating === "liked" || rating === "like" || rating === "approved" || rating === "favorite");
+}
+
+function isDislikedQuestion(question) {
+  const rating = cleanText(question.rating || question.status).toLowerCase();
+  return Boolean(question.is_disliked || question.disliked || rating === "disliked" || rating === "dislike" || rating === "rejected");
 }
 
 async function requestCandidates(prompt) {
@@ -622,13 +673,16 @@ async function fetchExistingQuestionsUncached(supabaseUrl, supabaseKey) {
   const base = supabaseUrl.replace(/\/$/, "");
   const headers = { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` };
 
-  const [questionsResponse, sessionsResponse] = await Promise.all([
-    fetch(`${base}/rest/v1/questions?select=question_text,correct_answer,category,question_type,fun_fact&order=created_at.desc&limit=1500`, { headers }),
-    fetch(`${base}/rest/v1/sessions?select=true_false_questions,multiple_choice_questions,written_questions,picture_questions&order=created_at.desc&limit=500`, { headers }),
+  const [libraryQuestions, sessions] = await Promise.all([
+    fetchJsonWithFallback([
+      `${base}/rest/v1/questions?select=question_text,correct_answer,category,question_type,fun_fact,is_liked,is_disliked,liked,disliked,rating,status&order=created_at.desc&limit=1500`,
+      `${base}/rest/v1/questions?select=question_text,correct_answer,category,question_type,fun_fact,rating&order=created_at.desc&limit=1500`,
+      `${base}/rest/v1/questions?select=question_text,correct_answer,category,question_type,fun_fact&order=created_at.desc&limit=1500`,
+    ], headers),
+    fetchJsonWithFallback([
+      `${base}/rest/v1/sessions?select=true_false_questions,multiple_choice_questions,written_questions,picture_questions&order=created_at.desc&limit=500`,
+    ], headers),
   ]);
-
-  const libraryQuestions = questionsResponse.ok ? await questionsResponse.json() : [];
-  const sessions = sessionsResponse.ok ? await sessionsResponse.json() : [];
   const sessionQuestions = Array.isArray(sessions) ? sessions.flatMap(extractSessionQuestions) : [];
 
   return [
@@ -641,9 +695,24 @@ async function fetchExistingQuestionsUncached(supabaseUrl, supabaseKey) {
       category: cleanText(q.category),
       question_type: normalizeFetchedType(q.question_type),
       fun_fact: cleanText(q.fun_fact),
+      is_liked: Boolean(q.is_liked || q.liked),
+      is_disliked: Boolean(q.is_disliked || q.disliked),
+      rating: cleanText(q.rating || q.status),
       source: q.source || "library",
     }))
     .filter((q) => q.question_text);
+}
+
+async function fetchJsonWithFallback(urls, headers) {
+  for (const url of urls) {
+    try {
+      const response = await fetch(url, { headers });
+      if (response.ok) return response.json();
+    } catch {
+      // Try the next shape; Supabase schemas vary across deployments.
+    }
+  }
+  return [];
 }
 
 function normalizeFetchedType(value) {
