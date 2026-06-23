@@ -23,6 +23,10 @@ const questionTypeOptions = [
   { value: "written", label: "Written" },
 ];
 const questionTypeLabel = (value) => questionTypeOptions.find((option) => option.value === value)?.label || "Mixed";
+const uniqueRoundTypeLabel = (values = []) => {
+  const unique = [...new Set((Array.isArray(values) ? values : []).map((value) => value || "mixed"))];
+  return unique.length === 1 ? questionTypeLabel(unique[0]) : "Mixed by round";
+};
 const resizeTemplateDraft = (template) => {
   const count = Math.max(1, Math.min(12, Number(template.roundCount) || 1));
   const existingNames = Array.isArray(template.roundNames) ? template.roundNames : [];
@@ -30,6 +34,7 @@ const resizeTemplateDraft = (template) => {
   const existingPoints = Array.isArray(template.roundPoints) ? template.roundPoints : [];
   const existingTimers = Array.isArray(template.roundTimers) ? template.roundTimers : [];
   const existingWagers = Array.isArray(template.roundWagerLimits) ? template.roundWagerLimits : [];
+  const existingQuestionTypes = Array.isArray(template.roundQuestionTypes) ? template.roundQuestionTypes : [];
   return {
     ...template,
     roundNames: Array.from({ length: count }, (_, index) => existingNames[index] ?? (index === count - 1 ? "Final Round" : `Round ${index + 1}`)),
@@ -37,6 +42,7 @@ const resizeTemplateDraft = (template) => {
     roundPoints: Array.from({ length: count }, (_, index) => existingPoints[index] ?? template.defaultPoints ?? 25),
     roundTimers: Array.from({ length: count }, (_, index) => existingTimers[index] ?? template.defaultTimer ?? 30),
     roundWagerLimits: Array.from({ length: count }, (_, index) => existingWagers[index] ?? template.defaultWagerLimit ?? 0),
+    roundQuestionTypes: Array.from({ length: count }, (_, index) => existingQuestionTypes[index] ?? template.questionType ?? "mixed"),
   };
 };
 
@@ -180,12 +186,14 @@ const ShowTemplates = ({ embedded = false }) => {
       const points = [...next.roundPoints];
       const timers = [...next.roundTimers];
       const wagers = [...next.roundWagerLimits];
+      const questionTypes = [...next.roundQuestionTypes];
       if (key === "name") names[index] = value;
       if (key === "description") descriptions[index] = value;
       if (key === "points") points[index] = value;
       if (key === "timer") timers[index] = value;
       if (key === "wager") wagers[index] = value;
-      return { ...next, roundNames: names, roundDescriptions: descriptions, roundPoints: points, roundTimers: timers, roundWagerLimits: wagers, updatedAt: new Date().toISOString() };
+      if (key === "questionType") questionTypes[index] = value;
+      return { ...next, roundNames: names, roundDescriptions: descriptions, roundPoints: points, roundTimers: timers, roundWagerLimits: wagers, roundQuestionTypes: questionTypes, updatedAt: new Date().toISOString() };
     });
   };
 
@@ -204,7 +212,7 @@ const ShowTemplates = ({ embedded = false }) => {
       </div>}
       {embedded && <div className="mb-5 flex items-center justify-between gap-3 flex-wrap"><div><p className="text-sm font-semibold uppercase tracking-[0.18em] text-[#71E0DC]">Reusable Formats</p><h2 className="text-2xl font-black text-white mt-1">Show Templates</h2><p className="text-zinc-500 mt-1">Pair a reusable show format with a venue and start building.</p></div><div className="flex gap-2 flex-wrap"><Badge className={syncStatus === "Synced" ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/20" : "bg-zinc-800 text-zinc-300"}>{syncStatus}</Badge><Button onClick={createTemplate} className="gradient-btn"><Plus size={16} className="mr-2" />New Template</Button></div></div>}
 
-      <Card className="glass-card mb-6"><CardContent className="p-4 grid grid-cols-1 lg:grid-cols-[1fr_1fr_auto] gap-3 items-end"><div><p className="text-xs uppercase tracking-wide text-zinc-500 font-bold">Selected format</p><p className="text-lg font-black text-white truncate">{form.name}</p><p className="text-sm text-zinc-500 truncate">{form.roundCount} rounds / {form.questionsPerRound} questions each / {questionTypeLabel(form.questionType)} / {form.defaultTimer}s timer</p></div><label className="text-sm text-zinc-400">Venue name for this build<select value={selectedVenueId} onChange={(event) => setSelectedVenueId(event.target.value)} className="mt-1 h-11 w-full rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60"><option value="">No venue selected</option>{venues.map((venue) => <option key={venue.id} value={venue.id}>{venue.name}</option>)}</select></label><Button onClick={() => startBuild(form)} className="gradient-btn h-11"><Sparkles size={16} className="mr-2" />Start Build</Button></CardContent></Card>
+      <Card className="glass-card mb-6"><CardContent className="p-4 grid grid-cols-1 lg:grid-cols-[1fr_1fr_auto] gap-3 items-end"><div><p className="text-xs uppercase tracking-wide text-zinc-500 font-bold">Selected format</p><p className="text-lg font-black text-white truncate">{form.name}</p><p className="text-sm text-zinc-500 truncate">{form.roundCount} rounds / {form.questionsPerRound} questions each / {uniqueRoundTypeLabel(form.roundQuestionTypes)} / {form.defaultTimer}s timer</p></div><label className="text-sm text-zinc-400">Venue name for this build<select value={selectedVenueId} onChange={(event) => setSelectedVenueId(event.target.value)} className="mt-1 h-11 w-full rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60"><option value="">No venue selected</option>{venues.map((venue) => <option key={venue.id} value={venue.id}>{venue.name}</option>)}</select></label><Button onClick={() => startBuild(form)} className="gradient-btn h-11"><Sparkles size={16} className="mr-2" />Start Build</Button></CardContent></Card>
 
       <div className="grid grid-cols-1 xl:grid-cols-[0.9fr_1.1fr] gap-6 items-start">
         <section className="space-y-4">
@@ -223,7 +231,7 @@ const ShowTemplates = ({ embedded = false }) => {
                     </div>
                     <div className="mt-3 flex flex-wrap gap-1.5">{template.roundNames.slice(0, 5).map((name, index) => <span key={`${template.id}-${index}`} className="rounded-full bg-zinc-900 px-2 py-1 text-[11px] text-zinc-400">{name}</span>)}{template.roundNames.length > 5 && <span className="rounded-full bg-zinc-900 px-2 py-1 text-[11px] text-zinc-500">+{template.roundNames.length - 5}</span>}</div>
                   </div>
-                  <div className="flex flex-col items-end gap-2"><Badge className="bg-zinc-800 text-zinc-300">{template.questionsPerRound} each</Badge><Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20">{questionTypeLabel(template.questionType)}</Badge><span className="text-[11px] text-zinc-600 whitespace-nowrap">{updatedLabel(template.updatedAt)}</span></div>
+                  <div className="flex flex-col items-end gap-2"><Badge className="bg-zinc-800 text-zinc-300">{template.questionsPerRound} each</Badge><Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20">{uniqueRoundTypeLabel(template.roundQuestionTypes)}</Badge><span className="text-[11px] text-zinc-600 whitespace-nowrap">{updatedLabel(template.updatedAt)}</span></div>
                 </div>
                 <div className="mt-4 flex flex-wrap gap-2">
                   <Button size="sm" variant="outline" onClick={() => editTemplate(template)} className="border-white/10 text-zinc-300 hover:text-white">Edit</Button>
@@ -268,16 +276,15 @@ const TemplateEditor = ({ form, selectedTemplate, selectedVenue, updateForm, upd
       </div>
       <div className="rounded-xl border border-white/10 bg-zinc-950/50 p-4 space-y-3">
         <h3 className="font-bold text-white">Format Defaults</h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
           <Field label="Rounds" type="number" value={form.roundCount} onChange={(value) => updateForm("roundCount", value)} />
           <Field label="Per round" type="number" value={form.questionsPerRound} onChange={(value) => updateForm("questionsPerRound", value)} />
-          <SelectField label="Question type" value={form.questionType || "mixed"} onChange={(value) => updateForm("questionType", value)} options={questionTypeOptions} />
           <Field label="Base wager cap" type="number" value={form.defaultWagerLimit} onChange={(value) => updateForm("defaultWagerLimit", value)} />
         </div>
       </div>
       <div className="space-y-3">
         <h3 className="font-bold text-white">Round Plan</h3>
-        {form.roundNames.map((roundName, index) => <div key={`round-${index}`} className="rounded-lg border border-white/10 bg-zinc-950/50 p-3 space-y-3"><div className="grid grid-cols-1 md:grid-cols-[1fr_90px_90px_110px] gap-3"><Field label={`Round ${index + 1} name`} value={roundName} onChange={(value) => updateRound(index, "name", value)} /><Field label="Points" type="number" value={form.roundPoints[index]} onChange={(value) => updateRound(index, "points", value)} /><Field label="Timer" type="number" value={form.roundTimers[index]} onChange={(value) => updateRound(index, "timer", value)} /><Field label="Wager cap" type="number" value={form.roundWagerLimits[index]} onChange={(value) => updateRound(index, "wager", value)} /></div><TextArea label="Description / category direction" value={form.roundDescriptions[index] || ""} onChange={(value) => updateRound(index, "description", value)} placeholder="What this round should feel like, include, or avoid." /></div>)}
+        {form.roundNames.map((roundName, index) => <div key={`round-${index}`} className="rounded-lg border border-white/10 bg-zinc-950/50 p-3 space-y-3"><div className="grid grid-cols-1 md:grid-cols-[1fr_120px_90px_90px_110px] gap-3"><Field label={`Round ${index + 1} name`} value={roundName} onChange={(value) => updateRound(index, "name", value)} /><SelectField label="Question type" value={form.roundQuestionTypes[index] || "mixed"} onChange={(value) => updateRound(index, "questionType", value)} options={questionTypeOptions} /><Field label="Points" type="number" value={form.roundPoints[index]} onChange={(value) => updateRound(index, "points", value)} /><Field label="Timer" type="number" value={form.roundTimers[index]} onChange={(value) => updateRound(index, "timer", value)} /><Field label="Wager cap" type="number" value={form.roundWagerLimits[index]} onChange={(value) => updateRound(index, "wager", value)} /></div><TextArea label="Description / category direction" value={form.roundDescriptions[index] || ""} onChange={(value) => updateRound(index, "description", value)} placeholder="What this round should feel like, include, or avoid." /></div>)}
       </div>
       <TextArea label="Host notes" value={form.hostNotes} onChange={(value) => updateForm("hostNotes", value)} placeholder="Scoring notes, wager rules, pacing, category mix, or host reminders..." />
       <div className="flex justify-end gap-2 flex-wrap">
