@@ -95,11 +95,9 @@ const ShowTemplates = ({ embedded = false }) => {
         if (profileVenues.length && recordsChanged(normalizedRemoteVenues, profileVenues)) {
           profilePatch[metadataVenuesKey] = profileVenues;
         }
-        if (Object.keys(profilePatch).length) {
-          await updateUserMetadata(profilePatch);
-        }
+        if (Object.keys(profilePatch).length) await updateUserMetadata(profilePatch);
         if ((normalized.length && recordsChanged(setupTemplates, normalized)) || (profileVenues.length && recordsChanged(setupVenues, profileVenues))) {
-          await saveHostSetupSettings({ templates: normalized, venues: profileVenues });
+          saveHostSetupSettings({ templates: normalized, venues: profileVenues }).catch((error) => console.warn("Template setup mirror unavailable:", error));
         }
         setSyncStatus("Synced");
       } catch (error) {
@@ -116,12 +114,13 @@ const ShowTemplates = ({ embedded = false }) => {
     writeLocalTemplates(normalized);
     try {
       await updateUserMetadata({ [metadataTemplatesKey]: normalized });
-      await saveHostSetupSettings({ templates: normalized });
+      saveHostSetupSettings({ templates: normalized }).catch((error) => console.warn("Template setup mirror unavailable:", error));
       localStorage.setItem(SHOW_TEMPLATES_STORAGE_KEY, JSON.stringify(normalized));
       setSyncStatus("Synced");
       return true;
     } catch (error) {
       console.warn("Template metadata save unavailable:", error);
+      saveHostSetupSettings({ templates: normalized }).catch((mirrorError) => console.warn("Template setup mirror unavailable:", mirrorError));
       setSyncStatus("Local only");
       return false;
     }
