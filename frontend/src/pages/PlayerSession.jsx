@@ -51,6 +51,14 @@ const writeStoredFeedback = (sessionId, name, value) => {
     // Feedback still broadcasts if device storage is unavailable.
   }
 };
+const stateTimestamp = (state) => {
+  const parsed = Date.parse(state?.updatedAt || "");
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+const applyHostState = (setHostState, payload) => {
+  if (!payload || typeof payload !== "object") return;
+  setHostState((current) => (stateTimestamp(payload) > stateTimestamp(current) ? payload : current));
+};
 
 const getRoundOrder = (question, fallbackOrder = 1) => Number(question?.round_order || question?.round_number || question?.round || fallbackOrder) || fallbackOrder;
 const getRoundName = (question, fallbackOrder = 1) => {
@@ -151,7 +159,7 @@ const PlayerSession = () => {
     const channel = supabase.channel(`quiz-crafter-live-${id}`, { config: { broadcast: { self: false } } });
     channel
       .on("broadcast", { event: "host_state" }, ({ payload }) => {
-        setHostState(payload || null);
+        applyHostState(setHostState, payload);
       })
       .on("broadcast", { event: "host_mode" }, ({ payload }) => {
         if (!payload?.mode) return;
@@ -169,7 +177,7 @@ const PlayerSession = () => {
     channelRef.current = channel;
     channel
       .on("broadcast", { event: "host_state" }, ({ payload }) => {
-        setHostState(payload || null);
+        applyHostState(setHostState, payload);
         setSubmitted((previous) => {
           if (!previous) return null;
           return previous.questionIndex === payload?.currentIndex ? previous : null;

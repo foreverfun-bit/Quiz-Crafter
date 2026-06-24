@@ -552,12 +552,12 @@ const HostSession = () => {
       })
       .on("broadcast", { event: "present_ready" }, () => {
         const state = liveStateRef.current;
-        if (state) liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: { ...state, updatedAt: new Date().toISOString() } });
+        if (state) liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: state });
       })
       .subscribe((status) => {
         setLiveStatus(status === "SUBSCRIBED" ? "live" : "connecting");
         if (status === "SUBSCRIBED" && liveStateRef.current) {
-          liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: { ...liveStateRef.current, updatedAt: new Date().toISOString() } });
+          liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: liveStateRef.current });
         }
       });
     return () => {
@@ -637,8 +637,8 @@ const HostSession = () => {
       wagerMode,
       wagerLimit: Number(wagerLimit || 0),
       wagerTiming,
+      timerSeconds: Number(timerSeconds) || 0,
       timerEndAt,
-      timeRemaining,
       acceptingAnswers,
       branding,
       updatedAt: new Date().toISOString(),
@@ -655,12 +655,12 @@ const HostSession = () => {
         if (error) console.warn("Live presentation state save unavailable:", error);
       }).catch((error) => console.warn("Live presentation state save unavailable:", error));
     }
-  }, [id, session, sessionName, questions.length, liveDisplayedQuestion, currentIndex, pendingBonusIndex, rounds, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, leaderboard, players.length, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerEndAt, timeRemaining, acceptingAnswers, branding]);
+  }, [id, session, sessionName, questions.length, liveDisplayedQuestion, currentIndex, pendingBonusIndex, rounds, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, leaderboard, players.length, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerSeconds, timerEndAt, acceptingAnswers, branding]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
       const state = liveStateRef.current;
-      if (state) liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: { ...state, updatedAt: new Date().toISOString() } });
+      if (state) liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: state });
     }, 2500);
     return () => window.clearInterval(interval);
   }, [id]);
