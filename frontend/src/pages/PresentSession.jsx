@@ -172,6 +172,19 @@ const readPresentState = (sessionId) => {
   }
 };
 
+const stateTimestamp = (state) => {
+  const parsed = Date.parse(state?.updatedAt || "");
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const mergeNewerPresentState = (current, incoming) => {
+  if (!incoming || typeof incoming !== "object") return current;
+  const currentTime = stateTimestamp(current);
+  const incomingTime = stateTimestamp(incoming);
+  if (currentTime && incomingTime && incomingTime < currentTime) return current;
+  return { ...current, ...incoming };
+};
+
 const hasPresentationStarted = (presentState, currentIndex) => {
   if (presentState.gameStarted) return true;
   if (presentState.timerEndAt) return true;
@@ -200,12 +213,12 @@ const PresentSession = () => {
     const syncState = (event) => {
       if (event.key !== `quiz-crafter-present-state-${id}`) return;
       const nextState = readPresentState(id);
-      if (nextState) setPresentState((current) => ({ ...current, ...nextState }));
+      if (nextState) setPresentState((current) => mergeNewerPresentState(current, nextState));
     };
 
     const interval = window.setInterval(() => {
       const nextState = readPresentState(id);
-      if (nextState) setPresentState((current) => ({ ...current, ...nextState }));
+      if (nextState) setPresentState((current) => mergeNewerPresentState(current, nextState));
     }, 1200);
     window.addEventListener("storage", syncState);
     return () => {
@@ -219,14 +232,18 @@ const PresentSession = () => {
     channel
       .on("broadcast", { event: "host_state" }, ({ payload }) => {
         if (!payload || typeof payload !== "object") return;
-        setPresentState((current) => ({ ...current, ...payload }));
+        setPresentState((current) => mergeNewerPresentState(current, payload));
         try {
           localStorage.setItem(`quiz-crafter-present-state-${id}`, JSON.stringify(payload));
         } catch {
           // The live broadcast still updates this screen if browser storage is unavailable.
         }
       })
-      .subscribe();
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          channel.send({ type: "broadcast", event: "present_ready", payload: { sessionId: id, requestedAt: new Date().toISOString() } });
+        }
+      });
 
     return () => {
       supabase.removeChannel(channel);
