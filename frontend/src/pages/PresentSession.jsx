@@ -495,6 +495,13 @@ const BonusPauseView = ({ round, leaderboard }) => {
   );
 };
 
+const funFactTextClass = (text = "") => {
+  const length = String(text || "").length;
+  if (length > 320) return "text-xl lg:text-2xl";
+  if (length > 210) return "text-2xl lg:text-3xl";
+  return "text-3xl lg:text-4xl";
+};
+
 const QuestionView = ({ question, index, total, showAnswer, showFunFact }) => {
   const meta = typeMeta[question.type] || typeMeta.written;
   const Icon = meta.icon;
@@ -519,10 +526,10 @@ const QuestionView = ({ question, index, total, showAnswer, showFunFact }) => {
 
           {funFactOnly ? (
             <div className="min-h-0 flex flex-1 items-center justify-center">
-              <div className="w-full rounded-lg border border-[#AEB2EF]/30 bg-[#AEB2EF]/10 p-4 lg:p-6 text-center">
-                {shouldShowFunFactImage && <div className="mb-3 flex justify-center"><img src={imageUrl} alt="Fun fact media" className="max-h-[38vh] max-w-full rounded-lg border border-white/10 object-contain" /></div>}
+              <div className="max-h-full min-h-0 w-full overflow-y-auto rounded-lg border border-[#AEB2EF]/30 bg-[#AEB2EF]/10 p-4 lg:p-6 text-center">
+                {shouldShowFunFactImage && <div className="mb-3 flex justify-center"><img src={imageUrl} alt="Fun fact media" className="max-h-[32vh] max-w-full rounded-lg border border-white/10 object-contain" /></div>}
                 <div className="flex items-center justify-center gap-3 text-[#AEB2EF] font-black mb-3 text-xl"><Sparkles size={24} />{question.funFact ? "Fun Fact" : "Media"}</div>
-                {question.funFact && <p className="text-3xl lg:text-4xl font-black leading-tight text-white max-w-5xl mx-auto">{question.funFact}</p>}
+                {question.funFact && <p className={`${funFactTextClass(question.funFact)} font-black leading-snug text-white max-w-5xl mx-auto`}>{question.funFact}</p>}
               </div>
             </div>
           ) : (
