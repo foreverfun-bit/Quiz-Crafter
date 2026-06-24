@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { QRCodeCanvas } from "qrcode.react";
 import { supabase } from "../lib/supabase";
@@ -172,19 +172,6 @@ const readPresentState = (sessionId) => {
   }
 };
 
-const stateTimestamp = (state) => {
-  const parsed = Date.parse(state?.updatedAt || "");
-  return Number.isFinite(parsed) ? parsed : 0;
-};
-
-const mergeNewerPresentState = (current, incoming) => {
-  if (!incoming || typeof incoming !== "object") return current;
-  const currentTime = stateTimestamp(current);
-  const incomingTime = stateTimestamp(incoming);
-  if (currentTime && incomingTime && incomingTime < currentTime) return current;
-  return { ...current, ...incoming };
-};
-
 const hasPresentationStarted = (presentState, currentIndex) => {
   if (presentState.gameStarted) return true;
   if (presentState.timerEndAt) return true;
@@ -197,6 +184,7 @@ const PresentSession = () => {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [presentState, setPresentState] = useState(() => readPresentState(id) || {});
+  const hasLiveStateRef = useRef(false);
 
   useEffect(() => {
     const loadSession = async () => {
@@ -211,14 +199,16 @@ const PresentSession = () => {
 
   useEffect(() => {
     const syncState = (event) => {
+      if (hasLiveStateRef.current) return;
       if (event.key !== `quiz-crafter-present-state-${id}`) return;
       const nextState = readPresentState(id);
-      if (nextState) setPresentState((current) => mergeNewerPresentState(current, nextState));
+      if (nextState) setPresentState((current) => ({ ...current, ...nextState }));
     };
 
     const interval = window.setInterval(() => {
+      if (hasLiveStateRef.current) return;
       const nextState = readPresentState(id);
-      if (nextState) setPresentState((current) => mergeNewerPresentState(current, nextState));
+      if (nextState) setPresentState((current) => ({ ...current, ...nextState }));
     }, 1200);
     window.addEventListener("storage", syncState);
     return () => {
@@ -232,7 +222,8 @@ const PresentSession = () => {
     channel
       .on("broadcast", { event: "host_state" }, ({ payload }) => {
         if (!payload || typeof payload !== "object") return;
-        setPresentState((current) => mergeNewerPresentState(current, payload));
+        hasLiveStateRef.current = true;
+        setPresentState((current) => ({ ...current, ...payload }));
         try {
           localStorage.setItem(`quiz-crafter-present-state-${id}`, JSON.stringify(payload));
         } catch {

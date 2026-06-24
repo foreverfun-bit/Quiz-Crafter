@@ -546,7 +546,12 @@ const HostSession = () => {
         const state = liveStateRef.current;
         if (state) liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: { ...state, updatedAt: new Date().toISOString() } });
       })
-      .subscribe((status) => setLiveStatus(status === "SUBSCRIBED" ? "live" : "connecting"));
+      .subscribe((status) => {
+        setLiveStatus(status === "SUBSCRIBED" ? "live" : "connecting");
+        if (status === "SUBSCRIBED" && liveStateRef.current) {
+          liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: { ...liveStateRef.current, updatedAt: new Date().toISOString() } });
+        }
+      });
     return () => {
       supabase.removeChannel(channel);
       liveChannelRef.current = null;
@@ -637,12 +642,8 @@ const HostSession = () => {
 
   useEffect(() => {
     const interval = window.setInterval(() => {
-      try {
-        const state = JSON.parse(localStorage.getItem(`quiz-crafter-present-state-${id}`) || "null");
-        if (state) liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: state });
-      } catch {
-        // Late-joining phones will catch the next regular host-state update.
-      }
+      const state = liveStateRef.current;
+      if (state) liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: { ...state, updatedAt: new Date().toISOString() } });
     }, 2500);
     return () => window.clearInterval(interval);
   }, [id]);
