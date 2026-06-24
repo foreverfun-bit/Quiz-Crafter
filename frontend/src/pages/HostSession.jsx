@@ -370,6 +370,8 @@ const HostSession = () => {
   const navigate = useNavigate();
   const liveChannelRef = useRef(null);
   const liveStateRef = useRef(null);
+  const hostedResultsRef = useRef({});
+  const liveStateSaveRef = useRef(0);
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -421,6 +423,7 @@ const HostSession = () => {
         const { data, error } = await supabase.from("sessions").select("*").eq("id", id).single();
         if (error) throw error;
         setSession(data);
+        hostedResultsRef.current = data?.hosted_results && typeof data.hosted_results === "object" && !Array.isArray(data.hosted_results) ? data.hosted_results : {};
         setBranding(readStoredBranding(id, data));
       } catch (error) {
         console.error("Host session load error:", error);
@@ -638,6 +641,15 @@ const HostSession = () => {
     liveStateRef.current = state;
     localStorage.setItem(`quiz-crafter-present-state-${id}`, JSON.stringify(state));
     liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: state });
+    const nowMs = Date.now();
+    if (nowMs - liveStateSaveRef.current > 1200) {
+      liveStateSaveRef.current = nowMs;
+      const hostedResults = { ...hostedResultsRef.current, liveState: state, liveStateUpdatedAt: state.updatedAt };
+      hostedResultsRef.current = hostedResults;
+      supabase.from("sessions").update({ hosted_results: hostedResults }).eq("id", id).then(({ error }) => {
+        if (error) console.warn("Live presentation state save unavailable:", error);
+      }).catch((error) => console.warn("Live presentation state save unavailable:", error));
+    }
   }, [id, session, sessionName, questions.length, liveDisplayedQuestion, currentIndex, pendingBonusIndex, rounds, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, leaderboard, players, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerEndAt, timeRemaining, acceptingAnswers, branding]);
 
   useEffect(() => {
@@ -842,7 +854,8 @@ const HostSession = () => {
     setPresentMode("winners");
     toast.success("Hosted session ended");
     saveHostToolsSessionState(id, { endedAt, currentIndex, presentMode: "winners" }).catch((error) => console.warn("End session profile marker unavailable:", error));
-    supabase.from("sessions").update({ hosted_at: endedAt, hosted_results: results }).eq("id", id).then(({ error }) => {
+    hostedResultsRef.current = { ...results, liveState: liveStateRef.current, liveStateUpdatedAt: new Date().toISOString() };
+    supabase.from("sessions").update({ hosted_at: endedAt, hosted_results: hostedResultsRef.current }).eq("id", id).then(({ error }) => {
       if (error) console.warn("End session database backup unavailable:", error);
     }).catch((error) => console.warn("End session database backup unavailable:", error));
   };

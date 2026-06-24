@@ -172,6 +172,22 @@ const readPresentState = (sessionId) => {
   }
 };
 
+const getSessionLiveState = (session) => {
+  const results = session?.hosted_results;
+  return results && typeof results === "object" && !Array.isArray(results) && results.liveState && typeof results.liveState === "object" ? results.liveState : null;
+};
+
+const stateTimestamp = (state) => {
+  const parsed = Date.parse(state?.updatedAt || state?.liveStateUpdatedAt || "");
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const applyNewerState = (setPresentState, hasLiveStateRef, incoming) => {
+  if (!incoming || typeof incoming !== "object") return;
+  hasLiveStateRef.current = true;
+  setPresentState((current) => stateTimestamp(incoming) >= stateTimestamp(current) ? { ...current, ...incoming } : current);
+};
+
 const hasPresentationStarted = (presentState, currentIndex) => {
   if (presentState.gameStarted) return true;
   if (presentState.timerEndAt) return true;
@@ -191,6 +207,7 @@ const PresentSession = () => {
       setLoading(true);
       const { data } = await supabase.from("sessions").select("*").eq("id", id).single();
       setSession(data || null);
+      applyNewerState(setPresentState, hasLiveStateRef, getSessionLiveState(data));
       setLoading(false);
     };
 
@@ -222,8 +239,7 @@ const PresentSession = () => {
     channel
       .on("broadcast", { event: "host_state" }, ({ payload }) => {
         if (!payload || typeof payload !== "object") return;
-        hasLiveStateRef.current = true;
-        setPresentState((current) => ({ ...current, ...payload }));
+        applyNewerState(setPresentState, hasLiveStateRef, payload);
         try {
           localStorage.setItem(`quiz-crafter-present-state-${id}`, JSON.stringify(payload));
         } catch {
@@ -239,6 +255,16 @@ const PresentSession = () => {
     return () => {
       supabase.removeChannel(channel);
     };
+  }, [id]);
+
+  useEffect(() => {
+    const loadDurableState = async () => {
+      const { data } = await supabase.from("sessions").select("hosted_results").eq("id", id).single();
+      applyNewerState(setPresentState, hasLiveStateRef, getSessionLiveState(data));
+    };
+    const interval = window.setInterval(loadDurableState, 1500);
+    loadDurableState();
+    return () => window.clearInterval(interval);
   }, [id]);
 
   const questions = useMemo(() => flattenSession(session), [session]);
