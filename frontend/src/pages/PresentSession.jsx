@@ -185,7 +185,7 @@ const stateTimestamp = (state) => {
 const applyNewerState = (setPresentState, hasLiveStateRef, incoming) => {
   if (!incoming || typeof incoming !== "object") return;
   hasLiveStateRef.current = true;
-  setPresentState((current) => stateTimestamp(incoming) >= stateTimestamp(current) ? { ...current, ...incoming } : current);
+  setPresentState((current) => stateTimestamp(incoming) > stateTimestamp(current) ? { ...current, ...incoming } : current);
 };
 
 const hasPresentationStarted = (presentState, currentIndex) => {
@@ -279,6 +279,7 @@ const PresentSession = () => {
   const displayRound = mode === "categories" ? introRound : currentRound;
   const sessionName = presentState.sessionName || session?.name || session?.session_name || "Trivia Session";
   const joinUrl = presentState.joinUrl || `${getPublicOrigin()}/join?session=${id}`;
+  const playerCount = Number.isFinite(Number(presentState.playerCount)) ? Number(presentState.playerCount) : (presentState.players || []).length;
   const showLobby = mode === "qr" || !hasPresentationStarted(presentState, currentIndex);
 
   if (loading) {
@@ -288,7 +289,7 @@ const PresentSession = () => {
   if (showLobby && session) {
     return (
       <div className="min-h-screen bg-[#09090B] text-white overflow-hidden" data-testid="present-session-page">
-        <LobbyView sessionName={sessionName} joinUrl={joinUrl} players={presentState.players || []} />
+        <LobbyView sessionName={sessionName} joinUrl={joinUrl} playerCount={playerCount} />
       </div>
     );
   }
@@ -324,7 +325,7 @@ const PresentSession = () => {
           {mode === "winners" && <WinnersView leaderboard={presentState.leaderboard || []} sessionName={sessionName} />}
           {mode === "feedback" && <FeedbackView />}
           {mode === "bonus_pause" && <BonusPauseView round={presentState.pendingBonusRound || currentRound} leaderboard={presentState.leaderboard || []} />}
-          {mode === "qr" && <LobbyView sessionName={sessionName} joinUrl={joinUrl} players={presentState.players || []} compact={false} />}
+          {mode === "qr" && <LobbyView sessionName={sessionName} joinUrl={joinUrl} playerCount={playerCount} compact={false} />}
           {mode !== "qr" && mode !== "categories" && mode !== "leaderboard" && mode !== "winners" && mode !== "feedback" && mode !== "bonus_pause" && (
             <QuestionView question={currentQuestion} index={currentIndex} total={questions.length} showAnswer={presentState.showAnswer} showFunFact={presentState.showFunFact} />
           )}
@@ -334,9 +335,7 @@ const PresentSession = () => {
   );
 };
 
-const LobbyView = ({ sessionName, joinUrl, players }) => {
-  const playerCount = players.length;
-
+const LobbyView = ({ sessionName, joinUrl, playerCount = 0 }) => {
   return (
     <div className="h-full flex items-center justify-center p-4 text-center">
       <div className="w-full max-w-5xl">

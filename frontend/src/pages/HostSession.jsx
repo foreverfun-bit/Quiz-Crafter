@@ -315,6 +315,11 @@ const answerKey = (answer) => `${answer.playerId}-${answer.questionIndex}`;
 const normalizeAnswerText = (value) => String(value || "").trim().toLowerCase().replace(/[’']/g, "'").replace(/[^a-z0-9]+/g, " ").trim();
 const isCorrectSubmission = (answer, question) => Boolean(question?.answer) && normalizeAnswerText(answer?.answer) === normalizeAnswerText(question.answer);
 const serializeRoundIntro = (round) => round ? { key: round.key, name: round.name, description: round.description || "", categories: [...new Set((round.questions || []).map((question) => question.category).filter(Boolean))], questionCount: round.questions?.length || 0, startIndex: round.startIndex } : null;
+const presentationLeaderboard = (leaderboard, mode) => {
+  if (!["leaderboard", "winners", "bonus_pause"].includes(mode)) return [];
+  const limit = mode === "winners" ? 3 : 12;
+  return [...leaderboard].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)).slice(0, limit).map((team) => ({ id: team.id, name: team.name, score: Number(team.score || 0) }));
+};
 const getTeamScore = (leaderboard, teamId) => Number(leaderboard.find((team) => team.id === teamId)?.score || 0);
 const isLateSubmission = (answer) => answer?.secondsRemainingAtSubmit !== null && answer?.secondsRemainingAtSubmit !== undefined && Number(answer.secondsRemainingAtSubmit) <= 5;
 const hasSubmittedWager = (answer) => Boolean(answer?.wagerMode) && (answer?.wagerSubmitted === true || answer?.wagerTiming !== "after_answer" || Number(answer?.wagerAmount || 0) > 0);
@@ -626,8 +631,8 @@ const HostSession = () => {
       showAnswer,
       revealedAnswer: showAnswer ? liveDisplayedQuestion.answer : "",
       showFunFact,
-      leaderboard,
-      players,
+      leaderboard: presentationLeaderboard(leaderboard, presentMode),
+      playerCount: players.length,
       pointsPerQuestion: Number(pointsPerQuestion) || getDefaultPoints(liveDisplayedQuestion),
       wagerMode,
       wagerLimit: Number(wagerLimit || 0),
@@ -650,7 +655,7 @@ const HostSession = () => {
         if (error) console.warn("Live presentation state save unavailable:", error);
       }).catch((error) => console.warn("Live presentation state save unavailable:", error));
     }
-  }, [id, session, sessionName, questions.length, liveDisplayedQuestion, currentIndex, pendingBonusIndex, rounds, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, leaderboard, players, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerEndAt, timeRemaining, acceptingAnswers, branding]);
+  }, [id, session, sessionName, questions.length, liveDisplayedQuestion, currentIndex, pendingBonusIndex, rounds, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, leaderboard, players.length, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerEndAt, timeRemaining, acceptingAnswers, branding]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
