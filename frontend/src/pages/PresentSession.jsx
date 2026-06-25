@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { QRCodeCanvas } from "qrcode.react";
 import { supabase } from "../lib/supabase";
+import { mergeNewerLiveState } from "../lib/liveState";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent } from "../components/ui/card";
 import {
@@ -177,15 +178,10 @@ const getSessionLiveState = (session) => {
   return results && typeof results === "object" && !Array.isArray(results) && results.liveState && typeof results.liveState === "object" ? results.liveState : null;
 };
 
-const stateTimestamp = (state) => {
-  const parsed = Date.parse(state?.updatedAt || state?.liveStateUpdatedAt || "");
-  return Number.isFinite(parsed) ? parsed : 0;
-};
-
 const applyNewerState = (setPresentState, hasLiveStateRef, incoming) => {
   if (!incoming || typeof incoming !== "object") return;
   hasLiveStateRef.current = true;
-  setPresentState((current) => stateTimestamp(incoming) > stateTimestamp(current) ? { ...current, ...incoming } : current);
+  setPresentState((current) => mergeNewerLiveState(current, incoming));
 };
 
 const hasPresentationStarted = (presentState, currentIndex) => {

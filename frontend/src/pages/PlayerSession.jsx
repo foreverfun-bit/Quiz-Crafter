@@ -1,6 +1,7 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { mergeNewerLiveState } from "../lib/liveState";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent } from "../components/ui/card";
@@ -51,13 +52,9 @@ const writeStoredFeedback = (sessionId, name, value) => {
     // Feedback still broadcasts if device storage is unavailable.
   }
 };
-const stateTimestamp = (state) => {
-  const parsed = Date.parse(state?.updatedAt || "");
-  return Number.isFinite(parsed) ? parsed : 0;
-};
 const applyHostState = (setHostState, payload) => {
   if (!payload || typeof payload !== "object") return;
-  setHostState((current) => (stateTimestamp(payload) > stateTimestamp(current) ? payload : current));
+  setHostState((current) => mergeNewerLiveState(current, payload));
 };
 
 const getRoundOrder = (question, fallbackOrder = 1) => Number(question?.round_order || question?.round_number || question?.round || fallbackOrder) || fallbackOrder;
