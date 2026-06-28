@@ -102,8 +102,8 @@ export default async function handler(req, res) {
     const cleanExcludeCategories = dedupeStrings([...normalizeStringArray(excludeCategories), ...cleanRejectedCategories].filter((category) => !containsCategory(cleanLockedCategories, category)));
     const cleanRejectedQuestions = dedupeStrings([...normalizeStringArray(rejectedQuestions), ...normalizeStringArray(currentBatchQuestions)]);
     const cleanSessionContext = normalizeSessionContext(sessionContext);
-    const requireApprovedCategories = cleanLockedCategories.length > 0 || cleanApprovedCategories.length >= APPROVED_CATEGORY_STRICT_THRESHOLD;
-    const categoryExpansionMode = !cleanLockedCategories.length && cleanApprovedCategories.length > 0 && cleanApprovedCategories.length < APPROVED_CATEGORY_STRICT_THRESHOLD;
+    const requireApprovedCategories = cleanLockedCategories.length > 0 || cleanApprovedCategories.length > 0;
+    const categoryExpansionMode = false;
     const existingQuestions = avoidDuplicates || excludeUsed ? await fetchExistingQuestions() : [];
     const styleExamples = buildStyleExamples(existingQuestions, normalizedQuestionType, cleanApprovedCategories);
     const existingFingerprints = new Set(existingQuestions.map((q) => fingerprint(q.question_text)));
@@ -287,9 +287,9 @@ function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, clea
   const approvedCategoryText = cleanLockedCategories.length
     ? lockedCategoryText
     : categoryExpansionMode
-      ? `The approved category list is still small, so use it as a style guide, not a cage. Approved category seeds: ${cleanApprovedCategories.join(", ")}. Roughly half the candidates should use one of those exact categories; the rest may introduce fresh adjacent categories that feel like the same host's vibe. New categories should be broad, reusable, US-friendly, and not one-off answer labels.`
+      ? `Use only these approved category names. The category field must exactly match one of these names; do not invent adjacent, similar, or new category names: ${cleanApprovedCategories.join(", ")}.`
       : cleanApprovedCategories.length
-      ? `Use these pre-approved categories first. The category field should exactly match one of these names unless the user typed a specific category in the current request: ${cleanApprovedCategories.join(", ")}.`
+      ? `Use only these approved category names. The category field must exactly match one of these names; do not invent adjacent, similar, or new category names: ${cleanApprovedCategories.join(", ")}.`
       : `Use varied broad categories such as: ${BROAD_CATEGORIES.join(", ")}.`;
   const excludedCategoryText = cleanExcludeCategories.length ? `Do not use these rejected or avoided categories: ${cleanExcludeCategories.join(", ")}.` : "";
   const themeText = cleanTheme ? `Theme/vibe/category guidance: ${cleanTheme}. Stay useful to that direction, but avoid repetitive question angles.` : "";
