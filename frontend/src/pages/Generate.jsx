@@ -126,7 +126,7 @@ const Generate = ({ initialCreateMode = "generate" }) => {
   const [createMode, setCreateMode] = useState(initialCreateMode);
   const [mode, setMode] = useState("standard");
 
-  const [difficulty, setDifficulty] = useState("host_hard");
+  const [difficulty, setDifficulty] = useState("medium");
   const [theme, setTheme] = useState("");
   const [excludeUsed, setExcludeUsed] = useState(true);
   const [avoidDuplicates, setAvoidDuplicates] = useState(true);

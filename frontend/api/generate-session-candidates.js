@@ -28,7 +28,7 @@ const DIFFICULTY_PROFILES = {
   hard: { label: "Hard", guidance: "Challenging but fair. Prefer second-layer knowledge over household-name facts." },
   host_hard: {
     label: "Host Hard",
-    guidance: "Fresh and host-worthy, but not punishing. Avoid overused pub trivia and basic quiz-bank facts, but keep the question answerable by a strong mixed trivia team or reasonably guessable from the wording. Aim for satisfying 40-60% solve-rate questions, not stumpers that depend on tiny-name recall.",
+    guidance: "Fresh and host-worthy, but still playable for a US bar-trivia room. Aim for strong mixed teams to have a real path to the answer, not a stump-the-room pull. Prefer familiar subjects with a less-obvious angle over obscure subjects with no foothold.",
   },
 };
 
@@ -294,7 +294,7 @@ function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, clea
   const excludedCategoryText = cleanExcludeCategories.length ? `Do not use these rejected or avoided categories: ${cleanExcludeCategories.join(", ")}.` : "";
   const themeText = cleanTheme ? `Theme/vibe/category guidance: ${cleanTheme}. Stay useful to that direction, but avoid repetitive question angles.` : "";
   const tasteProfileText = buildTasteProfileText(styleExamples, cleanSessionContext);
-  const styleText = styleExamples.length ? `Style calibration examples. These are not a source to copy from; they are the host's taste profile. Match their practical qualities: readable aloud, obscure-but-fair, specific without being tiny-name trivia, playful but clean, and useful for a US live bar crowd. Do not copy, lightly rewrite, reuse their answers, or generate the same topic angles:\n${styleExamples.map(formatStyleExample).join("\n")}` : "";
+  const styleText = styleExamples.length ? `Style calibration examples. These are not a source to copy from; they are the host's taste profile. Match their practical qualities: readable aloud, fresh-but-playable, specific without being tiny-name trivia, playful but clean, and useful for a US live bar crowd. Do not copy, lightly rewrite, reuse their answers, or generate the same topic angles:\n${styleExamples.map(formatStyleExample).join("\n")}` : "";
   const sessionContextText = cleanSessionContext && (cleanSessionContext.builtQuestions.length || cleanSessionContext.activeRoundQuestions.length || cleanSessionContext.roundDescriptions.length)
     ? [
         "Current build context. Use this to match the session's pacing, tone, readability, and clue style. Do not copy these questions, reuse their answers, or force the same categories if those categories are excluded:",
@@ -306,8 +306,8 @@ function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, clea
   const duplicateExamples = existingQuestions.slice(0, DUPLICATE_EXAMPLE_LIMIT).map((q) => `- ${q.question_text}${q.correct_answer ? ` Answer: ${q.correct_answer}` : ""}`).join("\n");
   const duplicateText = avoidDuplicates && duplicateExamples ? `Avoid duplicating, lightly rewording, using the same answer, or using the same answer-angle as these existing and past-session questions:\n${duplicateExamples}` : "";
   const rejectedText = cleanRejectedQuestions.length ? `The host explicitly rejected these generated questions. Do not return them, close rewrites, same-answer variations, or same topic-angle cousins:\n${cleanRejectedQuestions.map((question) => `- ${question}`).join("\n")}` : "";
-  const usedText = excludeUsed ? "Assume the host has already used years of common trivia. Do not use standard listicle facts or classroom facts unless the angle is unusually fresh." : "";
-  const hostHardText = difficultyKey === "host_hard" ? "Host Hard calibration: make these feel like the host's stronger library questions, not encyclopedia deep cuts. Prefer recognizable subjects with a fresh angle over obscure subjects with no clue path." : "";
+  const usedText = excludeUsed ? "Assume the host has already used years of common trivia. Avoid the most repeated stock facts, but do not compensate by choosing tiny or joyless facts. Use familiar subjects with fresher angles." : "";
+  const hostHardText = difficultyKey === "host_hard" ? "Host Hard calibration: this means polished and fresh, not brutally obscure. A good team should be able to reason toward the answer from the wording even if they do not know it cold." : "";
   const noveltySeed = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const imagePromptField = includeImagePrompt ? ',\n      "image_prompt": "A concise visual clue idea that does not reveal the answer"' : ',\n      "image_prompt": ""';
   const imagePromptRule = includeImagePrompt
@@ -318,14 +318,14 @@ function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, clea
 Generate exactly ${overGenerateCount} ${config.label} trivia question candidates so the app can keep the best ${safeCount}.
 
 Novelty seed: ${noveltySeed}
-Use the novelty seed to deliberately choose less-common subject matter and avoid repeating your usual examples.
+Use the novelty seed to vary the angle and avoid repeating your usual examples, while keeping the subject matter broadly recognizable.
 
 Host context:
 - The host runs live trivia and wants an assistant, not a generic question bank.
 - The host is based in the United States and usually hosts for a US bar-trivia audience.
 - The host builds flexible rounds with true/false, multiple choice, and written answer questions.
 - Pictures are not a question type. Any question can have media attached later.
-- The biggest need is fresh categories, fun angles, and non-generic questions.
+- The biggest need is fresh-but-playable questions: fun angles, useful clue paths, and categories that regular bar teams recognize.
 - The host has been hosting since 2019 and has already used a lot of common trivia.
 
 Return valid JSON only. No markdown. No comments. No extra keys outside the requested object.
@@ -349,11 +349,15 @@ Use this exact shape:
 Freshness rules:
 - Do not produce classic bar-trivia staples or their reworded cousins.
 - Default to general US-friendly trivia: recognizable subjects, broadly playable categories, and clues a US mixed team can reasonably follow.
+- Fresh does not mean obscure. Prefer a recognizable answer with a surprising route over a little-known answer with no clue path.
+- Every question must have at least one real foothold in the wording: etymology hint, era, object use, pop-culture connection, category cue, or elimination path.
 - International or foreign-country questions are welcome only occasionally. When used, make the subject globally recognizable or give a very clear clue path; do not depend on obscure foreign place names, politicians, monarchs, local festivals, minor wars, regional foods, or untranslated terms.
 - For Geography and World Culture, prefer accessible angles with context over "name this foreign thing" recall.
 - Avoid these angles entirely: capitals, first presidents, tallest/highest/largest/longest records, basic planets, basic elements, basic Shakespeare, Mona Lisa, Harry Potter author, obvious Oscar winners, obvious Disney facts, and common holiday myths.
-- Prefer second-order facts: unusual origins, production details, regional names, near-misses, odd rules, forgotten firsts, surprising constraints, etymology, hidden design choices, or real-world quirks.
+- Prefer second-order facts only when the answer is still reasonably familiar or the clue gives enough context to reach it.
+- Avoid tiny-name answers, obscure technical terms, minor foreign places, niche academic facts, and questions where the only path is "you either know this exact fact or you don't."
 - Ask yourself: "Would this feel fresh to someone who has hosted weekly trivia for years?" If not, replace it.
+- Also ask: "Would a good mixed bar team feel this was fair after hearing the answer?" If not, make it easier or choose a more recognizable subject.
 
 Game-show inspiration:
 - You may take high-level inspiration from game-show clue craft: strong hooks, clean clue paths, satisfying reveals, category variety, and answerability under pressure.
@@ -363,7 +367,8 @@ Game-show inspiration:
 Trivia host style:
 - ${config.roundGuidance}
 - Difficulty: ${difficultyProfile.label}. ${difficultyProfile.guidance}
-- Prefer obscure-but-fair, gettable, satisfying facts over generic quiz-bank material.
+- Prefer fresh-but-fair, gettable, satisfying facts over generic quiz-bank material.
+- For written-answer questions, the correct answer must be a familiar term, person, brand, object, title, or place. Do not use obscure names or exact technical vocabulary as written answers unless the clue makes the answer strongly inferable.
 - ${approvedCategoryText}
 - Avoid repeating a correct answer anywhere in the batch.
 - If more than one locked category is active, balance the candidates across those locked categories.

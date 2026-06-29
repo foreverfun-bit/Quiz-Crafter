@@ -235,7 +235,7 @@ const BuildSession = () => {
   const [saving, setSaving] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [theme, setTheme] = useState(savedState?.theme || venueDraft?.theme || "");
-  const [difficulty, setDifficulty] = useState(savedState?.difficulty || "host_hard");
+  const [difficulty, setDifficulty] = useState(savedState?.difficulty || "medium");
   const [typeFilter, setTypeFilter] = useState(savedState?.typeFilter || "all");
   const [generateType, setGenerateType] = useState(savedState?.generateType || "multiple_choice");
   const [generateCount, setGenerateCount] = useState(savedState?.generateCount || "3");
@@ -322,7 +322,7 @@ const BuildSession = () => {
     setRounds(cleanRounds);
     setActiveRoundId(getInitialActiveRoundId(cleanRounds, cleanState.activeRoundId));
     setTheme(cleanState.theme || "");
-    setDifficulty(cleanState.difficulty || "host_hard");
+    setDifficulty(cleanState.difficulty || "medium");
     setTypeFilter(cleanState.typeFilter || "all");
     setGenerateType(cleanState.generateType || "multiple_choice");
     setGenerateCount(cleanState.generateCount || "3");
