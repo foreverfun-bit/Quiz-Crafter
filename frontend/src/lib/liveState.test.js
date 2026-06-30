@@ -31,4 +31,17 @@ describe("live presentation state ordering", () => {
 
     expect(mergeNewerLiveState(current, heartbeat)).toBe(current);
   });
+
+  it("uses live sequence to release a bonus question even when timestamps match", () => {
+    const timestamp = "2026-06-24T18:00:05.000Z";
+    const bonusPause = state(timestamp, { liveSequence: 41, mode: "bonus_pause", currentIndex: 9, pendingBonusIndex: 9 });
+    const bonusQuestion = state(timestamp, { liveSequence: 42, mode: "question", currentIndex: 9, pendingBonusIndex: null, currentQuestion: { questionText: "Name this founding Father." } });
+
+    expect(mergeNewerLiveState(bonusPause, bonusQuestion)).toMatchObject({
+      liveSequence: 42,
+      mode: "question",
+      pendingBonusIndex: null,
+      currentQuestion: { questionText: "Name this founding Father." },
+    });
+  });
 });

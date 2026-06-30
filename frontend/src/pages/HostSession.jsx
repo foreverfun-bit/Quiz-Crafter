@@ -379,6 +379,7 @@ const HostSession = () => {
   const navigate = useNavigate();
   const liveChannelRef = useRef(null);
   const liveStateRef = useRef(null);
+  const liveStateSequenceRef = useRef(0);
   const hostedResultsRef = useRef({});
   const liveStateSaveRef = useRef(0);
   const liveStateSaveKeyRef = useRef("");
@@ -593,26 +594,29 @@ const HostSession = () => {
   const acceptingAnswers = timeRemaining === null || timeRemaining > 0;
 
   const persistLiveState = (state, force = false) => {
-    liveStateRef.current = state;
-    localStorage.setItem(`quiz-crafter-present-state-${id}`, JSON.stringify(state));
-    liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: state });
+    liveStateSequenceRef.current = Math.max(liveStateSequenceRef.current + 1, Number(state.liveSequence || 0));
+    const orderedState = { ...state, liveSequence: liveStateSequenceRef.current };
+    liveStateRef.current = orderedState;
+    localStorage.setItem(`quiz-crafter-present-state-${id}`, JSON.stringify(orderedState));
+    liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: orderedState });
     const nowMs = Date.now();
     const durableKey = [
-      state.currentIndex,
-      state.mode,
-      state.pendingBonusIndex ?? "",
-      state.pointsPerQuestion,
-      state.timerSeconds,
-      state.wagerLimit,
-      state.wagerTiming,
-      state.timerEndAt || "",
-      state.showAnswer ? "answer" : "",
-      state.showFunFact ? "fact" : "",
+      orderedState.liveSequence,
+      orderedState.currentIndex,
+      orderedState.mode,
+      orderedState.pendingBonusIndex ?? "",
+      orderedState.pointsPerQuestion,
+      orderedState.timerSeconds,
+      orderedState.wagerLimit,
+      orderedState.wagerTiming,
+      orderedState.timerEndAt || "",
+      orderedState.showAnswer ? "answer" : "",
+      orderedState.showFunFact ? "fact" : "",
     ].join("|");
     if (force || durableKey !== liveStateSaveKeyRef.current || nowMs - liveStateSaveRef.current > 1200) {
       liveStateSaveKeyRef.current = durableKey;
       liveStateSaveRef.current = nowMs;
-      const hostedResults = { ...hostedResultsRef.current, liveState: state, liveStateUpdatedAt: state.updatedAt };
+      const hostedResults = { ...hostedResultsRef.current, liveState: orderedState, liveStateUpdatedAt: orderedState.updatedAt };
       hostedResultsRef.current = hostedResults;
       supabase.from("sessions").update({ hosted_results: hostedResults }).eq("id", id).then(({ error }) => {
         if (error) console.warn("Live presentation state save unavailable:", error);
@@ -642,6 +646,7 @@ const HostSession = () => {
     const activeRound = rounds.find((round) => index >= round.startIndex && index < round.startIndex + round.questions.length);
     return {
       sessionId: id,
+      liveSequence: liveStateSequenceRef.current + 1,
       sessionName,
       mode,
       gameStarted: gameStartedValue,
