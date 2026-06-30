@@ -96,6 +96,7 @@ async function handler(req, res) {
                 approved_categories: safeList(context.approvedCategories, 80),
                 rejected_categories: safeList(context.rejectedCategories, 80),
                 recent_categories: safeList(context.recentSessionCategories, 80),
+                conversation: safeList(context.conversation, 12),
                 recent_feedback: safeList(context.feedback, 30),
                 player_ideas: safeList(context.ideas, 30),
                 questions: safeList(context.questions, 40),
@@ -116,6 +117,7 @@ async function handler(req, res) {
                 ? [
                     "Return JSON with keys: answer, candidates.",
                     "answer should be 2-5 short, actionable sentences for the host.",
+                    "Use the conversation history to continue refining instead of restarting the task.",
                     "candidates must be an array of 0-6 usable question objects.",
                     "Each candidate must include category, question_text, correct_answer, incorrect_answers, fun_fact, difficulty, question_type, image_url.",
                     "question_type must be true_false, multiple_choice, or written.",
