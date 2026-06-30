@@ -94,6 +94,7 @@ const normalizeType = (question, fallbackType = "written") => {
   if (type === "true_false" || type === "multiple_choice" || type === "written") return type;
   return "written";
 };
+const normalizeWagerTiming = (value) => value === "after_answer" || value === "after" ? "after_answer" : "before_answer";
 
 const getRoundOrder = (question, fallbackOrder = 1) => Number(question?.round_order || question?.round_number || question?.round || fallbackOrder) || fallbackOrder;
 const getSourceOrder = (question, fallbackOrder = 1) => Number(question?.import_order || question?.source_order || question?.question_order || question?.order || fallbackOrder) || fallbackOrder;
@@ -142,6 +143,11 @@ const flattenSession = (session) => {
         roundOrder,
         sourceOrder: getSourceOrder(question, index + 1),
         roundDescription: question.round_description || getRoundDescription(session, roundOrder, getRoundName(question, roundOrder)),
+        points: Number(question.points ?? question.question_points ?? 0) || null,
+        timerSeconds: Number(question.timer_seconds ?? question.time_limit ?? 30) || 30,
+        wagerLimit: Number(question.wager_limit ?? question.free_wager_limit ?? 0) || 0,
+        wagerTiming: normalizeWagerTiming(question.wager_timing || question.wagerTiming),
+        isBonus: Boolean(question.is_bonus || question.bonus || /\bbonus\b/i.test([question.category, getRoundName(question, roundOrder)].filter(Boolean).join(" "))),
       };
     });
   });

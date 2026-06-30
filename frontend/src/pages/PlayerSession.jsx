@@ -116,6 +116,7 @@ const hasGameStarted = (hostState) => {
   if (hostState.showAnswer || hostState.showFunFact) return true;
   return Number(hostState.currentIndex || 0) > 0;
 };
+const getCurrentQuestionPoints = (hostState, currentQuestion) => Number(currentQuestion?.questionPoints ?? currentQuestion?.points ?? hostState?.pointsPerQuestion ?? 1) || 1;
 
 const PlayerSession = () => {
   const { id } = useParams();
@@ -211,7 +212,7 @@ const PlayerSession = () => {
   const timeRemaining = hostState?.timerEndAt ? Math.max(0, Math.ceil((new Date(hostState.timerEndAt).getTime() - now) / 1000)) : null;
   const acceptingAnswers = timeRemaining === null || timeRemaining > 0;
   const submissionTiming = () => ({ secondsRemainingAtSubmit: timeRemaining, timerEndAt: hostState?.timerEndAt || null, timerSeconds: hostState?.timerSeconds || null });
-  const pointsPerQuestion = Number(hostState?.pointsPerQuestion || 1);
+  const pointsPerQuestion = getCurrentQuestionPoints(hostState, currentQuestion);
   const wagerMode = Boolean(hostState?.wagerMode);
   const wagerLimit = Number(hostState?.wagerLimit || 0);
   const effectiveWagerLimit = wagerMode ? Math.max(0, Math.min(wagerLimit || Number.POSITIVE_INFINITY, Number(myScore || 0))) : 0;
@@ -348,13 +349,13 @@ const PlayerSession = () => {
         {gameStarted && hostState?.mode === "bonus_pause" && <LeaderboardView leaderboard={leaderboard} playerId={player.id} title="Bonus Question Next" />}
         {gameStarted && hostState?.mode === "categories" && <RoundIntroFeedback roundName={activeRoundName} description={activeRoundDescription} categories={activeRoundCategories} selectedByCategory={feedbackByCategory} currentIndex={categoryFeedbackKey} onSelect={submitCategoryFeedback} />}
         {gameStarted && hostState && hostState.mode !== "leaderboard" && hostState.mode !== "winners" && hostState.mode !== "feedback" && hostState.mode !== "categories" && hostState.mode !== "bonus_pause" && !currentQuestion && <div className="text-center"><p className="text-zinc-400">Waiting for the next question.</p></div>}
-        {gameStarted && hostState && hostState.mode !== "leaderboard" && hostState.mode !== "winners" && hostState.mode !== "feedback" && hostState.mode !== "categories" && hostState.mode !== "bonus_pause" && currentQuestion && <PlayerQuestionView currentQuestion={currentQuestion} hostState={hostState} wagerMode={wagerMode} effectiveWagerLimit={effectiveWagerLimit} timeRemaining={timeRemaining} selectedFeedback={feedbackByQuestion[String(hostState.currentIndex)]} onFeedback={submitFeedback} submitted={submitted} wagerTiming={wagerTiming} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} submitWager={submitWager} acceptingAnswers={acceptingAnswers} answer={answer} setAnswer={setAnswer} submitAnswer={submitAnswer} />}
+        {gameStarted && hostState && hostState.mode !== "leaderboard" && hostState.mode !== "winners" && hostState.mode !== "feedback" && hostState.mode !== "categories" && hostState.mode !== "bonus_pause" && currentQuestion && <PlayerQuestionView currentQuestion={currentQuestion} hostState={hostState} pointsPerQuestion={pointsPerQuestion} wagerMode={wagerMode} effectiveWagerLimit={effectiveWagerLimit} timeRemaining={timeRemaining} selectedFeedback={feedbackByQuestion[String(hostState.currentIndex)]} onFeedback={submitFeedback} submitted={submitted} wagerTiming={wagerTiming} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} submitWager={submitWager} acceptingAnswers={acceptingAnswers} answer={answer} setAnswer={setAnswer} submitAnswer={submitAnswer} />}
       </main>
     </div>
   );
 };
 
-const PlayerQuestionView = ({ currentQuestion, hostState, wagerMode, effectiveWagerLimit, timeRemaining, selectedFeedback, onFeedback, submitted, wagerTiming, wagerAmount, setWagerAmount, submitWager, acceptingAnswers, answer, setAnswer, submitAnswer }) => {
+const PlayerQuestionView = ({ currentQuestion, hostState, pointsPerQuestion, wagerMode, effectiveWagerLimit, timeRemaining, selectedFeedback, onFeedback, submitted, wagerTiming, wagerAmount, setWagerAmount, submitWager, acceptingAnswers, answer, setAnswer, submitAnswer }) => {
   const imageUrl = currentQuestion.imageUrl || currentQuestion.image_url || "";
   const imageTiming = currentQuestion.imageTiming || currentQuestion.image_timing || "initial";
   const showQuestionMedia = Boolean(imageUrl) && imageTiming !== "after_answer" && !hostState.showFunFact;
@@ -366,6 +367,7 @@ const PlayerQuestionView = ({ currentQuestion, hostState, wagerMode, effectiveWa
         <div className="text-center mb-5">
           <div className="flex items-center justify-center gap-2 flex-wrap mb-3">
             <Badge className="bg-zinc-800 text-zinc-300"><span>{currentQuestion.roundName || "Round"}</span><span className="mx-1 text-zinc-500">/</span><span>{currentQuestion.category}</span></Badge>
+            {!wagerMode && <Badge className="bg-amber-500/15 text-amber-200 border border-amber-500/20">{pointsPerQuestion} pts</Badge>}
             {wagerMode && <Badge className="bg-purple-500/15 text-purple-300 border border-purple-500/20">Wager up to {effectiveWagerLimit}</Badge>}
             {timeRemaining !== null && <Badge className={timeRemaining === 0 ? "bg-red-500/15 text-red-300 border border-red-500/20" : "bg-[#AEB2EF]/15 text-[#AEB2EF] border border-[#AEB2EF]/20"}><Timer size={13} className="mr-1" />{timeRemaining}s</Badge>}
           </div>

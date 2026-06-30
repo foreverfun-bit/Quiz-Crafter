@@ -311,6 +311,10 @@ const persistLiveIdea = (sessionId, payload) => {
 
 const getDefaultPoints = (question) => POINTS_BY_TYPE[question?.type] || 100;
 const getQuestionPoints = (question) => Number(question?.points ?? 0) > 0 ? Number(question.points) : getDefaultPoints(question);
+const isBonusQuestion = (question) => {
+  const text = [question?.category, question?.roundName, question?.round_name, question?.tag, question?.label].filter(Boolean).join(" ");
+  return Boolean(question?.is_bonus || question?.bonus || /\bbonus\b/i.test(text));
+};
 const answerKey = (answer) => `${answer.playerId}-${answer.questionIndex}`;
 const normalizeAnswerText = (value) => String(value || "").trim().toLowerCase().replace(/[’']/g, "'").replace(/[^a-z0-9]+/g, " ").trim();
 const isCorrectSubmission = (answer, question) => Boolean(question?.answer) && normalizeAnswerText(answer?.answer) === normalizeAnswerText(question.answer);
@@ -616,7 +620,19 @@ const HostSession = () => {
 
   useEffect(() => {
     if (!session || !questions.length || !liveDisplayedQuestion) return;
-    const publicQuestion = { ...liveDisplayedQuestion, answer: showAnswer ? liveDisplayedQuestion.answer : "" };
+    const activePoints = Number(pointsPerQuestion) || getQuestionPoints(liveDisplayedQuestion);
+    const activeTimer = Number(timerSeconds) || Number(liveDisplayedQuestion.timerSeconds || 0) || 30;
+    const activeWagerLimit = Number(wagerLimit || 0);
+    const publicQuestion = {
+      ...liveDisplayedQuestion,
+      points: activePoints,
+      questionPoints: activePoints,
+      timerSeconds: activeTimer,
+      wagerLimit: activeWagerLimit,
+      wagerTiming,
+      isBonus: isBonusQuestion(liveDisplayedQuestion),
+      answer: showAnswer ? liveDisplayedQuestion.answer : "",
+    };
     const state = {
       sessionId: id,
       sessionName,
@@ -633,11 +649,11 @@ const HostSession = () => {
       showFunFact,
       leaderboard: presentationLeaderboard(leaderboard, presentMode),
       playerCount: players.length,
-      pointsPerQuestion: Number(pointsPerQuestion) || getDefaultPoints(liveDisplayedQuestion),
+      pointsPerQuestion: activePoints,
       wagerMode,
-      wagerLimit: Number(wagerLimit || 0),
+      wagerLimit: activeWagerLimit,
       wagerTiming,
-      timerSeconds: Number(timerSeconds) || 0,
+      timerSeconds: activeTimer,
       timerEndAt,
       acceptingAnswers,
       branding,
@@ -674,7 +690,7 @@ const HostSession = () => {
     }
     const targetQuestion = questions[index];
     const targetRound = rounds.find((round) => index >= round.startIndex && index < round.startIndex + round.questions.length);
-    const isRoundBonus = targetRound && targetRound.questions.length > 1 && index === targetRound.startIndex + targetRound.questions.length - 1;
+    const isRoundBonus = isBonusQuestion(targetQuestion) || (targetRound && targetRound.questions.length > 1 && index === targetRound.startIndex + targetRound.questions.length - 1);
     if (options.pauseBeforeBonus !== false && isRoundBonus && pendingBonusIndex !== index) {
       setPendingBonusIndex(index);
       setShowAnswer(false);
@@ -685,6 +701,11 @@ const HostSession = () => {
       return;
     }
     setReviewIndex(null);
+    setPointsPerQuestion(getQuestionPoints(targetQuestion));
+    setTimerSeconds(Number(targetQuestion?.timerSeconds || 30));
+    setWagerLimit(Number(targetQuestion?.wagerLimit || 0));
+    setWagerTiming(normalizeWagerTiming(targetQuestion?.wagerTiming));
+    setWagerMode(Number(targetQuestion?.wagerLimit || 0) > 0);
     setCurrentIndex(index);
     setEmergencyOverride(null);
     setPendingBonusIndex(null);
