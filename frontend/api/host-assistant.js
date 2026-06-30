@@ -64,6 +64,7 @@ async function handler(req, res) {
     }
 
     const buildMode = mode === "build_cohost";
+    const editMode = mode === "question_edit";
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -72,12 +73,14 @@ async function handler(req, res) {
       },
       body: JSON.stringify({
         model: process.env.OPENAI_HOST_ASSISTANT_MODEL || "gpt-4.1-mini",
-        temperature: buildMode ? 0.62 : 0.55,
-        response_format: buildMode ? { type: "json_object" } : undefined,
+        temperature: buildMode || editMode ? 0.62 : 0.55,
+        response_format: buildMode || editMode ? { type: "json_object" } : undefined,
         messages: [
           {
             role: "system",
-            content: buildMode
+            content: editMode
+              ? "You are Quiz Crafter's conversational question editor for an experienced US bar-trivia host. Rewrite the provided question according to the host's instruction while preserving the same trivia idea unless the host explicitly asks for a different fact. Make questions playable, fair, and host-ready. Return valid JSON only."
+              : buildMode
               ? "You are Quiz Crafter's private ChatGPT-style co-host for an experienced US bar-trivia host. Help shape the current build with practical, playable, fresh-but-fair questions. Use only approved categories when they are provided. Do not invent categories. Avoid obscure deep cuts, tiny-name answers, sterile textbook facts, and questions with no clue path. Return valid JSON only."
               : "You are Quiz Crafter's private assistant for an experienced weekly trivia host. Be concrete, host-aware, and useful. Help with show planning, rewrites, clue style, pacing, replacements, round balance, fairness, and emergency hosting decisions. Avoid generic trivia-site advice.",
           },
@@ -97,7 +100,19 @@ async function handler(req, res) {
                 player_ideas: safeList(context.ideas, 30),
                 questions: safeList(context.questions, 40),
               },
-              response_rules: buildMode
+              response_rules: editMode
+                ? [
+                    "Return JSON with keys: answer, candidate.",
+                    "answer should briefly explain what changed and any caveat the host should know.",
+                    "candidate must include category, question_text, correct_answer, incorrect_answers, fun_fact, difficulty, question_type, image_url.",
+                    "question_type must be true_false, multiple_choice, or written.",
+                    "If the host asks to make it false, create a true_false question whose correct_answer is exactly False.",
+                    "If the host asks to make it true, create a true_false question whose correct_answer is exactly True.",
+                    "If the host asks to make it easier or harder, keep the same broad trivia idea and category unless impossible.",
+                    "For multiple_choice, incorrect_answers must contain exactly 3 plausible wrong answers.",
+                    "Do not claim to save or edit anything directly.",
+                  ]
+                : buildMode
                 ? [
                     "Return JSON with keys: answer, candidates.",
                     "answer should be 2-5 short, actionable sentences for the host.",
@@ -130,6 +145,12 @@ async function handler(req, res) {
       const parsed = parseAssistantJson(answer);
       const candidates = Array.isArray(parsed?.candidates) ? parsed.candidates.map(normalizeCandidate).filter(Boolean).slice(0, 6) : [];
       return res.status(200).json({ answer: clean(parsed?.answer) || "I drafted a few co-host suggestions for this build.", candidates });
+    }
+    if (editMode) {
+      const parsed = parseAssistantJson(answer);
+      const candidate = normalizeCandidate(parsed?.candidate);
+      if (!candidate) throw new Error("AI did not return a usable question edit");
+      return res.status(200).json({ answer: clean(parsed?.answer) || "I rewrote the question for you to review.", candidate });
     }
     return res.status(200).json({ answer });
   } catch (error) {
