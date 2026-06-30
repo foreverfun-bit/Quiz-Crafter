@@ -1,6 +1,29 @@
 const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+const fingerprint = (value) => clean(value).toLowerCase().replace(/[^a-z0-9]/g, "");
+const answerPairFingerprint = (question, answer) => `${fingerprint(question)}::${fingerprint(answer)}`;
 
 const safeList = (value, limit = 20) => Array.isArray(value) ? value.slice(0, limit) : [];
+
+const collectBlockedQuestions = (context = {}) => {
+  const build = context.build || {};
+  const raw = [
+    ...safeList(context.questions, 80),
+    ...safeList(build.activeRoundQuestions, 80),
+    ...safeList(build.builtQuestions, 160),
+  ];
+  const textFingerprints = new Set();
+  const answerPairs = new Set();
+  const answersByCategory = new Set();
+  raw.forEach((question) => {
+    const text = question?.question_text || question?.question;
+    const answer = question?.correct_answer || question?.answer;
+    const category = question?.category;
+    if (text) textFingerprints.add(fingerprint(text));
+    if (text && answer) answerPairs.add(answerPairFingerprint(text, answer));
+    if (category && answer) answersByCategory.add(`${fingerprint(category)}::${fingerprint(answer)}`);
+  });
+  return { textFingerprints, answerPairs, answersByCategory };
+};
 
 const fallback = (request, context) => {
   const sessionName = clean(context?.session?.name || context?.session?.session_name) || "your next trivia night";
@@ -48,6 +71,14 @@ const normalizeCandidate = (candidate) => {
     image_url: "",
     image_prompt: "",
   };
+};
+
+const isBlockedCandidate = (candidate, blocked) => {
+  if (!candidate) return true;
+  const textKey = fingerprint(candidate.question_text);
+  const pairKey = answerPairFingerprint(candidate.question_text, candidate.correct_answer);
+  const categoryAnswerKey = `${fingerprint(candidate.category)}::${fingerprint(candidate.correct_answer)}`;
+  return blocked.textFingerprints.has(textKey) || blocked.answerPairs.has(pairKey) || blocked.answersByCategory.has(categoryAnswerKey);
 };
 
 async function handler(req, res) {
@@ -118,6 +149,11 @@ async function handler(req, res) {
                     "Return JSON with keys: answer, candidates.",
                     "answer should be 2-5 short, actionable sentences for the host.",
                     "Use the conversation history to continue refining instead of restarting the task.",
+                    "Treat the newest user request as the highest priority.",
+                    "Never suggest a question already present in host_context.questions, host_context.build.activeRoundQuestions, or host_context.build.builtQuestions.",
+                    "Never reuse the same correct answer in the same category as an existing built question.",
+                    "If the host rejects a direction, do not defend it; pivot and produce a materially different approach.",
+                    "If you cannot satisfy the directions without duplicates, return fewer candidates and explain what constraint blocked you.",
                     "candidates must be an array of 0-6 usable question objects.",
                     "Each candidate must include category, question_text, correct_answer, incorrect_answers, fun_fact, difficulty, question_type, image_url.",
                     "question_type must be true_false, multiple_choice, or written.",
@@ -145,8 +181,16 @@ async function handler(req, res) {
     if (!answer) throw new Error("AI returned an empty answer");
     if (buildMode) {
       const parsed = parseAssistantJson(answer);
-      const candidates = Array.isArray(parsed?.candidates) ? parsed.candidates.map(normalizeCandidate).filter(Boolean).slice(0, 6) : [];
-      return res.status(200).json({ answer: clean(parsed?.answer) || "I drafted a few co-host suggestions for this build.", candidates });
+      const blocked = collectBlockedQuestions(context);
+      const normalized = Array.isArray(parsed?.candidates) ? parsed.candidates.map(normalizeCandidate).filter(Boolean) : [];
+      const candidates = normalized.filter((candidate) => !isBlockedCandidate(candidate, blocked)).slice(0, 6);
+      const dropped = normalized.length - candidates.length;
+      const assistantAnswer = clean(parsed?.answer) || "I drafted a few co-host suggestions for this build.";
+      return res.status(200).json({
+        answer: dropped > 0 ? `${assistantAnswer}\n\nI filtered out ${dropped} suggestion${dropped === 1 ? "" : "s"} because they repeated questions or answers already in this build.` : assistantAnswer,
+        candidates,
+        dropped,
+      });
     }
     if (editMode) {
       const parsed = parseAssistantJson(answer);

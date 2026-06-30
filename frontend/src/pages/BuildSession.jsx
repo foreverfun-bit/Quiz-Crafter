@@ -485,6 +485,13 @@ const BuildSession = () => {
   const normalizeCoHostCandidates = (candidates) => (Array.isArray(candidates) ? candidates : []).map((candidate, index) => {
     const type = normalizeType(candidate, generateType);
     return applyDraftDefaults(normalizeQuestion({ ...candidate, id: `cohost-${activeRound.id}-${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`, question_type: type, isGenerated: true }, type), activeRound);
+  }).filter((candidate) => {
+    const textKey = fingerprint(candidate.question_text);
+    const answerKey = `${categoryKey(candidate.category)}::${fingerprint(candidate.correct_answer)}`;
+    const builtQuestions = safeRounds.flatMap((round) => (round.questionIds || []).map((id) => questionById.get(String(id))).filter(Boolean));
+    const existingTexts = new Set(builtQuestions.map((question) => fingerprint(question.question_text)));
+    const existingCategoryAnswers = new Set(builtQuestions.map((question) => `${categoryKey(question.category)}::${fingerprint(question.correct_answer)}`));
+    return textKey && !existingTexts.has(textKey) && !existingCategoryAnswers.has(answerKey);
   });
   const normalizeGeneratedForRound = (candidates, round, fallbackType) => (Array.isArray(candidates) ? candidates : []).map((candidate, index) => {
     const normalized = normalizeQuestion({ ...candidate, id: `ai-${round.id}-${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`, question_type: candidate.question_type || fallbackType, isGenerated: true }, fallbackType);
