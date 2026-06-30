@@ -705,7 +705,8 @@ const HostSession = () => {
     const targetQuestion = questions[index];
     const targetRound = rounds.find((round) => index >= round.startIndex && index < round.startIndex + round.questions.length);
     const isRoundBonus = isBonusQuestion(targetQuestion) || (targetRound && targetRound.questions.length > 1 && index === targetRound.startIndex + targetRound.questions.length - 1);
-    if (options.pauseBeforeBonus !== false && isRoundBonus && pendingBonusIndex !== index) {
+    const shouldPauseForBonus = options.pauseBeforeBonus !== false && presentMode !== "leaderboard" && isRoundBonus && pendingBonusIndex !== index;
+    if (shouldPauseForBonus) {
       setPendingBonusIndex(index);
       setShowAnswer(false);
       setShowFunFact(false);
