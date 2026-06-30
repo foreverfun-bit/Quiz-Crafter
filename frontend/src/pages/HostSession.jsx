@@ -592,6 +592,91 @@ const HostSession = () => {
   const timeRemaining = timerEndAt ? Math.max(0, Math.ceil((timerEndAt - now) / 1000)) : null;
   const acceptingAnswers = timeRemaining === null || timeRemaining > 0;
 
+  const persistLiveState = (state, force = false) => {
+    liveStateRef.current = state;
+    localStorage.setItem(`quiz-crafter-present-state-${id}`, JSON.stringify(state));
+    liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: state });
+    const nowMs = Date.now();
+    const durableKey = [
+      state.currentIndex,
+      state.mode,
+      state.pendingBonusIndex ?? "",
+      state.pointsPerQuestion,
+      state.timerSeconds,
+      state.wagerLimit,
+      state.wagerTiming,
+      state.timerEndAt || "",
+      state.showAnswer ? "answer" : "",
+      state.showFunFact ? "fact" : "",
+    ].join("|");
+    if (force || durableKey !== liveStateSaveKeyRef.current || nowMs - liveStateSaveRef.current > 1200) {
+      liveStateSaveKeyRef.current = durableKey;
+      liveStateSaveRef.current = nowMs;
+      const hostedResults = { ...hostedResultsRef.current, liveState: state, liveStateUpdatedAt: state.updatedAt };
+      hostedResultsRef.current = hostedResults;
+      supabase.from("sessions").update({ hosted_results: hostedResults }).eq("id", id).then(({ error }) => {
+        if (error) console.warn("Live presentation state save unavailable:", error);
+      }).catch((error) => console.warn("Live presentation state save unavailable:", error));
+    }
+  };
+
+  const buildLiveState = ({
+    question,
+    index,
+    mode,
+    pendingIndex = pendingBonusIndex,
+    showAnswerValue = showAnswer,
+    showFunFactValue = showFunFact,
+    timerEndAtValue = timerEndAt,
+    gameStartedValue = gameStarted,
+    pointsValue = pointsPerQuestion,
+    timerValue = timerSeconds,
+    wagerLimitValue = wagerLimit,
+    wagerModeValue = wagerMode,
+    wagerTimingValue = wagerTiming,
+  }) => {
+    if (!question) return null;
+    const activePoints = Number(pointsValue) || getQuestionPoints(question);
+    const activeTimer = Number(timerValue) || Number(question.timerSeconds || 0) || 30;
+    const activeWagerLimit = Number(wagerLimitValue || 0);
+    const activeRound = rounds.find((round) => index >= round.startIndex && index < round.startIndex + round.questions.length);
+    return {
+      sessionId: id,
+      sessionName,
+      mode,
+      gameStarted: gameStartedValue,
+      joinUrl,
+      currentIndex: index,
+      pendingBonusIndex: pendingIndex,
+      pendingBonusRound: pendingIndex !== null ? serializeRoundIntro(rounds.find((round) => pendingIndex >= round.startIndex && pendingIndex < round.startIndex + round.questions.length)) : null,
+      currentQuestion: {
+        ...question,
+        points: activePoints,
+        questionPoints: activePoints,
+        timerSeconds: activeTimer,
+        wagerLimit: activeWagerLimit,
+        wagerTiming: wagerTimingValue,
+        isBonus: isBonusQuestion(question),
+        answer: showAnswerValue ? question.answer : "",
+      },
+      introRound: serializeRoundIntro(mode === "categories" ? introRound : activeRound || introRound),
+      showAnswer: showAnswerValue,
+      revealedAnswer: showAnswerValue ? question.answer : "",
+      showFunFact: showFunFactValue,
+      leaderboard: presentationLeaderboard(leaderboard, mode),
+      playerCount: players.length,
+      pointsPerQuestion: activePoints,
+      wagerMode: wagerModeValue,
+      wagerLimit: activeWagerLimit,
+      wagerTiming: wagerTimingValue,
+      timerSeconds: activeTimer,
+      timerEndAt: timerEndAtValue,
+      acceptingAnswers: timerEndAtValue === null || timerEndAtValue > Date.now(),
+      branding,
+      updatedAt: new Date().toISOString(),
+    };
+  };
+
   useEffect(() => {
     if (!liveDisplayedQuestion || isReviewing) return;
     setPointsPerQuestion(getQuestionPoints(liveDisplayedQuestion));
@@ -621,70 +706,14 @@ const HostSession = () => {
 
   useEffect(() => {
     if (!session || !questions.length || !liveDisplayedQuestion) return;
-    const activePoints = Number(pointsPerQuestion) || getQuestionPoints(liveDisplayedQuestion);
-    const activeTimer = Number(timerSeconds) || Number(liveDisplayedQuestion.timerSeconds || 0) || 30;
-    const activeWagerLimit = Number(wagerLimit || 0);
-    const publicQuestion = {
-      ...liveDisplayedQuestion,
-      points: activePoints,
-      questionPoints: activePoints,
-      timerSeconds: activeTimer,
-      wagerLimit: activeWagerLimit,
-      wagerTiming,
-      isBonus: isBonusQuestion(liveDisplayedQuestion),
-      answer: showAnswer ? liveDisplayedQuestion.answer : "",
-    };
-    const state = {
-      sessionId: id,
-      sessionName,
+    const state = buildLiveState({
+      question: liveDisplayedQuestion,
+      index: currentIndex,
       mode: presentMode,
-      gameStarted,
-      joinUrl,
-      currentIndex,
-      pendingBonusIndex,
-      pendingBonusRound: pendingBonusIndex !== null ? serializeRoundIntro(rounds.find((round) => pendingBonusIndex >= round.startIndex && pendingBonusIndex < round.startIndex + round.questions.length)) : null,
-      currentQuestion: publicQuestion,
-      introRound: serializeRoundIntro(introRound),
-      showAnswer,
-      revealedAnswer: showAnswer ? liveDisplayedQuestion.answer : "",
-      showFunFact,
-      leaderboard: presentationLeaderboard(leaderboard, presentMode),
-      playerCount: players.length,
-      pointsPerQuestion: activePoints,
-      wagerMode,
-      wagerLimit: activeWagerLimit,
-      wagerTiming,
-      timerSeconds: activeTimer,
-      timerEndAt,
-      acceptingAnswers,
-      branding,
-      updatedAt: new Date().toISOString(),
-    };
-    liveStateRef.current = state;
-    localStorage.setItem(`quiz-crafter-present-state-${id}`, JSON.stringify(state));
-    liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: state });
-    const nowMs = Date.now();
-    const durableKey = [
-      state.currentIndex,
-      state.mode,
-      state.pendingBonusIndex ?? "",
-      state.pointsPerQuestion,
-      state.timerSeconds,
-      state.wagerLimit,
-      state.wagerTiming,
-      state.timerEndAt || "",
-      state.showAnswer ? "answer" : "",
-      state.showFunFact ? "fact" : "",
-    ].join("|");
-    if (durableKey !== liveStateSaveKeyRef.current || nowMs - liveStateSaveRef.current > 1200) {
-      liveStateSaveKeyRef.current = durableKey;
-      liveStateSaveRef.current = nowMs;
-      const hostedResults = { ...hostedResultsRef.current, liveState: state, liveStateUpdatedAt: state.updatedAt };
-      hostedResultsRef.current = hostedResults;
-      supabase.from("sessions").update({ hosted_results: hostedResults }).eq("id", id).then(({ error }) => {
-        if (error) console.warn("Live presentation state save unavailable:", error);
-      }).catch((error) => console.warn("Live presentation state save unavailable:", error));
-    }
+    });
+    if (state) persistLiveState(state);
+  // The live snapshot helpers intentionally read the latest host state in this render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, session, sessionName, questions.length, liveDisplayedQuestion, currentIndex, pendingBonusIndex, rounds, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, leaderboard, players.length, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerSeconds, timerEndAt, acceptingAnswers, branding]);
 
   useEffect(() => {
@@ -726,9 +755,26 @@ const HostSession = () => {
     setPendingBonusIndex(null);
     setShowAnswer(false);
     setShowFunFact(false);
-    setTimerEndAt(options.startTimer ? Date.now() + Math.max(1, Number(targetQuestion?.timerSeconds || 30)) * 1000 : null);
+    const nextTimerEndAt = options.startTimer ? Date.now() + Math.max(1, Number(targetQuestion?.timerSeconds || 30)) * 1000 : null;
+    setTimerEndAt(nextTimerEndAt);
     setPresentMode("question");
     if (options.startTimer) setGameStarted(true);
+    const nextState = buildLiveState({
+      question: targetQuestion,
+      index,
+      mode: "question",
+      pendingIndex: null,
+      showAnswerValue: false,
+      showFunFactValue: false,
+      timerEndAtValue: nextTimerEndAt,
+      gameStartedValue: options.startTimer ? true : gameStarted,
+      pointsValue: getQuestionPoints(targetQuestion),
+      timerValue: Number(targetQuestion?.timerSeconds || 30),
+      wagerLimitValue: Number(targetQuestion?.wagerLimit || 0),
+      wagerModeValue: Number(targetQuestion?.wagerLimit || 0) > 0,
+      wagerTimingValue: normalizeWagerTiming(targetQuestion?.wagerTiming),
+    });
+    if (nextState) persistLiveState(nextState, true);
   };
 
   const reviewQuestion = (index) => goToQuestion(index, { reviewOnly: true });

@@ -176,7 +176,7 @@ const PlayerSession = () => {
       })
       .on("broadcast", { event: "host_mode" }, ({ payload }) => {
         if (!payload?.mode) return;
-        setHostState((current) => ({ ...(current || {}), ...payload }));
+        applyHostState(setHostState, payload);
       })
       .subscribe();
     return () => {
@@ -198,7 +198,7 @@ const PlayerSession = () => {
       })
       .on("broadcast", { event: "host_mode" }, ({ payload }) => {
         if (!payload?.mode) return;
-        setHostState((current) => ({ ...(current || {}), ...payload }));
+        applyHostState(setHostState, payload);
       })
       .on("broadcast", { event: "host_update" }, ({ payload }) => {
         if (!payload?.message) return;
