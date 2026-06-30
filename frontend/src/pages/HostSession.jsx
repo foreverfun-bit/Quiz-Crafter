@@ -381,6 +381,7 @@ const HostSession = () => {
   const liveStateRef = useRef(null);
   const hostedResultsRef = useRef({});
   const liveStateSaveRef = useRef(0);
+  const liveStateSaveKeyRef = useRef("");
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -663,7 +664,20 @@ const HostSession = () => {
     localStorage.setItem(`quiz-crafter-present-state-${id}`, JSON.stringify(state));
     liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: state });
     const nowMs = Date.now();
-    if (nowMs - liveStateSaveRef.current > 1200) {
+    const durableKey = [
+      state.currentIndex,
+      state.mode,
+      state.pendingBonusIndex ?? "",
+      state.pointsPerQuestion,
+      state.timerSeconds,
+      state.wagerLimit,
+      state.wagerTiming,
+      state.timerEndAt || "",
+      state.showAnswer ? "answer" : "",
+      state.showFunFact ? "fact" : "",
+    ].join("|");
+    if (durableKey !== liveStateSaveKeyRef.current || nowMs - liveStateSaveRef.current > 1200) {
+      liveStateSaveKeyRef.current = durableKey;
       liveStateSaveRef.current = nowMs;
       const hostedResults = { ...hostedResultsRef.current, liveState: state, liveStateUpdatedAt: state.updatedAt };
       hostedResultsRef.current = hostedResults;

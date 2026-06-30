@@ -56,6 +56,10 @@ const applyHostState = (setHostState, payload) => {
   if (!payload || typeof payload !== "object") return;
   setHostState((current) => mergeNewerLiveState(current, payload));
 };
+const getSessionLiveState = (session) => {
+  const results = session?.hosted_results;
+  return results && typeof results === "object" && !Array.isArray(results) && results.liveState && typeof results.liveState === "object" ? results.liveState : null;
+};
 
 const getRoundOrder = (question, fallbackOrder = 1) => Number(question?.round_order || question?.round_number || question?.round || fallbackOrder) || fallbackOrder;
 const getRoundName = (question, fallbackOrder = 1) => {
@@ -148,8 +152,19 @@ const PlayerSession = () => {
     const loadSession = async () => {
       const { data } = await supabase.from("sessions").select("*").eq("id", id).single();
       setSession(data || null);
+      applyHostState(setHostState, getSessionLiveState(data));
     };
     loadSession();
+  }, [id]);
+
+  useEffect(() => {
+    const loadDurableState = async () => {
+      const { data } = await supabase.from("sessions").select("hosted_results").eq("id", id).single();
+      applyHostState(setHostState, getSessionLiveState(data));
+    };
+    const interval = window.setInterval(loadDurableState, 1500);
+    loadDurableState();
+    return () => window.clearInterval(interval);
   }, [id]);
 
   useEffect(() => {
