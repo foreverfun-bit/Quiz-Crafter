@@ -13,18 +13,57 @@ const fallback = (request, context) => {
   ].join("\n\n");
 };
 
+const parseAssistantJson = (content) => {
+  const text = clean(content);
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    try {
+      return JSON.parse(match[0]);
+    } catch {
+      return null;
+    }
+  }
+};
+
+const normalizeCandidate = (candidate) => {
+  if (!candidate || typeof candidate !== "object") return null;
+  const questionText = clean(candidate.question_text || candidate.question);
+  const correctAnswer = clean(candidate.correct_answer || candidate.answer);
+  const category = clean(candidate.category);
+  const type = ["true_false", "multiple_choice", "written"].includes(candidate.question_type || candidate.type) ? candidate.question_type || candidate.type : "written";
+  if (!questionText || !correctAnswer || !category) return null;
+  const incorrect = Array.isArray(candidate.incorrect_answers) ? candidate.incorrect_answers.map(clean).filter(Boolean) : [];
+  return {
+    category,
+    question_text: questionText,
+    correct_answer: type === "true_false" ? (correctAnswer.toLowerCase() === "false" ? "False" : "True") : correctAnswer,
+    incorrect_answers: type === "multiple_choice" ? incorrect.slice(0, 3) : [],
+    fun_fact: clean(candidate.fun_fact),
+    difficulty: clean(candidate.difficulty || "medium") || "medium",
+    question_type: type,
+    image_url: "",
+    image_prompt: "",
+  };
+};
+
 async function handler(req, res) {
   try {
     if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
     const body = req.body || {};
     const request = clean(body.request);
     const context = body.context || {};
+    const mode = clean(body.mode);
     if (!request) return res.status(400).json({ error: "Ask the host assistant for something first" });
 
     if (!process.env.OPENAI_API_KEY) {
       return res.status(200).json({ answer: fallback(request, context) });
     }
 
+    const buildMode = mode === "build_cohost";
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -33,11 +72,14 @@ async function handler(req, res) {
       },
       body: JSON.stringify({
         model: process.env.OPENAI_HOST_ASSISTANT_MODEL || "gpt-4.1-mini",
-        temperature: 0.55,
+        temperature: buildMode ? 0.62 : 0.55,
+        response_format: buildMode ? { type: "json_object" } : undefined,
         messages: [
           {
             role: "system",
-            content: "You are Quiz Crafter's private assistant for an experienced weekly trivia host. Be concrete, host-aware, and useful. Help with show planning, rewrites, clue style, pacing, replacements, round balance, fairness, and emergency hosting decisions. Avoid generic trivia-site advice.",
+            content: buildMode
+              ? "You are Quiz Crafter's private ChatGPT-style co-host for an experienced US bar-trivia host. Help shape the current build with practical, playable, fresh-but-fair questions. Use only approved categories when they are provided. Do not invent categories. Avoid obscure deep cuts, tiny-name answers, sterile textbook facts, and questions with no clue path. Return valid JSON only."
+              : "You are Quiz Crafter's private assistant for an experienced weekly trivia host. Be concrete, host-aware, and useful. Help with show planning, rewrites, clue style, pacing, replacements, round balance, fairness, and emergency hosting decisions. Avoid generic trivia-site advice.",
           },
           {
             role: "user",
@@ -47,16 +89,33 @@ async function handler(req, res) {
                 venue: context.venue || null,
                 template: context.template || null,
                 session: context.session || null,
+                build: context.build || null,
+                approved_categories: safeList(context.approvedCategories, 80),
+                rejected_categories: safeList(context.rejectedCategories, 80),
+                recent_categories: safeList(context.recentSessionCategories, 80),
                 recent_feedback: safeList(context.feedback, 30),
                 player_ideas: safeList(context.ideas, 30),
                 questions: safeList(context.questions, 40),
               },
-              response_rules: [
-                "Answer in short, actionable sections.",
-                "If rewriting or replacing a question, provide the usable question, answer, and brief host note.",
-                "Use the host's venue/template/session memory when relevant.",
-                "Do not claim to have changed the database unless explicitly asked and tool support exists.",
-              ],
+              response_rules: buildMode
+                ? [
+                    "Return JSON with keys: answer, candidates.",
+                    "answer should be 2-5 short, actionable sentences for the host.",
+                    "candidates must be an array of 0-6 usable question objects.",
+                    "Each candidate must include category, question_text, correct_answer, incorrect_answers, fun_fact, difficulty, question_type, image_url.",
+                    "question_type must be true_false, multiple_choice, or written.",
+                    "For multiple_choice, incorrect_answers must contain exactly 3 plausible wrong answers.",
+                    "For true_false, correct_answer must be exactly True or False.",
+                    "For written, answers must be familiar/gettable enough for a live bar team.",
+                    "Use only approved_categories if any are provided.",
+                    "Do not claim to save or edit anything directly.",
+                  ]
+                : [
+                    "Answer in short, actionable sections.",
+                    "If rewriting or replacing a question, provide the usable question, answer, and brief host note.",
+                    "Use the host's venue/template/session memory when relevant.",
+                    "Do not claim to have changed the database unless explicitly asked and tool support exists.",
+                  ],
             }),
           },
         ],
@@ -67,6 +126,11 @@ async function handler(req, res) {
     if (!response.ok) throw new Error(data?.error?.message || "OpenAI request failed");
     const answer = clean(data.choices?.[0]?.message?.content);
     if (!answer) throw new Error("AI returned an empty answer");
+    if (buildMode) {
+      const parsed = parseAssistantJson(answer);
+      const candidates = Array.isArray(parsed?.candidates) ? parsed.candidates.map(normalizeCandidate).filter(Boolean).slice(0, 6) : [];
+      return res.status(200).json({ answer: clean(parsed?.answer) || "I drafted a few co-host suggestions for this build.", candidates });
+    }
     return res.status(200).json({ answer });
   } catch (error) {
     console.error("host-assistant error:", error);
