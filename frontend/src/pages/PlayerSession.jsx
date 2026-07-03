@@ -20,6 +20,8 @@ const arrayConfig = [
 ];
 
 const playerStorageKey = (sessionId) => `quiz-crafter-player-${sessionId}`;
+const playerSubmissionStorageKey = (sessionId, playerId) => `quiz-crafter-player-answers-${sessionId}-${playerId}`;
+const questionSubmissionKey = (questionIndex, questionId) => `${questionIndex}:${questionId || ""}`;
 const readJsonStorage = (storage, key) => {
   try {
     const parsed = JSON.parse(storage.getItem(key) || "null");
@@ -36,6 +38,26 @@ const saveStoredPlayer = (sessionId, player) => {
   const value = JSON.stringify(player);
   try { sessionStorage.setItem(playerStorageKey(sessionId), value); } catch { /* Ignore storage failures. */ }
   try { localStorage.setItem(playerStorageKey(sessionId), value); } catch { /* Ignore storage failures. */ }
+};
+const getStoredSubmissions = (sessionId, playerId) => {
+  if (typeof window === "undefined" || !playerId) return {};
+  return readJsonStorage(sessionStorage, playerSubmissionStorageKey(sessionId, playerId)) || readJsonStorage(localStorage, playerSubmissionStorageKey(sessionId, playerId)) || {};
+};
+const getStoredSubmission = (sessionId, playerId, questionIndex, questionId) => {
+  const submissions = getStoredSubmissions(sessionId, playerId);
+  const key = questionSubmissionKey(questionIndex, questionId);
+  return submissions[key] || null;
+};
+const saveStoredSubmission = (sessionId, playerId, payload) => {
+  if (!playerId || payload?.questionIndex === undefined) return;
+  const key = playerSubmissionStorageKey(sessionId, playerId);
+  const next = {
+    ...getStoredSubmissions(sessionId, playerId),
+    [questionSubmissionKey(payload.questionIndex, payload.questionId)]: payload,
+  };
+  const value = JSON.stringify(next);
+  try { sessionStorage.setItem(key, value); } catch { /* Ignore storage failures. */ }
+  try { localStorage.setItem(key, value); } catch { /* Ignore storage failures. */ }
 };
 const getStoredFeedback = (sessionId, name) => {
   try {
@@ -191,10 +213,6 @@ const PlayerSession = () => {
     channel
       .on("broadcast", { event: "host_state" }, ({ payload }) => {
         applyHostState(setHostState, payload);
-        setSubmitted((previous) => {
-          if (!previous) return null;
-          return previous.questionIndex === payload?.currentIndex ? previous : null;
-        });
       })
       .on("broadcast", { event: "host_mode" }, ({ payload }) => {
         if (!payload?.mode) return;
@@ -244,6 +262,17 @@ const PlayerSession = () => {
   const activeRoundName = hostState?.mode === "categories" ? (introRound?.name || currentQuestion?.roundName || "Round") : (currentQuestion?.roundName || "Round");
   const activeRoundDescription = hostState?.mode === "categories" ? (introRound?.description || "") : (roundCategories.find((round) => round.name === activeRoundName)?.description || "");
   const categoryFeedbackKey = hostState?.mode === "categories" ? (introRound?.key || hostState.currentIndex) : hostState?.currentIndex;
+  const currentQuestionIndex = hostState?.currentIndex;
+  const currentQuestionId = currentQuestion?.id;
+
+  useEffect(() => {
+    if (!player || !currentQuestionId || currentQuestionIndex === undefined) {
+      setSubmitted(null);
+      return;
+    }
+    const stored = getStoredSubmission(id, player.id, currentQuestionIndex, currentQuestionId);
+    setSubmitted(stored);
+  }, [id, player, currentQuestionIndex, currentQuestionId]);
 
   useEffect(() => {
     if (!player || !hostState || !currentQuestion || hostState.mode !== "question") return undefined;
@@ -314,6 +343,9 @@ const PlayerSession = () => {
 
   const submitAnswer = (value) => {
     if (!acceptingAnswers) return toast.error("Time is up");
+    if (submitted?.questionIndex === hostState?.currentIndex && submitted?.questionId === currentQuestion?.id) {
+      return toast.info("Answer already submitted");
+    }
     const finalAnswer = String(value || answer).trim();
     if (!finalAnswer || !player || !currentQuestion) return;
     const shouldWagerBefore = wagerMode && wagerTiming !== "after_answer";
@@ -324,6 +356,7 @@ const PlayerSession = () => {
     const awardedPoints = wagerMode ? wager : pointsPerQuestion;
     const payload = { playerId: player.id, playerName: player.name, answer: finalAnswer, points: awardedPoints, wagerAmount: wager, wagerSubmitted: !wagerMode || wagerTiming !== "after_answer", wagerMode, wagerLimit, wagerCap: effectiveWagerLimit, scoreAtWager: Number(myScore || 0), wagerTiming, questionIndex: hostState.currentIndex, questionId: currentQuestion.id, questionText: currentQuestion.questionText, ...submissionTiming(), submittedAt: new Date().toISOString() };
     channelRef.current?.send({ type: "broadcast", event: "answer_submit", payload });
+    saveStoredSubmission(id, player.id, payload);
     setSubmitted(payload);
     setAnswer("");
     toast.success("Answer submitted");
@@ -336,6 +369,7 @@ const PlayerSession = () => {
     if (wager > effectiveWagerLimit) return toast.error(`Wager up to ${effectiveWagerLimit}`);
     const payload = { ...submitted, points: wager, wagerAmount: wager, wagerSubmitted: true, wagerLimit, wagerCap: effectiveWagerLimit, scoreAtWager: Number(myScore || 0), wagerTiming, ...submissionTiming(), submittedAt: new Date().toISOString() };
     channelRef.current?.send({ type: "broadcast", event: "answer_submit", payload });
+    saveStoredSubmission(id, player.id, payload);
     setSubmitted(payload);
     toast.success("Wager submitted");
   };
