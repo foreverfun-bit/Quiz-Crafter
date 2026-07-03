@@ -13,6 +13,7 @@ import {
   ArrowLeft,
 } from "lucide-react";
 import { toast } from "sonner";
+import { canonicalCategory, dedupeCategories } from "../lib/categories";
 import { HOST_SETUP_CATEGORY, profileKeys, saveProfileValue, syncProfileJson } from "../lib/profileState";
 
 const STORAGE_KEY = "quiz-crafter-category-preferences";
@@ -40,11 +41,11 @@ const Categories = () => {
 
       if (questionsResult.error) throw questionsResult.error;
 
-      const active = new Set(categoryState.approved);
-      const rejected = new Set(categoryState.rejected);
+      const active = new Set(dedupeCategories(categoryState.approved));
+      const rejected = new Set(dedupeCategories(categoryState.rejected));
 
       (questionsResult.data || []).forEach((question) => {
-        const category = cleanCategory(question.category);
+        const category = canonicalCategory(question.category, [...active, ...rejected]);
         if (!category) return;
 
         if (isRejectedQuestionCategory(question)) {
@@ -55,8 +56,8 @@ const Categories = () => {
         }
       });
 
-      setCategories(sortCategories([...active]));
-      setDislikedCategories(sortCategories([...rejected]));
+      setCategories(sortCategories(dedupeCategories([...active])));
+      setDislikedCategories(sortCategories(dedupeCategories([...rejected])));
     } catch (error) {
       console.error("Failed to load categories:", error);
       toast.error("Failed to load categories");
@@ -66,22 +67,22 @@ const Categories = () => {
   };
 
   const handleDislike = async (category) => {
-    const clean = cleanCategory(category);
+    const clean = canonicalCategory(category, [...categories, ...dislikedCategories]);
     if (!clean) return;
 
-    setCategories((prev) => prev.filter((c) => c !== clean));
-    setDislikedCategories((prev) => sortCategories([...new Set([...prev, clean])]));
+    setCategories((prev) => prev.filter((c) => canonicalCategory(c, [clean]) !== clean));
+    setDislikedCategories((prev) => sortCategories(dedupeCategories([...prev, clean], [clean])));
 
     const saved = await saveCategoryPreference(clean, "rejected");
     toast.success(saved ? `"${clean}" hidden from future suggestions` : `"${clean}" hidden on this device`);
   };
 
   const handleRestore = async (category) => {
-    const clean = cleanCategory(category);
+    const clean = canonicalCategory(category, [...categories, ...dislikedCategories]);
     if (!clean) return;
 
-    setDislikedCategories((prev) => prev.filter((c) => c !== clean));
-    setCategories((prev) => sortCategories([...new Set([...prev, clean])]));
+    setDislikedCategories((prev) => prev.filter((c) => canonicalCategory(c, [clean]) !== clean));
+    setCategories((prev) => sortCategories(dedupeCategories([...prev, clean], [clean])));
 
     const saved = await saveCategoryPreference(clean, "approved");
     toast.success(saved ? `"${clean}" restored` : `"${clean}" restored on this device`);
@@ -230,9 +231,12 @@ async function fetchCategoryState() {
 
   try {
     const profilePrefs = await syncProfileJson({ localKey: STORAGE_KEY, profileKey: profileKeys.categoryPrefs, fallback: { approved: [], rejected: [] }, merge: "categoryPrefs" });
-    (profilePrefs.approved || []).forEach((category) => approved.add(cleanCategory(category)));
+    (profilePrefs.approved || []).forEach((category) => {
+      const clean = canonicalCategory(category, [...approved, ...rejected]);
+      if (clean) approved.add(clean);
+    });
     (profilePrefs.rejected || []).forEach((category) => {
-      const clean = cleanCategory(category);
+      const clean = canonicalCategory(category, [...approved, ...rejected]);
       if (clean) {
         rejected.add(clean);
         approved.delete(clean);
@@ -253,7 +257,7 @@ async function fetchCategoryState() {
     if (result.status !== "fulfilled" || result.value.error || !Array.isArray(result.value.data)) return;
 
     result.value.data.forEach((row) => {
-      const category = cleanCategory(row.category || row.name || row.category_name || row.value);
+      const category = canonicalCategory(row.category || row.name || row.category_name || row.value, [...approved, ...rejected]);
       if (!category) return;
       if (category === HOST_SETUP_CATEGORY) return;
 
@@ -270,20 +274,23 @@ async function fetchCategoryState() {
     });
   });
 
-  return { approved, rejected };
+  return { approved: new Set(dedupeCategories([...approved])), rejected: new Set(dedupeCategories([...rejected])) };
 }
 
 async function saveCategoryPreference(category, status) {
   const local = loadLocalPreferences();
   const target = status === "rejected" ? local.rejected : local.approved;
   const opposite = status === "rejected" ? local.approved : local.rejected;
-  target.add(category);
-  opposite.delete(category);
+  const clean = canonicalCategory(category, [...target, ...opposite]);
+  target.add(clean);
+  [...opposite].forEach((item) => {
+    if (canonicalCategory(item, [clean]) === clean) opposite.delete(item);
+  });
   saveLocalPreferences(local);
 
   const session = await supabase.auth.getSession();
   const userId = session.data?.session?.user?.id;
-  const basePayload = { category, status };
+  const basePayload = { category: clean, status };
   const payloads = userId ? [{ ...basePayload, user_id: userId }, basePayload] : [basePayload];
 
   for (const payload of payloads) {
@@ -310,8 +317,8 @@ function loadLocalPreferences() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
     return {
-      approved: new Set(Array.isArray(saved.approved) ? saved.approved : []),
-      rejected: new Set(Array.isArray(saved.rejected) ? saved.rejected : []),
+      approved: new Set(dedupeCategories(Array.isArray(saved.approved) ? saved.approved : [])),
+      rejected: new Set(dedupeCategories(Array.isArray(saved.rejected) ? saved.rejected : [])),
     };
   } catch {
     return { approved: new Set(), rejected: new Set() };
@@ -320,8 +327,8 @@ function loadLocalPreferences() {
 
 function saveLocalPreferences(preferences) {
   const prefs = {
-    approved: [...preferences.approved],
-    rejected: [...preferences.rejected],
+    approved: dedupeCategories([...preferences.approved]),
+    rejected: dedupeCategories([...preferences.rejected]),
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
   saveProfileValue(profileKeys.categoryPrefs, prefs).catch((error) => console.warn("Category profile save unavailable:", error));
@@ -342,10 +349,6 @@ function isRejectedQuestionCategory(question) {
     isTruthy(question.disliked) ||
     isTruthy(question.is_disliked)
   );
-}
-
-function cleanCategory(value) {
-  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
 }
 
 function normalizeStatus(value) {

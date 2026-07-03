@@ -96,10 +96,10 @@ export default async function handler(req, res) {
     const difficultyKey = normalizeDifficulty(difficulty);
     const difficultyProfile = DIFFICULTY_PROFILES[difficultyKey];
     const cleanTheme = typeof theme === "string" ? theme.trim() : "";
-    const cleanLockedCategories = dedupeStrings(normalizeStringArray(lockedCategories));
-    const cleanApprovedCategories = dedupeStrings([...normalizeStringArray(approvedCategories), ...cleanLockedCategories]);
-    const cleanRejectedCategories = dedupeStrings(normalizeStringArray(rejectedCategories).filter((category) => !containsCategory(cleanLockedCategories, category)));
-    const cleanExcludeCategories = dedupeStrings([...normalizeStringArray(excludeCategories), ...cleanRejectedCategories].filter((category) => !containsCategory(cleanLockedCategories, category)));
+    const cleanLockedCategories = dedupeCategoryStrings(normalizeStringArray(lockedCategories));
+    const cleanApprovedCategories = dedupeCategoryStrings([...normalizeStringArray(approvedCategories), ...cleanLockedCategories]);
+    const cleanRejectedCategories = dedupeCategoryStrings(normalizeStringArray(rejectedCategories).filter((category) => !containsCategory(cleanLockedCategories, category)));
+    const cleanExcludeCategories = dedupeCategoryStrings([...normalizeStringArray(excludeCategories), ...cleanRejectedCategories].filter((category) => !containsCategory(cleanLockedCategories, category)));
     const cleanRejectedQuestions = dedupeStrings([...normalizeStringArray(rejectedQuestions), ...normalizeStringArray(currentBatchQuestions)]);
     const cleanSessionContext = normalizeSessionContext(sessionContext);
     const requireApprovedCategories = cleanLockedCategories.length > 0 || cleanApprovedCategories.length > 0;
@@ -249,12 +249,22 @@ function dedupeStrings(values) {
   });
 }
 
+function dedupeCategoryStrings(values) {
+  const seen = new Set();
+  return values.filter((value) => {
+    const key = categoryKey(value);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function containsCategory(categories, category) {
   return categories.some((item) => categoryKey(item) === categoryKey(category));
 }
 
 function categoryKey(value) {
-  return cleanText(value).toLowerCase().replace(/[^a-z0-9]/g, "");
+  return cleanText(value).toLowerCase().replace(/[’‘`]/g, "'").replace(/\band\b/g, "&").replace(/[^a-z0-9&]+/g, "");
 }
 
 function normalizeSessionContext(value) {

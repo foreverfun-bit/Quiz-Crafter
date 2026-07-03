@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { dedupeCategories } from "./categories";
 
 export const profileKeys = {
   categoryPrefs: "quiz_crafter_category_preferences_v1",
@@ -131,8 +132,8 @@ export const syncProfileJson = async ({ localKey, profileKey, fallback, merge = 
   if (merge === "object" && isPlainObject(remoteValue) && isPlainObject(localValue)) nextValue = { ...remoteValue, ...localValue };
   if (merge === "categoryPrefs") {
     nextValue = {
-      approved: mergeArrays(remoteValue?.approved, localValue?.approved),
-      rejected: mergeArrays(remoteValue?.rejected, localValue?.rejected),
+      approved: dedupeCategories(mergeArrays(remoteValue?.approved, localValue?.approved)),
+      rejected: dedupeCategories(mergeArrays(remoteValue?.rejected, localValue?.rejected)),
     };
   }
 

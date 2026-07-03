@@ -30,6 +30,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { canonicalCategory, dedupeCategories } from "../lib/categories";
 import { memoryRejectedQuestionTexts, readQuestionMemory, saveQuestionMemoryToProfile, syncQuestionMemoryFromProfile, upsertQuestionMemory } from "../lib/questionMemory";
 import { profileKeys, saveProfileValue, syncProfileJson } from "../lib/profileState";
 
@@ -67,6 +68,7 @@ const GENERATED_HISTORY_KEY = "quiz-crafter-recent-ai-suggestions";
 const LOCKED_CATEGORY_KEY = "quiz-crafter-locked-generator-categories";
 
 const cleanList = (values) => values.map((value) => String(value || "").trim()).filter(Boolean);
+const cleanCategoryList = (values, preferred = []) => dedupeCategories(cleanList(values || []), preferred);
 const normalizeText = (value) => String(value || "").replace(/\s+/g, " ").trim();
 const fingerprint = (value) => normalizeText(value).toLowerCase().replace(/[^a-z0-9]/g, "");
 const candidateFingerprint = (candidate) => fingerprint(`${candidate?.question_text || ""} ${candidate?.correct_answer || ""}`);
@@ -81,7 +83,7 @@ const readJsonArray = (key) => {
 };
 
 const writeJsonArray = (key, values) => {
-  const list = [...new Set(values.filter(Boolean))];
+  const list = key === LOCKED_CATEGORY_KEY ? cleanCategoryList(values) : [...new Set(values.filter(Boolean))];
   localStorage.setItem(key, JSON.stringify(list));
   const profileKey = key === REJECTED_AI_KEY ? profileKeys.rejectedAi : key === GENERATED_HISTORY_KEY ? profileKeys.generatedHistory : key === LOCKED_CATEGORY_KEY ? profileKeys.lockedCategories : null;
   if (profileKey) saveProfileValue(profileKey, list).catch((error) => console.warn("Generator profile save unavailable:", error));
@@ -97,8 +99,8 @@ const readCategoryPrefs = () => {
   try {
     const parsed = JSON.parse(localStorage.getItem(CATEGORY_PREF_KEY) || "{}");
     return {
-      approved: Array.isArray(parsed.approved) ? parsed.approved : [],
-      rejected: Array.isArray(parsed.rejected) ? parsed.rejected : [],
+      approved: cleanCategoryList(Array.isArray(parsed.approved) ? parsed.approved : []),
+      rejected: cleanCategoryList(Array.isArray(parsed.rejected) ? parsed.rejected : []),
     };
   } catch {
     return { approved: [], rejected: [] };
@@ -107,8 +109,8 @@ const readCategoryPrefs = () => {
 
 const writeCategoryPrefs = ({ approved, rejected }) => {
   const prefs = {
-    approved: [...new Set(cleanList(approved || []))],
-    rejected: [...new Set(cleanList(rejected || []))],
+    approved: cleanCategoryList(approved || []),
+    rejected: cleanCategoryList(rejected || []),
   };
   localStorage.setItem(CATEGORY_PREF_KEY, JSON.stringify(prefs));
   saveProfileValue(profileKeys.categoryPrefs, prefs).catch((error) => console.warn("Category profile save unavailable:", error));
@@ -153,7 +155,7 @@ const Generate = ({ initialCreateMode = "generate" }) => {
           syncProfileJson({ localKey: REJECTED_AI_KEY, profileKey: profileKeys.rejectedAi, fallback: [], merge: "array" }),
           syncProfileJson({ localKey: GENERATED_HISTORY_KEY, profileKey: profileKeys.generatedHistory, fallback: [], merge: "array" }),
         ]);
-        setLockedCategories(Array.isArray(locked) ? locked : []);
+        setLockedCategories(cleanCategoryList(Array.isArray(locked) ? locked : []));
         setQuestionMemory(memory);
       } catch (error) {
         console.warn("Generator profile sync unavailable:", error);
@@ -179,34 +181,34 @@ const Generate = ({ initialCreateMode = "generate" }) => {
     const rejectedQuestions = [...readJsonArray(REJECTED_AI_KEY), ...memoryRejectedQuestionTexts(latestMemory), ...extraRejectedQuestions];
 
     return {
-      approvedCategories: cleanList(prefs.approved),
-      rejectedCategories: cleanList(prefs.rejected),
-      lockedCategories: cleanList(lockedCategoriesOverride || lockedCategories),
+      approvedCategories: cleanCategoryList(prefs.approved),
+      rejectedCategories: cleanCategoryList(prefs.rejected),
+      lockedCategories: cleanCategoryList(lockedCategoriesOverride || lockedCategories, prefs.approved),
       rejectedQuestions: cleanList(rejectedQuestions),
     };
   };
 
   const saveLockedCategories = (nextCategories) => {
-    const cleaned = [...new Set(cleanList(nextCategories))];
+    const cleaned = cleanCategoryList(nextCategories, readCategoryPrefs().approved);
     setLockedCategories(cleaned);
     writeJsonArray(LOCKED_CATEGORY_KEY, cleaned);
   };
 
   const handleLockCategory = (category) => {
-    const cleanCategory = normalizeText(category);
+    const prefs = readCategoryPrefs();
+    const cleanCategory = canonicalCategory(category, [...prefs.approved, ...prefs.rejected, ...lockedCategories]);
     if (!cleanCategory) return;
 
-    const prefs = readCategoryPrefs();
-    const approved = [...prefs.approved.filter((item) => item.toLowerCase() !== cleanCategory.toLowerCase()), cleanCategory];
-    const rejected = prefs.rejected.filter((item) => item.toLowerCase() !== cleanCategory.toLowerCase());
+    const approved = cleanCategoryList([...prefs.approved.filter((item) => canonicalCategory(item, [cleanCategory]) !== cleanCategory), cleanCategory], [cleanCategory]);
+    const rejected = prefs.rejected.filter((item) => canonicalCategory(item, [cleanCategory]) !== cleanCategory);
     writeCategoryPrefs({ approved, rejected });
     saveLockedCategories([...lockedCategories, cleanCategory]);
     toast.success(`${cleanCategory} locked for generation`);
   };
 
   const handleUnlockCategory = (category) => {
-    const cleanCategory = normalizeText(category);
-    saveLockedCategories(lockedCategories.filter((item) => item.toLowerCase() !== cleanCategory.toLowerCase()));
+    const cleanCategory = canonicalCategory(category, lockedCategories);
+    saveLockedCategories(lockedCategories.filter((item) => canonicalCategory(item, [cleanCategory]) !== cleanCategory));
     toast.success(`${cleanCategory} unlocked`);
   };
 
