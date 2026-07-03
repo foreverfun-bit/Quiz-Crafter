@@ -670,6 +670,7 @@ const HostSession = () => {
       revealedAnswer: showAnswerValue ? question.answer : "",
       showFunFact: showFunFactValue,
       leaderboard: presentationLeaderboard(leaderboard, mode),
+      playerScores: [...leaderboard].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)).map((team) => ({ id: team.id, name: team.name, score: Number(team.score || 0) })),
       playerCount: players.length,
       pointsPerQuestion: activePoints,
       wagerMode: wagerModeValue,

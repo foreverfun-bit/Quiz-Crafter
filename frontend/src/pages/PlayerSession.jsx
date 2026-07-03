@@ -142,7 +142,18 @@ const hasGameStarted = (hostState) => {
   if (hostState.showAnswer || hostState.showFunFact) return true;
   return Number(hostState.currentIndex || 0) > 0;
 };
-const getCurrentQuestionPoints = (hostState, currentQuestion) => Number(currentQuestion?.questionPoints ?? currentQuestion?.points ?? hostState?.pointsPerQuestion ?? 1) || 1;
+const POINTS_BY_TYPE = { true_false: 25, multiple_choice: 50, written: 100 };
+const getDefaultPoints = (question) => POINTS_BY_TYPE[question?.type] || 100;
+const positiveNumber = (value) => {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+};
+const getCurrentQuestionPoints = (hostState, currentQuestion) => (
+  positiveNumber(currentQuestion?.questionPoints)
+  ?? positiveNumber(hostState?.pointsPerQuestion)
+  ?? positiveNumber(currentQuestion?.points)
+  ?? getDefaultPoints(currentQuestion)
+);
 
 const PlayerSession = () => {
   const { id } = useParams();
@@ -237,7 +248,7 @@ const PlayerSession = () => {
   }, [id, player]);
 
   const currentQuestion = useMemo(() => (hostState?.currentQuestion ? { ...hostState.currentQuestion, answer: hostState.showAnswer ? (hostState.revealedAnswer || hostState.currentQuestion.answer || "") : "" } : null), [hostState]);
-  const leaderboard = useMemo(() => [...(hostState?.leaderboard || [])].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)), [hostState]);
+  const leaderboard = useMemo(() => [...(hostState?.playerScores || hostState?.leaderboard || [])].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)), [hostState]);
   const roundCategories = useMemo(() => buildRoundCategories(session), [session]);
   const branding = useMemo(() => mergeBranding(session, hostState), [session, hostState]);
   const myScore = leaderboard.find((team) => team.id === player?.id)?.score || 0;
@@ -354,7 +365,7 @@ const PlayerSession = () => {
     if (shouldWagerBefore && requestedWager > effectiveWagerLimit) return toast.error(`Wager up to ${effectiveWagerLimit}`);
     const wager = shouldWagerBefore ? requestedWager : 0;
     const awardedPoints = wagerMode ? wager : pointsPerQuestion;
-    const payload = { playerId: player.id, playerName: player.name, answer: finalAnswer, points: awardedPoints, wagerAmount: wager, wagerSubmitted: !wagerMode || wagerTiming !== "after_answer", wagerMode, wagerLimit, wagerCap: effectiveWagerLimit, scoreAtWager: Number(myScore || 0), wagerTiming, questionIndex: hostState.currentIndex, questionId: currentQuestion.id, questionText: currentQuestion.questionText, ...submissionTiming(), submittedAt: new Date().toISOString() };
+    const payload = { playerId: player.id, playerName: player.name, answer: finalAnswer, points: awardedPoints, questionPoints: pointsPerQuestion, pointsPerQuestion, wagerAmount: wager, wagerSubmitted: !wagerMode || wagerTiming !== "after_answer", wagerMode, wagerLimit, wagerCap: effectiveWagerLimit, scoreAtWager: Number(myScore || 0), wagerTiming, questionIndex: hostState.currentIndex, questionId: currentQuestion.id, questionText: currentQuestion.questionText, ...submissionTiming(), submittedAt: new Date().toISOString() };
     channelRef.current?.send({ type: "broadcast", event: "answer_submit", payload });
     saveStoredSubmission(id, player.id, payload);
     setSubmitted(payload);
