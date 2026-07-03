@@ -512,6 +512,8 @@ const QuestionView = ({ question, index, total, showAnswer, showFunFact }) => {
   const shouldShowImage = Boolean(imageUrl) && revealTiming !== "after_answer";
   const shouldShowFunFactImage = Boolean(imageUrl) && revealTiming === "after_answer" && showFunFact;
   const funFactOnly = Boolean(showFunFact && (question.funFact || shouldShowFunFactImage));
+  const imageRevealed = Boolean(showAnswer || showFunFact);
+  const questionImageClass = imageRevealed ? "max-h-[30vh] max-w-[min(760px,100%)]" : "max-h-[54vh] w-full max-w-[min(1100px,100%)]";
 
   return (
     <div className="h-full w-full max-w-6xl">
@@ -536,7 +538,7 @@ const QuestionView = ({ question, index, total, showAnswer, showFunFact }) => {
             </div>
           ) : (
             <>
-              {shouldShowImage && <div className="mb-3 flex justify-center"><img src={imageUrl} alt="Question" className="max-h-[28vh] max-w-full rounded-lg border border-white/10 object-contain" /></div>}
+              {shouldShowImage && <div className="mb-3 flex justify-center"><img src={imageUrl} alt="Question" className={`${questionImageClass} rounded-lg border border-white/10 object-contain transition-[max-height,width] duration-300`} /></div>}
 
               <h2 className="text-3xl lg:text-5xl font-black leading-tight text-white text-center mb-4">{question.questionText}</h2>
 
