@@ -6,7 +6,7 @@ import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { CalendarDays, Clock, Copy, Layers, MapPin, Plus, Save, Sparkles, Trash2, Trophy, Users } from "lucide-react";
 import { toast } from "sonner";
-import { PROFILE_SHOW_TEMPLATES_KEY, PROFILE_VENUES_KEY, SHOW_TEMPLATES_STORAGE_KEY, defaultShowTemplates, mergeProfileRecords, normalizeTemplate, normalizeVenue, readLocalTemplates, readLocalVenues, recordsChanged, writeLocalTemplates, writeLocalVenues, writeTemplateBuildDraft } from "../lib/venues";
+import { PROFILE_SHOW_TEMPLATES_KEY, PROFILE_VENUES_KEY, SHOW_TEMPLATES_STORAGE_KEY, defaultShowTemplates, hasSavedLocalTemplates, mergeProfileRecords, normalizeTemplate, normalizeVenue, readLocalTemplates, readLocalVenues, recordsChanged, writeLocalTemplates, writeLocalVenues, writeTemplateBuildDraft } from "../lib/venues";
 import { loadHostSetupSettings, saveHostSetupSettings, updateUserMetadata } from "../lib/profileState";
 
 const metadataTemplatesKey = PROFILE_SHOW_TEMPLATES_KEY;
@@ -79,7 +79,8 @@ const ShowTemplates = ({ embedded = false }) => {
         const setupVenues = Array.isArray(setupSettings.venues) ? setupSettings.venues.map(normalizeVenue) : [];
         const normalizedRemoteTemplates = Array.isArray(remoteTemplates) ? remoteTemplates.map(normalizeTemplate) : [];
         const normalizedRemoteVenues = Array.isArray(remoteVenues) ? remoteVenues.map(normalizeVenue) : [];
-        const normalized = mergeProfileRecords([...setupTemplates, ...normalizedRemoteTemplates], localTemplates, normalizeTemplate);
+        const savedLocalTemplates = hasSavedLocalTemplates() ? localTemplates : [];
+        const normalized = mergeProfileRecords([...setupTemplates, ...normalizedRemoteTemplates], savedLocalTemplates, normalizeTemplate);
         const profileVenues = mergeProfileRecords([...setupVenues, ...normalizedRemoteVenues], localVenues, normalizeVenue);
         setTemplates(normalized);
         setVenues(profileVenues);

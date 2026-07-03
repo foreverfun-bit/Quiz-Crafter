@@ -207,6 +207,17 @@ export const defaultShowTemplates = [
   },
 ];
 
+const defaultTemplateIds = new Set(defaultShowTemplates.map((template) => template.id));
+export const isDefaultTemplateId = (id) => defaultTemplateIds.has(id);
+export const hasSavedLocalTemplates = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SHOW_TEMPLATES_STORAGE_KEY) || "null");
+    return Array.isArray(parsed);
+  } catch {
+    return false;
+  }
+};
+
 export const normalizeTemplate = (template = {}) => {
   const source = template && typeof template === "object" ? template : {};
   const roundCount = Math.max(1, Math.min(12, Number(source.roundCount || 5)));
@@ -226,14 +237,14 @@ export const normalizeTemplate = (template = {}) => {
     roundNames: Array.from({ length: roundCount }, (_, index) => String(source.roundNames?.[index] || (index === roundCount - 1 ? "Final Round" : `Round ${index + 1}`)).trim()),
     roundDescriptions: Array.from({ length: roundCount }, (_, index) => String(source.roundDescriptions?.[index] || "").trim()),
     hostNotes: String(source.hostNotes || "").trim(),
-    updatedAt: source.updatedAt || new Date().toISOString(),
+    updatedAt: source.updatedAt || (isDefaultTemplateId(source.id) ? "" : new Date().toISOString()),
   };
 };
 
 export const readLocalTemplates = () => {
   try {
     const parsed = JSON.parse(localStorage.getItem(SHOW_TEMPLATES_STORAGE_KEY) || "null");
-    const source = Array.isArray(parsed) && parsed.length ? parsed : defaultShowTemplates;
+    const source = Array.isArray(parsed) ? parsed : defaultShowTemplates;
     return source.map(normalizeTemplate);
   } catch {
     return defaultShowTemplates.map(normalizeTemplate);
@@ -259,7 +270,7 @@ export const mergeProfileRecords = (remoteRecords, localRecords, normalize) => {
     const normalized = normalize(record);
     const key = normalized.id;
     const current = map.get(key);
-    if (!current || itemUpdatedTime(normalized) >= itemUpdatedTime(current)) {
+    if (!current || itemUpdatedTime(normalized) > itemUpdatedTime(current)) {
       map.set(key, normalized);
     }
   };

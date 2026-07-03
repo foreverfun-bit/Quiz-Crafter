@@ -71,14 +71,18 @@ const parseSetupStatus = (value) => {
 };
 
 const mergeSetupSettings = (primary, mirror) => {
+  const primaryTime = new Date(primary?.updatedAt || 0).getTime() || 0;
+  const mirrorTime = new Date(mirror?.updatedAt || 0).getTime() || 0;
+  const preferMirror = mirrorTime > primaryTime;
   const next = { ...(isPlainObject(primary) ? primary : {}), ...(isPlainObject(mirror) ? mirror : {}) };
   ["venues", "templates"].forEach((key) => {
     const primaryList = Array.isArray(primary?.[key]) ? primary[key] : [];
     const mirrorList = Array.isArray(mirror?.[key]) ? mirror[key] : [];
-    if (mirrorList.length) next[key] = mirrorList;
+    if (preferMirror && mirrorList.length) next[key] = mirrorList;
     else if (primaryList.length) next[key] = primaryList;
+    else if (mirrorList.length) next[key] = mirrorList;
   });
-  next.activeVenueId = mirror?.activeVenueId || primary?.activeVenueId || next.activeVenueId || "";
+  next.activeVenueId = preferMirror ? (mirror?.activeVenueId || primary?.activeVenueId || next.activeVenueId || "") : (primary?.activeVenueId || mirror?.activeVenueId || next.activeVenueId || "");
   return next;
 };
 

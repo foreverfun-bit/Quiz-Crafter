@@ -13,7 +13,7 @@ import { Badge } from "../components/ui/badge";
 import { ArrowDown, ArrowUp, Ban, Check, CheckCircle, ChevronDown, Clock, Coins, Image, Layers, Link, List, Loader2, MessageSquare, Minus, Pencil, Plus, RefreshCw, Save, Search, Settings, Sparkles, Tag, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { canonicalCategory, categoryKey, dedupeCategories } from "../lib/categories";
-import { PROFILE_SHOW_TEMPLATES_KEY, PROFILE_VENUES_KEY, makeTemplateBuildDraft, mergeProfileRecords, normalizeTemplate, normalizeVenue, readActiveVenueId, readLocalTemplates, readLocalVenues, readVenueBuildDraft, recordsChanged, VENUE_BUILD_DRAFT_KEY, writeLocalTemplates, writeLocalVenues, writeTemplateBuildDraft } from "../lib/venues";
+import { PROFILE_SHOW_TEMPLATES_KEY, PROFILE_VENUES_KEY, hasSavedLocalTemplates, makeTemplateBuildDraft, mergeProfileRecords, normalizeTemplate, normalizeVenue, readActiveVenueId, readLocalTemplates, readLocalVenues, readVenueBuildDraft, recordsChanged, VENUE_BUILD_DRAFT_KEY, writeLocalTemplates, writeLocalVenues, writeTemplateBuildDraft } from "../lib/venues";
 import { isMemoryBlocked, memoryRejectedQuestionTexts, readQuestionMemory, saveQuestionMemoryToProfile, syncQuestionMemoryFromProfile, upsertQuestionMemory } from "../lib/questionMemory";
 import { loadHostSetupSettings, profileKeys, saveHostSetupSettings, saveProfileValue, syncProfileJson, updateUserMetadata } from "../lib/profileState";
 
@@ -375,7 +375,8 @@ const BuildSession = () => {
         const setupVenues = Array.isArray(setupSettings.venues) ? setupSettings.venues.map(normalizeVenue) : [];
         const remoteTemplates = Array.isArray(metadata[PROFILE_SHOW_TEMPLATES_KEY]) ? metadata[PROFILE_SHOW_TEMPLATES_KEY].map(normalizeTemplate) : [];
         const remoteVenues = Array.isArray(metadata[PROFILE_VENUES_KEY]) ? metadata[PROFILE_VENUES_KEY].map(normalizeVenue) : [];
-        const mergedTemplates = mergeProfileRecords([...setupTemplates, ...remoteTemplates], localTemplates, normalizeTemplate);
+        const savedLocalTemplates = hasSavedLocalTemplates() ? localTemplates : [];
+        const mergedTemplates = mergeProfileRecords([...setupTemplates, ...remoteTemplates], savedLocalTemplates, normalizeTemplate);
         const mergedVenues = mergeProfileRecords([...setupVenues, ...remoteVenues], localVenues, normalizeVenue);
         if (mergedTemplates.length) {
           setTemplates(mergedTemplates);
