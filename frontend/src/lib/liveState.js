@@ -14,7 +14,10 @@ export const mergeNewerLiveState = (current, incoming) => {
   const incomingOrder = liveStateOrder(incoming);
   const currentOrder = liveStateOrder(current);
   if (incomingOrder.sequence || currentOrder.sequence) {
-    return incomingOrder.sequence > currentOrder.sequence ? { ...(current || {}), ...incoming } : current;
+    if (incomingOrder.sequence > currentOrder.sequence) return { ...(current || {}), ...incoming };
+    if (incomingOrder.sequence < currentOrder.sequence && incomingOrder.timestamp > currentOrder.timestamp) return { ...(current || {}), ...incoming };
+    if (incomingOrder.sequence === currentOrder.sequence && incomingOrder.timestamp > currentOrder.timestamp) return { ...(current || {}), ...incoming };
+    return current;
   }
   return incomingOrder.timestamp > currentOrder.timestamp ? { ...(current || {}), ...incoming } : current;
 };

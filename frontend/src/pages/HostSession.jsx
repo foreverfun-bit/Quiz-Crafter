@@ -435,6 +435,7 @@ const HostSession = () => {
         if (error) throw error;
         setSession(data);
         hostedResultsRef.current = data?.hosted_results && typeof data.hosted_results === "object" && !Array.isArray(data.hosted_results) ? data.hosted_results : {};
+        liveStateSequenceRef.current = Math.max(liveStateSequenceRef.current, Number(hostedResultsRef.current?.liveState?.liveSequence || 0));
         setBranding(readStoredBranding(id, data));
       } catch (error) {
         console.error("Host session load error:", error);

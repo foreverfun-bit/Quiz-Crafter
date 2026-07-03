@@ -44,4 +44,15 @@ describe("live presentation state ordering", () => {
       currentQuestion: { questionText: "Name this founding Father." },
     });
   });
+
+  it("allows a newer host reload state even if its sequence restarted lower", () => {
+    const oldPause = state("2026-06-24T18:00:05.000Z", { liveSequence: 42, mode: "bonus_pause", currentIndex: 9, pendingBonusIndex: 9 });
+    const reloadedHostQuestion = state("2026-06-24T18:01:05.000Z", { liveSequence: 1, mode: "question", currentIndex: 9, pendingBonusIndex: null, currentQuestion: { questionText: "Name this founding Father." } });
+
+    expect(mergeNewerLiveState(oldPause, reloadedHostQuestion)).toMatchObject({
+      liveSequence: 1,
+      mode: "question",
+      pendingBonusIndex: null,
+    });
+  });
 });
