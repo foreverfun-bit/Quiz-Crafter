@@ -39,6 +39,41 @@ const parseAnswerOptions = (value) => Array.isArray(value) ? value.map((x) => St
 const normalizeText = (value) => String(value || "").replace(/\s+/g, " ").trim();
 const fingerprint = (value) => normalizeText(value).toLowerCase().replace(/[^a-z0-9]/g, "");
 const cleanList = (values) => values.map((value) => normalizeText(value)).filter(Boolean);
+const lowerText = (value) => normalizeText(value).toLowerCase();
+const parseQuestionNumber = (value) => {
+  const match = lowerText(value).match(/\b(?:q|question)\s*#?\s*(\d+)\b/) || lowerText(value).match(/\breplace\s+(\d+)\b/) || lowerText(value).match(/\b(?:make|rewrite|improve|edit)\s+(?:this\s+)?(?:question\s*)?(\d+)\b/);
+  return match ? Math.max(1, Number(match[1]) || 1) : null;
+};
+const parseRoundNumber = (value) => {
+  const match = lowerText(value).match(/\bround\s*(\d+)\b/);
+  return match ? Math.max(1, Number(match[1]) || 1) : null;
+};
+const parseRequestedCount = (value, fallback = 3) => {
+  const match = lowerText(value).match(/\b(?:add|build|give|find|generate|make)\s+(\d{1,2})\b/) || lowerText(value).match(/\b(\d{1,2})\s+(?:questions|candidates|replacements)\b/);
+  return Math.max(1, Math.min(20, match ? Number(match[1]) || fallback : fallback));
+};
+const parseRequestedType = (value, fallback = null) => {
+  const text = lowerText(value);
+  if (/\b(t\/f|true\s*\/?\s*false|true false)\b/.test(text)) return "true_false";
+  if (/\b(mc|multiple choice|multiple-choice)\b/.test(text)) return "multiple_choice";
+  if (/\b(written|free response|free-response|write in|write-in)\b/.test(text)) return "written";
+  return fallback;
+};
+const classifyBuildIntent = (value) => {
+  const text = lowerText(value);
+  if (/\b(import|upload|pdf|csv)\b/.test(text)) return "import_file";
+  if (/\bfull session|finish (?:the )?(?:session|game)|complete (?:the )?(?:session|game)\b/.test(text)) return "generate_full_session";
+  if (/\bbuild\s+(?:this\s+)?round|fill\s+(?:this\s+)?round|finish\s+(?:this\s+)?round\b/.test(text)) return "generate_round";
+  if (/\b(replace|replacement|replacements)\b/.test(text)) return "replace_question";
+  if (/\b(search|find|library|saved question)\b/.test(text)) return "search_library";
+  if (/\bfun fact|funfact\b/.test(text)) return "add_fun_fact";
+  if (/\b(harder|more difficult|tougher)\b/.test(text)) return "make_harder";
+  if (/\b(easier|less hard|less obscure|more gettable|too hard)\b/.test(text)) return "make_easier";
+  if (/\b(rewrite|improve|clean up|polish|wording|make this|convert)\b/.test(text)) return "rewrite_question";
+  if (/\b(add|generate|give me|make)\b/.test(text) && /\b(question|questions|candidate|candidates)\b/.test(text)) return "add_questions";
+  if (/\b(review|feedback|what feels|missing|repetitive|cohost|co-host|help)\b/.test(text)) return "explain_or_cohost_feedback";
+  return "general_help";
+};
 const createDefaultRounds = () => defaultRounds.map((round) => ({ ...round, questionIds: [...round.questionIds] }));
 const normalizeRoundQuestionSettings = (value) => {
   const source = value && typeof value === "object" ? value : {};
@@ -247,6 +282,11 @@ const BuildSession = () => {
   const [cohostAnswer, setCohostAnswer] = useState("");
   const [cohostMessages, setCohostMessages] = useState([]);
   const [cohostCandidates, setCohostCandidates] = useState([]);
+  const [builderChatInput, setBuilderChatInput] = useState("");
+  const [builderChatMessages, setBuilderChatMessages] = useState([{ role: "assistant", content: "Tell me what you want to build. I can generate, search your library, rewrite a question, replace something, add fun facts, or finish the session from here." }]);
+  const [builderChatLoading, setBuilderChatLoading] = useState(false);
+  const [builderUndoSnapshot, setBuilderUndoSnapshot] = useState(null);
+  const [chatPreview, setChatPreview] = useState(null);
   const [writeForm, setWriteForm] = useState(emptyWriteForm);
   const [mediaQuestionId, setMediaQuestionId] = useState(null);
   const [settingsQuestionId, setSettingsQuestionId] = useState(null);
@@ -473,7 +513,7 @@ const BuildSession = () => {
   };
   const handleSaveQuestionToLibrary = async (question) => { if (!user?.id) { toast.error("You must be signed in"); return false; } const type = normalizeType(question); const basePayload = { user_id: user.id, question_text: question.question_text, correct_answer: question.correct_answer, question_type: type, category: question.category || "", incorrect_answers: Array.isArray(question.options) && question.options.length ? question.options.join("; ") : question.incorrect_answers || null, fun_fact: question.fun_fact || null, image_url: question.image_url || null }; const attempts = [basePayload, (({ image_url, ...rest }) => rest)(basePayload), (({ image_url, fun_fact, ...rest }) => rest)(basePayload), (({ image_url, fun_fact, incorrect_answers, ...rest }) => rest)(basePayload)]; try { let saved = null; let lastError = null; for (const payload of attempts) { const { data, error } = await supabase.from("questions").insert(payload).select("*").single(); if (!error) { saved = data; break; } lastError = error; if (!String(error.message || "").includes("column")) break; } if (!saved) throw lastError || new Error("Failed to save question"); setQuestions((prev) => [normalizeQuestion(saved, saved.question_type, approvedCategories), ...prev]); toast.success("Saved to library"); return true; } catch (error) { console.error("Save question to library error:", error); toast.error(error.message || "Failed to save to library"); return false; } };
   const handleAddCustomQuestion = () => { const type = normalizeType(writeForm); const questionText = normalizeText(writeForm.question_text); const correctAnswer = normalizeText(writeForm.correct_answer); const category = normalizeText(writeForm.category); const wrongAnswers = cleanList(writeForm.incorrect_answers).filter((answer) => answer.toLowerCase() !== correctAnswer.toLowerCase()); if (!questionText || !correctAnswer || !category) return toast.error("Question, category, and answer are required"); if (type === "multiple_choice" && wrongAnswers.length < 2) return toast.error("Add at least two wrong answers for multiple choice"); const normalizedAnswer = type === "true_false" ? (correctAnswer.toLowerCase() === "false" ? "False" : "True") : correctAnswer; const newQuestion = applyDraftDefaults(normalizeQuestion({ id: `custom-${Date.now()}`, question_type: type, category, question_text: questionText, correct_answer: normalizedAnswer, incorrect_answers: type === "multiple_choice" ? wrongAnswers.join("; ") : type === "true_false" ? (normalizedAnswer === "False" ? "True" : "False") : null, fun_fact: writeForm.fun_fact, image_url: writeForm.image_url, image_timing: writeForm.image_timing }, type, approvedCategories)); setQuestions((prev) => [newQuestion, ...prev]); setRounds((prev) => prev.map((round) => round.id === activeRound.id ? { ...round, questionIds: [...(round.questionIds || []), newQuestion.id] } : round)); setWriteForm(emptyWriteForm); setShowWriteForm(false); toast.success("Question added to round"); };
-  const requestGeneratedQuestions = async ({ replacement = null, rejectCurrent = false, difficultyOverride = null, themeOverride = null, allowCurrentCategory = false, lockedCategoriesOverride = [], typeOverride = null, avoidDuplicatesOverride = true } = {}) => { const count = replacement ? 1 : Math.max(1, Math.min(20, Number(generateCount) || 3)); const type = typeOverride || (replacement ? normalizeType(replacement) : generateType); const latestMemory = readQuestionMemory(); setQuestionMemory(latestMemory); const rejectedQuestions = new Set([...rejectedAi, ...memoryRejectedQuestionTexts(latestMemory)]); if (rejectCurrent && replacement?.question_text) rejectedQuestions.add(replacement.question_text); const categoryExclusions = allowCurrentCategory && replacement ? selectedSessionCategories.filter((category) => categoryKey(category) !== categoryKey(replacement.category)) : selectedSessionCategories; const { excludedCategories, approvedPool } = buildApprovedCategoryScope({ softExclusions: categoryExclusions, lockedCategories: lockedCategoriesOverride }); return axios.post("/api/generate-session-candidates", { sessionId: `build-${activeRound.id}`, questionType: type, count, difficulty: difficultyOverride || difficulty, theme: themeOverride ?? theme, excludeUsed: true, avoidDuplicates: avoidDuplicatesOverride, includeImagePrompt: false, excludeCategories: excludedCategories, approvedCategories: approvedPool, rejectedCategories, lockedCategories: uniqueCategories(lockedCategoriesOverride), rejectedQuestions: [...rejectedQuestions], sessionContext: buildAiSessionContext() }, { timeout: 90000 }); };
+  const requestGeneratedQuestions = async ({ replacement = null, rejectCurrent = false, difficultyOverride = null, themeOverride = null, allowCurrentCategory = false, lockedCategoriesOverride = [], typeOverride = null, countOverride = null, roundOverride = null, avoidDuplicatesOverride = true } = {}) => { const targetRound = roundOverride || activeRound; const count = replacement ? 1 : Math.max(1, Math.min(20, Number(countOverride ?? generateCount) || 3)); const type = typeOverride || (replacement ? normalizeType(replacement) : generateType); const latestMemory = readQuestionMemory(); setQuestionMemory(latestMemory); const rejectedQuestions = new Set([...rejectedAi, ...memoryRejectedQuestionTexts(latestMemory)]); if (rejectCurrent && replacement?.question_text) rejectedQuestions.add(replacement.question_text); const categoryExclusions = allowCurrentCategory && replacement ? selectedSessionCategories.filter((category) => categoryKey(category) !== categoryKey(replacement.category)) : selectedSessionCategories; const { excludedCategories, approvedPool } = buildApprovedCategoryScope({ softExclusions: categoryExclusions, lockedCategories: lockedCategoriesOverride }); return axios.post("/api/generate-session-candidates", { sessionId: `build-${targetRound.id}`, questionType: type, count, difficulty: difficultyOverride || difficulty, theme: themeOverride ?? theme, excludeUsed: true, avoidDuplicates: avoidDuplicatesOverride, includeImagePrompt: false, excludeCategories: excludedCategories, approvedCategories: approvedPool, rejectedCategories, lockedCategories: uniqueCategories(lockedCategoriesOverride), rejectedQuestions: [...rejectedQuestions], sessionContext: buildAiSessionContext() }, { timeout: 90000 }); };
   const normalizeGeneratedCandidates = (candidates, roundId, fallbackType) => (Array.isArray(candidates) ? candidates : []).map((candidate, index) => applyDraftDefaults(normalizeQuestion({ ...candidate, id: `ai-${roundId}-${Date.now()}-${index}`, question_type: candidate.question_type || fallbackType, isGenerated: true }, fallbackType, approvedCategories)));
   const normalizeCoHostCandidates = (candidates) => (Array.isArray(candidates) ? candidates : []).map((candidate, index) => {
     const type = normalizeType(candidate, generateType);
@@ -530,7 +570,7 @@ const BuildSession = () => {
   };
   const handleAssistWriteQuestion = async () => { setDraftGenerating(true); try { const type = normalizeType(writeForm); const assistTheme = [theme, writeForm.category ? `Use category: ${writeForm.category}` : "", writeForm.question_text ? `Use or improve this idea: ${writeForm.question_text}` : ""].filter(Boolean).join("\n"); const writeCategory = normalizeText(writeForm.category); const draftCategoryExclusions = writeCategory ? selectedSessionCategories.filter((category) => categoryKey(category) !== categoryKey(writeCategory)) : selectedSessionCategories; const { excludedCategories: draftExcludedCategories, approvedPool: draftApprovedPool } = buildApprovedCategoryScope({ softExclusions: draftCategoryExclusions, lockedCategories: writeCategory ? [writeCategory] : [] }); const { data } = await axios.post("/api/generate-session-candidates", { sessionId: `write-${activeRound.id}`, questionType: type, count: 1, difficulty, theme: assistTheme, excludeUsed: true, avoidDuplicates: true, includeImagePrompt: false, excludeCategories: draftExcludedCategories, approvedCategories: draftApprovedPool, rejectedCategories, lockedCategories: writeCategory ? [writeCategory] : [], rejectedQuestions: [...rejectedAi] }, { timeout: 90000 }); const candidate = normalizeGeneratedCandidates(data?.candidates, activeRound.id, type)[0]; if (!candidate) throw new Error("No AI draft came back. Try adding a category or theme."); const wrongAnswers = candidate.options?.length ? candidate.options : parseAnswerOptions(candidate.incorrect_answers); setWriteForm((prev) => ({ ...prev, question_type: type, category: candidate.category || prev.category, question_text: candidate.question_text || prev.question_text, correct_answer: candidate.correct_answer || prev.correct_answer, incorrect_answers: type === "multiple_choice" ? [...wrongAnswers, "", "", ""].slice(0, 3) : prev.incorrect_answers, fun_fact: candidate.fun_fact || prev.fun_fact, image_url: candidate.image_url || prev.image_url, image_timing: prev.image_timing || "initial" })); toast.success("AI draft added"); } catch (error) { console.error("Free write AI assist error:", error); toast.error(error.response?.data?.error || error.message || "Failed to draft question"); } finally { setDraftGenerating(false); } };
   const handleAskCoHost = async () => { const request = normalizeText(cohostPrompt); if (!request) return toast.error("Ask the co-host what you need help with"); const nextMessages = [...cohostMessages, { role: "user", content: request }].slice(-10); setCohostMessages(nextMessages); setCohostPrompt(""); setCohostLoading(true); try { const { excludedCategories, approvedPool } = buildApprovedCategoryScope({ softExclusions: selectedSessionCategories }); const { data } = await axios.post("/api/host-assistant", { mode: "build_cohost", request, context: { session: { name: sessionName, session_date: sessionDate, difficulty, activeRound: activeRound.name, targetType: generateType }, build: buildAiSessionContext(), approvedCategories: approvedPool.length ? approvedPool : approvedCategories, rejectedCategories: uniqueCategories([...rejectedCategories, ...excludedCategories]), recentSessionCategories, conversation: nextMessages, questions: activeRoundQuestions.map((question) => ({ category: question.category, question_text: question.question_text, correct_answer: question.correct_answer, question_type: normalizeType(question) })) } }, { timeout: 90000 }); const reply = data?.answer || "I drafted a few suggestions for this round."; setCohostAnswer(reply); setCohostMessages((prev) => [...prev, { role: "assistant", content: reply }].slice(-12)); setCohostCandidates(normalizeCoHostCandidates(data?.candidates)); toast.success("Co-host response ready"); } catch (error) { console.error("AI co-host error:", error); setCohostMessages((prev) => [...prev, { role: "assistant", content: "I could not finish that request. Try asking again with a tighter direction or fewer requested questions." }].slice(-12)); toast.error(error.response?.data?.error || error.message || "Failed to ask the co-host"); } finally { setCohostLoading(false); } };
-  const addGeneratedToRound = (generated, replacement = null) => { setQuestions((prev) => [...generated, ...prev.filter((q) => !replacement || String(q.id) !== String(replacement.id))]); setRounds((prev) => prev.map((round) => { if (round.id !== activeRound.id) return round; const current = round.questionIds || []; const withoutReplacement = replacement ? current.filter((id) => String(id) !== String(replacement.id)) : current; return { ...round, questionIds: [...withoutReplacement, ...generated.map((q) => q.id)] }; })); };
+  const addGeneratedToRound = (generated, replacement = null, targetRoundId = activeRound.id) => { setQuestions((prev) => [...generated, ...prev.filter((q) => !replacement || String(q.id) !== String(replacement.id))]); setRounds((prev) => prev.map((round) => { if (round.id !== targetRoundId) return round; const current = round.questionIds || []; const withoutReplacement = replacement ? current.filter((id) => String(id) !== String(replacement.id)) : current; return { ...round, questionIds: [...withoutReplacement, ...generated.map((q) => q.id)] }; })); };
   const rejectAiCandidate = (question, note = "Rejected from AI pop-up") => { const nextRejectedAi = new Set(rejectedAi); nextRejectedAi.add(fingerprint(question.question_text)); setRejectedAi(nextRejectedAi); saveRejectedAi(nextRejectedAi); const nextMemory = upsertQuestionMemory(question, { status: "too_common", note }, readQuestionMemory()); setQuestionMemory(nextMemory); saveQuestionMemoryToProfile(supabase, nextMemory).catch((error) => console.warn("Question memory profile save unavailable:", error)); };
   const handleGenerateForRound = async () => { setGenerating(true); try { const { data } = await requestGeneratedQuestions(); const generated = normalizeGeneratedCandidates(data?.candidates, activeRound.id, generateType); if (!generated.length) throw new Error("No candidates returned. Try approving more categories or changing the AI direction."); setAiCandidates(generated); toast.success(`Generated ${generated.length} candidate${generated.length === 1 ? "" : "s"}`); } catch (error) { console.error("Round generate error:", error); toast.error(error.response?.data?.error || error.message || "Failed to generate questions"); } finally { setGenerating(false); } };
   const handleBuildFullSession = async ({ onlyRoundId = null } = {}) => {
@@ -632,6 +672,121 @@ const BuildSession = () => {
     setShowLibrary(false);
     toast.success(`Started from ${template.name}`);
   };
+  const createUndoSnapshot = (label = "AI action") => setBuilderUndoSnapshot({ label, questions: safeQuestions(questions), rounds: normalizeRounds(rounds), activeRoundId, theme, difficulty, aiCandidates: safeQuestions(aiCandidates), time: Date.now() });
+  const restoreBuilderUndo = () => {
+    if (!builderUndoSnapshot) return;
+    setQuestions(safeQuestions(builderUndoSnapshot.questions));
+    setRounds(normalizeRounds(builderUndoSnapshot.rounds));
+    setActiveRoundId(getInitialActiveRoundId(builderUndoSnapshot.rounds, builderUndoSnapshot.activeRoundId));
+    setTheme(builderUndoSnapshot.theme || "");
+    setDifficulty(builderUndoSnapshot.difficulty || "medium");
+    setAiCandidates(safeQuestions(builderUndoSnapshot.aiCandidates));
+    setChatPreview(null);
+    setBuilderChatMessages((prev) => [...prev, { role: "assistant", content: `Undone: ${builderUndoSnapshot.label}.` }].slice(-12));
+    setBuilderUndoSnapshot(null);
+  };
+  const findRoundFromPrompt = (request) => {
+    const number = parseRoundNumber(request);
+    if (!number) return activeRound;
+    return safeRounds[number - 1] || activeRound;
+  };
+  const findQuestionFromPrompt = (request) => {
+    const number = parseQuestionNumber(request);
+    if (!number) return activeRoundQuestions[0] || null;
+    return activeRoundQuestions[number - 1] || null;
+  };
+  const appendBuilderAssistant = (content) => setBuilderChatMessages((prev) => [...prev, { role: "assistant", content }].slice(-12));
+  const acceptChatPreview = () => {
+    if (!chatPreview) return;
+    createUndoSnapshot(chatPreview.kind === "replace" ? "Replace question" : "Rewrite question");
+    if (chatPreview.kind === "replace") addGeneratedToRound([chatPreview.question], chatPreview.originalQuestion, chatPreview.roundId || activeRound.id);
+    else updateQuestion(chatPreview.originalQuestion.id, chatPreview.question);
+    appendBuilderAssistant(chatPreview.kind === "replace" ? "I replaced the question." : "I applied the rewrite.");
+    setChatPreview(null);
+  };
+  const runBuilderChat = async (messageOverride = "") => {
+    const request = normalizeText(messageOverride || builderChatInput);
+    if (!request) return toast.error("Ask Quiz Crafter what you want to build");
+    const intent = classifyBuildIntent(request);
+    const targetRound = findRoundFromPrompt(request);
+    const requestedType = parseRequestedType(request, generateType);
+    const requestedCount = parseRequestedCount(request, 3);
+    setBuilderChatInput("");
+    setBuilderChatMessages((prev) => [...prev, { role: "user", content: request }].slice(-12));
+    setBuilderChatLoading(true);
+    try {
+      if (intent === "import_file") {
+        appendBuilderAssistant("Imports still live on the Import CSV/PDF screen so you can review detected rows before they touch the database. Opening that next.");
+        navigate("/import");
+        return;
+      }
+      if (intent === "search_library") {
+        const query = request.replace(/\b(search|find|library|saved question|from my library|about|for)\b/gi, " ").replace(/\s+/g, " ").trim();
+        setSearchQuery(query);
+        setTypeFilter(parseRequestedType(request, "all") || "all");
+        setShowLibrary(true);
+        setShowAiPanel(false);
+        setShowWriteForm(false);
+        setShowCoHost(false);
+        appendBuilderAssistant(`I opened your unused library${query ? ` and searched for "${query}"` : ""}. Pick any question to add it to ${targetRound.name}.`);
+        return;
+      }
+      if (intent === "generate_full_session") {
+        createUndoSnapshot("Finish full session");
+        await handleBuildFullSession();
+        appendBuilderAssistant("I started filling the full session from your current rounds, template, approved categories, and what is already in the build.");
+        return;
+      }
+      if (intent === "generate_round") {
+        createUndoSnapshot(`Build ${targetRound.name}`);
+        await handleBuildFullSession({ onlyRoundId: targetRound.id });
+        setActiveRoundId(targetRound.id);
+        appendBuilderAssistant(`I started filling ${targetRound.name} from the template and approved category pool.`);
+        return;
+      }
+      if (intent === "add_questions") {
+        const themeParts = [theme, request, `Target round: ${targetRound.name}.`, targetRound.description ? `Round direction: ${targetRound.description}` : ""].filter(Boolean);
+        const { data } = await requestGeneratedQuestions({ countOverride: requestedCount, typeOverride: requestedType, themeOverride: themeParts.join("\n"), roundOverride: targetRound });
+        const generated = normalizeGeneratedCandidates(data?.candidates, targetRound.id, requestedType);
+        if (!generated.length) throw new Error("No candidates came back.");
+        setAiCandidates(generated);
+        setActiveRoundId(targetRound.id);
+        appendBuilderAssistant(`I found ${generated.length} candidate${generated.length === 1 ? "" : "s"} for ${targetRound.name}. Review them below and add the ones you like.`);
+        return;
+      }
+      if (["replace_question", "rewrite_question", "make_harder", "make_easier", "add_fun_fact"].includes(intent)) {
+        const targetQuestion = findQuestionFromPrompt(request);
+        if (!targetQuestion) {
+          appendBuilderAssistant("I need a question number for that. Try: \"Replace question 4\" or \"Make question 6 easier.\"");
+          return;
+        }
+        const direction = intent === "make_easier" ? "Make this easier and more gettable for a US bar-trivia crowd." : intent === "make_harder" ? "Make this harder but still fair and playable." : intent === "add_fun_fact" ? "Add or improve the fun fact. Keep the same question, answer, category, and type." : request;
+        if (intent === "replace_question") {
+          const { data } = await requestGeneratedQuestions({ replacement: targetQuestion, rejectCurrent: true, typeOverride: parseRequestedType(request, normalizeType(targetQuestion)), themeOverride: [theme, request, "Replace this question with a different fact but keep the same broad round fit.", `Old question: ${targetQuestion.question_text}`, `Old answer: ${targetQuestion.correct_answer}`].filter(Boolean).join("\n"), roundOverride: targetRound, allowCurrentCategory: true });
+          const replacement = normalizeGeneratedCandidates(data?.candidates, targetRound.id, parseRequestedType(request, normalizeType(targetQuestion)))[0];
+          if (!replacement) throw new Error("No replacement came back.");
+          setChatPreview({ kind: "replace", originalQuestion: targetQuestion, question: replacement, roundId: targetRound.id });
+          appendBuilderAssistant(`Here is a replacement preview for question ${parseQuestionNumber(request) || 1}. Accept it if this is the direction you want.`);
+          return;
+        }
+        const result = await handleChatEditQuestion(targetQuestion, direction);
+        if (result?.question) {
+          setChatPreview({ kind: "rewrite", originalQuestion: targetQuestion, question: result.question, roundId: targetRound.id });
+          appendBuilderAssistant(result.answer || "I made a preview rewrite. Accept it to update the question.");
+        }
+        return;
+      }
+      setCohostPrompt(request);
+      await handleAskCoHost();
+      appendBuilderAssistant("I sent that to the co-host brain. If it drafts usable questions, they will appear in the co-host preview.");
+    } catch (error) {
+      console.error("Builder chat command error:", error);
+      appendBuilderAssistant(error.response?.data?.error || error.message || "I could not finish that request. Try naming a round, question number, type, or count.");
+      toast.error(error.response?.data?.error || error.message || "Ask Quiz Crafter failed");
+    } finally {
+      setBuilderChatLoading(false);
+    }
+  };
   const handleSave = async (goLive = false) => {
     if (!user?.id) return toast.error("You must be signed in");
 
@@ -712,7 +867,8 @@ const BuildSession = () => {
     <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-4 mb-5"><div><h1 className="text-3xl md:text-4xl font-bold text-white mb-2">Build <span className="gradient-text">Session</span></h1><p className="text-zinc-500">Build rounds freely, add media anywhere, and let AI fill gaps from approved categories.</p></div><div className="flex gap-2 flex-wrap">{selectedTotal > 0 && <Button variant="outline" onClick={handleClearSession} className="border-zinc-700 text-zinc-400 hover:text-white hover:bg-zinc-800"><X size={16} className="mr-2" />Clear</Button>}<Button onClick={() => handleSave(true)} disabled={saving} className="bg-[#AEB2EF] hover:bg-[#C6C9FF] text-zinc-950 font-semibold" data-testid="go-live-btn">{saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</> : <><Sparkles className="mr-2" size={18} />Go Live</>}</Button><Button onClick={() => handleSave(false)} disabled={saving} className="gradient-btn" data-testid="save-build-btn">{saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</> : <><Save className="mr-2" size={18} />Save Build</>}</Button></div></div>
     {loading && <div className="mb-4 flex items-center gap-2 rounded-md border border-[#71E0DC]/20 bg-[#071A1D]/70 px-3 py-2 text-sm text-[#AEEBFF]"><Loader2 className="h-4 w-4 animate-spin" />Loading your saved builds and question library...</div>}
     <Card className="glass-card mb-5"><CardContent className="p-4 space-y-4"><div className="grid grid-cols-1 lg:grid-cols-[1fr_170px_240px] gap-3"><Field label="Session Name"><Input value={sessionName} onChange={(e) => setSessionName(e.target.value)} placeholder="e.g., Tuesday Night Trivia" className="bg-zinc-950/50 border-white/10 text-white" /></Field><Field label="Date"><Input type="date" value={sessionDate} onChange={(e) => setSessionDate(e.target.value)} className="bg-zinc-950/50 border-white/10 text-white" /></Field><Field label="Venue"><select value={selectedVenueId} onChange={(e) => setSelectedVenueId(e.target.value)} className="w-full h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3"><option value="">No venue</option>{venues.map((venue) => <option key={venue.id} value={venue.id}>{venue.name || venue.nightName || "Untitled venue"}</option>)}</select></Field></div>{approvedCategories.length > 0 && <p className="text-xs text-zinc-500">AI category pool: {approvedCategories.slice(0, 10).join(", ")}{approvedCategories.length > 10 ? "..." : ""}</p>}</CardContent></Card>
-    <Card className="glass-card mb-5"><CardContent className="p-4"><div className="grid grid-cols-1 lg:grid-cols-[1fr_1.3fr_auto] gap-3 items-end"><div><p className="text-xs font-bold uppercase tracking-wide text-[#71E0DC]">Start from template</p><p className="text-sm text-zinc-500 mt-1">Apply a saved show format, then generate or pick questions for each round.</p></div><label className="text-sm text-zinc-400">Template<select value={selectedTemplateId} onChange={(event) => setSelectedTemplateId(event.target.value)} className="mt-1 h-11 w-full rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60">{templates.map((template) => <option key={template.id} value={template.id}>{template.name} - {template.roundCount} rounds</option>)}</select></label><div className="flex flex-wrap gap-2"><Button type="button" onClick={handleStartFromTemplate} disabled={!templates.length || generating} className="h-11 border border-white/10 bg-zinc-950/70 text-zinc-100 hover:border-[#71E0DC]/40 hover:bg-zinc-900"><Layers size={16} className="mr-2" />Use Template</Button><Button type="button" onClick={handleBuildActiveRound} disabled={generating} className="h-11 border border-[#71E0DC]/30 bg-[#71E0DC]/10 text-[#71E0DC] hover:bg-[#71E0DC]/15"><Sparkles size={16} className="mr-2" />Build Round</Button><Button type="button" onClick={() => handleBuildFullSession()} disabled={generating} className="gradient-btn h-11">{generating ? <Loader2 size={16} className="mr-2 animate-spin" /> : <Sparkles size={16} className="mr-2" />}Build Full Session</Button></div></div></CardContent></Card>
+    <Card className="glass-card mb-5"><CardContent className="p-4"><div className="grid grid-cols-1 lg:grid-cols-[1fr_1.3fr_auto] gap-3 items-end"><div><p className="text-xs font-bold uppercase tracking-wide text-[#71E0DC]">Start from template</p><p className="text-sm text-zinc-500 mt-1">Apply a saved show format, then ask Quiz Crafter to fill or refine it.</p></div><label className="text-sm text-zinc-400">Template<select value={selectedTemplateId} onChange={(event) => setSelectedTemplateId(event.target.value)} className="mt-1 h-11 w-full rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60">{templates.map((template) => <option key={template.id} value={template.id}>{template.name} - {template.roundCount} rounds</option>)}</select></label><Button type="button" onClick={handleStartFromTemplate} disabled={!templates.length || generating} className="h-11 border border-white/10 bg-zinc-950/70 text-zinc-100 hover:border-[#71E0DC]/40 hover:bg-zinc-900"><Layers size={16} className="mr-2" />Use Template</Button></div></CardContent></Card>
+    <AskQuizCrafterPanel input={builderChatInput} setInput={setBuilderChatInput} messages={builderChatMessages} loading={builderChatLoading || generating} undoSnapshot={builderUndoSnapshot} onUndo={restoreBuilderUndo} onAsk={runBuilderChat} preview={chatPreview} onAcceptPreview={acceptChatPreview} onDiscardPreview={() => setChatPreview(null)} aiCandidates={aiCandidates} aiActionId={aiActionId} onAddToSession={handleAddAiCandidateToSession} onSaveToLibrary={handleSaveAiCandidateToLibrary} onRegenerate={handleRegenerateAiCandidate} onConvertType={handleConvertAiCandidateType} onTuneDifficulty={handleTuneAiCandidateDifficulty} />
     <div className="space-y-5"><RoundDropdown rounds={rounds} activeRoundId={activeRoundId} menuOpen={roundMenuOpen} setMenuOpen={setRoundMenuOpen} onSelect={setActiveRoundId} onRename={handleRenameRound} onDescribe={handleDescribeRound} onDelete={handleDeleteRound} onAdd={handleAddRound} />
       <Card className="glass-card overflow-hidden"><CardHeader className="pb-3 border-b border-white/10"><div><CardTitle className="text-white flex items-center gap-2"><Layers size={20} className="text-[#71E0DC]" />{activeRound.name}</CardTitle><CardDescription className="text-zinc-500">{activeRoundQuestions.length} question{activeRoundQuestions.length === 1 ? "" : "s"} selected</CardDescription></div></CardHeader><CardContent className="p-4 space-y-4"><BuilderToolbar showAiPanel={showAiPanel} setShowAiPanel={setShowAiPanel} showWriteForm={showWriteForm} setShowWriteForm={setShowWriteForm} showLibrary={showLibrary} showCoHost={showCoHost} onOpenCoHost={() => { setShowCoHost((value) => !value); setShowAiPanel(false); setShowWriteForm(false); setShowLibrary(false); }} onBrowseLibrary={handleBrowseLibrary} />{showCoHost && <CoHostModal prompt={cohostPrompt} setPrompt={setCohostPrompt} loading={cohostLoading} answer={cohostAnswer} messages={cohostMessages} candidates={cohostCandidates} onAsk={handleAskCoHost} onClose={() => setShowCoHost(false)} onAddToSession={handleAddCoHostCandidateToSession} onSaveToLibrary={handleSaveCoHostCandidateToLibrary} />}{showAiPanel && <AiGenerateModal theme={theme} setTheme={setTheme} difficulty={difficulty} setDifficulty={setDifficulty} generateType={generateType} setGenerateType={setGenerateType} generateCount={generateCount} setGenerateCount={setGenerateCount} generating={generating} aiCandidates={aiCandidates} aiActionId={aiActionId} onGenerate={handleGenerateForRound} onAddToSession={handleAddAiCandidateToSession} onSaveToLibrary={handleSaveAiCandidateToLibrary} onRegenerate={handleRegenerateAiCandidate} onConvertType={handleConvertAiCandidateType} onTuneDifficulty={handleTuneAiCandidateDifficulty} onClose={() => setShowAiPanel(false)} />}{showWriteForm && <FreeWriteModal form={writeForm} setForm={setWriteForm} categories={approvedCategories} onSubmit={handleAddCustomQuestion} onCancel={() => setShowWriteForm(false)} onAssist={handleAssistWriteQuestion} draftGenerating={draftGenerating} />}<SelectedRoundList questions={activeRoundQuestions} rounds={safeRounds} activeRoundId={activeRound.id} mediaQuestionId={mediaQuestionId} settingsQuestionId={settingsQuestionId} actionQuestionId={actionQuestionId} onOpenMedia={setMediaQuestionId} onOpenSettings={setSettingsQuestionId} onCloseMedia={() => setMediaQuestionId(null)} onMoveWithinRound={moveQuestionWithinRound} onMoveToRound={moveQuestionToRound} onRemove={(questionId) => removeFromRound(activeRound.id, questionId)} onUpdate={updateQuestion} onSaveToLibrary={handleSaveQuestionToLibrary} onRefresh={handleRefreshGenerated} onConvertType={handleConvertGeneratedType} onTuneDifficulty={handleTuneGeneratedDifficulty} onChatEdit={handleChatEditQuestion} onRejectQuestion={handleRejectQuestion} onRejectCategory={handleRejectCategory} /></CardContent></Card>
     </div>
@@ -723,6 +879,14 @@ const BuildSession = () => {
 };
 
 const Field = ({ label, children }) => <div className="space-y-2"><Label className="text-zinc-300">{label}</Label>{children}</div>;
+const AskQuizCrafterPanel = ({ input, setInput, messages, loading, undoSnapshot, onUndo, onAsk, preview, onAcceptPreview, onDiscardPreview, aiCandidates, aiActionId, onAddToSession, onSaveToLibrary, onRegenerate, onConvertType, onTuneDifficulty }) => {
+  const chips = ["Build this round", "Finish session", "Find replacements", "Search library", "Make harder", "Add fun facts"];
+  const handleKeyDown = (event) => {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) onAsk();
+  };
+  return <Card className="glass-card mb-5 overflow-hidden border-[#71E0DC]/20"><CardHeader className="pb-3 border-b border-white/10"><div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3"><div><CardTitle className="text-white flex items-center gap-2"><Sparkles size={20} className="text-[#71E0DC]" />Ask Quiz Crafter</CardTitle><CardDescription className="text-zinc-500">Chat first. Tell the assistant what you want, and it will route to generation, editing, library search, or co-host feedback.</CardDescription></div>{undoSnapshot && <Button type="button" variant="outline" onClick={onUndo} className="h-9 border-white/10 text-zinc-300 hover:text-white"><RefreshCw size={14} className="mr-2" />Undo last AI action</Button>}</div></CardHeader><CardContent className="p-4 space-y-4"><div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-4"><div className="space-y-3"><Textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={handleKeyDown} placeholder="Build Round 1 with summer questions... Replace question 4 with something harder... Find me a weird animal question..." className="min-h-[108px] bg-zinc-950/70 border-white/10 text-white text-base" /><div className="flex flex-wrap items-center justify-between gap-3"><div className="flex flex-wrap gap-2">{chips.map((chip) => <button key={chip} type="button" onClick={() => onAsk(chip)} className="rounded-full border border-white/10 bg-zinc-950/70 px-3 py-1.5 text-xs font-semibold text-zinc-300 hover:border-[#71E0DC]/40 hover:text-white">{chip}</button>)}</div><Button type="button" onClick={() => onAsk()} disabled={loading || !normalizeText(input)} className="gradient-btn h-10">{loading ? <Loader2 size={16} className="mr-2 animate-spin" /> : <Sparkles size={16} className="mr-2" />}Ask</Button></div>{preview && <div className="rounded-xl border border-[#AEB2EF]/25 bg-[#AEB2EF]/8 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-wide text-[#AEB2EF]">{preview.kind === "replace" ? "Replacement Preview" : "Rewrite Preview"}</p><p className="mt-1 text-sm text-zinc-500">Review before changing the round.</p></div><div className="flex gap-2"><Button type="button" variant="outline" onClick={onDiscardPreview} className="h-9 border-white/10 text-zinc-300 hover:text-white">Discard</Button><Button type="button" onClick={onAcceptPreview} className="h-9 gradient-btn"><Check size={15} className="mr-2" />Accept</Button></div></div><div className="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-3"><PreviewQuestion title="Current" question={preview.originalQuestion} muted /><PreviewQuestion title="Preview" question={preview.question} /></div></div>}{aiCandidates.length > 0 && <div className="rounded-xl border border-white/10 bg-zinc-950/35 p-3"><div className="mb-3 flex items-center justify-between gap-2"><div><p className="text-sm font-bold text-white">Candidate Drafts</p><p className="text-xs text-zinc-500">Add to the session, save for later, regenerate, or adjust difficulty.</p></div><Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20">{aiCandidates.length}</Badge></div><div className="space-y-3">{aiCandidates.map((candidate) => <AiCandidateCard key={candidate.id} candidate={candidate} busy={String(aiActionId) === String(candidate.id)} onAddToSession={() => onAddToSession(candidate)} onSaveToLibrary={() => onSaveToLibrary(candidate)} onRegenQuestion={() => onRegenerate(candidate, "question")} onRegenCategory={() => onRegenerate(candidate, "category")} onConvertType={(targetType) => onConvertType(candidate, targetType)} onTuneDifficulty={(direction) => onTuneDifficulty(candidate, direction)} />)}</div></div>}</div><div className="rounded-xl border border-white/10 bg-zinc-950/45 p-3 min-h-[220px]"><p className="mb-3 text-xs font-bold uppercase tracking-wide text-zinc-500">Conversation</p><div className="space-y-2 max-h-[360px] overflow-y-auto pr-1">{messages.map((message, index) => <div key={`${message.role}-${index}`} className={`rounded-xl px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap ${message.role === "user" ? "ml-8 bg-[#71E0DC]/15 border border-[#71E0DC]/20 text-white" : "mr-8 bg-zinc-900/90 border border-white/10 text-zinc-300"}`}>{message.content}</div>)}{loading && <div className="mr-8 rounded-xl bg-zinc-900/90 border border-white/10 px-3 py-2 text-sm text-zinc-400"><Loader2 size={14} className="mr-2 inline animate-spin text-[#71E0DC]" />Working...</div>}</div></div></div></CardContent></Card>;
+};
+const PreviewQuestion = ({ title, question, muted }) => <div className={`rounded-lg border p-3 ${muted ? "border-white/10 bg-zinc-950/60 opacity-75" : "border-[#71E0DC]/25 bg-[#071A1D]/50"}`}><p className="mb-2 text-xs font-bold uppercase tracking-wide text-zinc-500">{title}</p><QuestionMeta question={question} /><p className="mt-2 text-sm font-semibold text-white">{question.question_text}</p><p className="mt-2 text-xs text-zinc-400">Answer: <span className="text-emerald-300">{question.correct_answer}</span></p>{question.fun_fact && <p className="mt-2 text-xs text-zinc-500">{question.fun_fact}</p>}</div>;
 const TimingButtons = ({ value, onChange }) => <div className="inline-flex rounded-lg bg-zinc-800 p-1"><button type="button" onClick={() => onChange("initial")} className={`px-4 py-2 rounded-md text-sm font-semibold ${normalizeImageTiming(value) === "initial" ? "bg-zinc-600 text-white" : "text-zinc-400 hover:text-white"}`}>Before Answer</button><button type="button" onClick={() => onChange("after_answer")} className={`px-4 py-2 rounded-md text-sm font-semibold ${normalizeImageTiming(value) === "after_answer" ? "bg-zinc-600 text-white" : "text-zinc-400 hover:text-white"}`}>After Answer</button></div>;
 const RoundDropdown = ({ rounds, activeRoundId, menuOpen, setMenuOpen, onSelect, onRename, onDescribe, onDelete, onAdd }) => {
   const [manageOpen, setManageOpen] = useState(false);
