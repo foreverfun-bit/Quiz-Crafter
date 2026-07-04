@@ -20,10 +20,13 @@ import {
   Eye,
   FileUp,
   FileSpreadsheet,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 
 const SERVER_UPLOAD_LIMIT_BYTES = 4 * 1024 * 1024;
+const PDF_BATCH_SIZE = 6;
+const PDF_JOB_STORAGE_PREFIX = "quiz-crafter-pdf-import-job";
 
 const sourceOptions = [
   { value: "auto", label: "Auto Detect", description: "Best choice for most files" },
@@ -53,6 +56,7 @@ const ImportCSV = () => {
   const [previewing, setPreviewing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [preview, setPreview] = useState(null);
+  const [reviewRows, setReviewRows] = useState([]);
   const [previewError, setPreviewError] = useState(null);
   const [pdfProgress, setPdfProgress] = useState("");
   const [result, setResult] = useState(null);
@@ -72,6 +76,7 @@ const ImportCSV = () => {
 
     setFile(selectedFile);
     setPreview(null);
+    setReviewRows([]);
     setPreviewError(null);
     setPdfProgress("");
     setResult(null);
@@ -150,14 +155,17 @@ const ImportCSV = () => {
 
     try {
       const response = shouldExtractPdfInBrowser(selectedFile)
-        ? await postExtractedPdf(selectedFile, "preview", selectedSource, "", setPdfProgress)
+        ? null
         : await fetch("/api/import-questions", {
           method: "POST",
           body: buildFormData(selectedFile, "preview", selectedSource),
         });
 
-      const data = await parseJsonResponse(response, "Failed to preview import file");
+      const data = shouldExtractPdfInBrowser(selectedFile)
+        ? await processPdfImportJob(selectedFile, selectedSource, setPdfProgress)
+        : await parseJsonResponse(response, "Failed to preview import file");
       setPreview(data);
+      setReviewRows(normalizeReviewRows(data.questions || data.preview || []));
     } catch (error) {
       console.error("Preview failed:", error);
       setPreview(null);
@@ -172,6 +180,7 @@ const ImportCSV = () => {
   const handleSourceChange = async (value) => {
     setSource(value);
     setPreview(null);
+    setReviewRows([]);
     setPreviewError(null);
     setPdfProgress("");
     setResult(null);
@@ -201,9 +210,8 @@ const ImportCSV = () => {
       const userId = session?.user?.id;
       if (!userId) throw new Error("You must be signed in");
 
-      const data = shouldExtractPdfInBrowser(file)
-        ? await parseJsonResponse(await postExtractedPdf(file, "import", source, userId, setPdfProgress), "Import failed")
-        : await postFormData(buildImportFormData(file, source, userId), "Import failed");
+      if (!reviewRows.length) throw new Error("Review the detected rows before importing.");
+      const data = await postReviewedQuestions(reviewRows, source, userId, file.name);
       setResult(data);
 
       if (data.imported > 0) toast.success(`Imported ${data.imported} question${data.imported === 1 ? "" : "s"}`);
@@ -222,8 +230,8 @@ const ImportCSV = () => {
   };
 
   const handleExportPreviewCsv = () => {
-    if (!preview?.questions?.length) return;
-    const csv = toImportCsv(preview.questions);
+    if (!reviewRows.length) return;
+    const csv = toImportCsv(reviewRows);
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -231,6 +239,14 @@ const ImportCSV = () => {
     link.download = `${(file?.name || "quiz-crafter-import").replace(/\.[^.]+$/, "")}-review.csv`;
     link.click();
     URL.revokeObjectURL(url);
+  };
+
+  const updateReviewRow = (index, field, value) => {
+    setReviewRows((rows) => rows.map((row, rowIndex) => (rowIndex === index ? { ...row, [field]: value } : row)));
+  };
+
+  const removeReviewRow = (index) => {
+    setReviewRows((rows) => rows.filter((_, rowIndex) => rowIndex !== index));
   };
 
   const selectedSource = sourceOptions.find((option) => option.value === source) || sourceOptions[0];
@@ -344,7 +360,7 @@ const ImportCSV = () => {
                 <p className="text-zinc-300">Format detected: <span className="text-[#71E0DC]">{preview.format}</span></p>
                 <p className="text-zinc-300">Questions found: <span className="text-[#71E0DC]">{preview.row_count}</span></p>
               </div>
-              {preview.questions?.length > 0 && (
+              {reviewRows.length > 0 && (
                 <div className="mb-4">
                   <Button type="button" variant="outline" size="sm" onClick={handleExportPreviewCsv} className="border-white/20 text-white hover:bg-zinc-800">
                     Export Review CSV
@@ -360,23 +376,55 @@ const ImportCSV = () => {
                   </div>
                 </div>
               )}
-              {preview.preview?.length > 0 && (
+              {preview.categoryLists?.length > 0 && (
+                <div className="mb-4 rounded-lg border border-[#71E0DC]/20 bg-[#71E0DC]/5 p-3">
+                  <p className="text-[#71E0DC] text-sm font-semibold mb-2">Extracted Round Categories</p>
+                  <div className="space-y-2">
+                    {preview.categoryLists.map((list, index) => (
+                      <div key={`${list.round}-${index}`} className="text-xs text-zinc-300">
+                        <span className="text-white font-medium">{list.round}:</span>{" "}
+                        {(list.categories || []).join(", ")}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {reviewRows.length > 0 && (
                 <div className="overflow-x-auto">
-                  <p className="text-zinc-500 text-sm mb-2">First {preview.preview.length} question(s):</p>
-                  <table className="w-full text-xs">
+                  <p className="text-zinc-500 text-sm mb-2">Review and edit every detected row before importing:</p>
+                  <table className="w-full min-w-[1500px] text-xs">
                     <thead>
                       <tr className="border-b border-white/10">
-                        {["question", "type", "category", "answer", "wrong answers"].map((col) => <th key={col} className="text-left py-1 px-2 text-zinc-400 font-medium">{col}</th>)}
+                        {["round", "#", "category", "type", "question", "option a", "option b", "option c", "option d", "answer", "fun fact", "image url", ""].map((col) => <th key={col} className="text-left py-1 px-2 text-zinc-400 font-medium">{col}</th>)}
                       </tr>
                     </thead>
                     <tbody>
-                      {preview.preview.map((row, idx) => (
+                      {reviewRows.map((row, idx) => (
                         <tr key={idx} className="border-b border-white/5">
-                          <td className="py-1 px-2 text-zinc-300 max-w-[280px] truncate">{row.question || "-"}</td>
-                          <td className="py-1 px-2 text-zinc-300">{row.questionType || "-"}</td>
-                          <td className="py-1 px-2 text-zinc-300">{row.category || "-"}</td>
-                          <td className="py-1 px-2 text-zinc-300 max-w-[160px] truncate">{row.correctAnswer || "-"}</td>
-                          <td className="py-1 px-2 text-zinc-300 max-w-[180px] truncate">{row.incorrectAnswers || "-"}</td>
+                          <td className="py-2 px-1"><ReviewInput value={row.round} onChange={(value) => updateReviewRow(idx, "round", value)} className="w-24" /></td>
+                          <td className="py-2 px-1"><ReviewInput value={row.questionNumber} onChange={(value) => updateReviewRow(idx, "questionNumber", value)} className="w-14" /></td>
+                          <td className="py-2 px-1"><ReviewInput value={row.category} onChange={(value) => updateReviewRow(idx, "category", value)} className="w-32" /></td>
+                          <td className="py-2 px-1">
+                            <select value={row.questionType} onChange={(e) => updateReviewRow(idx, "questionType", e.target.value)} className="h-9 w-36 rounded-md bg-zinc-950/80 border border-white/10 text-white px-2">
+                              <option value="true_false">True/False</option>
+                              <option value="multiple_choice">Multiple Choice</option>
+                              <option value="written">Written</option>
+                              <option value="picture">Image</option>
+                            </select>
+                          </td>
+                          <td className="py-2 px-1"><ReviewTextarea value={row.question} onChange={(value) => updateReviewRow(idx, "question", value)} className="w-72" /></td>
+                          <td className="py-2 px-1"><ReviewInput value={row.optionA} onChange={(value) => updateReviewRow(idx, "optionA", value)} className="w-28" /></td>
+                          <td className="py-2 px-1"><ReviewInput value={row.optionB} onChange={(value) => updateReviewRow(idx, "optionB", value)} className="w-28" /></td>
+                          <td className="py-2 px-1"><ReviewInput value={row.optionC} onChange={(value) => updateReviewRow(idx, "optionC", value)} className="w-28" /></td>
+                          <td className="py-2 px-1"><ReviewInput value={row.optionD} onChange={(value) => updateReviewRow(idx, "optionD", value)} className="w-28" /></td>
+                          <td className="py-2 px-1"><ReviewInput value={row.correctAnswer} onChange={(value) => updateReviewRow(idx, "correctAnswer", value)} className="w-32" /></td>
+                          <td className="py-2 px-1"><ReviewTextarea value={row.funFact} onChange={(value) => updateReviewRow(idx, "funFact", value)} className="w-64" /></td>
+                          <td className="py-2 px-1"><ReviewInput value={row.imageUrl} onChange={(value) => updateReviewRow(idx, "imageUrl", value)} className="w-44" /></td>
+                          <td className="py-2 px-1">
+                            <Button type="button" variant="ghost" size="icon" onClick={() => removeReviewRow(idx)} className="text-red-300 hover:bg-red-500/10">
+                              <Trash2 size={15} />
+                            </Button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -385,14 +433,14 @@ const ImportCSV = () => {
               )}
               {preview.warnings?.length > 0 && (
                 <div className="mt-3 p-2 bg-amber-500/10 rounded text-xs text-amber-300">
-                  {preview.warnings.slice(0, 4).map((warning, i) => <p key={i}>{warning}</p>)}
+                  {preview.warnings.map((warning, i) => <p key={i}>{warning}</p>)}
                 </div>
               )}
             </div>
           )}
 
           <div className="mt-6 flex justify-center">
-            <Button onClick={handleImport} disabled={!file || importing || previewing || !preview?.row_count} className="gradient-btn px-8">
+            <Button onClick={handleImport} disabled={!file || importing || previewing || !reviewRows.length} className="gradient-btn px-8">
               {importing ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Importing...</> : <><Upload className="mr-2" size={18} />Import Questions</>}
             </Button>
           </div>
@@ -454,6 +502,22 @@ const buildImportFormData = (selectedFile, selectedSource, userId) => {
   return formData;
 };
 
+const ReviewInput = ({ value, onChange, className = "" }) => (
+  <input
+    value={value ?? ""}
+    onChange={(e) => onChange(e.target.value)}
+    className={`h-9 rounded-md bg-zinc-950/80 border border-white/10 text-white px-2 outline-none focus:border-[#71E0DC]/70 ${className}`}
+  />
+);
+
+const ReviewTextarea = ({ value, onChange, className = "" }) => (
+  <textarea
+    value={value ?? ""}
+    onChange={(e) => onChange(e.target.value)}
+    className={`min-h-[54px] rounded-md bg-zinc-950/80 border border-white/10 text-white px-2 py-2 outline-none focus:border-[#71E0DC]/70 ${className}`}
+  />
+);
+
 async function loadPdfJs() {
   if (window.pdfjsLib) return window.pdfjsLib;
 
@@ -479,7 +543,7 @@ async function loadPdfJs() {
   return window.pdfjsLib;
 }
 
-async function extractPdfTextInBrowser(file, onProgress) {
+async function extractPdfPagesInBrowser(file, onProgress) {
   const pdfjs = await loadPdfJs();
   const bytes = new Uint8Array(await file.arrayBuffer());
   const loadingTask = pdfjs.getDocument({ data: bytes, disableWorker: true });
@@ -507,26 +571,152 @@ async function extractPdfTextInBrowser(file, onProgress) {
     });
 
     if (currentLine.length) lines.push(currentLine.join(" "));
-    pages.push(`--- QUIZ_CRAFTER_PAGE ${pageNumber} ---\n${lines.join("\n")}`);
+    pages.push({ pageNumber, text: lines.join("\n") });
   }
 
-  return pages.join("\n\n");
+  return pages;
 }
 
-async function postExtractedPdf(file, action, selectedSource, userId = "", onProgress) {
-  const pdfText = await extractPdfTextInBrowser(file, onProgress);
-  return fetch("/api/import-questions", {
+async function processPdfImportJob(file, selectedSource, onProgress) {
+  const jobKey = getPdfJobKey(file, selectedSource);
+  const pages = await extractPdfPagesInBrowser(file, onProgress);
+  const savedJob = readPdfJob(jobKey);
+  const job = savedJob?.totalPages === pages.length
+    ? savedJob
+    : { totalPages: pages.length, nextPageIndex: 0, rows: [], warnings: [] };
+
+  for (let pageIndex = job.nextPageIndex || 0; pageIndex < pages.length; pageIndex += PDF_BATCH_SIZE) {
+    const ownedPages = pages.slice(pageIndex, Math.min(pageIndex + PDF_BATCH_SIZE, pages.length));
+    const lookaheadPage = pages[pageIndex + PDF_BATCH_SIZE];
+    const batchPages = lookaheadPage ? [...ownedPages, lookaheadPage] : ownedPages;
+    const endPage = ownedPages[ownedPages.length - 1]?.pageNumber || pageIndex + 1;
+    if (typeof onProgress === "function") onProgress(`Parsing pages ${ownedPages[0]?.pageNumber || pageIndex + 1}-${endPage} of ${pages.length}.`);
+
+    const batch = await postPdfPageBatch(batchPages, ownedPages.map((page) => page.pageNumber), selectedSource, file.name);
+    job.rows = renumberReviewRows(mergeReviewRows(job.rows, normalizeReviewRows(batch.questions || [])));
+    job.warnings = [...new Set([...(job.warnings || []), ...(batch.warnings || [])])];
+    job.nextPageIndex = pageIndex + PDF_BATCH_SIZE;
+    writePdfJob(jobKey, job);
+  }
+
+  return {
+    format: "PDF",
+    source: "pdf",
+    columns: IMPORT_CSV_HEADER,
+    row_count: job.rows.length,
+    preview: renumberReviewRows(job.rows).slice(0, 8),
+    questions: renumberReviewRows(job.rows),
+    warnings: job.warnings || [],
+    categoryLists: [],
+  };
+}
+
+async function postPdfPageBatch(pages, ownedPageNumbers, selectedSource, filename) {
+  const response = await fetch("/api/import-questions", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      action,
+      action: "parse-page-batch",
       source: selectedSource === "auto" ? "pdf" : selectedSource,
-      filename: file.name,
-      contentType: file.type || "application/pdf",
-      pdfText,
-      sessionUserId: userId,
+      filename,
+      pages,
+      ownedPageNumbers,
     }),
   });
+  const text = await response.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`Failed to parse PDF page batch. Server said: ${text.slice(0, 240)}`);
+  }
+  if (!response.ok) throw new Error(data.error || "Failed to parse PDF page batch");
+  return data;
+}
+
+async function postReviewedQuestions(rows, selectedSource, userId, filename) {
+  const response = await fetch("/api/import-questions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      action: "import-reviewed",
+      source: selectedSource === "auto" ? "generic" : selectedSource,
+      filename,
+      sessionUserId: userId,
+      questions: rows,
+    }),
+  });
+  const text = await response.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`Import failed. Server said: ${text.slice(0, 240)}`);
+  }
+  if (!response.ok) throw new Error(data.error || "Import failed");
+  return data;
+}
+
+function getPdfJobKey(file, selectedSource) {
+  return `${PDF_JOB_STORAGE_PREFIX}:${selectedSource}:${file.name}:${file.size}:${file.lastModified}`;
+}
+
+function readPdfJob(jobKey) {
+  try {
+    return JSON.parse(localStorage.getItem(jobKey) || "null");
+  } catch {
+    return null;
+  }
+}
+
+function writePdfJob(jobKey, job) {
+  try {
+    localStorage.setItem(jobKey, JSON.stringify(job));
+  } catch {
+    // A full browser storage cache should not block the import preview.
+  }
+}
+
+function normalizeReviewRows(rows) {
+  return (rows || []).map((row, index) => {
+    const options = optionValues(row);
+    return {
+      round: row.round || row.round_name || "",
+      questionNumber: row.questionNumber || row.source_order || index + 1,
+      category: row.category || "",
+      questionType: row.questionType || row.question_type || "written",
+      question: row.question || row.question_text || "",
+      optionA: row.optionA || options[0] || "",
+      optionB: row.optionB || options[1] || "",
+      optionC: row.optionC || options[2] || "",
+      optionD: row.optionD || options[3] || "",
+      correctAnswer: row.correctAnswer || row.correct_answer || "",
+      incorrectAnswers: row.incorrectAnswers || row.incorrect_answers || "",
+      funFact: row.funFact || row.fun_fact || "",
+      imageUrl: row.imageUrl || row.image_url || "",
+      pageNumber: row.pageNumber || row.page_number || null,
+    };
+  });
+}
+
+function mergeReviewRows(existingRows, newRows) {
+  const seen = new Set(existingRows.map(reviewRowKey));
+  const merged = [...existingRows];
+  newRows.forEach((row) => {
+    const key = reviewRowKey(row);
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(row);
+  });
+  return merged;
+}
+
+function renumberReviewRows(rows) {
+  return rows.map((row, index) => ({ ...row, questionNumber: index + 1 }));
+}
+
+function reviewRowKey(row) {
+  return [row.pageNumber || "", row.round || "", row.question || "", row.correctAnswer || ""].join("|").toLowerCase().replace(/[^a-z0-9|]/g, "");
 }
 
 const IMPORT_CSV_HEADER = ["Round", "Question Number", "Category", "Type", "Question", "Option A", "Option B", "Option C", "Option D", "Answer", "Fun Fact", "Image URL"];

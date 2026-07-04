@@ -83,10 +83,16 @@ function extractJsonParts(req, buffer) {
   if (!parsed || typeof parsed !== "object") return {};
 
   const pdfText = String(parsed.pdfText || parsed.text || "");
+  const pages = Array.isArray(parsed.pages) ? parsed.pages : null;
+  const questions = Array.isArray(parsed.questions) ? parsed.questions : null;
   return {
     action: parsed.action,
     source: parsed.source,
     sessionUserId: parsed.sessionUserId,
+    filename: parsed.filename,
+    pages,
+    questions,
+    ownedPageNumbers: Array.isArray(parsed.ownedPageNumbers) ? parsed.ownedPageNumbers : null,
     file: pdfText
       ? {
         filename: parsed.filename || "Imported PDF.pdf",
@@ -197,6 +203,44 @@ function sortQuestionsByRound(questions) {
   return [...questions].sort(compareRoundNames);
 }
 
+function toPreviewQuestion(question, index = 0) {
+  return {
+    round: question.round_name || question.round || question.category,
+    questionNumber: question.source_order || question.import_order || question.questionNumber || index + 1,
+    category: question.category || "",
+    questionType: question.question_type || question.questionType || "written",
+    question: question.question_text || question.question || "",
+    optionA: question.optionA || "",
+    optionB: question.optionB || "",
+    optionC: question.optionC || "",
+    optionD: question.optionD || "",
+    correctAnswer: question.correct_answer || question.correctAnswer || "",
+    incorrectAnswers: question.incorrect_answers || question.incorrectAnswers || "",
+    funFact: question.fun_fact || question.funFact || "",
+    imageUrl: question.image_url || question.imageUrl || "",
+    pageNumber: question.page_number || question.pageNumber || null,
+  };
+}
+
+function reviewedRowToQuestion(row, index = 0) {
+  const options = [row.optionA, row.optionB, row.optionC, row.optionD].map(clean).filter(Boolean);
+  const correctAnswer = clean(row.correctAnswer || row.correct_answer);
+  const questionType = row.questionType || row.question_type || detectQuestionType("", correctAnswer, options, row.imageUrl || row.image_url);
+  return normalizeRecord({
+    category: row.category || "",
+    round_name: row.round || row.round_name || "Imported",
+    round_order: getRoundSortValue(row.round || row.round_name || "", index + 1),
+    source_order: Number(row.questionNumber || row.source_order || index + 1),
+    import_order: index + 1,
+    question_text: row.question || row.question_text || "",
+    correct_answer: correctAnswer,
+    question_type: questionType,
+    incorrect_answers: options.length ? options : splitAnswers(row.incorrectAnswers || row.incorrect_answers),
+    fun_fact: row.funFact || row.fun_fact || null,
+    image_url: row.imageUrl || row.image_url || null,
+  });
+}
+
 function normalizePdfText(value) {
   return String(value || "")
     .replace(/\r/g, "\n")
@@ -223,13 +267,13 @@ function normalizeRecord(record) {
   };
 
   if (questionType === "true_false") {
-    const answer = correctAnswer.toLowerCase() === "false" ? "False" : "True";
+    const answer = correctAnswer ? (correctAnswer.toLowerCase() === "false" ? "False" : "True") : "";
     return {
       ...base,
       question_text: questionText,
       correct_answer: answer,
       question_type: "true_false",
-      incorrect_answers: answer === "True" ? "False" : "True",
+      incorrect_answers: answer ? (answer === "True" ? "False" : "True") : "True; False",
       fun_fact: clean(record.fun_fact) || null,
       image_url: clean(record.image_url) || null,
       correct_answer_image: clean(record.correct_answer_image) || null,
@@ -252,8 +296,26 @@ function normalizeRecord(record) {
 
 function normalizeCrowdpurrRows(rows) {
   const dataRows = rows.filter((row) => Array.isArray(row) && clean(row[0]) && compactKey(row[0]) !== "question");
+  const questions = [];
+  const warnings = [];
+  const categoryLists = [];
+  let currentRound = { name: "Round 1", order: 1, categories: [] };
+  let roundQuestionOrder = 1;
+  let nonBonusQuestionIndex = 0;
+  let globalImportOrder = 1;
 
-  return dataRows.map((row, index) => {
+  dataRows.forEach((row) => {
+    const rawQuestion = clean(row[0]);
+    const categoryList = extractCrowdpurrCategoryList(rawQuestion);
+    if (categoryList.length) {
+      const roundOrder = categoryLists.length + 1;
+      currentRound = { name: `Round ${roundOrder}`, order: roundOrder, categories: categoryList };
+      categoryLists.push({ round: currentRound.name, roundOrder, categories: categoryList });
+      roundQuestionOrder = 1;
+      nonBonusQuestionIndex = 0;
+      return;
+    }
+
     const question = stripQuestionNumber(row[0]);
     const rawType = clean(row[1]);
     const imageUrl = firstImageUrl(row[4]);
@@ -261,13 +323,16 @@ function normalizeCrowdpurrRows(rows) {
     const parsedCorrect = parseAnswerWithImage(row[7]);
     const wrongAnswers = unique(row.slice(8).map((value) => parseAnswerWithImage(value).text), parsedCorrect.text);
     const questionType = detectQuestionType(rawType, parsedCorrect.text, wrongAnswers, imageUrl);
+    const isBonus = isBonusCrowdpurrQuestion(question, rawType);
+    const assignedCategory = isBonus ? "Bonus" : currentRound.categories[nonBonusQuestionIndex] || "";
+    if (!isBonus) nonBonusQuestionIndex += 1;
 
-    return normalizeRecord({
-      category: "",
-      round_name: "Imported",
-      round_order: 1,
-      source_order: index + 1,
-      import_order: index + 1,
+    const normalized = normalizeRecord({
+      category: assignedCategory,
+      round_name: currentRound.name,
+      round_order: currentRound.order,
+      source_order: roundQuestionOrder,
+      import_order: globalImportOrder,
       question_text: question,
       correct_answer: parsedCorrect.text,
       question_type: questionType,
@@ -276,7 +341,42 @@ function normalizeCrowdpurrRows(rows) {
       image_url: imageUrl,
       correct_answer_image: parsedCorrect.image,
     });
-  }).filter(Boolean);
+    if (normalized) {
+      questions.push(normalized);
+      roundQuestionOrder += 1;
+      globalImportOrder += 1;
+    }
+  });
+
+  const roundCounts = new Map();
+  questions.forEach((question) => {
+    if (isBonusCrowdpurrQuestion(question.question_text, question.question_type) || compactKey(question.category) === "bonus") return;
+    const key = question.round_name || "Round 1";
+    roundCounts.set(key, (roundCounts.get(key) || 0) + 1);
+  });
+
+  categoryLists.forEach((list) => {
+    const questionCount = roundCounts.get(list.round) || 0;
+    if (questionCount && list.categories.length !== questionCount) {
+      warnings.push(`Category count does not match question count for ${list.round}.`);
+    }
+  });
+
+  return { questions, warnings, categoryLists };
+}
+
+function extractCrowdpurrCategoryList(value) {
+  const text = stripQuestionNumber(value);
+  const match = text.match(/^(?:round\s*\d+\s*)?(?:round\s*)?categor(?:y|ies)\s*[:\-]\s*(.+)$/i);
+  if (!match) return [];
+  return match[1]
+    .split(/\s*(?:,|;|\||\/)\s*/)
+    .map((category) => clean(category).replace(/\s+/g, " "))
+    .filter((category) => category && !/^(none|n\/a)$/i.test(category));
+}
+
+function isBonusCrowdpurrQuestion(question, rawType = "") {
+  return /\bbonus\b/i.test(`${question || ""} ${rawType || ""}`);
 }
 
 function normalizeObjectRows(rows, requestedSource) {
@@ -357,13 +457,15 @@ function parseCsv(text, requestedSource) {
 
   if (source === "crowdpurr") {
     const arrayParsed = Papa.parse(text, { header: false, skipEmptyLines: true });
-    const positionalQuestions = normalizeCrowdpurrRows(arrayParsed.data || []);
+    const crowdpurr = normalizeCrowdpurrRows(arrayParsed.data || []);
+    const positionalQuestions = crowdpurr.questions || [];
     if (positionalQuestions.length) {
       return {
         source,
         columns: arrayParsed.data?.[0] || objectParsed.meta?.fields || [],
         questions: sortQuestionsByRound(positionalQuestions),
-        warnings: (arrayParsed.errors || []).map((error) => error.message),
+        warnings: [...(arrayParsed.errors || []).map((error) => error.message), ...(crowdpurr.warnings || [])],
+        categoryLists: crowdpurr.categoryLists || [],
       };
     }
   }
@@ -625,10 +727,10 @@ function makeQuestionFromPage(page, currentRound, sourceOrder, previousClass) {
   return record ? { ...record, _options: options, _pageNumber: page.pageNumber, _flagForReview: true } : null;
 }
 
-function parsePdfPagesPipeline(rawText) {
+function parsePdfPagesPipeline(rawText, options = {}) {
   const pages = splitPdfPages(rawText);
   const warnings = [];
-  if (pages.length <= 1) return { questions: [], warnings };
+  if (!pages.length) return { questions: [], warnings };
 
   const classified = [];
   let previousClass = "";
@@ -680,9 +782,12 @@ function parsePdfPagesPipeline(rawText) {
     lastMarkerClass = page.pageClass;
   }
 
-  const cleanedQuestions = questions.map(({ _options, _pageNumber, _flagForReview, ...question }) => question);
+  const cleanedQuestions = questions.map(({ _options, _pageNumber, _flagForReview, ...question }) => ({
+    ...question,
+    page_number: _pageNumber || null,
+  }));
   const expectedLow = 27;
-  if (cleanedQuestions.length && cleanedQuestions.length < expectedLow) {
+  if (options.expectedCountWarning !== false && cleanedQuestions.length && cleanedQuestions.length < expectedLow) {
     warnings.push(`Only ${cleanedQuestions.length} questions found. Expected around 27 or 30. Review before importing.`);
   }
   const reviewCount = questions.filter((question) => question._flagForReview).length;
@@ -690,6 +795,15 @@ function parsePdfPagesPipeline(rawText) {
   warnings.push(`Processed ${pages.length} PDF page${pages.length === 1 ? "" : "s"} page-by-page.`);
 
   return { questions: cleanedQuestions, warnings };
+}
+
+function serializePdfPages(pages) {
+  return (pages || [])
+    .map((page, index) => {
+      const pageNumber = Number(page.pageNumber || page.page || index + 1);
+      return `--- QUIZ_CRAFTER_PAGE ${pageNumber} ---\n${String(page.text || "")}`;
+    })
+    .join("\n\n");
 }
 
 async function extractQuestionsWithAi(text) {
@@ -1209,6 +1323,45 @@ async function handler(req, res) {
     const requestedSource = clean(parts.source || "auto").toLowerCase();
     const userId = clean(parts.sessionUserId);
 
+    if (action === "parse-page-batch") {
+      const pages = Array.isArray(parts.pages) ? parts.pages : [];
+      if (!pages.length) return res.status(400).json({ error: "No PDF pages found in this batch" });
+
+      const ownedPageNumbers = new Set((parts.ownedPageNumbers || pages.map((page) => page.pageNumber)).map(Number).filter(Boolean));
+      const parsed = parsePdfPagesPipeline(serializePdfPages(pages), { expectedCountWarning: false });
+      const questions = sortQuestionsByRound(parsed.questions || [])
+        .filter((question) => !question.page_number || !ownedPageNumbers.size || ownedPageNumbers.has(Number(question.page_number)));
+
+      return res.status(200).json({
+        format: "PDF",
+        source: "pdf",
+        row_count: questions.length,
+        questions: questions.map(toPreviewQuestion),
+        categoryLists: [],
+        warnings: parsed.warnings || [],
+      });
+    }
+
+    if (action === "import-reviewed") {
+      if (!userId) return res.status(400).json({ error: "Missing session user id" });
+      const reviewedQuestions = (parts.questions || []).map(reviewedRowToQuestion).filter(Boolean);
+      if (!reviewedQuestions.length) return res.status(400).json({ error: "No reviewed questions to import" });
+
+      const result = await importQuestions({ questions: reviewedQuestions, userId, filename: parts.filename || "Reviewed Import.csv" });
+      return res.status(200).json({
+        format: SOURCE_LABELS[requestedSource] || SOURCE_LABELS.pdf,
+        imported: result.imported,
+        skipped: result.skipped,
+        skipped_details: result.skippedDetails,
+        errors: result.errors,
+        sessions_created: result.sessionsCreated,
+        session_id: result.sessionId,
+        session_name: result.sessionName,
+        session_error: result.sessionError,
+        total_session_questions: reviewedQuestions.length,
+      });
+    }
+
     if (!file?.buffer?.length) {
       return res.status(400).json({
         error: "No file found in upload. Please choose the file again and retry.",
@@ -1225,28 +1378,9 @@ async function handler(req, res) {
         source: parsed.source,
         columns: parsed.columns || [],
         row_count: questions.length,
-        preview: questions.slice(0, 8).map((question) => ({
-          round: question.round_name || question.category,
-          question: question.question_text,
-          category: question.category,
-          correctAnswer: question.correct_answer,
-          incorrectAnswers: question.incorrect_answers || "",
-          questionType: question.question_type,
-          funFact: question.fun_fact || "",
-          imageUrl: question.image_url || "",
-          source_order: question.source_order || question.import_order || 0,
-        })),
-        questions: questions.map((question, index) => ({
-          round: question.round_name || question.category,
-          questionNumber: question.source_order || question.import_order || index + 1,
-          question: question.question_text,
-          category: question.category,
-          correctAnswer: question.correct_answer,
-          incorrectAnswers: question.incorrect_answers || "",
-          questionType: question.question_type,
-          funFact: question.fun_fact || "",
-          imageUrl: question.image_url || "",
-        })),
+        preview: questions.slice(0, 8).map(toPreviewQuestion),
+        questions: questions.map(toPreviewQuestion),
+        categoryLists: parsed.categoryLists || [],
         warnings: parsed.warnings || [],
       });
     }
