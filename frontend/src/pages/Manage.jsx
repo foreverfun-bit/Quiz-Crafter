@@ -2,7 +2,7 @@ import { useNavigate } from "react-router-dom";
 import { Card, CardContent } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
-import { FolderOpen, MapPin, Palette, Settings, SlidersHorizontal, Trash2, Trophy } from "lucide-react";
+import { FolderOpen, MapPin, Palette, Settings, Trash2, Trophy } from "lucide-react";
 
 const setupTools = [
   {
@@ -58,7 +58,7 @@ export default function Manage() {
 
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto animate-fade-in" data-testid="manage-page">
-      <div className="mb-7 flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+      <div className="mb-7">
         <div>
           <p className="text-sm font-semibold uppercase tracking-[0.18em] text-[#71E0DC]">Manage Workspace</p>
           <h1 className="text-3xl md:text-4xl font-bold text-white mt-2">Configure the host setup</h1>
@@ -66,10 +66,6 @@ export default function Manage() {
             Categories, venues, templates, branding, and settings live here so the sidebar stays focused on destinations.
           </p>
         </div>
-        <Button onClick={() => navigate("/build")} className="gradient-btn">
-          <SlidersHorizontal className="mr-2" size={18} />
-          Back to Build
-        </Button>
       </div>
 
       <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">

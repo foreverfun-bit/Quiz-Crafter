@@ -12,6 +12,7 @@ import {
   Copy,
   Download,
   Loader2,
+  MoreHorizontal,
   Pencil,
   Plus,
   Radio,
@@ -19,6 +20,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 
 const questionTypes = [
   { value: "true_false", label: "True/False" },
@@ -514,18 +516,7 @@ const SessionDetail = () => {
         </div>
 
         <div className="flex gap-2 flex-wrap">
-          {canEditArrays && !isEditingImported && (
-            <Button variant="outline" onClick={() => setIsEditingImported(true)} className="border-[#AEB2EF]/40 text-[#AEB2EF]">
-              <Pencil className="mr-2" size={16} />Edit Session
-            </Button>
-          )}
-          {canEditArrays && !isEditingImported && (
-            <Button variant="outline" onClick={() => navigate(`/build/${id}`)} className="border-[#71E0DC]/40 text-[#71E0DC] hover:bg-[#71E0DC]/10">
-              <Pencil className="mr-2" size={16} />Open in Builder
-            </Button>
-          )}
-
-          {canEditArrays && isEditingImported && (
+          {canEditArrays && isEditingImported ? (
             <>
               <Button onClick={handleSaveImportedSession} disabled={savingImported} className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
                 {savingImported ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2" size={16} />}
@@ -533,20 +524,27 @@ const SessionDetail = () => {
               </Button>
               <Button variant="outline" onClick={handleCancelImportedEdits} disabled={savingImported} className="border-zinc-700 text-zinc-300">Cancel</Button>
             </>
+          ) : (
+            <>
+              <Button onClick={handleGoLive} className="bg-gradient-to-r from-[#71E0DC] to-[#AEB2EF] text-zinc-900 font-bold hover:opacity-90" data-testid="go-live-btn">
+                <Radio size={16} className="mr-2" />Go Live
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" className="border-white/15 text-zinc-300 hover:text-white hover:bg-zinc-800" aria-label="More session actions">
+                    <MoreHorizontal size={18} />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="border-white/10 bg-zinc-950 text-zinc-200">
+                  {canEditArrays && <DropdownMenuItem onClick={() => setIsEditingImported(true)} className="cursor-pointer focus:bg-zinc-800"><Pencil size={15} className="mr-2" />Edit Session</DropdownMenuItem>}
+                  {canEditArrays && <DropdownMenuItem onClick={() => navigate(`/build/${id}`)} className="cursor-pointer focus:bg-zinc-800"><Pencil size={15} className="mr-2" />Open in Builder</DropdownMenuItem>}
+                  <DropdownMenuItem onClick={handleExportCSV} className="cursor-pointer focus:bg-zinc-800" data-testid="export-csv-btn"><Download size={15} className="mr-2" />Export CSV</DropdownMenuItem>
+                  <DropdownMenuItem onClick={copyToClipboard} className="cursor-pointer focus:bg-zinc-800" data-testid="copy-btn"><Copy size={15} className="mr-2" />Copy</DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleDelete} disabled={deleting} className="cursor-pointer text-red-200 focus:bg-red-500/10 focus:text-red-200" data-testid="delete-session-btn">{deleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 size={15} className="mr-2" />}Delete</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </>
           )}
-
-          <Button onClick={handleGoLive} className="bg-gradient-to-r from-[#71E0DC] to-[#AEB2EF] text-zinc-900 font-bold hover:opacity-90" data-testid="go-live-btn">
-            <Radio size={16} className="mr-2" />Go Live
-          </Button>
-          <Button variant="outline" onClick={handleExportCSV} className="border-[#71E0DC]/30 text-[#71E0DC] hover:bg-[#71E0DC]/10" data-testid="export-csv-btn">
-            <Download className="mr-2" size={16} />Export CSV
-          </Button>
-          <Button variant="outline" onClick={copyToClipboard} className="border-white/20 text-white hover:bg-zinc-800" data-testid="copy-btn">
-            <Copy className="mr-2" size={16} />Copy
-          </Button>
-          <Button variant="outline" onClick={handleDelete} disabled={deleting} className="border-red-500/30 text-red-400 hover:bg-red-500/10" data-testid="delete-session-btn">
-            {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Trash2 className="mr-2" size={16} />Delete</>}
-          </Button>
         </div>
       </div>
 

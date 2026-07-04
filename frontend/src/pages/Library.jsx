@@ -20,10 +20,12 @@ import {
   Save,
   Search,
   Upload,
+  MoreHorizontal,
   RotateCcw,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 import { getQuestionMemory, isMemoryBlocked, isMemoryUsed, memoryStatuses, readQuestionMemory, saveQuestionMemoryToProfile, syncQuestionMemoryFromProfile, upsertQuestionMemory } from "../lib/questionMemory";
 import { profileKeys, saveProfileValue, syncProfileJson } from "../lib/profileState";
 
@@ -364,17 +366,27 @@ export default function Library() {
           <p className="text-zinc-600 text-sm mt-1">{usedCount} marked used / {blockedMemoryCount} blocked by memory</p>
         </div>
         <div className="flex gap-2 flex-wrap justify-end">
-          <Button onClick={() => navigate("/import")} variant="outline" className="border-[#71E0DC]/35 text-[#71E0DC] hover:bg-[#71E0DC]/10 hover:text-white">
+          <Button onClick={() => navigate("/import")} className="gradient-btn">
             <Upload size={16} className="mr-2" />
             Import
           </Button>
-          <Button onClick={() => navigate("/build")} className="gradient-btn">
-            <MessageSquare size={16} className="mr-2" />
-            Write or Generate
-          </Button>
-          <Button onClick={fetchQuestions} variant="outline" className="border-zinc-700 text-zinc-300 hover:text-white">
-            Refresh
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="border-white/15 text-zinc-300 hover:text-white hover:bg-zinc-800" aria-label="More question bank actions">
+                <MoreHorizontal size={18} />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="border-white/10 bg-zinc-950 text-zinc-200">
+              <DropdownMenuItem onClick={() => navigate("/build")} className="cursor-pointer focus:bg-zinc-800">
+                <MessageSquare size={15} className="mr-2" />
+                Write or Generate
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={fetchQuestions} className="cursor-pointer focus:bg-zinc-800">
+                <RotateCcw size={15} className="mr-2" />
+                Refresh
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 

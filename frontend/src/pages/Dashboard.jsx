@@ -24,8 +24,10 @@ import {
   ThumbsDown,
   Upload,
   X,
+  MoreHorizontal,
 } from "lucide-react";
 import { toast } from "sonner";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 import { PROFILE_ACTIVE_VENUE_KEY, PROFILE_SHOW_TEMPLATES_KEY, PROFILE_VENUES_KEY, mergeProfileRecords, normalizeTemplate, normalizeVenue, readActiveVenueId, readLocalTemplates, readLocalVenues, recordsChanged, writeActiveVenueId, writeLocalTemplates, writeLocalVenues } from "../lib/venues";
 import { HOST_SETUP_CATEGORY, loadHostSetupSettings, loadProfileValue, saveHostSetupSettings, saveProfileValue, updateUserMetadata } from "../lib/profileState";
 
@@ -306,6 +308,10 @@ const Dashboard = () => {
       toast.error("Could not start a blank build");
     }
   };
+  const PrimaryDashboardIcon = savedBuild ? Save : PlusCircle;
+  const primaryDashboardAction = savedBuild
+    ? { label: "Continue Build", action: handleContinueBuild, testId: "dashboard-continue-build-btn" }
+    : { label: "New Build", action: handleNewBlankBuild, testId: "dashboard-build-btn" };
 
   if (loading) {
     return (
@@ -326,23 +332,34 @@ const Dashboard = () => {
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <Button
-            onClick={() => liveSession ? navigate(`/host-session/${liveSession.id}`) : navigate("/past-sessions")}
-            variant="outline"
-            className="border-[#71E0DC]/35 bg-[#71E0DC]/10 text-[#71E0DC] hover:bg-[#71E0DC]/15 hover:text-white"
-            data-testid="dashboard-live-hosting-btn"
-          >
-            <MonitorPlay className="mr-2" size={18} />
-            Open Live Hosting
+          <Button onClick={primaryDashboardAction.action} className="gradient-btn" data-testid={primaryDashboardAction.testId}>
+            <PrimaryDashboardIcon className="mr-2" size={18} />
+            {primaryDashboardAction.label}
           </Button>
-          <Button onClick={handleContinueBuild} variant="outline" className="border-white/20 text-white hover:bg-zinc-800" data-testid="dashboard-continue-build-btn">
-            <Save className="mr-2" size={18} />
-            Continue Build
-          </Button>
-          <Button onClick={handleNewBlankBuild} className="gradient-btn" data-testid="dashboard-build-btn">
-            <PlusCircle className="mr-2" size={18} />
-            New Build
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="border-white/15 text-zinc-300 hover:text-white hover:bg-zinc-800" aria-label="More dashboard actions">
+                <MoreHorizontal size={18} />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="border-white/10 bg-zinc-950 text-zinc-200">
+              <DropdownMenuItem onClick={() => liveSession ? navigate(`/host-session/${liveSession.id}`) : navigate("/past-sessions")} className="cursor-pointer focus:bg-zinc-800">
+                <MonitorPlay size={15} className="mr-2" />
+                Open Live Hosting
+              </DropdownMenuItem>
+              {savedBuild ? (
+                <DropdownMenuItem onClick={handleNewBlankBuild} className="cursor-pointer focus:bg-zinc-800">
+                  <PlusCircle size={15} className="mr-2" />
+                  New Build
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem onClick={handleContinueBuild} className="cursor-pointer focus:bg-zinc-800">
+                  <Save size={15} className="mr-2" />
+                  Continue Build
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
