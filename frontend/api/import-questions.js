@@ -168,7 +168,7 @@ function detectQuestionType(rawType, correctAnswer, wrongAnswers, imageUrl) {
   if (answer === "true" || answer === "false") return "true_false";
   if (type.includes("truefalse") || type === "tf") return "true_false";
   if (type.includes("multiple") || type.includes("choice") || wrongAnswers.length >= 2) return "multiple_choice";
-  if (type.includes("picture") || imageUrl) return "picture";
+  if (type.includes("picture") || type.includes("image") || imageUrl) return "picture";
   return "written";
 }
 
@@ -209,7 +209,7 @@ function normalizePdfText(value) {
 function normalizeRecord(record) {
   const questionText = clean(record.question_text);
   const correctAnswer = clean(record.correct_answer);
-  if (!questionText || !correctAnswer) return null;
+  if (!questionText) return null;
 
   let questionType = record.question_type || "written";
   const wrongAnswers = unique(record.incorrect_answers || [], correctAnswer);
@@ -236,7 +236,7 @@ function normalizeRecord(record) {
     };
   }
 
-  if (questionType === "multiple_choice" && wrongAnswers.length < 2) questionType = "written";
+  if (questionType === "multiple_choice" && wrongAnswers.length < 2 && correctAnswer) questionType = "written";
 
   return {
     ...base,
@@ -399,6 +399,16 @@ async function parsePdf(buffer, requestedSource) {
 
 async function parsePdfText(text, requestedSource, extraWarnings = []) {
   const normalizedText = normalizePdfText(text);
+  const pagePipeline = parsePdfPagesPipeline(text);
+  if (pagePipeline.questions.length) {
+    return {
+      source: requestedSource === "auto" ? "pdf" : requestedSource,
+      columns: ["Round", "Question Number", "Category", "Type", "Question", "Option A", "Option B", "Option C", "Option D", "Answer", "Fun Fact", "Image URL"],
+      questions: sortQuestionsByRound(pagePipeline.questions),
+      warnings: [...extraWarnings, ...pagePipeline.warnings],
+    };
+  }
+
   const aiQuestions = await extractQuestionsWithAi(text);
   if (aiQuestions.length) {
     return {
@@ -425,6 +435,261 @@ async function parsePdfText(text, requestedSource, extraWarnings = []) {
     questions: sortQuestionsByRound(parseQuestionsFromText(normalizedText)),
     warnings: [...extraWarnings, "Used simple PDF text parsing. Review the preview before importing."],
   };
+}
+
+function splitPdfPages(rawText) {
+  const text = String(rawText || "").replace(/\r/g, "\n");
+  const marked = text.split(/---\s*QUIZ_CRAFTER_PAGE\s+(\d+)\s*---/i);
+  if (marked.length > 2) {
+    const pages = [];
+    for (let index = 1; index < marked.length; index += 2) {
+      pages.push({ pageNumber: Number(marked[index]) || pages.length + 1, text: normalizePdfText(marked[index + 1] || "") });
+    }
+    return pages.filter((page) => page.text);
+  }
+
+  const formFeedPages = text.split(/\f+/).map((pageText, index) => ({ pageNumber: index + 1, text: normalizePdfText(pageText) })).filter((page) => page.text);
+  if (formFeedPages.length > 1) return formFeedPages;
+
+  return [{ pageNumber: 1, text: normalizePdfText(text) }].filter((page) => page.text);
+}
+
+function cleanOcrDoubledText(value) {
+  return clean(value)
+    .split(/\s+/)
+    .map((word) => {
+      const letters = word.replace(/[^A-Za-z]/g, "");
+      if (letters.length >= 4 && letters.length % 2 === 0) {
+        const half = letters.slice(0, letters.length / 2);
+        if (compactKey(half) === compactKey(letters.slice(letters.length / 2))) {
+          return word.replace(letters, half);
+        }
+      }
+      const collapsed = word.replace(/([A-Za-z])\1/g, "$1");
+      return compactKey(collapsed).length >= 3 ? collapsed : word;
+    })
+    .join(" ");
+}
+
+function normalizePdfCategory(value) {
+  const cleaned = cleanOcrDoubledText(value)
+    .replace(/^(category|topic|round categories?)\s*[:\-]\s*/i, "")
+    .replace(/\b(TRUE|FALSE|TRUE OR FALSE|MULTIPLE CHOICE|BONUS)\b/gi, "")
+    .trim();
+  if (!cleaned) return "";
+  return cleaned.toLowerCase().replace(/\b[a-z]/g, (letter) => letter.toUpperCase());
+}
+
+function classifyPdfPage(page, previousClass = "") {
+  const text = page.text;
+  if (!text) return "unknown";
+  if (/^(trivia night|welcome|title)$/i.test(clean(text.split("\n")[0] || ""))) return "title";
+  if (/\brules?\b|no phones|wager rules/i.test(text)) return "rules";
+  if (/\b(and the winner|tonight's winners|final scores|drumroll)\b/i.test(text)) return "winner";
+  if (/^(icons?|icon page)$/i.test(clean(text))) return "icons";
+  if (/\bbonus\b/i.test(text) && text.split(/\n+/).length <= 3 && !/\?/.test(text)) return "bonus_marker";
+  if (isRoundHeading(clean(text.split("\n")[0] || "")) || /^(easy|average|difficult)\s+round\b/i.test(clean(text.split("\n")[0] || ""))) return "round_marker";
+  if (/\bfun fact\b/i.test(text)) return "fun_fact";
+  if (/^(answer|correct answer)\b/i.test(clean(text.split("\n")[0] || ""))) return "answer";
+  if (previousClass === "question" || previousClass === "image_question") return "answer";
+  if (looksLikePdfQuestionPage(text, previousClass)) return hasImageQuestionSignal(text, previousClass) ? "image_question" : "question";
+  return "unknown";
+}
+
+function hasImageQuestionSignal(text, previousClass = "") {
+  return previousClass === "bonus_marker" || /\b(name this|identify this|pictured|image|photo|map|logo)\b/i.test(text);
+}
+
+function looksLikePdfQuestionPage(text, previousClass = "") {
+  if (previousClass === "bonus_marker" && clean(text).length > 8) return true;
+  if (/\btrue\s*(?:or|\/)?\s*false\b/i.test(text)) return true;
+  if (/(?:^|\n)\s*A[.)\-:]?\s+.+(?:\n|$)[\s\S]*(?:^|\n)\s*B[.)\-:]?\s+.+(?:\n|$)[\s\S]*(?:^|\n)\s*C[.)\-:]?\s+.+(?:\n|$)/i.test(text)) return true;
+  if (/\?/.test(text) && clean(text).length > 12) return true;
+  return false;
+}
+
+function detectRoundFromPage(page, currentRound) {
+  const lines = page.text.split(/\n+/).map(clean).filter(Boolean);
+  const heading = lines.find((line) => isRoundHeading(line) || /^(easy|average|difficult)\s+round$/i.test(line));
+  return heading ? getRoundFromHeading(heading, currentRound) : currentRound;
+}
+
+function extractOptionsFromQuestionText(text) {
+  const options = [];
+  const optionRegex = /(?:^|\n)\s*([A-D])[.)\-:]?\s+([^\n]+)/gi;
+  let match;
+  while ((match = optionRegex.exec(text)) !== null) {
+    const optionText = clean(match[2]);
+    if (optionText && !options.some((option) => compactKey(option) === compactKey(optionText))) options.push(optionText);
+  }
+  return options.slice(0, 4);
+}
+
+function stripOptionsAndLabels(text) {
+  return clean(
+    String(text || "")
+      .replace(/---\s*QUIZ_CRAFTER_PAGE\s+\d+\s*---/gi, "")
+      .replace(/\b(true\s*(?:or|\/)?\s*false|multiple choice|bonus question|question)\b/gi, " ")
+      .replace(/(?:^|\n)\s*[A-D][.)\-:]?\s+[^\n]+/gi, "\n")
+      .replace(/\b(category|topic)\s*[:\-]\s*[^\n]+/gi, " ")
+  );
+}
+
+function extractCategoryFromQuestionPage(text, fallback = "") {
+  const lines = text.split(/\n+/).map(clean).filter(Boolean);
+  const labeled = lines.find((line) => /^(category|topic)\s*[:\-]/i.test(line));
+  if (labeled) return normalizePdfCategory(labeled);
+  const categoryLine = lines.find((line) => {
+    const stripped = cleanOcrDoubledText(line);
+    return stripped.length >= 3 && stripped.length <= 34 && !/\?|true|false|bonus|round|\d+\s*points/i.test(stripped);
+  });
+  return normalizePdfCategory(categoryLine || fallback);
+}
+
+function extractQuestionTextFromPage(text) {
+  const lines = text.split(/\n+/).map(clean).filter(Boolean);
+  const questionLineIndex = lines.findIndex((line) => /\?/.test(line));
+  if (questionLineIndex !== -1) {
+    const collected = [];
+    for (let index = Math.max(0, questionLineIndex - 2); index < lines.length; index += 1) {
+      const line = lines[index];
+      if (/^(category|topic|true\s*(?:or|\/)?\s*false|multiple choice|bonus)$/i.test(line)) continue;
+      if (/^[A-D][.)\-:]?\s+/i.test(line)) break;
+      collected.push(line);
+      if (/\?/.test(line)) break;
+    }
+    return stripQuestionNumber(stripOptionsAndLabels(collected.join(" ")));
+  }
+
+  const stripped = stripQuestionNumber(stripOptionsAndLabels(text));
+  return stripped.split(/\s{2,}/)[0] || stripped;
+}
+
+function answerFromTrueFalseSlide(questionText, answerText) {
+  const text = clean(answerText);
+  if (/^(true|false)\b/i.test(text)) return /^true\b/i.test(text) ? "True" : "False";
+  if (/\b(?:actually|instead|not true|was not|were not|but it was|it was|they are from|they were from)\b/i.test(text)) return "False";
+  if (compactKey(text).includes(compactKey(questionText).slice(0, 24)) && text.length > questionText.length + 20) return "True";
+  return "";
+}
+
+function removeRepeatedQuestion(answerText, questionText) {
+  const answer = clean(answerText);
+  const question = clean(questionText);
+  if (!question) return answer;
+  return clean(answer.replace(question, " ").replace(stripQuestionNumber(question), " "));
+}
+
+function extractAnswerAndFact(question, answerPages) {
+  const answerText = normalizePdfText(answerPages.map((page) => page.text).join("\n"));
+  const cleaned = removeRepeatedQuestion(answerText, question.question_text);
+  const withoutFactLabel = cleaned.replace(/\bfun fact\b[:\-]?/ig, " ").trim();
+  if (!cleaned) return { answer: "", funFact: "" };
+
+  if (question.question_type === "true_false") {
+    const answer = answerFromTrueFalseSlide(question.question_text, cleaned);
+    return { answer, funFact: withoutFactLabel };
+  }
+
+  const options = Array.isArray(question._options) ? question._options : [];
+  const matchingOption = options.find((option) => new RegExp(`\\b${escapeRegex(option)}\\b`, "i").test(cleaned));
+  const lines = withoutFactLabel.split(/\n+/).map(clean).filter(Boolean);
+  const firstLine = lines[0] || withoutFactLabel;
+  const shortAnswer = matchingOption || firstLine.replace(/^(answer|correct answer)\s*[:\-]\s*/i, "");
+  const funFact = clean(lines.slice(matchingOption ? 0 : 1).join(" ")) || (withoutFactLabel.length > shortAnswer.length + 20 ? withoutFactLabel : "");
+  return { answer: clean(shortAnswer), funFact };
+}
+
+function escapeRegex(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function makeQuestionFromPage(page, currentRound, sourceOrder, previousClass) {
+  const text = page.text;
+  const options = extractOptionsFromQuestionText(text);
+  const isTrueFalse = /\btrue\s*(?:or|\/)?\s*false\b/i.test(text);
+  const isImage = hasImageQuestionSignal(text, previousClass);
+  const questionType = isTrueFalse ? "true_false" : options.length >= 3 ? "multiple_choice" : isImage ? "picture" : "written";
+  const record = normalizeRecord({
+    category: extractCategoryFromQuestionPage(text, isImage ? "Bonus" : ""),
+    round_name: currentRound.name,
+    round_order: currentRound.order,
+    source_order: sourceOrder,
+    import_order: sourceOrder,
+    question_text: extractQuestionTextFromPage(text),
+    correct_answer: "",
+    question_type: questionType,
+    incorrect_answers: options,
+    image_url: "",
+  });
+  return record ? { ...record, _options: options, _pageNumber: page.pageNumber, _flagForReview: true } : null;
+}
+
+function parsePdfPagesPipeline(rawText) {
+  const pages = splitPdfPages(rawText);
+  const warnings = [];
+  if (pages.length <= 1) return { questions: [], warnings };
+
+  const classified = [];
+  let previousClass = "";
+  pages.forEach((page) => {
+    const pageClass = classifyPdfPage(page, previousClass);
+    classified.push({ ...page, pageClass });
+    if (!["unknown", "title", "rules", "category_list", "winner", "icons"].includes(pageClass)) previousClass = pageClass;
+  });
+
+  let currentRound = { name: "Round 1", order: 1 };
+  let sourceOrder = 1;
+  let lastMarkerClass = "";
+  const questions = [];
+
+  for (let index = 0; index < classified.length; index += 1) {
+    const page = classified[index];
+    if (page.pageClass === "round_marker") {
+      currentRound = detectRoundFromPage(page, currentRound);
+      lastMarkerClass = page.pageClass;
+      continue;
+    }
+    if (page.pageClass === "bonus_marker") {
+      lastMarkerClass = page.pageClass;
+      continue;
+    }
+    if (!["question", "image_question"].includes(page.pageClass)) {
+      if (!["title", "rules", "category_list", "winner", "icons", "unknown"].includes(page.pageClass)) lastMarkerClass = page.pageClass;
+      continue;
+    }
+
+    const question = makeQuestionFromPage(page, currentRound, sourceOrder, lastMarkerClass);
+    if (!question) continue;
+
+    const answerPages = [];
+    let lookahead = index + 1;
+    while (lookahead < classified.length && answerPages.length < 2) {
+      const nextPage = classified[lookahead];
+      if (["question", "image_question", "round_marker", "bonus_marker"].includes(nextPage.pageClass)) break;
+      if (["answer", "fun_fact", "unknown"].includes(nextPage.pageClass)) answerPages.push(nextPage);
+      lookahead += 1;
+    }
+
+    const paired = extractAnswerAndFact(question, answerPages);
+    question.correct_answer = paired.answer;
+    question.fun_fact = paired.funFact || question.fun_fact;
+    question._flagForReview = !question.correct_answer;
+    questions.push(question);
+    sourceOrder += 1;
+    lastMarkerClass = page.pageClass;
+  }
+
+  const cleanedQuestions = questions.map(({ _options, _pageNumber, _flagForReview, ...question }) => question);
+  const expectedLow = 27;
+  if (cleanedQuestions.length && cleanedQuestions.length < expectedLow) {
+    warnings.push(`Only ${cleanedQuestions.length} questions found. Expected around 27 or 30. Review before importing.`);
+  }
+  const reviewCount = questions.filter((question) => question._flagForReview).length;
+  if (reviewCount) warnings.push(`${reviewCount} question${reviewCount === 1 ? "" : "s"} need answer review instead of being skipped.`);
+  warnings.push(`Processed ${pages.length} PDF page${pages.length === 1 ? "" : "s"} page-by-page.`);
+
+  return { questions: cleanedQuestions, warnings };
 }
 
 async function extractQuestionsWithAi(text) {
@@ -967,6 +1232,20 @@ async function handler(req, res) {
           correctAnswer: question.correct_answer,
           incorrectAnswers: question.incorrect_answers || "",
           questionType: question.question_type,
+          funFact: question.fun_fact || "",
+          imageUrl: question.image_url || "",
+          source_order: question.source_order || question.import_order || 0,
+        })),
+        questions: questions.map((question, index) => ({
+          round: question.round_name || question.category,
+          questionNumber: question.source_order || question.import_order || index + 1,
+          question: question.question_text,
+          category: question.category,
+          correctAnswer: question.correct_answer,
+          incorrectAnswers: question.incorrect_answers || "",
+          questionType: question.question_type,
+          funFact: question.fun_fact || "",
+          imageUrl: question.image_url || "",
         })),
         warnings: parsed.warnings || [],
       });

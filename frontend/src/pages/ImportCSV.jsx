@@ -24,7 +24,6 @@ import {
 import { toast } from "sonner";
 
 const SERVER_UPLOAD_LIMIT_BYTES = 4 * 1024 * 1024;
-const PDF_DIRECT_UPLOAD_LIMIT_BYTES = 3.8 * 1024 * 1024;
 
 const sourceOptions = [
   { value: "auto", label: "Auto Detect", description: "Best choice for most files" },
@@ -46,7 +45,7 @@ const getLargeFileMessage = (selectedFile) => {
 };
 
 const isPdfFile = (selectedFile) => selectedFile?.name?.toLowerCase().endsWith(".pdf") || selectedFile?.type === "application/pdf";
-const shouldExtractPdfInBrowser = (selectedFile) => isPdfFile(selectedFile) && selectedFile.size > PDF_DIRECT_UPLOAD_LIMIT_BYTES;
+const shouldExtractPdfInBrowser = (selectedFile) => isPdfFile(selectedFile);
 
 const ImportCSV = () => {
   const [file, setFile] = useState(null);
@@ -55,6 +54,7 @@ const ImportCSV = () => {
   const [importing, setImporting] = useState(false);
   const [preview, setPreview] = useState(null);
   const [previewError, setPreviewError] = useState(null);
+  const [pdfProgress, setPdfProgress] = useState("");
   const [result, setResult] = useState(null);
 
   const fileInputRef = useRef(null);
@@ -73,6 +73,7 @@ const ImportCSV = () => {
     setFile(selectedFile);
     setPreview(null);
     setPreviewError(null);
+    setPdfProgress("");
     setResult(null);
 
     const largeFileMessage = getLargeFileMessage(selectedFile);
@@ -144,11 +145,12 @@ const ImportCSV = () => {
     }
 
     setPreviewing(true);
+    setPdfProgress("");
     setPreviewError(isPdfFile(selectedFile) && largeFileMessage ? largeFileMessage : null);
 
     try {
       const response = shouldExtractPdfInBrowser(selectedFile)
-        ? await postExtractedPdf(selectedFile, "preview", selectedSource)
+        ? await postExtractedPdf(selectedFile, "preview", selectedSource, "", setPdfProgress)
         : await fetch("/api/import-questions", {
           method: "POST",
           body: buildFormData(selectedFile, "preview", selectedSource),
@@ -163,6 +165,7 @@ const ImportCSV = () => {
       toast.error(error.message || "Preview failed");
     } finally {
       setPreviewing(false);
+      setPdfProgress("");
     }
   };
 
@@ -170,6 +173,7 @@ const ImportCSV = () => {
     setSource(value);
     setPreview(null);
     setPreviewError(null);
+    setPdfProgress("");
     setResult(null);
     if (file) await handlePreview(file, value);
   };
@@ -187,6 +191,7 @@ const ImportCSV = () => {
     }
 
     setImporting(true);
+    setPdfProgress("");
 
     try {
       const {
@@ -197,7 +202,7 @@ const ImportCSV = () => {
       if (!userId) throw new Error("You must be signed in");
 
       const data = shouldExtractPdfInBrowser(file)
-        ? await parseJsonResponse(await postExtractedPdf(file, "import", source, userId), "Import failed")
+        ? await parseJsonResponse(await postExtractedPdf(file, "import", source, userId, setPdfProgress), "Import failed")
         : await postFormData(buildImportFormData(file, source, userId), "Import failed");
       setResult(data);
 
@@ -212,7 +217,20 @@ const ImportCSV = () => {
       toast.error(error.message || "Import failed");
     } finally {
       setImporting(false);
+      setPdfProgress("");
     }
+  };
+
+  const handleExportPreviewCsv = () => {
+    if (!preview?.questions?.length) return;
+    const csv = toImportCsv(preview.questions);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${(file?.name || "quiz-crafter-import").replace(/\.[^.]+$/, "")}-review.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
   const selectedSource = sourceOptions.find((option) => option.value === source) || sourceOptions[0];
@@ -261,7 +279,7 @@ const ImportCSV = () => {
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap gap-2">
-            {["PDF under 4 MB", "CrowdPurr CSV", "TriviaNow CSV", "Generic CSV", "TSV", "TXT"].map((col) => (
+            {["Large PDFs", "CrowdPurr CSV", "TriviaNow CSV", "Generic CSV", "TSV", "TXT"].map((col) => (
               <Badge key={col} className="bg-zinc-800 text-zinc-300">{col}</Badge>
             ))}
           </div>
@@ -300,7 +318,7 @@ const ImportCSV = () => {
           {previewing && (
             <div className="mt-6 flex items-center justify-center py-4">
               <Loader2 className="h-5 w-5 animate-spin text-zinc-500 mr-2" />
-              <span className="text-zinc-500">Analyzing file...</span>
+              <span className="text-zinc-500">{pdfProgress || "Analyzing file..."}</span>
             </div>
           )}
 
@@ -326,6 +344,13 @@ const ImportCSV = () => {
                 <p className="text-zinc-300">Format detected: <span className="text-[#71E0DC]">{preview.format}</span></p>
                 <p className="text-zinc-300">Questions found: <span className="text-[#71E0DC]">{preview.row_count}</span></p>
               </div>
+              {preview.questions?.length > 0 && (
+                <div className="mb-4">
+                  <Button type="button" variant="outline" size="sm" onClick={handleExportPreviewCsv} className="border-white/20 text-white hover:bg-zinc-800">
+                    Export Review CSV
+                  </Button>
+                </div>
+              )}
               {preview.columns?.length > 0 && (
                 <div className="mb-3">
                   <p className="text-zinc-500 text-sm mb-2">Detected Fields:</p>
@@ -454,7 +479,7 @@ async function loadPdfJs() {
   return window.pdfjsLib;
 }
 
-async function extractPdfTextInBrowser(file) {
+async function extractPdfTextInBrowser(file, onProgress) {
   const pdfjs = await loadPdfJs();
   const bytes = new Uint8Array(await file.arrayBuffer());
   const loadingTask = pdfjs.getDocument({ data: bytes, disableWorker: true });
@@ -462,6 +487,7 @@ async function extractPdfTextInBrowser(file) {
   const pages = [];
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    if (typeof onProgress === "function") onProgress(`Processing page ${pageNumber} of ${pdf.numPages}.`);
     const page = await pdf.getPage(pageNumber);
     const content = await page.getTextContent();
     const lines = [];
@@ -481,14 +507,14 @@ async function extractPdfTextInBrowser(file) {
     });
 
     if (currentLine.length) lines.push(currentLine.join(" "));
-    pages.push(lines.join("\n"));
+    pages.push(`--- QUIZ_CRAFTER_PAGE ${pageNumber} ---\n${lines.join("\n")}`);
   }
 
   return pages.join("\n\n");
 }
 
-async function postExtractedPdf(file, action, selectedSource, userId = "") {
-  const pdfText = await extractPdfTextInBrowser(file);
+async function postExtractedPdf(file, action, selectedSource, userId = "", onProgress) {
+  const pdfText = await extractPdfTextInBrowser(file, onProgress);
   return fetch("/api/import-questions", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -501,6 +527,40 @@ async function postExtractedPdf(file, action, selectedSource, userId = "") {
       sessionUserId: userId,
     }),
   });
+}
+
+const IMPORT_CSV_HEADER = ["Round", "Question Number", "Category", "Type", "Question", "Option A", "Option B", "Option C", "Option D", "Answer", "Fun Fact", "Image URL"];
+
+function csvEscape(value) {
+  const text = String(value ?? "");
+  if (/[",\n\r]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+  return text;
+}
+
+function optionValues(question) {
+  const options = Array.isArray(question.options) ? question.options : String(question.incorrectAnswers || question.incorrect_answers || "").split(";").map((item) => item.trim()).filter(Boolean);
+  const answer = question.correctAnswer || question.correct_answer || "";
+  if (question.questionType === "true_false" || question.question_type === "true_false") return ["True", "False", "", ""];
+  const merged = [answer, ...options].filter(Boolean);
+  return [merged[0] || "", merged[1] || "", merged[2] || "", merged[3] || ""];
+}
+
+function toImportCsv(questions) {
+  const rows = questions.map((question, index) => {
+    const options = optionValues(question);
+    return [
+      question.round || question.round_name || "",
+      question.questionNumber || question.source_order || index + 1,
+      question.category || "",
+      question.questionType || question.question_type || "",
+      question.question || question.question_text || "",
+      ...options,
+      question.correctAnswer || question.correct_answer || "",
+      question.funFact || question.fun_fact || "",
+      question.imageUrl || question.image_url || "",
+    ];
+  });
+  return [IMPORT_CSV_HEADER, ...rows].map((row) => row.map(csvEscape).join(",")).join("\n");
 }
 
 export default ImportCSV;
