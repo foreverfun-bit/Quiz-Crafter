@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../App";
 import { Card, CardContent } from "../components/ui/card";
@@ -18,6 +19,7 @@ import {
   Pencil,
   Save,
   Search,
+  Upload,
   RotateCcw,
   X,
 } from "lucide-react";
@@ -114,6 +116,7 @@ const toEditForm = (question) => ({
 
 export default function Library() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [questions, setQuestions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -355,14 +358,24 @@ export default function Library() {
       <div className="flex items-start justify-between gap-4 mb-8 flex-wrap">
         <div>
           <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">
-            Question <span className="gradient-text">Library</span>
+            Question <span className="gradient-text">Bank</span>
           </h1>
-          <p className="text-zinc-500">Browse and edit saved questions from imports, generated sets, and custom writing.</p>
+          <p className="text-zinc-500">Find, import, edit, and organize trivia questions for future sessions.</p>
           <p className="text-zinc-600 text-sm mt-1">{usedCount} marked used / {blockedMemoryCount} blocked by memory</p>
         </div>
-        <Button onClick={fetchQuestions} variant="outline" className="border-zinc-700 text-zinc-300 hover:text-white">
-          Refresh
-        </Button>
+        <div className="flex gap-2 flex-wrap justify-end">
+          <Button onClick={() => navigate("/import")} variant="outline" className="border-[#71E0DC]/35 text-[#71E0DC] hover:bg-[#71E0DC]/10 hover:text-white">
+            <Upload size={16} className="mr-2" />
+            Import
+          </Button>
+          <Button onClick={() => navigate("/build")} className="gradient-btn">
+            <MessageSquare size={16} className="mr-2" />
+            Write or Generate
+          </Button>
+          <Button onClick={fetchQuestions} variant="outline" className="border-zinc-700 text-zinc-300 hover:text-white">
+            Refresh
+          </Button>
+        </div>
       </div>
 
       <Card className="glass-card mb-6">

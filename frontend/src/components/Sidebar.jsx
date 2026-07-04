@@ -2,18 +2,13 @@ import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../App";
 import {
   LayoutDashboard,
-  Sparkles,
   Library,
   PlusCircle,
-  Upload,
   LogOut,
   X,
   History,
   MessageSquare,
   MapPin,
-  Trash2,
-  FolderOpen,
-  Layers,
 } from "lucide-react";
 
 const Sidebar = ({ isOpen, onClose }) => {
@@ -26,36 +21,21 @@ const Sidebar = ({ isOpen, onClose }) => {
     navigate("/login");
   };
 
-  const navSections = [
-    {
-      label: "Questions",
-      icon: Sparkles,
-      paths: ["/library", "/import", "/categories"],
-      links: [
-        { path: "/library", icon: Library, label: "Library" },
-        { path: "/import", icon: Upload, label: "Import" },
-        { path: "/categories", icon: FolderOpen, label: "Categories" },
-      ],
-    },
-    {
-      label: "Shows",
-      icon: Layers,
-      paths: ["/build", "/past-sessions", "/session", "/venues", "/show-templates", "/game-history"],
-      links: [
-        { path: "/build", icon: PlusCircle, label: "Build" },
-        { path: "/past-sessions", icon: History, label: "Sessions" },
-        { path: "/venues", icon: MapPin, label: "Setup" },
-      ],
-    },
+  const navItems = [
+    { path: "/", icon: LayoutDashboard, label: "Dashboard", end: true, testId: "nav-dashboard" },
+    { path: "/build", icon: PlusCircle, label: "Build", testId: "nav-build" },
+    { path: "/library", icon: Library, label: "Question Bank", activePaths: ["/library", "/import"], testId: "nav-question-bank" },
+    { path: "/past-sessions", icon: History, label: "Sessions", activePaths: ["/past-sessions", "/sessions", "/session", "/game-history"], testId: "nav-sessions" },
+    { path: "/host-tools", icon: MessageSquare, label: "Host Hub", activePaths: ["/host-tools", "/host-session"], testId: "nav-host-hub" },
+    { path: "/manage", icon: MapPin, label: "Manage", activePaths: ["/manage", "/categories", "/venues", "/show-templates", "/reset-data"], testId: "nav-manage" },
   ];
 
-  const isPathActive = (path) => {
+  const isPathActive = (path, activePaths = []) => {
     if (path === "/") return location.pathname === "/";
+    if (activePaths.some((activePath) => location.pathname === activePath || location.pathname.startsWith(`${activePath}/`))) return true;
     if (path === "/venues" && location.pathname.startsWith("/show-templates")) return true;
     return location.pathname === path || location.pathname.startsWith(`${path}/`);
   };
-
-  const isSectionActive = (section) => section.paths.some((path) => location.pathname === path || location.pathname.startsWith(`${path}/`));
 
   return (
     <>
@@ -85,67 +65,28 @@ const Sidebar = ({ isOpen, onClose }) => {
             </button>
           </div>
 
-          <nav className="flex-1 px-4 py-5 space-y-4 overflow-y-auto">
-            <NavLink
-              to="/"
-              end
-              onClick={onClose}
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${
-                  isActive
-                    ? "bg-gradient-to-r from-[#71E0DC]/20 to-[#AEB2EF]/20 text-white border border-[#71E0DC]/30"
-                    : "text-zinc-400 hover:text-white hover:bg-zinc-800/50"
-                }`
-              }
-              data-testid="nav-dashboard"
-            >
-              <LayoutDashboard size={20} />
-              <span className="font-medium">Dashboard</span>
-            </NavLink>
-
-            {navSections.map((section) => (
-              <NavSection
-                key={section.label}
-                section={section}
-                active={isSectionActive(section)}
-                isPathActive={isPathActive}
-                onClose={onClose}
-              />
-            ))}
-
-            <div className="pt-2 border-t border-white/10">
-              <NavLink
-                to="/host-tools"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  `flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${
-                    isActive
+          <nav className="flex-1 px-4 py-5 space-y-2 overflow-y-auto">
+            {navItems.map((item) => {
+              const ItemIcon = item.icon;
+              const active = isPathActive(item.path, item.activePaths);
+              return (
+                <NavLink
+                  key={item.path}
+                  to={item.path}
+                  end={item.end}
+                  onClick={onClose}
+                  className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${
+                    active
                       ? "bg-gradient-to-r from-[#71E0DC]/20 to-[#AEB2EF]/20 text-white border border-[#71E0DC]/30"
                       : "text-zinc-400 hover:text-white hover:bg-zinc-800/50"
-                  }`
-                }
-                data-testid="nav-host-tools"
-              >
-                <MessageSquare size={20} />
-                <span className="font-medium">Host Hub</span>
-              </NavLink>
-
-              <NavLink
-                to="/reset-data"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  `mt-2 flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${
-                    isActive
-                      ? "bg-red-500/15 text-red-200 border border-red-500/30"
-                      : "text-red-300/70 hover:text-red-200 hover:bg-red-500/10"
-                  }`
-                }
-                data-testid="nav-reset-data"
-              >
-                <Trash2 size={20} />
-                <span className="font-medium">Reset Data</span>
-              </NavLink>
-            </div>
+                  }`}
+                  data-testid={item.testId}
+                >
+                  <ItemIcon size={20} />
+                  <span className="font-medium">{item.label}</span>
+                </NavLink>
+              );
+            })}
           </nav>
 
           <div className="p-4 border-t border-white/10">
@@ -172,43 +113,6 @@ const Sidebar = ({ isOpen, onClose }) => {
         </div>
       </aside>
     </>
-  );
-};
-
-const NavSection = ({ section, active, isPathActive, onClose }) => {
-  const SectionIcon = section.icon;
-
-  return (
-    <div className={`rounded-lg border transition-colors ${active ? "border-[#71E0DC]/25 bg-[#71E0DC]/5" : "border-white/5 bg-zinc-950/20"}`}>
-      <div className={`flex items-center gap-3 px-4 pt-3 pb-2 ${active ? "text-white" : "text-zinc-500"}`}>
-        <SectionIcon size={18} />
-        <span className="text-xs font-semibold uppercase tracking-[0.16em]">{section.label}</span>
-      </div>
-
-      <div className="px-2 pb-2 space-y-1">
-        {section.links.map((item) => {
-          const ItemIcon = item.icon;
-          const activeLink = isPathActive(item.path);
-
-          return (
-            <NavLink
-              key={item.path}
-              to={item.path}
-              onClick={onClose}
-              className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors ${
-                activeLink
-                  ? "bg-zinc-800 text-white"
-                  : "text-zinc-400 hover:text-white hover:bg-zinc-800/50"
-              }`}
-              data-testid={`nav-${item.label.toLowerCase().replace(/\s+/g, "-")}`}
-            >
-              <ItemIcon size={16} />
-              <span className="font-medium">{item.label}</span>
-            </NavLink>
-          );
-        })}
-      </div>
-    </div>
   );
 };
 

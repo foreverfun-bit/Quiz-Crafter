@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -43,9 +44,10 @@ const hostToolTabs = [
 ];
 
 const HostTools = () => {
+  const [searchParams] = useSearchParams();
   const [sessions, setSessions] = useState([]);
   const [selectedSessionId, setSelectedSessionId] = useState("");
-  const [activeTab, setActiveTab] = useState("feedback");
+  const [activeTab, setActiveTab] = useState(() => hostToolTabs.some((tab) => tab.key === searchParams.get("tab")) ? searchParams.get("tab") : "feedback");
   const [players, setPlayers] = useState([]);
   const [feedback, setFeedback] = useState([]);
   const [categoryFeedback, setCategoryFeedback] = useState([]);
@@ -80,6 +82,11 @@ const HostTools = () => {
     answer: getQuestionAnswer(question),
     fun_fact: question.fun_fact || question.funFact || "",
   })).filter((question) => question.question && question.answer), [selectedSession]);
+
+  useEffect(() => {
+    const tab = searchParams.get("tab");
+    if (hostToolTabs.some((item) => item.key === tab)) setActiveTab(tab);
+  }, [searchParams]);
 
   useEffect(() => {
     const loadHostBranding = async () => {
