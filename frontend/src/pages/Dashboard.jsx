@@ -18,6 +18,7 @@ import {
   MessageSquare,
   MonitorPlay,
   PlusCircle,
+  Radio,
   Save,
   Sparkles,
   ThumbsDown,
@@ -259,6 +260,9 @@ const Dashboard = () => {
   const liveSession = nextSession || recentSessions[0] || null;
   const upcomingSchedule = useMemo(() => buildVenueSchedule(venues), [venues]);
   const likedCategories = stats.liked_categories || [];
+  const nextShow = upcomingSchedule[0] || null;
+  const buildProgress = getBuildProgress(savedBuild, starterTemplate);
+  const nextPrep = getNextPrep(buildProgress, starterTemplate, savedBuild, unusedCount);
 
   const persistTodos = (nextTodos) => {
     setTodos(nextTodos);
@@ -316,9 +320,9 @@ const Dashboard = () => {
       <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-4 mb-6">
         <div>
           <p className="text-sm font-semibold uppercase tracking-[0.18em] text-[#71E0DC]">Host Dashboard</p>
-          <h1 className="text-3xl md:text-4xl font-bold text-white mt-2">Tonight and next up</h1>
+          <h1 className="text-3xl md:text-4xl font-bold text-white mt-2">What should I work on next?</h1>
           <p className="text-zinc-500 mt-2 max-w-3xl">
-            A cleaner home base for {firstName}: upcoming venue nights, useful stats, and the next prep move.
+            Your home base for the next show: what is coming up, what needs attention, and the fastest way back in.
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
@@ -342,35 +346,39 @@ const Dashboard = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_0.65fr] gap-5 mb-5">
-        <ScheduleCard schedule={upcomingSchedule} nextSession={nextSession} savedBuild={savedBuild} onBuild={() => navigate("/build")} onVenues={() => navigate("/venues")} onHostSession={() => nextSession && navigate(`/host-session/${nextSession.id}`)} />
+      <NextShowHero
+        nextShow={nextShow}
+        savedBuild={savedBuild}
+        progress={buildProgress}
+        nextPrep={nextPrep}
+        nextSession={nextSession}
+        onBuild={() => navigate("/build")}
+        onHostSession={() => nextSession && navigate(`/host-session/${nextSession.id}`)}
+        onVenues={() => navigate("/venues")}
+      />
+
+      <div className="grid grid-cols-1 xl:grid-cols-[1fr_0.8fr] gap-5 mb-5">
+        <AssistantBriefing
+          firstName={firstName}
+          nextShow={nextShow}
+          savedBuild={savedBuild}
+          progress={buildProgress}
+          nextPrep={nextPrep}
+          onBuild={() => navigate("/build")}
+          onImport={() => navigate("/import")}
+          onNewBuild={handleNewBlankBuild}
+          onHostSession={() => nextSession && navigate(`/host-session/${nextSession.id}`)}
+          canHost={Boolean(nextSession)}
+        />
         <TodoCard todos={todos} todoText={todoText} setTodoText={setTodoText} onAdd={addTodo} onToggle={toggleTodo} onRemove={removeTodo} />
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
-        <MetricCard label="Questions" value={stats.total_questions} sub={`${unusedCount} unused`} icon={Library} tone="cyan" onClick={() => navigate("/library")} />
-        <MetricCard label="Sessions" value={stats.sessions_count} sub={`${stats.imported_sessions_count} past`} icon={Calendar} tone="purple" onClick={() => navigate("/past-sessions")} />
-        <MetricCard label="Venues" value={venues.length} sub={activeVenue ? activeVenue.name : "set one up"} icon={MapPin} tone="green" onClick={() => navigate("/venues")} />
-        <MetricCard label="Categories" value={approvedCategories.length} sub={`${rejectedCategories.length} rejected`} icon={FolderOpen} tone="amber" onClick={() => navigate("/categories")} />
+      <div className="mb-5">
+        <ScheduleCard schedule={upcomingSchedule} nextSession={nextSession} savedBuild={savedBuild} progress={buildProgress} onBuild={() => navigate("/build")} onVenues={() => navigate("/venues")} onHostSession={() => nextSession && navigate(`/host-session/${nextSession.id}`)} />
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[0.9fr_1.1fr] gap-5">
+      <div className="mb-5">
         <LikedCategoriesCard categories={likedCategories} onCategories={() => navigate("/categories")} />
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          <BreakdownCard title="Question Mix" items={[
-            { icon: CheckCircle, label: "True/False", value: stats.by_type?.true_false || 0, color: "text-[#71E0DC]" },
-            { icon: List, label: "Multiple Choice", value: stats.by_type?.multiple_choice || 0, color: "text-[#AEB2EF]" },
-            { icon: MessageSquare, label: "Written", value: stats.by_type?.written || 0, color: "text-emerald-400" },
-            { icon: Image, label: "Media", value: stats.media_count || 0, color: "text-amber-400" },
-          ]} />
-
-          <BreakdownCard title="Source Mix" items={[
-            { icon: Bot, label: "AI Generated", value: stats.ai_generated_count || 0, color: "text-[#71E0DC]" },
-            { icon: Upload, label: "Imported", value: stats.imported_count || 0, color: "text-[#AEB2EF]" },
-            { icon: FileText, label: "Manual", value: manualCount, color: "text-zinc-300" },
-            { icon: ThumbsDown, label: "Disliked", value: stats.disliked_count || 0, color: "text-red-400" },
-          ]} />
-        </div>
       </div>
 
       <Card className="glass-card mt-5" data-testid="dashboard-categories-section">
@@ -393,6 +401,34 @@ const Dashboard = () => {
           </div>
         </CardContent>
       </Card>
+
+      <section className="mt-5">
+        <div className="mb-3">
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-500">Insights</p>
+          <h2 className="text-xl font-bold text-white mt-1">Background signals</h2>
+          <p className="text-sm text-zinc-500 mt-1">Useful when you are tuning the system, but secondary to preparing the next night.</p>
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+          <MetricCard label="Questions" value={stats.total_questions} sub={`${unusedCount} unused`} icon={Library} tone="cyan" onClick={() => navigate("/library")} />
+          <MetricCard label="Sessions" value={stats.sessions_count} sub={`${stats.imported_sessions_count} past`} icon={Calendar} tone="purple" onClick={() => navigate("/past-sessions")} />
+          <MetricCard label="Venues" value={venues.length} sub={activeVenue ? activeVenue.name : "set one up"} icon={MapPin} tone="green" onClick={() => navigate("/venues")} />
+          <MetricCard label="Categories" value={approvedCategories.length} sub={`${rejectedCategories.length} rejected`} icon={FolderOpen} tone="amber" onClick={() => navigate("/categories")} />
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          <BreakdownCard title="Question Mix" items={[
+            { icon: CheckCircle, label: "True/False", value: stats.by_type?.true_false || 0, color: "text-[#71E0DC]" },
+            { icon: List, label: "Multiple Choice", value: stats.by_type?.multiple_choice || 0, color: "text-[#AEB2EF]" },
+            { icon: MessageSquare, label: "Written", value: stats.by_type?.written || 0, color: "text-emerald-400" },
+            { icon: Image, label: "Media", value: stats.media_count || 0, color: "text-amber-400" },
+          ]} />
+          <BreakdownCard title="Source Mix" items={[
+            { icon: Bot, label: "AI Generated", value: stats.ai_generated_count || 0, color: "text-[#71E0DC]" },
+            { icon: Upload, label: "Imported", value: stats.imported_count || 0, color: "text-[#AEB2EF]" },
+            { icon: FileText, label: "Manual", value: manualCount, color: "text-zinc-300" },
+            { icon: ThumbsDown, label: "Disliked", value: stats.disliked_count || 0, color: "text-red-400" },
+          ]} />
+        </div>
+      </section>
 
       {stats.total_questions === 0 && (
         <Card className="glass-card mt-5 border-[#71E0DC]/30">
@@ -419,13 +455,83 @@ const Dashboard = () => {
   );
 };
 
-const ScheduleCard = ({ schedule, nextSession, savedBuild, onBuild, onVenues, onHostSession }) => (
+const NextShowHero = ({ nextShow, savedBuild, progress, nextPrep, nextSession, onBuild, onHostSession, onVenues }) => {
+  const venue = nextShow?.venue;
+  const date = nextShow?.date;
+  const ready = progress.complete && Boolean(savedBuild?.questionCount);
+  return (
+    <Card className="glass-card mb-5 border-[#71E0DC]/30 overflow-hidden">
+      <CardContent className="p-5 md:p-6">
+        <div className="grid grid-cols-1 xl:grid-cols-[1fr_auto] gap-5 items-end">
+          <div>
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <Badge className="bg-[#71E0DC] text-zinc-950">Next show</Badge>
+              <Badge className={ready ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-200"}>{nextPrep.status}</Badge>
+            </div>
+            <h2 className="text-2xl md:text-4xl font-bold text-white">
+              {venue ? (venue.nightName || venue.name) : savedBuild?.sessionName || "No upcoming show yet"}
+            </h2>
+            <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm text-zinc-400">
+              <span className="flex items-center gap-2"><MapPin size={16} className="text-[#71E0DC]" />{venue?.name || venue?.nightName || "Set a venue"}</span>
+              <span className="flex items-center gap-2"><Calendar size={16} className="text-[#AEB2EF]" />{date ? `${date.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })} at ${formatScheduleTime(venue.startTime, venue.timeZone)}` : "Date/time TBD"}</span>
+              <span className="flex items-center gap-2"><CheckCircle size={16} className="text-emerald-400" />{progress.current}/{progress.goal || "?"} questions</span>
+            </div>
+            <p className="mt-4 text-lg text-zinc-200">{nextPrep.message}</p>
+          </div>
+          <div className="flex flex-wrap xl:flex-col gap-2 xl:min-w-48">
+            <Button className="gradient-btn" onClick={onBuild}>{savedBuild ? "Continue Building" : "Start Building"}</Button>
+            {nextSession && <Button variant="outline" onClick={onHostSession} className="border-[#71E0DC]/35 bg-[#71E0DC]/10 text-[#71E0DC] hover:bg-[#71E0DC]/15 hover:text-white"><MonitorPlay size={16} className="mr-2" />Open Host Mode</Button>}
+            {!venue && <Button variant="outline" onClick={onVenues} className="border-white/20 text-white hover:bg-zinc-800">Set Up Venue</Button>}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
+
+const AssistantBriefing = ({ firstName, nextShow, savedBuild, progress, nextPrep, onBuild, onImport, onNewBuild, onHostSession, canHost }) => {
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+  const showName = nextShow?.venue?.nightName || nextShow?.venue?.name || savedBuild?.sessionName || "your next trivia night";
+  const showDay = nextShow?.date ? nextShow.date.toLocaleDateString([], { weekday: "long" }) : "soon";
+  return (
+    <Card className="glass-card border-[#AEB2EF]/20">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-white flex items-center gap-2"><Sparkles className="text-[#71E0DC]" size={20} />Quiz Crafter briefing</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="rounded-xl border border-white/10 bg-zinc-950/45 p-4">
+          <p className="text-white font-semibold">{greeting}, {firstName}.</p>
+          <p className="mt-2 text-zinc-300">You have {showName} on {showDay}.</p>
+          <div className="mt-4 space-y-2 text-sm text-zinc-400">
+            {progress.rounds.length ? progress.rounds.slice(0, 4).map((round) => (
+              <div key={round.name} className="flex items-center justify-between gap-3">
+                <span>{round.name}</span>
+                <span className={round.remaining <= 0 ? "text-emerald-300" : "text-amber-200"}>{round.remaining <= 0 ? "complete" : `needs ${round.remaining}`}</span>
+              </div>
+            )) : <p>No active build yet.</p>}
+          </div>
+          <p className="mt-4 text-zinc-200">{nextPrep.question}</p>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button className="gradient-btn" onClick={onBuild}>Continue Building</Button>
+          <Button variant="outline" onClick={onBuild} className="border-white/20 text-white hover:bg-zinc-800">Finish with AI</Button>
+          <Button variant="outline" onClick={onImport} className="border-white/20 text-white hover:bg-zinc-800">Import Questions</Button>
+          <Button variant="outline" onClick={onNewBuild} className="border-white/20 text-white hover:bg-zinc-800">Start New Session</Button>
+          {canHost && <Button variant="outline" onClick={onHostSession} className="border-[#71E0DC]/30 text-[#71E0DC] hover:bg-[#71E0DC]/10">Open Host Mode</Button>}
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
+
+const ScheduleCard = ({ schedule, nextSession, savedBuild, progress, onBuild, onVenues, onHostSession }) => (
   <Card className="glass-card border-[#71E0DC]/25">
     <CardHeader className="pb-3">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <CardTitle className="text-white text-xl">Upcoming Schedule</CardTitle>
-          <p className="text-zinc-500 text-sm mt-1">Built from your venue day, frequency, and start time.</p>
+          <CardTitle className="text-white text-xl">Upcoming Shows</CardTitle>
+          <p className="text-zinc-500 text-sm mt-1">Each show shows the next prep action, not just the date.</p>
         </div>
         <Button variant="outline" size="sm" onClick={onVenues} className="border-white/20 text-white hover:bg-zinc-800">
           Venues
@@ -436,17 +542,21 @@ const ScheduleCard = ({ schedule, nextSession, savedBuild, onBuild, onVenues, on
       {schedule.length === 0 ? (
         <EmptyPanel icon={Calendar} title="No venue schedule yet" text="Add your regular trivia venues and this becomes your weekly hosting calendar." action="Set Up Venues" onClick={onVenues} />
       ) : (
-        schedule.map(({ venue, date }, index) => (
+        schedule.map(({ venue, date }, index) => {
+          const prep = index === 0 ? getNextPrep(progress, null, savedBuild, 0) : { status: "Upcoming", message: "Schedule set. Build when ready." };
+          return (
           <div key={`${venue.id}-${date.toISOString()}`} className={`rounded-lg border p-4 ${index === 0 ? "border-[#71E0DC]/35 bg-[#71E0DC]/10" : "border-white/10 bg-zinc-950/45"}`}>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <Badge className={index === 0 ? "bg-[#71E0DC] text-zinc-950" : "bg-white/10 text-zinc-300"}>{index === 0 ? "Next" : date.toLocaleDateString([], { weekday: "short" })}</Badge>
+                  <Badge className={prep.status === "Ready to host" ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-200"}>{prep.status}</Badge>
                   <p className="text-white font-bold truncate">{venue.nightName || venue.name}</p>
                 </div>
                 <p className="text-zinc-400 text-sm mt-2">
                   {date.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })} at {formatScheduleTime(venue.startTime, venue.timeZone)}
                 </p>
+                <p className="text-zinc-500 text-xs mt-1">{prep.message}</p>
                 {venue.address && <p className="text-zinc-600 text-xs mt-1 truncate">{venue.address}</p>}
               </div>
               {index === 0 && (
@@ -457,7 +567,7 @@ const ScheduleCard = ({ schedule, nextSession, savedBuild, onBuild, onVenues, on
               )}
             </div>
           </div>
-        ))
+        );})
       )}
     </CardContent>
   </Card>
@@ -687,9 +797,66 @@ function readSavedBuild() {
   const parsed = readSavedBuildState();
   if (!parsed) return null;
   const rounds = Array.isArray(parsed.rounds) ? parsed.rounds : [];
+  const questions = safeArray(parsed.questions);
   return {
     sessionName: parsed.sessionName || "",
+    sessionDate: parsed.sessionDate || "",
+    venueId: parsed.venueId || "",
+    rounds,
+    questions,
     questionCount: rounds.reduce((sum, round) => sum + safeArray(round.questionIds).length, 0),
+  };
+}
+
+function getBuildProgress(savedBuild, template) {
+  const rounds = safeArray(savedBuild?.rounds);
+  const fallbackPerRound = Number(template?.questionsPerRound || 0) || 0;
+  const templateRounds = Number(template?.roundCount || 0) || rounds.length || 0;
+  const normalizedRounds = rounds.length
+    ? rounds.map((round, index) => {
+      const target = Number(round?.targetCount || round?.questionsPerRound || fallbackPerRound || 0) || 0;
+      const count = safeArray(round?.questionIds).length;
+      return { name: round?.name || `Round ${index + 1}`, count, target, remaining: Math.max(0, target - count) };
+    })
+    : Array.from({ length: templateRounds }, (_, index) => ({ name: `Round ${index + 1}`, count: 0, target: fallbackPerRound, remaining: fallbackPerRound }));
+  const goal = normalizedRounds.reduce((sum, round) => sum + (round.target || 0), 0);
+  const current = savedBuild?.questionCount || normalizedRounds.reduce((sum, round) => sum + round.count, 0);
+  const firstNeeds = normalizedRounds.find((round) => round.remaining > 0);
+  return {
+    current,
+    goal,
+    rounds: normalizedRounds,
+    firstNeeds,
+    complete: Boolean(goal && current >= goal && !firstNeeds),
+  };
+}
+
+function getNextPrep(progress, template, savedBuild, unusedCount) {
+  if (!savedBuild) {
+    return {
+      status: template ? "Start build" : "Set up show",
+      message: template ? "No active build yet. Start from your template or import a past set." : "Add a template or venue, then start the next session.",
+      question: "What would you like to start with?",
+    };
+  }
+  if (progress.complete) {
+    return {
+      status: "Ready to host",
+      message: `Build has ${progress.current}/${progress.goal} questions and is ready for review or host mode.`,
+      question: "Ready to review or open host mode?",
+    };
+  }
+  if (progress.firstNeeds) {
+    return {
+      status: `Needs ${progress.firstNeeds.name}`,
+      message: `${progress.firstNeeds.name} needs ${progress.firstNeeds.remaining} question${progress.firstNeeds.remaining === 1 ? "" : "s"}.`,
+      question: `What would you like to do for ${progress.firstNeeds.name}?`,
+    };
+  }
+  return {
+    status: unusedCount > 0 ? "Ready for review" : "Needs questions",
+    message: unusedCount > 0 ? "Review the set and pull from your unused library if needed." : "Build has started, but it still needs more questions.",
+    question: "What would you like to work on next?",
   };
 }
 
