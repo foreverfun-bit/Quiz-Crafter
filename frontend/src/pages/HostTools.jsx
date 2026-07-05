@@ -329,6 +329,19 @@ const HostTools = () => {
     }
     if (network === "x") window.open(`https://twitter.com/intent/tweet?text=${text}&url=${url}`, "_blank", "noopener,noreferrer");
   };
+  const exportResults = () => {
+    const rows = [["Team", "Score", "Answered", "Correct"], ...analytics.teamStats.map((team) => [team.name, team.score, team.answered, team.correct])];
+    const csv = rows.map((row) => row.map((cell) => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${(selectedSession?.name || selectedSession?.session_name || "trivia-results").replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-results.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+  const buildNextSession = () => { window.location.href = "/build"; };
+  const scheduleNextShow = () => { window.location.href = "/manage"; };
 
   const generateClues = async (questionsToDraft = []) => {
     if (!selectedSession) return toast.error("Choose a session first");
@@ -363,29 +376,29 @@ const HostTools = () => {
       <div className="mb-6 flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
         <div>
           <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">Host Hub</h1>
-          <p className="text-zinc-500">Post-game feedback, player data, host outreach, and default branding live here. Start live hosting from the Dashboard.</p>
+          <p className="text-zinc-500">How did tonight go, and what should you do before the next show?</p>
         </div>
         <Badge className={connected ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/20" : "bg-zinc-800 text-zinc-300"}>{connected ? "Listening live" : "Choose a session"}</Badge>
       </div>
 
       <Card className="glass-card mb-6"><CardContent className="p-4 grid grid-cols-1 lg:grid-cols-[1fr_auto_auto] gap-3 items-end"><label className="text-sm text-zinc-400">Session<select value={selectedSessionId} onChange={(event) => setSelectedSessionId(event.target.value)} className="mt-1 w-full h-11 rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60">{sessions.map((session) => <option key={session.id} value={session.id}>{session.name || session.session_name || "Untitled Session"}</option>)}</select></label><Badge className="h-10 justify-center bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20"><Users size={15} className="mr-1" />{emailPlayers.length} this session</Badge><Badge className="h-10 justify-center bg-[#AEB2EF]/15 text-[#AEB2EF] border border-[#AEB2EF]/20"><Mail size={15} className="mr-1" />{allEmailContacts.length} total opt-ins</Badge></CardContent></Card>
 
-      <Card className="glass-card mb-6"><CardContent className="p-2 grid grid-cols-2 lg:grid-cols-5 gap-2">{hostToolTabs.map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => setActiveTab(key)} className={`h-12 rounded-lg border px-3 font-semibold flex items-center justify-center gap-2 transition ${activeTab === key ? "bg-[#71E0DC]/20 border-[#71E0DC]/45 text-white shadow-[0_0_24px_rgba(113,224,220,.12)]" : "bg-zinc-950/50 border-white/10 text-zinc-400 hover:text-white hover:border-white/20"}`}><Icon size={17} />{label}</button>)}</CardContent></Card>
-
-      {activeTab === "feedback" && <FeedbackInsightsPanel analytics={analytics} questionFeedback={questionFeedback} categoryRows={categoryRows} playerIdeas={playerIdeas} />}
-
-      {activeTab === "game" && <GameDataPanel analytics={analytics} />}
-
-      {activeTab === "outreach" && <OutreachPanel message={message} setMessage={setMessage} sendUpdate={sendUpdate} openEmailDraft={openEmailDraft} copyEmails={copyEmails} contacts={allEmailContacts} sessionEmailCount={emailPlayers.length} socialLinks={socialLinks} updateSocialLink={updateSocialLink} />}
-
-      {activeTab === "clues" && <CluesPanel aiDirection={aiDirection} setAiDirection={setAiDirection} generateClues={generateClues} generating={generating} selectedSession={selectedSession} clueQuestionRows={clueQuestionRows} selectedClueKeys={selectedClueKeys} setSelectedClueKeys={setSelectedClueKeys} message={message} setMessage={setMessage} socialPost={socialPost} setSocialPost={setSocialPost} copySocialPost={copySocialPost} openSocialComposer={openSocialComposer} socialLinks={socialLinks} />}
-
-      {activeTab === "branding" && <section className="max-w-5xl"><BrandingPanel branding={branding} setBranding={setBranding} onSave={saveDefaultBranding} /></section>}
+      <HostReviewWorkspace analytics={analytics} questionFeedback={questionFeedback} categoryRows={categoryRows} playerIdeas={playerIdeas} message={message} setMessage={setMessage} sendUpdate={sendUpdate} openEmailDraft={openEmailDraft} copyEmails={copyEmails} contacts={allEmailContacts} exportResults={exportResults} scheduleNextShow={scheduleNextShow} buildNextSession={buildNextSession} />
     </div>
   );
 };
 
 const Panel = ({ title, icon: Icon, children }) => <Card className="glass-card"><CardHeader><CardTitle className="text-white flex items-center gap-2"><Icon className="text-[#71E0DC]" />{title}</CardTitle></CardHeader><CardContent className="space-y-4">{children}</CardContent></Card>;
+
+const HostReviewWorkspace = ({ analytics, questionFeedback, categoryRows, playerIdeas, message, setMessage, sendUpdate, openEmailDraft, copyEmails, contacts, exportResults, scheduleNextShow, buildNextSession }) => {
+  const summary = analytics.summary || {};
+  const performance = analytics.performance || {};
+  return <section className="space-y-6"><Panel title="Session Summary" icon={BarChart3}><div className="grid grid-cols-2 lg:grid-cols-6 gap-3"><ReviewMetric label="Attendance" value={analytics.totals.players} sub={`${analytics.totals.emailOptIns} email opt-ins`} /><ReviewMetric label="Average Score" value={analytics.totals.averageScore} sub="across ranked teams" /><ReviewMetric label="Duration" value={analytics.totals.sessionDuration || "Not tracked"} sub="first to last signal" /><ReviewMetric label="Hardest" value={summary.hardestQuestion ? `${summary.hardestQuestion.correctPercent}%` : "-"} sub={summary.hardestQuestion?.category || "No answers yet"} /><ReviewMetric label="Easiest" value={summary.easiestQuestion ? `${summary.easiestQuestion.correctPercent}%` : "-"} sub={summary.easiestQuestion?.category || "No answers yet"} /><ReviewMetric label="Top Category" value={summary.highestRatedCategory?.label || "-"} sub={summary.highestRatedCategory ? `${summary.highestRatedCategory.likes} likes` : "No category votes"} /></div></Panel><Panel title="Question Performance" icon={TrendingUp}><div className="grid grid-cols-1 xl:grid-cols-2 gap-4"><PerformanceBlock title="Best Performing" rows={performance.bestPerforming} empty="Balanced, well-received questions will appear here." tone="good" /><PerformanceBlock title="Weak Questions" rows={performance.weakQuestions} empty="Low-rated, skipped, or poor-performing questions will appear here." tone="bad" /><PerformanceBlock title="Too Easy" rows={performance.tooEasy} empty="Questions with very high correct rates will appear here." /><PerformanceBlock title="Too Difficult" rows={performance.tooDifficult} empty="Questions with very low correct rates will appear here." /><PerformanceBlock title="Most Skipped" rows={performance.mostSkipped} empty="Skipped or low-response questions will appear here." /><PerformanceBlock title="Most Liked" rows={performance.mostLiked} empty="Player-liked questions will appear here." tone="good" /></div></Panel><Panel title="Quiz Crafter Review" icon={Sparkles}><div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-5"><div className="space-y-3">{analytics.reviewNotes.map((note) => <div key={note.title} className="rounded-xl border border-white/10 bg-zinc-950/60 p-4"><p className="font-black text-white">{note.title}</p><p className="mt-1 text-sm text-zinc-400">{note.body}</p></div>)}</div><div className="space-y-2"><Button onClick={() => toast.info("Rewrite workflow will open from selected weak questions next.")} className="w-full gradient-btn">Rewrite Weak Questions</Button><Button onClick={buildNextSession} variant="outline" className="w-full border-white/10 text-zinc-300 hover:text-white">Build Similar Questions</Button><Button onClick={() => toast.success("Marked for review. Retire controls will connect to Question Bank next.")} variant="outline" className="w-full border-white/10 text-zinc-300 hover:text-white">Retire Weak Questions</Button></div></div></Panel><Panel title="Player Feedback" icon={ThumbsUp}><div className="grid grid-cols-1 xl:grid-cols-3 gap-4"><FeedbackCard title="Question Likes & Dislikes" rows={questionFeedback} empty="Question thumbs will appear here after players rate live questions." /><FeedbackCard title="Category Likes & Dislikes" rows={categoryRows} empty="Category reactions appear after players rate round intros." /><IdeasFeedbackCard ideas={playerIdeas} /></div></Panel><Panel title="Follow-Up" icon={CheckCircle}><div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-5"><div><p className="text-sm text-zinc-400">Turn tonight into the next prep move. Outreach now lives here as a task, not a separate destination.</p><textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Thank-you note, schedule reminder, or next-show teaser..." className="mt-4 min-h-32 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><p className="mt-2 text-xs text-zinc-500">{contacts.length} total email opt-ins saved.</p></div><div className="grid gap-2"><Button onClick={exportResults} className="gradient-btn"><Copy size={16} className="mr-2" />Export Results</Button><Button onClick={scheduleNextShow} variant="outline" className="border-white/10 text-zinc-300 hover:text-white">Schedule Next Show</Button><Button onClick={openEmailDraft} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Mail size={16} className="mr-2" />Thank Players</Button><Button onClick={sendUpdate} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Send size={16} className="mr-2" />Send In-App Update</Button><Button onClick={copyEmails} variant="outline" className="border-white/10 text-zinc-300 hover:text-white">Copy Email List</Button><Button onClick={buildNextSession} variant="outline" className="border-white/10 text-zinc-300 hover:text-white">Build Next Session</Button></div></div></Panel></section>;
+};
+
+const ReviewMetric = ({ label, value, sub }) => <div className="rounded-xl border border-white/10 bg-zinc-950/60 p-4"><p className="text-xs font-bold uppercase tracking-wide text-zinc-500">{label}</p><p className="mt-2 truncate text-2xl font-black text-white">{value}</p><p className="mt-1 truncate text-xs text-zinc-500">{sub}</p></div>;
+
+const PerformanceBlock = ({ title, rows = [], empty, tone }) => <div className="rounded-xl border border-white/10 bg-zinc-950/45 p-4"><div className="mb-3 flex items-center justify-between gap-2"><h3 className="font-black text-white">{title}</h3><Badge className={tone === "good" ? "bg-emerald-500/15 text-emerald-300" : tone === "bad" ? "bg-red-500/15 text-red-300" : "bg-zinc-800 text-zinc-300"}>{rows.length}</Badge></div><div className="space-y-2">{rows.slice(0, 4).map((row) => <div key={row.key || row.label} className="rounded-lg border border-white/10 bg-zinc-950/70 p-3"><p className="line-clamp-2 text-sm font-semibold text-zinc-200">{row.label}</p><div className="mt-2 flex flex-wrap gap-2"><Badge className="bg-[#71E0DC]/15 text-[#71E0DC]">{row.category}</Badge><Badge className="bg-[#AEB2EF]/15 text-[#AEB2EF]">{row.correctPercent}% correct</Badge><Badge className="bg-zinc-800 text-zinc-300">{row.responses} answers</Badge>{Number(row.likes || 0) > 0 && <Badge className="bg-emerald-500/15 text-emerald-300">{row.likes} likes</Badge>}{Number(row.dislikes || 0) > 0 && <Badge className="bg-red-500/15 text-red-300">{row.dislikes} dislikes</Badge>}</div></div>)}{!rows.length && <p className="rounded-lg border border-white/10 bg-zinc-950/60 p-4 text-center text-sm text-zinc-500">{empty}</p>}</div></div>;
 
 const FeedbackInsightsPanel = ({ analytics, questionFeedback, categoryRows, playerIdeas }) => {
   const totalVotes = analytics.totals.questionVotes + analytics.totals.categoryVotes;
@@ -521,6 +534,27 @@ const percent = (value, total) => total > 0 ? Math.round((value / total) * 100) 
 const compactLabel = (value, fallback = "Unknown") => String(value || fallback).replace(/\s+/g, " ").trim();
 const sortByTotal = (rows) => [...rows].sort((a, b) => (b.total || 0) - (a.total || 0));
 const scoreRows = (rows) => [...rows].map((row) => ({ ...row, score: Number(row.likes || 0) - Number(row.dislikes || 0), total: Number(row.likes || 0) + Number(row.dislikes || 0) }));
+const estimateSessionDuration = (activity, answers) => {
+  const times = [...(Array.isArray(activity) ? activity : []), ...(Array.isArray(answers) ? answers : [])]
+    .map((item) => new Date(item.submittedAt || item.sentAt || item.joinedAt || item.at || item.createdAt || "").getTime())
+    .filter((time) => Number.isFinite(time));
+  if (times.length < 2) return "";
+  const minutes = Math.max(1, Math.round((Math.max(...times) - Math.min(...times)) / 60000));
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+};
+const makeReviewNotes = ({ categoryRows, weakQuestions, tooEasy, tooDifficult, highestRatedCategory, easiestQuestion, hardestQuestion, teamStats }) => {
+  const likedCategories = categoryRows.filter((row) => row.score > 0).slice(0, 3).map((row) => row.label);
+  const strugglingCategories = categoryRows.filter((row) => row.score < 0).slice(0, 3).map((row) => row.label);
+  const spread = teamStats.length > 1 ? Number(teamStats[0]?.score || 0) - Number(teamStats[teamStats.length - 1]?.score || 0) : 0;
+  return [
+    { title: "Categories players enjoyed", body: likedCategories.length ? `${likedCategories.join(", ")} got the strongest positive signals. Bring one of these vibes back, but rotate the exact category wording.` : highestRatedCategory ? `${highestRatedCategory.label} had the best category score.` : "No category winner yet. Use next show to collect round-intro feedback." },
+    { title: "Categories that struggled", body: strugglingCategories.length ? `${strugglingCategories.join(", ")} drew more negative feedback. Reframe these, make them more general, or pair them with easier clueing.` : "No category clearly struggled from feedback." },
+    { title: "Questions to rewrite", body: weakQuestions.length ? `${weakQuestions.length} question${weakQuestions.length === 1 ? "" : "s"} need review based on dislikes, low response rate, or difficulty.` : "No obvious weak questions from the saved signals." },
+    { title: "Balance suggestion", body: tooEasy.length && tooDifficult.length ? "You had both softballs and stumpers. Keep that range, but avoid stacking the hardest questions in the same round." : tooDifficult.length ? `The hardest question landed at ${hardestQuestion?.correctPercent ?? 0}% correct. Add more footholds or switch a few written questions to multiple choice.` : tooEasy.length ? `The easiest question landed at ${easiestQuestion?.correctPercent ?? 0}% correct. Add a twist or save these as warm-up material.` : "Difficulty looks fairly balanced from the available answer data." },
+    { title: "Next show recommendation", body: spread > 600 ? "Scores had a wide spread. Add more mid-level questions next week so more teams stay in range longer." : "Scores look close enough to keep the room engaged. Build next week with a similar mix and fresh categories from your approved list." },
+  ];
+};
 
 const buildAnalytics = ({ selectedSession, players, feedback, categoryFeedback, playerIdeas, answers, activity, emailPlayers, leaderboard, gradedAnswers }) => {
   const questions = sessionQuestions(selectedSession);
@@ -603,6 +637,19 @@ const buildAnalytics = ({ selectedSession, players, feedback, categoryFeedback, 
     groups[label].total += 1;
     return groups;
   }, {})).sort((a, b) => b.total - a.total);
+  const averageScore = teamStats.length ? Math.round(teamStats.reduce((sum, team) => sum + Number(team.score || 0), 0) / teamStats.length) : 0;
+  const completedRows = questionRows.filter((row) => row.responses > 0);
+  const easiestQuestion = [...completedRows].sort((a, b) => b.correctPercent - a.correctPercent || b.responses - a.responses)[0] || null;
+  const hardestQuestion = [...completedRows].sort((a, b) => a.correctPercent - b.correctPercent || b.responses - a.responses)[0] || null;
+  const mostSkipped = [...questionRows].sort((a, b) => a.responseRate - b.responseRate || b.responses - a.responses).slice(0, 5);
+  const tooEasy = completedRows.filter((row) => row.correctPercent >= 85).sort((a, b) => b.correctPercent - a.correctPercent).slice(0, 5);
+  const tooDifficult = completedRows.filter((row) => row.correctPercent > 0 && row.correctPercent <= 35).sort((a, b) => a.correctPercent - b.correctPercent).slice(0, 5);
+  const weakQuestions = questionRows.filter((row) => row.dislikes > row.likes || (row.responses > 0 && row.correctPercent <= 35) || row.responseRate < 50).sort((a, b) => b.dislikes - a.dislikes || a.correctPercent - b.correctPercent).slice(0, 6);
+  const bestPerforming = completedRows.filter((row) => row.correctPercent >= 45 && row.correctPercent <= 80).sort((a, b) => b.likes - a.likes || b.responses - a.responses).slice(0, 5);
+  const mostLiked = questionVoteRows.filter((row) => row.likes > 0).sort((a, b) => b.likes - a.likes || b.score - a.score).slice(0, 5);
+  const highestRatedCategory = [...categoryRows].sort((a, b) => b.score - a.score || b.likes - a.likes)[0] || null;
+  const sessionDuration = estimateSessionDuration(activity, answers);
+  const reviewNotes = makeReviewNotes({ categoryRows, weakQuestions, tooEasy, tooDifficult, highestRatedCategory, easiestQuestion, hardestQuestion, teamStats });
 
   return {
     totals: {
@@ -615,7 +662,12 @@ const buildAnalytics = ({ selectedSession, players, feedback, categoryFeedback, 
       categoryVotes: categoryFeedback.length,
       ideas: playerIdeas.length,
       screenExits: activity.filter((item) => item.eventType === "left_screen").length,
+      averageScore,
+      sessionDuration,
     },
+    summary: { easiestQuestion, hardestQuestion, highestRatedCategory },
+    performance: { bestPerforming, weakQuestions, tooEasy, tooDifficult, mostSkipped, mostLiked },
+    reviewNotes,
     topQuestions: questionVoteRows.filter((row) => row.total > 0).sort((a, b) => b.score - a.score || b.total - a.total).slice(0, 5),
     needsReview: questionVoteRows.filter((row) => row.total > 0 || row.responses > 0).sort((a, b) => a.score - b.score || b.dislikes - a.dislikes).slice(0, 5),
     categoryRows,
