@@ -37,7 +37,7 @@ const APPROVED_CATEGORY_STRICT_THRESHOLD = 14;
 const EXISTING_QUESTIONS_CACHE_MS = 5 * 60 * 1000;
 const STYLE_EXAMPLE_LIMIT = 24;
 const DUPLICATE_EXAMPLE_LIMIT = 55;
-let existingQuestionsCache = { expiresAt: 0, data: null, pending: null };
+let existingQuestionsCache = { expiresAt: 0, data: null, pending: null, libraryLimit: 0, sessionLimit: 0 };
 
 const BANNED_GENERIC_PATTERNS = [
   /capital of/i,
@@ -84,6 +84,7 @@ export default async function handler(req, res) {
       rejectedQuestions = [],
       currentBatchQuestions = [],
       sessionContext = null,
+      generationMode = "polished",
     } = req.body || {};
 
     if (!sessionId || !questionType) return res.status(400).json({ error: "Missing sessionId or questionType" });
@@ -95,6 +96,7 @@ export default async function handler(req, res) {
     const safeCount = clampCount(count);
     const difficultyKey = normalizeDifficulty(difficulty);
     const difficultyProfile = DIFFICULTY_PROFILES[difficultyKey];
+    const fastMode = generationMode === "quick";
     const cleanTheme = typeof theme === "string" ? theme.trim() : "";
     const cleanLockedCategories = dedupeCategoryStrings(normalizeStringArray(lockedCategories));
     const cleanApprovedCategories = dedupeCategoryStrings([...normalizeStringArray(approvedCategories), ...cleanLockedCategories]);
@@ -104,8 +106,8 @@ export default async function handler(req, res) {
     const cleanSessionContext = normalizeSessionContext(sessionContext);
     const requireApprovedCategories = cleanLockedCategories.length > 0 || cleanApprovedCategories.length > 0;
     const categoryExpansionMode = false;
-    const existingQuestions = avoidDuplicates || excludeUsed ? await fetchExistingQuestions() : [];
-    const styleExamples = buildStyleExamples(existingQuestions, normalizedQuestionType, cleanApprovedCategories);
+    const existingQuestions = avoidDuplicates || excludeUsed ? await fetchExistingQuestions(fastMode ? 220 : 1500, fastMode ? 100 : 500) : [];
+    const styleExamples = fastMode ? [] : buildStyleExamples(existingQuestions, normalizedQuestionType, cleanApprovedCategories);
     const existingFingerprints = new Set(existingQuestions.map((q) => fingerprint(q.question_text)));
     const existingAnswerPairs = new Set(existingQuestions.map((q) => answerPairFingerprint(q.question_text, q.correct_answer)));
     const existingAnswers = new Set(existingQuestions.map((q) => answerFingerprint(q.correct_answer)).filter(Boolean));
@@ -129,8 +131,9 @@ export default async function handler(req, res) {
       excludeUsed,
       avoidDuplicates,
       includeImagePrompt,
+      fastMode,
     });
-    const parsed = await requestCandidates(prompt);
+    const parsed = await requestCandidates(prompt, { fastMode });
     const validationInput = {
       candidates: parsed.candidates,
       config,
@@ -291,8 +294,8 @@ function formatContextQuestion(question) {
   return `- [${question.round || "Session"} / ${question.category || "Uncategorized"} / ${question.question_type || "written"}] ${question.question_text} Answer: ${question.correct_answer}`;
 }
 
-function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, categoryExpansionMode, cleanRejectedQuestions = [], cleanSessionContext = null, existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt }) {
-  const overGenerateCount = Math.min(18, Math.max(safeCount + 4, Math.ceil(safeCount * 1.7)));
+function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, categoryExpansionMode, cleanRejectedQuestions = [], cleanSessionContext = null, existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt, fastMode = false }) {
+  const overGenerateCount = fastMode ? Math.min(8, Math.max(safeCount + 1, Math.ceil(safeCount * 1.35))) : Math.min(18, Math.max(safeCount + 4, Math.ceil(safeCount * 1.7)));
   const lockedCategoryText = cleanLockedCategories.length ? `Locked categories are active. The category field must exactly match one of these locked categories: ${cleanLockedCategories.join(", ")}. Generate all candidates inside these locked categories until the host unlocks them.` : "";
   const approvedCategoryText = cleanLockedCategories.length
     ? lockedCategoryText
@@ -303,17 +306,17 @@ function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, clea
       : `Use varied broad categories such as: ${BROAD_CATEGORIES.join(", ")}.`;
   const excludedCategoryText = cleanExcludeCategories.length ? `Do not use these rejected or avoided categories: ${cleanExcludeCategories.join(", ")}.` : "";
   const themeText = cleanTheme ? `Theme/vibe/category guidance: ${cleanTheme}. Stay useful to that direction, but avoid repetitive question angles.` : "";
-  const tasteProfileText = buildTasteProfileText(styleExamples, cleanSessionContext);
+  const tasteProfileText = fastMode ? "" : buildTasteProfileText(styleExamples, cleanSessionContext);
   const styleText = styleExamples.length ? `Style calibration examples. These are not a source to copy from; they are the host's taste profile. Match their practical qualities: readable aloud, fresh-but-playable, specific without being tiny-name trivia, playful but clean, and useful for a US live bar crowd. Do not copy, lightly rewrite, reuse their answers, or generate the same topic angles:\n${styleExamples.map(formatStyleExample).join("\n")}` : "";
   const sessionContextText = cleanSessionContext && (cleanSessionContext.builtQuestions.length || cleanSessionContext.activeRoundQuestions.length || cleanSessionContext.roundDescriptions.length)
     ? [
         "Current build context. Use this to match the session's pacing, tone, readability, and clue style. Do not copy these questions, reuse their answers, or force the same categories if those categories are excluded:",
         cleanSessionContext.roundDescriptions.length ? `Round plan:\n${cleanSessionContext.roundDescriptions.map((round) => `- ${round.name || "Round"}${round.description ? `: ${round.description}` : ""}${round.categories?.length ? ` Categories already present: ${round.categories.join(", ")}` : ""}`).join("\n")}` : "",
         cleanSessionContext.activeRoundQuestions.length ? `Questions already in the active round:\n${cleanSessionContext.activeRoundQuestions.map(formatContextQuestion).join("\n")}` : "",
-        cleanSessionContext.builtQuestions.length ? `Questions already selected in the full session:\n${cleanSessionContext.builtQuestions.map(formatContextQuestion).join("\n")}` : "",
+        cleanSessionContext.builtQuestions.length ? `Questions already selected in the full session:\n${cleanSessionContext.builtQuestions.slice(0, fastMode ? 18 : 80).map(formatContextQuestion).join("\n")}` : "",
       ].filter(Boolean).join("\n")
     : "";
-  const duplicateExamples = existingQuestions.slice(0, DUPLICATE_EXAMPLE_LIMIT).map((q) => `- ${q.question_text}${q.correct_answer ? ` Answer: ${q.correct_answer}` : ""}`).join("\n");
+  const duplicateExamples = existingQuestions.slice(0, fastMode ? 16 : DUPLICATE_EXAMPLE_LIMIT).map((q) => `- ${q.question_text}${q.correct_answer ? ` Answer: ${q.correct_answer}` : ""}`).join("\n");
   const duplicateText = avoidDuplicates && duplicateExamples ? `Avoid duplicating, lightly rewording, using the same answer, or using the same answer-angle as these existing and past-session questions:\n${duplicateExamples}` : "";
   const rejectedText = cleanRejectedQuestions.length ? `The host explicitly rejected these generated questions. Do not return them, close rewrites, same-answer variations, or same topic-angle cousins:\n${cleanRejectedQuestions.map((question) => `- ${question}`).join("\n")}` : "";
   const usedText = excludeUsed ? "Assume the host has already used years of common trivia. Avoid the most repeated stock facts, but do not compensate by choosing tiny or joyless facts. Use familiar subjects with fresher angles." : "";
@@ -355,6 +358,8 @@ Use this exact shape:
     }
   ]
 }
+
+${fastMode ? "Quick draft mode: move fast. Return complete usable drafts with concise wording, plausible wrong answers when needed, and one short fun fact." : "Polished mode: spend extra care on clue path, wrong answers, and fun facts."}
 
 Freshness rules:
 - Do not produce classic bar-trivia staples or their reworded cousins.
@@ -492,17 +497,17 @@ function isDislikedQuestion(question) {
   return Boolean(question.is_disliked || question.disliked || rating === "disliked" || rating === "dislike" || rating === "rejected");
 }
 
-async function requestCandidates(prompt) {
+async function requestCandidates(prompt, { fastMode = false } = {}) {
   if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured in Vercel");
 
   const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: process.env.OPENAI_GENERATOR_MODEL || "gpt-4.1",
-      temperature: 0.82,
-      presence_penalty: 0.35,
-      frequency_penalty: 0.3,
+      model: fastMode ? (process.env.OPENAI_FAST_GENERATOR_MODEL || "gpt-4.1-mini") : (process.env.OPENAI_GENERATOR_MODEL || "gpt-4.1"),
+      temperature: fastMode ? 0.76 : 0.82,
+      presence_penalty: fastMode ? 0.2 : 0.35,
+      frequency_penalty: fastMode ? 0.2 : 0.3,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: "You are a careful, inventive trivia co-host for a weekly live trivia host. You learn from the host's saved library and previously hosted questions, avoid common quiz-bank questions, and return only valid JSON." },
@@ -661,18 +666,20 @@ function answerPairFingerprint(questionText, answer) {
   return `${fingerprint(questionText)}::${answerFingerprint(answer)}`;
 }
 
-async function fetchExistingQuestions() {
+async function fetchExistingQuestions(libraryLimit = 1500, sessionLimit = 500) {
   const now = Date.now();
-  if (existingQuestionsCache.data && existingQuestionsCache.expiresAt > now) return existingQuestionsCache.data;
+  if (existingQuestionsCache.data && existingQuestionsCache.expiresAt > now && existingQuestionsCache.libraryLimit >= libraryLimit && existingQuestionsCache.sessionLimit >= sessionLimit) {
+    return existingQuestionsCache.data.slice(0, libraryLimit + sessionLimit);
+  }
   if (existingQuestionsCache.pending) return existingQuestionsCache.pending;
 
   const supabaseUrl = process.env.SUPABASE_URL || process.env.REACT_APP_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.REACT_APP_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!supabaseUrl || !supabaseKey) return [];
 
-  existingQuestionsCache.pending = fetchExistingQuestionsUncached(supabaseUrl, supabaseKey)
+  existingQuestionsCache.pending = fetchExistingQuestionsUncached(supabaseUrl, supabaseKey, libraryLimit, sessionLimit)
     .then((data) => {
-      existingQuestionsCache = { data, expiresAt: Date.now() + EXISTING_QUESTIONS_CACHE_MS, pending: null };
+      existingQuestionsCache = { data, expiresAt: Date.now() + EXISTING_QUESTIONS_CACHE_MS, pending: null, libraryLimit, sessionLimit };
       return data;
     })
     .catch((error) => {
@@ -684,18 +691,18 @@ async function fetchExistingQuestions() {
   return existingQuestionsCache.pending;
 }
 
-async function fetchExistingQuestionsUncached(supabaseUrl, supabaseKey) {
+async function fetchExistingQuestionsUncached(supabaseUrl, supabaseKey, libraryLimit = 1500, sessionLimit = 500) {
   const base = supabaseUrl.replace(/\/$/, "");
   const headers = { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` };
 
   const [libraryQuestions, sessions] = await Promise.all([
     fetchJsonWithFallback([
-      `${base}/rest/v1/questions?select=question_text,correct_answer,category,question_type,fun_fact,is_liked,is_disliked,liked,disliked,rating,status&order=created_at.desc&limit=1500`,
-      `${base}/rest/v1/questions?select=question_text,correct_answer,category,question_type,fun_fact,rating&order=created_at.desc&limit=1500`,
-      `${base}/rest/v1/questions?select=question_text,correct_answer,category,question_type,fun_fact&order=created_at.desc&limit=1500`,
+      `${base}/rest/v1/questions?select=question_text,correct_answer,category,question_type,fun_fact,is_liked,is_disliked,liked,disliked,rating,status&order=created_at.desc&limit=${libraryLimit}`,
+      `${base}/rest/v1/questions?select=question_text,correct_answer,category,question_type,fun_fact,rating&order=created_at.desc&limit=${libraryLimit}`,
+      `${base}/rest/v1/questions?select=question_text,correct_answer,category,question_type,fun_fact&order=created_at.desc&limit=${libraryLimit}`,
     ], headers),
     fetchJsonWithFallback([
-      `${base}/rest/v1/sessions?select=true_false_questions,multiple_choice_questions,written_questions,picture_questions&order=created_at.desc&limit=500`,
+      `${base}/rest/v1/sessions?select=true_false_questions,multiple_choice_questions,written_questions,picture_questions&order=created_at.desc&limit=${sessionLimit}`,
     ], headers),
   ]);
   const sessionQuestions = Array.isArray(sessions) ? sessions.flatMap(extractSessionQuestions) : [];
