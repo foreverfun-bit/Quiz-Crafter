@@ -27,7 +27,7 @@ const Sidebar = ({ isOpen, onClose }) => {
     { path: "/library", icon: Library, label: "Question Bank", activePaths: ["/library", "/import"], testId: "nav-question-bank" },
     { path: "/past-sessions", icon: History, label: "Sessions", activePaths: ["/past-sessions", "/sessions", "/session", "/game-history"], testId: "nav-sessions" },
     { path: "/host-tools", icon: MessageSquare, label: "Host Hub", activePaths: ["/host-tools", "/host-session"], testId: "nav-host-hub" },
-    { path: "/manage", icon: MapPin, label: "Manage", activePaths: ["/manage", "/categories", "/venues", "/show-templates", "/reset-data"], testId: "nav-manage" },
+    { path: "/manage", icon: MapPin, label: "Manage", activePaths: ["/manage", "/categories", "/venues", "/show-templates", "/style-memory", "/reset-data"], testId: "nav-manage" },
   ];
 
   const isPathActive = (path, activePaths = []) => {

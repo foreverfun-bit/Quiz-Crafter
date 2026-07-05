@@ -33,6 +33,7 @@ import { toast } from "sonner";
 import { canonicalCategory, dedupeCategories } from "../lib/categories";
 import { memoryRejectedQuestionTexts, readQuestionMemory, saveQuestionMemoryToProfile, syncQuestionMemoryFromProfile, upsertQuestionMemory } from "../lib/questionMemory";
 import { profileKeys, saveProfileValue, syncProfileJson } from "../lib/profileState";
+import { readHostStyleProfile, rememberStyleFeedback, syncHostStyleProfile } from "../lib/hostStyleMemory";
 
 const questionTypes = [
   { value: "true_false", label: "True/False", icon: CheckCircle, color: "text-[#71E0DC]", round: "Round 1" },
@@ -135,6 +136,7 @@ const Generate = ({ initialCreateMode = "generate" }) => {
   const [includeMediaIdeas, setIncludeMediaIdeas] = useState(false);
   const [lockedCategories, setLockedCategories] = useState(() => readJsonArray(LOCKED_CATEGORY_KEY));
   const [questionMemory, setQuestionMemory] = useState(readQuestionMemory);
+  const [, setHostStyleProfile] = useState(readHostStyleProfile);
 
   const [roundThemeSubject, setRoundThemeSubject] = useState("");
   const [freeBuildType, setFreeBuildType] = useState("multiple_choice");
@@ -148,15 +150,17 @@ const Generate = ({ initialCreateMode = "generate" }) => {
   useEffect(() => {
     const syncGeneratorProfileState = async () => {
       try {
-        const [locked, memory] = await Promise.all([
+        const [locked, memory, styleProfile] = await Promise.all([
           syncProfileJson({ localKey: LOCKED_CATEGORY_KEY, profileKey: profileKeys.lockedCategories, fallback: [], merge: "array" }),
           syncQuestionMemoryFromProfile(supabase),
+          syncHostStyleProfile(),
           syncProfileJson({ localKey: CATEGORY_PREF_KEY, profileKey: profileKeys.categoryPrefs, fallback: { approved: [], rejected: [] }, merge: "categoryPrefs" }),
           syncProfileJson({ localKey: REJECTED_AI_KEY, profileKey: profileKeys.rejectedAi, fallback: [], merge: "array" }),
           syncProfileJson({ localKey: GENERATED_HISTORY_KEY, profileKey: profileKeys.generatedHistory, fallback: [], merge: "array" }),
         ]);
         setLockedCategories(cleanCategoryList(Array.isArray(locked) ? locked : []));
         setQuestionMemory(memory);
+        setHostStyleProfile(styleProfile);
       } catch (error) {
         console.warn("Generator profile sync unavailable:", error);
       }
@@ -214,6 +218,8 @@ const Generate = ({ initialCreateMode = "generate" }) => {
 
   const callGenerateRoute = async ({ questionType, count, themeValue, excludeCategories = [], extraRejectedQuestions = [], difficultyOverride = null, lockedCategoriesOverride = null }) => {
     const preferences = getGenerationPreferences(extraRejectedQuestions, lockedCategoriesOverride);
+    const latestStyle = readHostStyleProfile();
+    setHostStyleProfile(latestStyle);
 
     const { data } = await axios.post("/api/generate-session-candidates", {
       sessionId: `generate-${mode}`,
@@ -226,6 +232,7 @@ const Generate = ({ initialCreateMode = "generate" }) => {
       excludeCategories,
       count,
       currentBatchQuestions: [...readJsonArray(GENERATED_HISTORY_KEY), ...visibleCandidateFingerprints()],
+      hostStyleProfile: latestStyle,
       ...preferences,
     });
 
@@ -415,6 +422,7 @@ const Generate = ({ initialCreateMode = "generate" }) => {
       const nextMemory = upsertQuestionMemory(candidate, { status: "too_common" }, readQuestionMemory());
       setQuestionMemory(nextMemory);
       saveQuestionMemoryToProfile(supabase, nextMemory).catch((error) => console.warn("Question memory profile save unavailable:", error));
+      rememberStyleFeedback(candidate, "too_common", "Discarded generated question").then(setHostStyleProfile).catch((error) => console.warn("Style feedback save unavailable:", error));
     }
 
     setGroupedCandidates((prev) => ({
@@ -423,6 +431,13 @@ const Generate = ({ initialCreateMode = "generate" }) => {
     }));
 
     toast.success("Question discarded permanently");
+  };
+
+  const handleStyleFeedback = (type, index, action) => {
+    const candidate = groupedCandidates[type]?.[index];
+    if (!candidate) return;
+    rememberStyleFeedback(candidate, action).then(setHostStyleProfile).catch((error) => console.warn("Style feedback save unavailable:", error));
+    toast.success(action === "more_like_this" ? "Quiz Crafter will make more like this" : "Style memory updated");
   };
 
   const handleRejectCategory = (type, index) => {
@@ -479,6 +494,7 @@ const Generate = ({ initialCreateMode = "generate" }) => {
         [type]: prev[type].filter((_, i) => i !== index),
       }));
 
+      rememberStyleFeedback(candidate, "keep", "Saved generated question to library").then(setHostStyleProfile).catch((error) => console.warn("Style feedback save unavailable:", error));
       toast.success("Saved to library");
     } catch (error) {
       console.error("Save error:", error);
@@ -542,6 +558,27 @@ const Generate = ({ initialCreateMode = "generate" }) => {
                 <span className="text-amber-200">{candidate.image_prompt}</span>
               </p>
             )}
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center gap-1.5 rounded-lg border border-white/10 bg-zinc-950/45 p-2">
+            <span className="mr-1 text-[11px] font-bold uppercase tracking-wide text-zinc-500">Style</span>
+            {[
+              { key: "keep", label: "Keep" },
+              { key: "too_easy", label: "Too easy" },
+              { key: "too_common", label: "Too common" },
+              { key: "not_my_style", label: "Not my style" },
+              { key: "more_like_this", label: "More like this" },
+            ].map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => handleStyleFeedback(type, index, item.key)}
+                disabled={isBusy || savingKey === saveId}
+                className="rounded-full border border-white/10 bg-zinc-900 px-2.5 py-1 text-[11px] font-semibold text-zinc-300 hover:border-[#71E0DC]/40 hover:text-white disabled:opacity-50"
+              >
+                {item.label}
+              </button>
+            ))}
           </div>
 
           <div

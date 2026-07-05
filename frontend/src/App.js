@@ -24,6 +24,7 @@ import PlayerView from "./pages/PlayerView";
 import HostTools from "./pages/HostTools";
 import Venues from "./pages/Venues";
 import Manage from "./pages/Manage";
+import StyleMemory from "./pages/StyleMemory";
 import { GameHistory } from "./pages/GameHistory";
 import GameHistoryDetail from "./pages/GameHistory";
 
@@ -349,6 +350,7 @@ function App() {
             <Route path="/game-history" element={<ProtectedRoute><AppLayout><GameHistory /></AppLayout></ProtectedRoute>} />
             <Route path="/host-tools" element={<ProtectedRoute><AppLayout><HostTools /></AppLayout></ProtectedRoute>} />
             <Route path="/manage" element={<ProtectedRoute><AppLayout><Manage /></AppLayout></ProtectedRoute>} />
+            <Route path="/style-memory" element={<ProtectedRoute><AppLayout><StyleMemory /></AppLayout></ProtectedRoute>} />
             <Route path="/venues" element={<ProtectedRoute><AppLayout><Venues /></AppLayout></ProtectedRoute>} />
             <Route path="/show-templates" element={<ProtectedRoute><AppLayout><Venues initialTab="templates" /></AppLayout></ProtectedRoute>} />
             <Route path="/game-history/:historyId" element={<ProtectedRoute><AppLayout><GameHistoryDetail /></AppLayout></ProtectedRoute>} />

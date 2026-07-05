@@ -85,6 +85,7 @@ export default async function handler(req, res) {
       currentBatchQuestions = [],
       sessionContext = null,
       generationMode = "polished",
+      hostStyleProfile = null,
     } = req.body || {};
 
     if (!sessionId || !questionType) return res.status(400).json({ error: "Missing sessionId or questionType" });
@@ -104,6 +105,7 @@ export default async function handler(req, res) {
     const cleanExcludeCategories = dedupeCategoryStrings([...normalizeStringArray(excludeCategories), ...cleanRejectedCategories].filter((category) => !containsCategory(cleanLockedCategories, category)));
     const cleanRejectedQuestions = dedupeStrings([...normalizeStringArray(rejectedQuestions), ...normalizeStringArray(currentBatchQuestions)]);
     const cleanSessionContext = normalizeSessionContext(sessionContext);
+    const cleanHostStyleProfile = normalizeHostStyleProfile(hostStyleProfile);
     const requireApprovedCategories = cleanLockedCategories.length > 0 || cleanApprovedCategories.length > 0;
     const categoryExpansionMode = false;
     const existingQuestions = avoidDuplicates || excludeUsed ? await fetchExistingQuestions(fastMode ? 220 : 1500, fastMode ? 100 : 500) : [];
@@ -132,6 +134,7 @@ export default async function handler(req, res) {
       avoidDuplicates,
       includeImagePrompt,
       fastMode,
+      cleanHostStyleProfile,
     });
     const parsed = await requestCandidates(prompt, { fastMode });
     const validationInput = {
@@ -290,11 +293,67 @@ function normalizeSessionContext(value) {
   return { builtQuestions, activeRoundQuestions, roundDescriptions, categories };
 }
 
+function normalizeHostStyleProfile(value) {
+  const source = value && typeof value === "object" ? value : {};
+  const cleanExamples = (examples) => (Array.isArray(examples) ? examples : [])
+    .map((item) => ({
+      category: cleanText(item?.category),
+      question_type: normalizeFetchedType(item?.question_type || item?.type),
+      question_text: cleanText(item?.question_text || item?.question),
+      correct_answer: cleanText(item?.correct_answer || item?.answer),
+      fun_fact: cleanText(item?.fun_fact),
+      note: cleanText(item?.note),
+    }))
+    .filter((item) => item.question_text && item.correct_answer)
+    .slice(0, 6);
+  return {
+    preferredDifficulty: cleanText(source.preferredDifficulty),
+    favoriteCategories: dedupeCategoryStrings(normalizeStringArray(source.favoriteCategories)).slice(0, 18),
+    avoidedCategories: dedupeCategoryStrings(normalizeStringArray(source.avoidedCategories)).slice(0, 18),
+    commonQuestionTypes: normalizeStringArray(source.commonQuestionTypes).slice(0, 6),
+    preferredRoundStructure: cleanText(source.preferredRoundStructure),
+    writingStyleNotes: cleanText(source.writingStyleNotes),
+    funFactStyle: cleanText(source.funFactStyle),
+    wrongAnswerStyle: cleanText(source.wrongAnswerStyle),
+    categoriesThatPerformWell: dedupeCategoryStrings(normalizeStringArray(source.categoriesThatPerformWell)).slice(0, 18),
+    categoriesThatPerformPoorly: dedupeCategoryStrings(normalizeStringArray(source.categoriesThatPerformPoorly)).slice(0, 18),
+    venuePreferences: cleanText(source.venuePreferences),
+    examplesOfGoodQuestions: cleanExamples(source.examplesOfGoodQuestions),
+    examplesOfBadQuestions: cleanExamples(source.examplesOfBadQuestions),
+  };
+}
+
+function buildHostStyleProfileText(profile) {
+  if (!profile || !Object.values(profile).some((value) => Array.isArray(value) ? value.length : Boolean(value))) return "";
+  const goodExamples = profile.examplesOfGoodQuestions?.length
+    ? `Sounds-like-me examples:\n${profile.examplesOfGoodQuestions.slice(0, 4).map((q) => `- [${q.category || "Category"} / ${q.question_type}] ${q.question_text} Answer: ${q.correct_answer}${q.fun_fact ? ` Fun fact: ${q.fun_fact}` : ""}`).join("\n")}`
+    : "";
+  const badExamples = profile.examplesOfBadQuestions?.length
+    ? `Avoid-this-style examples:\n${profile.examplesOfBadQuestions.slice(0, 4).map((q) => `- [${q.category || "Category"} / ${q.question_type}] ${q.question_text} Answer: ${q.correct_answer}${q.note ? ` (${q.note})` : ""}`).join("\n")}`
+    : "";
+  return [
+    "Host Style Profile for Jewelzz / Forever Fun Events:",
+    profile.preferredDifficulty ? `- Preferred difficulty: ${profile.preferredDifficulty}` : "",
+    profile.writingStyleNotes ? `- Voice and wording: ${profile.writingStyleNotes}` : "",
+    profile.funFactStyle ? `- Fun fact style: ${profile.funFactStyle}` : "",
+    profile.wrongAnswerStyle ? `- Wrong answer style: ${profile.wrongAnswerStyle}` : "",
+    profile.preferredRoundStructure ? `- Round structure: ${profile.preferredRoundStructure}` : "",
+    profile.favoriteCategories?.length ? `- Favorite categories: ${profile.favoriteCategories.join(", ")}` : "",
+    profile.avoidedCategories?.length ? `- Avoided categories: ${profile.avoidedCategories.join(", ")}` : "",
+    profile.categoriesThatPerformWell?.length ? `- Categories that perform well: ${profile.categoriesThatPerformWell.join(", ")}` : "",
+    profile.categoriesThatPerformPoorly?.length ? `- Categories to handle carefully or rewrite broadly: ${profile.categoriesThatPerformPoorly.join(", ")}` : "",
+    profile.venuePreferences ? `- Venue preferences: ${profile.venuePreferences}` : "",
+    goodExamples,
+    badExamples,
+    "Before returning JSON, silently style-check every candidate. Revise or replace any candidate that feels generic, too easy, too common, overexplained, category-repetitive, or not like this host would approve it.",
+  ].filter(Boolean).join("\n");
+}
+
 function formatContextQuestion(question) {
   return `- [${question.round || "Session"} / ${question.category || "Uncategorized"} / ${question.question_type || "written"}] ${question.question_text} Answer: ${question.correct_answer}`;
 }
 
-function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, categoryExpansionMode, cleanRejectedQuestions = [], cleanSessionContext = null, existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt, fastMode = false }) {
+function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, categoryExpansionMode, cleanRejectedQuestions = [], cleanSessionContext = null, existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt, fastMode = false, cleanHostStyleProfile = null }) {
   const overGenerateCount = fastMode ? Math.min(8, Math.max(safeCount + 1, Math.ceil(safeCount * 1.35))) : Math.min(18, Math.max(safeCount + 4, Math.ceil(safeCount * 1.7)));
   const lockedCategoryText = cleanLockedCategories.length ? `Locked categories are active. The category field must exactly match one of these locked categories: ${cleanLockedCategories.join(", ")}. Generate all candidates inside these locked categories until the host unlocks them.` : "";
   const approvedCategoryText = cleanLockedCategories.length
@@ -307,6 +366,7 @@ function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, clea
   const excludedCategoryText = cleanExcludeCategories.length ? `Do not use these rejected or avoided categories: ${cleanExcludeCategories.join(", ")}.` : "";
   const themeText = cleanTheme ? `Theme/vibe/category guidance: ${cleanTheme}. Stay useful to that direction, but avoid repetitive question angles.` : "";
   const tasteProfileText = fastMode ? "" : buildTasteProfileText(styleExamples, cleanSessionContext);
+  const hostStyleProfileText = buildHostStyleProfileText(cleanHostStyleProfile);
   const styleText = styleExamples.length ? `Style calibration examples. These are not a source to copy from; they are the host's taste profile. Match their practical qualities: readable aloud, fresh-but-playable, specific without being tiny-name trivia, playful but clean, and useful for a US live bar crowd. Do not copy, lightly rewrite, reuse their answers, or generate the same topic angles:\n${styleExamples.map(formatStyleExample).join("\n")}` : "";
   const sessionContextText = cleanSessionContext && (cleanSessionContext.builtQuestions.length || cleanSessionContext.activeRoundQuestions.length || cleanSessionContext.roundDescriptions.length)
     ? [
@@ -395,6 +455,7 @@ Trivia host style:
 - image_url must be "".
 - difficulty must be "${difficultyKey}".
 ${imagePromptRule}
+${hostStyleProfileText}
 ${hostHardText}
 ${tasteProfileText}
 ${sessionContextText}

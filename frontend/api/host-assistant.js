@@ -3,6 +3,50 @@ const fingerprint = (value) => clean(value).toLowerCase().replace(/[^a-z0-9]/g, 
 const answerPairFingerprint = (question, answer) => `${fingerprint(question)}::${fingerprint(answer)}`;
 
 const safeList = (value, limit = 20) => Array.isArray(value) ? value.slice(0, limit) : [];
+const normalizeStyleProfile = (value = {}) => {
+  const source = value && typeof value === "object" ? value : {};
+  const cleanExamples = (examples) => safeList(examples, 6).map((item) => ({
+    category: clean(item?.category),
+    question_type: clean(item?.question_type || item?.type),
+    question_text: clean(item?.question_text || item?.question),
+    correct_answer: clean(item?.correct_answer || item?.answer),
+    fun_fact: clean(item?.fun_fact),
+    note: clean(item?.note),
+  })).filter((item) => item.question_text && item.correct_answer);
+  return {
+    preferredDifficulty: clean(source.preferredDifficulty),
+    favoriteCategories: safeList(source.favoriteCategories, 18).map(clean).filter(Boolean),
+    avoidedCategories: safeList(source.avoidedCategories, 18).map(clean).filter(Boolean),
+    preferredRoundStructure: clean(source.preferredRoundStructure),
+    writingStyleNotes: clean(source.writingStyleNotes),
+    funFactStyle: clean(source.funFactStyle),
+    wrongAnswerStyle: clean(source.wrongAnswerStyle),
+    categoriesThatPerformWell: safeList(source.categoriesThatPerformWell, 18).map(clean).filter(Boolean),
+    categoriesThatPerformPoorly: safeList(source.categoriesThatPerformPoorly, 18).map(clean).filter(Boolean),
+    venuePreferences: clean(source.venuePreferences),
+    examplesOfGoodQuestions: cleanExamples(source.examplesOfGoodQuestions),
+    examplesOfBadQuestions: cleanExamples(source.examplesOfBadQuestions),
+  };
+};
+const styleProfileText = (profile) => {
+  const cleanProfile = normalizeStyleProfile(profile);
+  if (!Object.values(cleanProfile).some((value) => Array.isArray(value) ? value.length : Boolean(value))) return null;
+  return {
+    preferredDifficulty: cleanProfile.preferredDifficulty,
+    writingStyleNotes: cleanProfile.writingStyleNotes,
+    funFactStyle: cleanProfile.funFactStyle,
+    wrongAnswerStyle: cleanProfile.wrongAnswerStyle,
+    preferredRoundStructure: cleanProfile.preferredRoundStructure,
+    favoriteCategories: cleanProfile.favoriteCategories,
+    avoidedCategories: cleanProfile.avoidedCategories,
+    categoriesThatPerformWell: cleanProfile.categoriesThatPerformWell,
+    categoriesThatPerformPoorly: cleanProfile.categoriesThatPerformPoorly,
+    venuePreferences: cleanProfile.venuePreferences,
+    soundsLikeMe: cleanProfile.examplesOfGoodQuestions.slice(0, 4),
+    avoidThisStyle: cleanProfile.examplesOfBadQuestions.slice(0, 4),
+    styleRule: "Sound like Jewelzz/Forever Fun Events: unique, slightly hard, fun, concise, category-varied, clean bar trivia. Silently revise anything generic, too easy, too common, overexplained, or not in this voice before returning JSON.",
+  };
+};
 
 const collectBlockedQuestions = (context = {}) => {
   const build = context.build || {};
@@ -131,6 +175,7 @@ async function handler(req, res) {
                 recent_feedback: safeList(context.feedback, 30),
                 player_ideas: safeList(context.ideas, 30),
                 questions: safeList(context.questions, 40),
+                host_style_profile: styleProfileText(context.hostStyleProfile),
               },
               response_rules: editMode
                 ? [

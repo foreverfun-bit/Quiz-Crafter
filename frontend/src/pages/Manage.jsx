@@ -2,7 +2,7 @@ import { useNavigate } from "react-router-dom";
 import { Card, CardContent } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
-import { FolderOpen, MapPin, Palette, Settings, Trash2, Trophy } from "lucide-react";
+import { Brain, FolderOpen, MapPin, Palette, Settings, Trash2, Trophy } from "lucide-react";
 
 const setupTools = [
   {
@@ -32,6 +32,13 @@ const setupTools = [
     path: "/host-tools?tab=branding",
     icon: Palette,
     badge: "Host profile",
+  },
+  {
+    title: "Style Memory",
+    description: "Teach Quiz Crafter your host voice, difficulty, examples, fun fact style, and what to avoid.",
+    path: "/style-memory",
+    icon: Brain,
+    badge: "AI voice",
   },
   {
     title: "Settings",
