@@ -226,6 +226,16 @@ export default function FloatingCopilot({ user }) {
     }
   };
 
+  useEffect(() => {
+    const handleOpenRequest = (event) => {
+      const prompt = clean(event.detail?.prompt);
+      setOpen(true);
+      if (prompt) window.setTimeout(() => handleSubmit(prompt), 0);
+    };
+    window.addEventListener("quiz-crafter-open-copilot", handleOpenRequest);
+    return () => window.removeEventListener("quiz-crafter-open-copilot", handleOpenRequest);
+  });
+
   const startResize = (event) => {
     event.preventDefault();
     const startX = event.clientX;
