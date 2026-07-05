@@ -142,6 +142,13 @@ const buildVenueSchedule = (venues) => venues
   .filter((item) => item.date)
   .sort((a, b) => a.date - b.date)
   .slice(0, 6);
+const showDateInput = (date) => date instanceof Date && !Number.isNaN(date.getTime()) ? date.toISOString().slice(0, 10) : "";
+const savedBuildMatchesShow = (savedBuild, show) => Boolean(
+  savedBuild
+  && show?.venue?.id
+  && String(savedBuild.venueId || "") === String(show.venue.id)
+  && String(savedBuild.sessionDate || "") === showDateInput(show.date)
+);
 
 const Dashboard = () => {
   const { user } = useAuth();
@@ -263,8 +270,10 @@ const Dashboard = () => {
   const upcomingSchedule = useMemo(() => buildVenueSchedule(venues), [venues]);
   const likedCategories = stats.liked_categories || [];
   const nextShow = upcomingSchedule[0] || null;
-  const buildProgress = getBuildProgress(savedBuild, starterTemplate);
-  const nextPrep = getNextPrep(buildProgress, starterTemplate, savedBuild, unusedCount);
+  const nextShowBuild = nextShow && savedBuildMatchesShow(savedBuild, nextShow) ? savedBuild : null;
+  const relevantBuild = nextShow ? nextShowBuild : savedBuild;
+  const buildProgress = getBuildProgress(relevantBuild, starterTemplate);
+  const nextPrep = getNextPrep(buildProgress, starterTemplate, relevantBuild, unusedCount);
 
   const persistTodos = (nextTodos) => {
     setTodos(nextTodos);
@@ -282,7 +291,16 @@ const Dashboard = () => {
   const toggleTodo = (id) => persistTodos(todos.map((todo) => todo.id === id ? { ...todo, done: !todo.done } : todo));
   const removeTodo = (id) => persistTodos(todos.filter((todo) => todo.id !== id));
 
-  const handleContinueBuild = () => navigate("/build");
+  const buildUrlForShow = (show = nextShow) => {
+    if (!show?.venue?.id || !show?.date) return "/build";
+    const params = new URLSearchParams();
+    params.set("venueId", show.venue.id);
+    params.set("date", showDateInput(show.date));
+    if (starterTemplate?.id) params.set("templateId", starterTemplate.id);
+    return `/build?${params.toString()}`;
+  };
+  const handleContinueBuild = () => navigate(buildUrlForShow(nextShow));
+  const handleBuildShow = (show) => navigate(buildUrlForShow(show));
   const handleNewBlankBuild = async () => {
     try {
       const draft = readSavedBuildState();
@@ -302,14 +320,14 @@ const Dashboard = () => {
       ]);
       setSavedBuild(null);
       toast.success(draft ? "Current build saved as a draft. Starting blank." : "Starting a blank build.");
-      navigate("/build");
+      navigate("/build?new=1");
     } catch (error) {
       console.error("New blank build error:", error);
       toast.error("Could not start a blank build");
     }
   };
-  const PrimaryDashboardIcon = savedBuild ? Save : PlusCircle;
-  const primaryDashboardAction = savedBuild
+  const PrimaryDashboardIcon = relevantBuild ? Save : PlusCircle;
+  const primaryDashboardAction = relevantBuild || nextShow
     ? { label: "Continue Build", action: handleContinueBuild, testId: "dashboard-continue-build-btn" }
     : { label: "New Build", action: handleNewBlankBuild, testId: "dashboard-build-btn" };
 
@@ -347,7 +365,7 @@ const Dashboard = () => {
                 <MonitorPlay size={15} className="mr-2" />
                 Open Live Hosting
               </DropdownMenuItem>
-              {savedBuild ? (
+              {relevantBuild || nextShow ? (
                 <DropdownMenuItem onClick={handleNewBlankBuild} className="cursor-pointer focus:bg-zinc-800">
                   <PlusCircle size={15} className="mr-2" />
                   New Build
@@ -365,11 +383,11 @@ const Dashboard = () => {
 
       <NextShowHero
         nextShow={nextShow}
-        savedBuild={savedBuild}
+        savedBuild={relevantBuild}
         progress={buildProgress}
         nextPrep={nextPrep}
         nextSession={nextSession}
-        onBuild={() => navigate("/build")}
+        onBuild={handleContinueBuild}
         onHostSession={() => nextSession && navigate(`/host-session/${nextSession.id}`)}
         onVenues={() => navigate("/venues")}
       />
@@ -378,10 +396,10 @@ const Dashboard = () => {
         <AssistantBriefing
           firstName={firstName}
           nextShow={nextShow}
-          savedBuild={savedBuild}
+          savedBuild={relevantBuild}
           progress={buildProgress}
           nextPrep={nextPrep}
-          onBuild={() => navigate("/build")}
+          onBuild={handleContinueBuild}
           onImport={() => navigate("/import")}
           onNewBuild={handleNewBlankBuild}
           onHostSession={() => nextSession && navigate(`/host-session/${nextSession.id}`)}
@@ -391,7 +409,7 @@ const Dashboard = () => {
       </div>
 
       <div className="mb-5">
-        <ScheduleCard schedule={upcomingSchedule} nextSession={nextSession} savedBuild={savedBuild} progress={buildProgress} onBuild={() => navigate("/build")} onVenues={() => navigate("/venues")} onHostSession={() => nextSession && navigate(`/host-session/${nextSession.id}`)} />
+        <ScheduleCard schedule={upcomingSchedule} nextSession={nextSession} savedBuild={relevantBuild} progress={buildProgress} onBuild={handleBuildShow} onVenues={() => navigate("/venues")} onHostSession={() => nextSession && navigate(`/host-session/${nextSession.id}`)} />
       </div>
 
       <div className="mb-5">
@@ -456,7 +474,7 @@ const Dashboard = () => {
               Create fresh host-grade questions in the builder or import the sets you already have.
             </p>
             <div className="flex gap-3 justify-center flex-wrap">
-              <Button className="gradient-btn" onClick={() => navigate("/build")} data-testid="cta-generate-btn">
+              <Button className="gradient-btn" onClick={handleContinueBuild} data-testid="cta-generate-btn">
                 <Sparkles className="mr-2" size={18} />
                 Create & Build
               </Button>
@@ -578,7 +596,7 @@ const ScheduleCard = ({ schedule, nextSession, savedBuild, progress, onBuild, on
               </div>
               {index === 0 && (
                 <div className="flex gap-2">
-                  <Button size="sm" className="gradient-btn" onClick={onBuild}>{savedBuild ? "Continue Build" : "Build Set"}</Button>
+                  <Button size="sm" className="gradient-btn" onClick={() => onBuild({ venue, date })}>{savedBuild ? "Continue Build" : "Build Set"}</Button>
                   {nextSession && <Button size="sm" variant="outline" onClick={onHostSession} className="border-white/20 text-white hover:bg-zinc-800">Go Live</Button>}
                 </div>
               )}

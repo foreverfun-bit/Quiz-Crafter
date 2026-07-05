@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import axios from "axios";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../App";
@@ -181,6 +181,85 @@ const todayInputDate = () => new Date().toISOString().slice(0, 10);
 const formatSessionDate = (value) => { const [year, month, day] = String(value || "").split("-"); return year && month && day ? `${Number(month)}.${Number(day)}.${year}` : new Date().toLocaleDateString(); };
 const venueDisplayName = (venue) => venue?.nightName || venue?.name || "";
 const buildAutoSessionName = (date, venue) => [formatSessionDate(date), venueDisplayName(venue) || "Trivia"].filter(Boolean).join(" ");
+const dayIndex = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
+const weekIndex = { first: 1, second: 2, third: 3, fourth: 4 };
+const startOfDay = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+const addDays = (date, days) => { const next = new Date(date); next.setDate(next.getDate() + days); return next; };
+const nextWeeklyDate = (venue, fromDate) => {
+  const target = dayIndex[venue.dayOfWeek];
+  if (target === undefined) return null;
+  const from = startOfDay(fromDate);
+  return addDays(from, (target - from.getDay() + 7) % 7);
+};
+const monthlyOccurrence = (year, month, dayName, monthlyWeek) => {
+  const target = dayIndex[dayName];
+  if (target === undefined) return null;
+  if (monthlyWeek === "last") {
+    const date = new Date(year, month + 1, 0);
+    date.setDate(date.getDate() - ((date.getDay() - target + 7) % 7));
+    return startOfDay(date);
+  }
+  const occurrence = weekIndex[monthlyWeek] || 1;
+  const first = new Date(year, month, 1);
+  const offset = (target - first.getDay() + 7) % 7;
+  return startOfDay(new Date(year, month, 1 + offset + ((occurrence - 1) * 7)));
+};
+const nextMonthlyDate = (venue, fromDate) => {
+  const from = startOfDay(fromDate);
+  for (let offset = 0; offset < 12; offset += 1) {
+    const monthDate = new Date(from.getFullYear(), from.getMonth() + offset, 1);
+    const candidate = monthlyOccurrence(monthDate.getFullYear(), monthDate.getMonth(), venue.dayOfWeek, venue.monthlyWeek);
+    if (candidate && candidate >= from) return candidate;
+  }
+  return null;
+};
+const nextVenueDate = (venue, fromDate = new Date()) => {
+  if (venue.frequency === "monthly") return nextMonthlyDate(venue, fromDate);
+  const weekly = nextWeeklyDate(venue, fromDate);
+  if (!weekly) return null;
+  if (venue.frequency !== "bi_weekly") return weekly;
+  const updated = venue.updatedAt ? new Date(venue.updatedAt) : fromDate;
+  const anchor = Number.isNaN(updated.getTime()) ? fromDate : updated;
+  const weeks = Math.floor((weekly - startOfDay(anchor)) / (7 * 24 * 60 * 60 * 1000));
+  return weeks % 2 === 0 ? weekly : addDays(weekly, 7);
+};
+const buildVenueSchedule = (venues) => venues
+  .map((venue) => ({ venue, date: nextVenueDate(venue) }))
+  .filter((item) => item.date)
+  .sort((a, b) => a.date - b.date);
+const showDateInput = (date) => date instanceof Date && !Number.isNaN(date.getTime()) ? date.toISOString().slice(0, 10) : "";
+const applyShowDateToDraft = (draft, venue, date, template) => {
+  if (!draft) return null;
+  const sessionDate = showDateInput(date) || draft.sessionDate || todayInputDate();
+  return {
+    ...draft,
+    sessionDate,
+    sessionName: buildAutoSessionName(sessionDate, venue) || draft.sessionName,
+    venueId: venue?.id || draft.venueId || "",
+    venueName: venueDisplayName(venue) || draft.venueName || "",
+    templateId: template?.id || draft.templateId,
+    templateName: template?.name || draft.templateName,
+  };
+};
+const makeShowBuildDraft = (venue, date, template) => {
+  const showTemplate = template || readLocalTemplates()[0];
+  return applyShowDateToDraft(makeTemplateBuildDraft(showTemplate, venue), venue, date, showTemplate);
+};
+const draftMatchesShow = (state, context) => Boolean(state && context && String(state.venueId || "") === String(context.venueId || "") && String(state.sessionDate || "") === String(context.sessionDate || ""));
+const resolveBuildContext = (searchParams, venues, templates) => {
+  if (searchParams.get("new") === "1") return null;
+  const queryVenueId = searchParams.get("venueId") || "";
+  const queryDate = searchParams.get("date") || "";
+  const queryTemplateId = searchParams.get("templateId") || "";
+  const schedule = buildVenueSchedule(venues);
+  const scheduled = queryVenueId ? schedule.find((item) => String(item.venue.id) === String(queryVenueId)) : schedule[0];
+  const venue = venues.find((item) => String(item.id) === String(queryVenueId || scheduled?.venue?.id || "")) || scheduled?.venue || null;
+  if (!venue) return null;
+  const parsedDate = queryDate ? new Date(`${queryDate}T00:00:00`) : scheduled?.date;
+  const template = templates.find((item) => String(item.id) === String(queryTemplateId)) || templates[0] || null;
+  const sessionDate = queryDate || showDateInput(parsedDate);
+  return { venueId: venue.id, sessionDate, venue, date: parsedDate, template };
+};
 const normalizeBuildSavedState = (value) => {
   try {
     const parsed = typeof value === "string" ? JSON.parse(value) : value;
@@ -238,9 +317,22 @@ const createBuildSnapshot = ({ sessionName, sessionDate, selectedVenueId, rounds
 const BuildSession = () => {
   const navigate = useNavigate();
   const { sessionId } = useParams();
+  const [searchParams] = useSearchParams();
   const { user } = useAuth();
-  const savedState = useMemo(() => (sessionId ? null : loadBuildSavedState()), [sessionId]);
-  const venueDraft = useMemo(() => (sessionId || savedState ? null : readVenueBuildDraft()), [sessionId, savedState]);
+  const initialVenues = useMemo(() => readLocalVenues(), []);
+  const initialTemplates = useMemo(() => readLocalTemplates(), []);
+  const buildContext = useMemo(() => (sessionId ? null : resolveBuildContext(searchParams, initialVenues, initialTemplates)), [sessionId, searchParams, initialVenues, initialTemplates]);
+  const savedState = useMemo(() => {
+    if (sessionId) return null;
+    const state = loadBuildSavedState();
+    if (!buildContext) return state;
+    return draftMatchesShow(state, buildContext) ? state : null;
+  }, [sessionId, buildContext]);
+  const venueDraft = useMemo(() => {
+    if (sessionId || savedState) return null;
+    if (buildContext) return makeShowBuildDraft(buildContext.venue, buildContext.date, buildContext.template);
+    return readVenueBuildDraft();
+  }, [sessionId, savedState, buildContext]);
   const initialRounds = useMemo(() => normalizeRounds(savedState?.rounds || venueDraft?.rounds || createDefaultRounds()), [savedState, venueDraft]);
   const initialQuestions = useMemo(() => safeQuestions(savedState?.questions), [savedState]);
   const draftQuestionDefaults = venueDraft?.defaultQuestionSettings && typeof venueDraft.defaultQuestionSettings === "object" ? venueDraft.defaultQuestionSettings : null;
@@ -385,9 +477,12 @@ const BuildSession = () => {
         const localState = loadBuildSavedState();
         const remoteIsFresh = remoteState && hasBuildContent(remoteState) && buildStateUpdatedAt(remoteState) > clearedAt;
         const localIsFresh = localState && hasBuildContent(localState) && buildStateUpdatedAt(localState) > clearedAt;
-        if (remoteIsFresh && (!localIsFresh || buildStateUpdatedAt(remoteState) >= buildStateUpdatedAt(localState))) {
+        const remoteMatchesContext = !buildContext || draftMatchesShow(remoteState, buildContext);
+        const localMatchesContext = !buildContext || draftMatchesShow(localState, buildContext);
+        if (remoteIsFresh && remoteMatchesContext && (!localIsFresh || !localMatchesContext || buildStateUpdatedAt(remoteState) >= buildStateUpdatedAt(localState))) {
           applySavedBuildState(remoteState);
-        } else if (localIsFresh) {
+        } else if (localIsFresh && localMatchesContext) {
+          applySavedBuildState(localState);
           await updateUserMetadata({ [metadataBuildKey]: localState, [metadataBuildClearedKey]: null });
         }
       } catch (error) {
@@ -397,7 +492,7 @@ const BuildSession = () => {
       }
     };
     hydrateProfileBuild();
-  }, [sessionId, loading, profileBuildHydrated]);
+  }, [sessionId, loading, profileBuildHydrated, buildContext]);
   const handleBrowseLibrary = () => { setUsedQuestionIds(readUsedIds()); setUnusedQuestionIds(readUnusedIds()); setQuestionMemory(readQuestionMemory()); setShowLibrary(true); setShowWriteForm(false); setShowAiPanel(false); };
   useEffect(() => { localStorage.removeItem("quiz-crafter-build-recovery-attempted"); }, []);
   useEffect(() => {
@@ -652,7 +747,7 @@ const BuildSession = () => {
   const handleTuneGeneratedDifficulty = async (question, direction) => { setActionQuestionId(question.id); try { const type = normalizeType(question); const targetDifficulty = direction === "easier" ? easierDifficulty[difficulty] || "medium" : harderDifficulty[difficulty] || "hard"; const tuningTheme = [theme, direction === "easier" ? "Make a more accessible version of this same trivia idea. Keep it fresh, but add a clearer clue path and make the answer more gettable for a strong bar-trivia team." : "Make a harder version of this same trivia idea. Keep it fair and satisfying, but require a stronger clue path or second-layer knowledge.", type === "written" ? "Because this is a written-answer question, make the answer especially fair to recall without options. Avoid exact-spelling traps." : type === "multiple_choice" ? "Because this is multiple choice, keep the wrong answers plausible and comparable." : "Because this is true/false, keep the claim cleanly verifiable and not a coin flip.", `Original category: ${question.category || "General"}`, `Original question: ${question.question_text}`, `Original answer: ${question.correct_answer}`, question.fun_fact ? `Original fun fact: ${question.fun_fact}` : "", "Return a replacement, not a duplicate. It may keep the same broad subject, but should be newly worded and calibrated to the requested difficulty."].filter(Boolean).join("\n"); const { data } = await requestGeneratedQuestions({ replacement: question, rejectCurrent: true, difficultyOverride: targetDifficulty, themeOverride: tuningTheme, allowCurrentCategory: true, lockedCategoriesOverride: [question.category].filter(Boolean) }); const generated = normalizeGeneratedCandidates(data?.candidates, activeRound.id, type).map((candidate) => normalizeQuestion({ ...candidate, category: question.category || candidate.category }, type)); if (!generated.length) throw new Error(`No ${direction} version came back. Try changing the AI direction.`); addGeneratedToRound(generated, question); toast.success(direction === "easier" ? "Made easier" : "Made harder"); } catch (error) { console.error("Tune generated question error:", error); toast.error(error.response?.data?.error || error.message || `Failed to make question ${direction}`); } finally { setActionQuestionId(null); } };
   const handleRejectQuestion = (question) => { const nextRejectedAi = new Set(rejectedAi); nextRejectedAi.add(fingerprint(question.question_text)); setRejectedAi(nextRejectedAi); saveRejectedAi(nextRejectedAi); const nextMemory = upsertQuestionMemory(question, { status: "too_common" }, readQuestionMemory()); setQuestionMemory(nextMemory); saveQuestionMemoryToProfile(supabase, nextMemory).catch((error) => console.warn("Question memory profile save unavailable:", error)); setQuestions((prev) => prev.filter((q) => String(q.id) !== String(question.id))); setRounds((prev) => prev.map((round) => ({ ...round, questionIds: (round.questionIds || []).filter((id) => String(id) !== String(question.id)) }))); toast.success("Question blocked from future AI suggestions"); };
   const handleRejectCategory = (question) => { if (!question.category) return; const clean = canonicalCategory(question.category, [...approvedCategories, ...rejectedCategories]); const approved = new Set(approvedCategories.filter((category) => categoryKey(category) !== categoryKey(clean))); const rejected = new Set(uniqueCategories([...rejectedCategories, clean], [clean])); setApprovedCategories(uniqueCategories([...approved]).sort((a, b) => a.localeCompare(b))); setRejectedCategories(uniqueCategories([...rejected]).sort((a, b) => a.localeCompare(b))); saveLocalCategoryPrefs(approved, rejected); removeFromRound(activeRound.id, question.id); toast.success(`${clean} moved to rejected categories`); };
-  const handleClearSession = async () => { await clearSavedState(); setEditingSessionId(null); setEditingSessionWasPast(false); setSessionName(""); setSessionDate(todayInputDate()); setSelectedVenueId(readActiveVenueId() || ""); setRounds(createDefaultRounds()); setActiveRoundId("round-1"); setTheme(""); setTypeFilter("all"); setGenerateType("multiple_choice"); setAiCandidates([]); setShowAiPanel(false); setShowWriteForm(false); setShowLibrary(false); if (sessionId) navigate("/build", { replace: true }); toast.success("Session cleared"); };
+  const handleClearSession = async () => { await clearSavedState(); setEditingSessionId(null); setEditingSessionWasPast(false); setSessionName(""); setSessionDate(todayInputDate()); setSelectedVenueId(readActiveVenueId() || ""); setRounds(createDefaultRounds()); setActiveRoundId("round-1"); setTheme(""); setTypeFilter("all"); setGenerateType("multiple_choice"); setAiCandidates([]); setShowAiPanel(false); setShowWriteForm(false); setShowLibrary(false); if (sessionId || buildContext) navigate("/build?new=1", { replace: true }); toast.success("Session cleared"); };
   const handleStartFromTemplate = () => {
     const template = templates.find((item) => item.id === selectedTemplateId) || templates[0];
     if (!template) return toast.error("Create a template in Setup first");
