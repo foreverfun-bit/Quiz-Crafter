@@ -30,6 +30,8 @@ import GameHistoryDetail from "./pages/GameHistory";
 
 // Components
 import Sidebar from "./components/Sidebar";
+import FloatingCopilot from "./components/FloatingCopilot";
+import { CopilotProvider } from "./context/CopilotContext";
 
 export const api = {
   get: async () => {
@@ -325,6 +327,7 @@ function App() {
               },
             }}
           />
+          <CopilotProvider>
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/" element={<ProtectedRoute><AppLayout><Dashboard /></AppLayout></ProtectedRoute>} />
@@ -356,6 +359,8 @@ function App() {
             <Route path="/game-history/:historyId" element={<ProtectedRoute><AppLayout><GameHistoryDetail /></AppLayout></ProtectedRoute>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
+          <FloatingCopilot user={user} />
+          </CopilotProvider>
         </BrowserRouter>
       </div>
     </AuthContext.Provider>

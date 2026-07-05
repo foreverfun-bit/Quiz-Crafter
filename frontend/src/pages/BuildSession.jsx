@@ -18,6 +18,7 @@ import { PROFILE_SHOW_TEMPLATES_KEY, PROFILE_VENUES_KEY, hasSavedLocalTemplates,
 import { isMemoryBlocked, memoryRejectedQuestionTexts, readQuestionMemory, saveQuestionMemoryToProfile, syncQuestionMemoryFromProfile, upsertQuestionMemory } from "../lib/questionMemory";
 import { loadHostSetupSettings, profileKeys, saveHostSetupSettings, saveProfileValue, syncProfileJson, updateUserMetadata } from "../lib/profileState";
 import { readHostStyleProfile, rememberStyleFeedback, syncHostStyleProfile } from "../lib/hostStyleMemory";
+import { useCopilot } from "../context/CopilotContext";
 
 const questionTypes = [
   { value: "all", label: "All", shortLabel: "All", icon: List, color: "text-zinc-300" },
@@ -383,6 +384,7 @@ const BuildSession = () => {
   const [builderChatMessages, setBuilderChatMessages] = useState([]);
   const [builderChatLoading, setBuilderChatLoading] = useState(false);
   const [builderUndoSnapshot, setBuilderUndoSnapshot] = useState(null);
+  const { updatePageContext } = useCopilot();
   const [chatPreview, setChatPreview] = useState(null);
   const [writeForm, setWriteForm] = useState(emptyWriteForm);
   const [mediaQuestionId, setMediaQuestionId] = useState(null);
@@ -988,6 +990,15 @@ const BuildSession = () => {
       setGenerationStatus("");
     }
   };
+  useEffect(() => {
+    const handleCopilotCommand = (event) => {
+      const request = normalizeText(event.detail?.request);
+      if (!request) return;
+      runBuilderChat(request);
+    };
+    window.addEventListener("quiz-crafter-copilot-command", handleCopilotCommand);
+    return () => window.removeEventListener("quiz-crafter-copilot-command", handleCopilotCommand);
+  });
   const handleSave = async (goLive = false) => {
     if (!user?.id) return toast.error("You must be signed in");
 
@@ -1067,6 +1078,34 @@ const BuildSession = () => {
   const selectedTotal = safeRounds.reduce((sum, round) => sum + (round.questionIds?.length || 0), 0);
   const fullSessionGoal = templateGoal ? safeRounds.length * templateGoal : 0;
   const fullSessionComplete = Boolean(fullSessionGoal && selectedTotal >= fullSessionGoal);
+
+  useEffect(() => {
+    updatePageContext({
+      goal: "Create or continue the active trivia session",
+      build: {
+        sessionName,
+        sessionDate,
+        venue: selectedVenue?.name || selectedVenue?.nightName || "",
+        template: selectedTemplate?.name || "",
+        difficulty,
+        activeRound: activeRound?.name || "",
+        activeRoundDescription: activeRound?.description || "",
+        activeRoundQuestionCount: activeRoundQuestions.length,
+        templateGoal,
+        fullSessionComplete,
+        totalQuestions: selectedTotal,
+        rounds: safeRounds.map((round) => ({ name: round.name, description: round.description, questionCount: round.questionIds?.length || 0 })),
+        activeRoundQuestions: activeRoundQuestions.map((question, index) => ({
+          number: index + 1,
+          category: question.category,
+          question_type: normalizeType(question),
+          question_text: question.question_text,
+          correct_answer: question.correct_answer,
+          fun_fact: question.fun_fact,
+        })),
+      },
+    });
+  }, [activeRound, activeRoundQuestions, difficulty, fullSessionComplete, safeRounds, selectedTemplate, selectedTotal, selectedVenue, sessionDate, sessionName, templateGoal, updatePageContext]);
 
   return <div className="p-4 lg:p-6 max-w-7xl mx-auto animate-fade-in" data-testid="build-session-page">
     <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-4 mb-5"><div><h1 className="text-3xl md:text-4xl font-bold text-white mb-2">Build <span className="gradient-text">Session</span></h1><p className="text-zinc-500">Create or continue the active trivia session.</p></div><div className="flex gap-2 flex-wrap"><Button onClick={() => handleSave(false)} disabled={saving} className="gradient-btn" data-testid="save-build-btn">{saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</> : <><Save className="mr-2" size={18} />Save Build</>}</Button><DropdownMenu><DropdownMenuTrigger asChild><Button variant="outline" className="border-white/15 text-zinc-300 hover:text-white hover:bg-zinc-800" aria-label="More build actions"><MoreHorizontal size={18} /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" className="border-white/10 bg-zinc-950 text-zinc-200"><DropdownMenuItem onClick={() => handleSave(true)} className="cursor-pointer focus:bg-zinc-800" data-testid="go-live-btn"><Sparkles size={15} className="mr-2" />Go Live</DropdownMenuItem>{selectedTotal > 0 && <DropdownMenuItem onClick={handleClearSession} className="cursor-pointer text-red-200 focus:bg-red-500/10 focus:text-red-200"><X size={15} className="mr-2" />Clear Build</DropdownMenuItem>}</DropdownMenuContent></DropdownMenu></div></div>
