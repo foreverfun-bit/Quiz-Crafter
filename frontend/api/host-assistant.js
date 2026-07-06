@@ -209,6 +209,10 @@ async function handler(req, res) {
                     "Do not claim to save or edit anything directly.",
                   ]
                 : [
+                    "Conversation is the default. Answer directly unless the host explicitly asks to modify application state.",
+                    "Do not claim you saved, replaced, added, deleted, imported, exported, duplicated, or changed anything.",
+                    "Do not say to check the Build workspace or that you sent something to another tool.",
+                    "For requests like try again, make it harder, give me another, rewrite this, suggest categories, or improve this fun fact, respond in chat with the improved content or explanation.",
                     "Answer in short, actionable sections.",
                     "If rewriting or replacing a question, provide the usable question, answer, and brief host note.",
                     "Use the host's venue/template/session memory when relevant.",

@@ -92,7 +92,21 @@ const nextVenueDate = (venue) => {
   return date.toISOString();
 };
 
-const isBuildCommand = (text) => /\b(build|round|replace|rewrite|question|fun fact|harder|easier|library|search|finish session|make this|convert)\b/i.test(text);
+const isApplicationAction = (text) => {
+  const lower = clean(text).toLowerCase();
+  if (!lower) return false;
+  const questionRef = /\b(question|q)\s*#?\s*\d+\b/.test(lower);
+  const roundRef = /\bround\s*#?\s*\d+\b/.test(lower);
+  if (/\b(replace|delete|remove|retire)\b/.test(lower) && questionRef) return true;
+  if (/\b(add|move)\b/.test(lower) && (questionRef || roundRef || /\bround\b/.test(lower))) return true;
+  if (/\b(save)\b/.test(lower) && /\b(question|build|session|this)\b/.test(lower)) return true;
+  if (/\b(import|upload)\b/.test(lower) && /\b(pdf|csv|file)\b/.test(lower)) return true;
+  if (/\b(export)\b/.test(lower) && /\b(csv|session|results|questions)\b/.test(lower)) return true;
+  if (/\bduplicate\b/.test(lower) && /\bsession\b/.test(lower)) return true;
+  if (/\b(use|apply)\b/.test(lower) && /\btemplate\b/.test(lower)) return true;
+  if (/\b(build|fill|finish)\b/.test(lower) && (roundRef || /\b(full session|this round|the round|session)\b/.test(lower))) return true;
+  return false;
+};
 const buildProgressText = (text) => {
   const lower = text.toLowerCase();
   if (/\breplace\b/.test(lower)) return `Replacing ${clean(text.match(/question\s*#?\s*\d+/i)?.[0]) || "that question"}...`;
@@ -112,12 +126,13 @@ const formatBuildResult = (result = {}) => {
 };
 const routeForIntent = (text) => {
   const lower = text.toLowerCase();
-  if (/\b(import|pdf|csv|upload)\b/.test(lower)) return "/import";
-  if (/\b(question bank|library|search|find)\b/.test(lower)) return "/library";
-  if (/\b(session|duplicate|halloween|past)\b/.test(lower)) return "/past-sessions";
+  if (/\b(import|upload)\b/.test(lower) && /\b(pdf|csv|file)\b/.test(lower)) return "/import";
+  if (/\b(open|go to|show me)\b/.test(lower) && /\b(question bank|library)\b/.test(lower)) return "/library";
+  if (/\b(open|go to|show me)\b/.test(lower) && /\b(session|past sessions)\b/.test(lower)) return "/past-sessions";
+  if (/\bduplicate\b/.test(lower) && /\bsession\b/.test(lower)) return "/past-sessions";
   if (/\b(venue|template|branding|style memory|settings|manage)\b/.test(lower)) return "/manage";
   if (/\b(host|live|run trivia|answers|players)\b/.test(lower)) return "/host-tools";
-  if (/\b(build|round|question|replace|rewrite|finish)\b/.test(lower)) return "/build";
+  if (isApplicationAction(lower)) return "/build";
   return "";
 };
 
@@ -215,7 +230,7 @@ export default function FloatingCopilot({ user }) {
     const nextMessages = [...messages, { role: "user", content: request }].slice(-24);
     setMessages(nextMessages);
 
-    if (location.pathname.startsWith("/build") && isBuildCommand(request)) {
+    if (location.pathname.startsWith("/build") && isApplicationAction(request)) {
       const commandId = `build-${Date.now()}-${Math.random().toString(16).slice(2)}`;
       setMessages((current) => [...current, { role: "assistant", content: buildProgressText(request), commandId, pending: true }].slice(-24));
       runBuildCommand(request, commandId);

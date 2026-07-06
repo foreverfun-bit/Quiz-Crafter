@@ -948,14 +948,14 @@ const BuildSession = () => {
         setGenerationStatus("");
         setActiveRoundId(targetRound.id);
         appendBuilderAssistant(`I found ${generated.length} possible ${generated.length === 1 ? "question" : "questions"} for ${targetRound.name}. Pick the ones you want to add.`);
-        return { ok: true, message: `Found ${generated.length} candidate ${generated.length === 1 ? "question" : "questions"} for ${targetRound.name}. Review them in the Build results area.` };
+        return { ok: true, message: `Found ${generated.length} candidate ${generated.length === 1 ? "question" : "questions"} for ${targetRound.name}.` };
       }
       if (["replace_question", "rewrite_question", "make_harder", "make_easier", "add_fun_fact"].includes(intent)) {
         if (/\bweakest|balance|review\b/i.test(request) && !parseQuestionNumber(request)) {
           setCohostPrompt(request);
           await handleAskCoHost();
           appendBuilderAssistant("I reviewed the round balance. If I draft replacements, they will appear in the co-host drafts.");
-          return { ok: true, message: "Review complete. Check the Build workspace for co-host notes or drafts." };
+          return { ok: true, message: "Review complete." };
         }
         const targetQuestion = findQuestionFromPrompt(request);
         if (!targetQuestion) {
@@ -982,7 +982,7 @@ const BuildSession = () => {
       setCohostPrompt(request);
       await handleAskCoHost();
       appendBuilderAssistant("Co-host review complete. If it drafted usable questions, they will appear in the co-host preview.");
-      return { ok: true, message: "Co-host review complete. Check the Build workspace for notes or drafts." };
+      return { ok: true, message: "Co-host review complete." };
     } catch (error) {
       console.error("Builder chat command error:", error);
       appendBuilderAssistant(error.response?.data?.error || error.message || "I could not finish that request. Try naming a round, question number, type, or count.");
