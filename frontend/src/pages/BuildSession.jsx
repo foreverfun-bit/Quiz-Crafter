@@ -872,6 +872,8 @@ const BuildSession = () => {
   const runBuilderChat = async (messageOverride = "") => {
     const request = normalizeText(messageOverride || builderChatInput);
     if (!request) return toast.error("Ask Quiz Crafter what you want to build");
+    const lowerRequest = request.toLowerCase();
+    const pendingQuestionNumber = chatPreview ? ((activeRoundQuestions.findIndex((question) => String(question.id) === String(chatPreview.originalQuestion?.id)) + 1) || parseQuestionNumber(request) || 1) : null;
     const intent = classifyBuildIntent(request);
     const targetRound = findRoundFromPrompt(request);
     const requestedType = parseRequestedType(request, generateType);
@@ -880,6 +882,32 @@ const BuildSession = () => {
     setBuilderChatMessages((prev) => [...prev, { role: "user", content: request }].slice(-12));
     setBuilderChatLoading(true);
     try {
+      if (chatPreview && /^(yes|yep|looks good|use it|apply it|replace it)$/i.test(request)) {
+        acceptChatPreview();
+        return { ok: true, message: chatPreview.kind === "replace" ? `Question ${pendingQuestionNumber} has been replaced.` : `Question ${pendingQuestionNumber} has been updated.`, taskComplete: true, lastAiSuggestion: chatPreview.question };
+      }
+      if (chatPreview && /^(try again|again|another|give me another)$/i.test(request)) {
+        const original = chatPreview.originalQuestion;
+        const type = normalizeType(chatPreview.question || original);
+        const { data } = await requestGeneratedQuestions({ replacement: original, rejectCurrent: true, typeOverride: type, themeOverride: [theme, "Generate another candidate for the same pending task.", `Rejected candidate: ${chatPreview.question?.question_text || ""}`, `Original question: ${original?.question_text || ""}`, `Original answer: ${original?.correct_answer || ""}`].filter(Boolean).join("\n"), roundOverride: safeRounds.find((round) => round.id === chatPreview.roundId) || activeRound, allowCurrentCategory: true });
+        const replacement = normalizeGeneratedCandidates(data?.candidates, chatPreview.roundId || activeRound.id, type)[0];
+        if (!replacement) throw new Error("No alternate candidate came back.");
+        setChatPreview({ ...chatPreview, question: replacement });
+        appendBuilderAssistant(`I made another preview for Question ${pendingQuestionNumber}.`);
+        return { ok: true, message: `Another preview is ready for Question ${pendingQuestionNumber}.`, preview: replacement, awaitingConfirmation: true, task: { type: chatPreview.kind, session: sessionName, round: activeRound.name, question: { number: pendingQuestionNumber, id: original?.id } } };
+      }
+      if (chatPreview && /\b(harder|easier|rewrite it|improve it)\b/i.test(lowerRequest)) {
+        const direction = /\beasier\b/i.test(lowerRequest)
+          ? "Make this pending candidate easier and more gettable while keeping the same task."
+          : /\bharder\b/i.test(lowerRequest)
+            ? "Make this pending candidate harder but still fair while keeping the same task."
+            : "Improve this pending candidate while keeping the same task, category, and answer unless necessary.";
+        const result = await handleChatEditQuestion(chatPreview.question, direction);
+        if (!result?.question) throw new Error("No revised candidate came back.");
+        setChatPreview({ ...chatPreview, question: result.question });
+        appendBuilderAssistant(result.answer || `I revised the pending preview for Question ${pendingQuestionNumber}.`);
+        return { ok: true, message: result.answer || `Updated preview is ready for Question ${pendingQuestionNumber}.`, preview: result.question, awaitingConfirmation: true, task: { type: chatPreview.kind, session: sessionName, round: activeRound.name, question: { number: pendingQuestionNumber, id: chatPreview.originalQuestion?.id } } };
+      }
       if (/\b(write my own|manual|manually write|create my own)\b/i.test(request)) {
         setShowWriteForm(true);
         setShowLibrary(false);
@@ -969,13 +997,13 @@ const BuildSession = () => {
           if (!replacement) throw new Error("No replacement came back.");
           setChatPreview({ kind: "replace", originalQuestion: targetQuestion, question: replacement, roundId: targetRound.id });
           appendBuilderAssistant(`I found a replacement for Question ${parseQuestionNumber(request) || 1}. Preview it before saving.`);
-          return { ok: true, message: `Replacement preview is ready for Question ${parseQuestionNumber(request) || 1}.`, preview: replacement, undoAvailable: false };
+          return { ok: true, message: `Replacement preview is ready for Question ${parseQuestionNumber(request) || 1}.`, preview: replacement, awaitingConfirmation: true, undoAvailable: false, task: { type: "replace_question", session: sessionName, round: targetRound.name, question: { number: parseQuestionNumber(request) || 1, id: targetQuestion.id } } };
         }
         const result = await handleChatEditQuestion(targetQuestion, direction);
         if (result?.question) {
           setChatPreview({ kind: "rewrite", originalQuestion: targetQuestion, question: result.question, roundId: targetRound.id });
           appendBuilderAssistant(result.answer || "I made a preview rewrite. Accept it to update the question.");
-          return { ok: true, message: result.answer || `Rewrite preview is ready for Question ${parseQuestionNumber(request) || 1}.`, preview: result.question, undoAvailable: false };
+          return { ok: true, message: result.answer || `Rewrite preview is ready for Question ${parseQuestionNumber(request) || 1}.`, preview: result.question, awaitingConfirmation: true, undoAvailable: false, task: { type: intent, session: sessionName, round: targetRound.name, question: { number: parseQuestionNumber(request) || 1, id: targetQuestion.id } } };
         }
         return { ok: false, message: "I couldn't create a usable preview for that question." };
       }
@@ -1000,9 +1028,9 @@ const BuildSession = () => {
       if (!request) return;
       try {
         const result = await runBuilderChat(request);
-        if (commandId) window.dispatchEvent(new CustomEvent("quiz-crafter-copilot-result", { detail: { commandId, result: result || { ok: true, message: "Build action finished." } } }));
+        if (commandId) window.dispatchEvent(new CustomEvent("quiz-crafter-copilot-result", { detail: { commandId, result: { ...(result || { ok: true, message: "Build action finished." }), request } } }));
       } catch (error) {
-        if (commandId) window.dispatchEvent(new CustomEvent("quiz-crafter-copilot-result", { detail: { commandId, result: { ok: false, message: error.message || "I couldn't access the active Build session." } } }));
+        if (commandId) window.dispatchEvent(new CustomEvent("quiz-crafter-copilot-result", { detail: { commandId, result: { ok: false, request, message: error.message || "I couldn't access the active Build session." } } }));
       }
     };
     window.addEventListener("quiz-crafter-copilot-command", handleCopilotCommand);

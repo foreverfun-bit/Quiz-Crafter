@@ -15,6 +15,7 @@ import { useCopilot } from "../context/CopilotContext";
 const COPILOT_OPEN_KEY = "quiz-crafter-copilot-open-v1";
 const COPILOT_SIZE_KEY = "quiz-crafter-copilot-size-v1";
 const COPILOT_MESSAGES_KEY = "quiz-crafter-copilot-messages-v1";
+const COPILOT_STATE_KEY = "quiz-crafter-copilot-working-state-v1";
 const BUILD_STATE_KEYS = [
   "trivia-flex-round-builder-state-v5",
   "trivia-flex-round-builder-state-v4",
@@ -107,6 +108,40 @@ const isApplicationAction = (text) => {
   if (/\b(build|fill|finish)\b/.test(lower) && (roundRef || /\b(full session|this round|the round|session)\b/.test(lower))) return true;
   return false;
 };
+const emptyWorkingState = {
+  currentTask: "",
+  activeSession: null,
+  activeRound: null,
+  activeQuestion: null,
+  pendingGeneratedQuestion: null,
+  awaitingConfirmation: false,
+  lastAiSuggestion: null,
+  lastUserFeedback: "",
+};
+const normalizeWorkingState = (state = {}) => ({ ...emptyWorkingState, ...(state && typeof state === "object" ? state : {}) });
+const isFollowUpForPendingTask = (text, state) => {
+  const lower = clean(text).toLowerCase();
+  if (!state?.currentTask && !state?.awaitingConfirmation && !state?.pendingGeneratedQuestion) return false;
+  return /^(try again|again|another|give me another|harder|make it harder|easier|make it easier|yes|yep|looks good|use it|apply it|replace it|rewrite it|improve it|cancel|nevermind|never mind)$/i.test(lower);
+};
+const isConfirmFollowUp = (text) => /^(yes|yep|looks good|use it|apply it|replace it)$/i.test(clean(text));
+const isCancelFollowUp = (text) => /^(cancel|nevermind|never mind)$/i.test(clean(text));
+const applyWorkingStateFromResult = (current, request, result = {}) => {
+  if (!result?.ok) return normalizeWorkingState({ ...current, lastUserFeedback: request });
+  const next = normalizeWorkingState({
+    ...current,
+    currentTask: result.task?.type || current.currentTask || "",
+    activeSession: result.task?.session || current.activeSession,
+    activeRound: result.task?.round || current.activeRound,
+    activeQuestion: result.task?.question || current.activeQuestion,
+    pendingGeneratedQuestion: result.preview || current.pendingGeneratedQuestion,
+    awaitingConfirmation: Boolean(result.awaitingConfirmation || result.preview),
+    lastAiSuggestion: result.preview || result.lastAiSuggestion || current.lastAiSuggestion,
+    lastUserFeedback: request,
+  });
+  if (result.taskComplete) return normalizeWorkingState({ ...emptyWorkingState, lastAiSuggestion: result.lastAiSuggestion || current.lastAiSuggestion, lastUserFeedback: request });
+  return next;
+};
 const buildProgressText = (text) => {
   const lower = text.toLowerCase();
   if (/\breplace\b/.test(lower)) return `Replacing ${clean(text.match(/question\s*#?\s*\d+/i)?.[0]) || "that question"}...`;
@@ -148,6 +183,7 @@ export default function FloatingCopilot({ user }) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [baseContext, setBaseContext] = useState({});
+  const [workingState, setWorkingState] = useState(() => normalizeWorkingState(readJson(COPILOT_STATE_KEY, emptyWorkingState)));
   const dragRef = useRef(null);
 
   const pageName = routeTitle(location.pathname);
@@ -156,6 +192,7 @@ export default function FloatingCopilot({ user }) {
   useEffect(() => writeJson(COPILOT_OPEN_KEY, open), [open]);
   useEffect(() => writeJson(COPILOT_SIZE_KEY, size), [size]);
   useEffect(() => writeJson(COPILOT_MESSAGES_KEY, messages.slice(-24)), [messages]);
+  useEffect(() => writeJson(COPILOT_STATE_KEY, workingState), [workingState]);
 
   useEffect(() => {
     if (!user || hidden) return;
@@ -209,7 +246,8 @@ export default function FloatingCopilot({ user }) {
     ...baseContext,
     pageLiveContext: pageContext,
     currentPageGoal: pageContext?.goal || pageName,
-  }), [baseContext, pageContext, pageName]);
+    conversationState: workingState,
+  }), [baseContext, pageContext, pageName, workingState]);
 
   const promptHint = useMemo(() => {
     if (location.pathname.startsWith("/build")) return "Try: Replace question 4, build Round 2, make this less obvious...";
@@ -230,9 +268,21 @@ export default function FloatingCopilot({ user }) {
     const nextMessages = [...messages, { role: "user", content: request }].slice(-24);
     setMessages(nextMessages);
 
-    if (location.pathname.startsWith("/build") && isApplicationAction(request)) {
+    if (isCancelFollowUp(request)) {
+      setWorkingState(emptyWorkingState);
+      setMessages((current) => [...current, { role: "assistant", content: "Canceled. What would you like to work on next?" }].slice(-24));
+      return;
+    }
+
+    const shouldUseBuildTool = location.pathname.startsWith("/build") && (isApplicationAction(request) || isFollowUpForPendingTask(request, workingState));
+    if (shouldUseBuildTool) {
       const commandId = `build-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-      setMessages((current) => [...current, { role: "assistant", content: buildProgressText(request), commandId, pending: true }].slice(-24));
+      const progress = isConfirmFollowUp(request)
+        ? "Applying the pending change..."
+        : isFollowUpForPendingTask(request, workingState)
+          ? `Updating ${workingState.activeQuestion ? `Question ${workingState.activeQuestion.number}` : "the pending suggestion"}...`
+          : buildProgressText(request);
+      setMessages((current) => [...current, { role: "assistant", content: progress, commandId, pending: true }].slice(-24));
       runBuildCommand(request, commandId);
       return;
     }
@@ -266,6 +316,7 @@ export default function FloatingCopilot({ user }) {
       setMessages((current) => {
         const hasPending = current.some((message) => message.commandId === commandId);
         const formatted = formatBuildResult(result);
+        setWorkingState((state) => applyWorkingStateFromResult(state, result?.request || "", result));
         if (!hasPending) return [...current, { role: "assistant", content: formatted }].slice(-24);
         return current.map((message) => message.commandId === commandId ? { role: "assistant", content: formatted, commandId } : message).slice(-24);
       });
