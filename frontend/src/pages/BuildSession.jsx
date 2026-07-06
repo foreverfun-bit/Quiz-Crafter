@@ -47,6 +47,13 @@ const parseQuestionNumber = (value) => {
   const match = lowerText(value).match(/\b(?:q|question)\s*#?\s*(\d+)\b/) || lowerText(value).match(/\breplace\s+(\d+)\b/) || lowerText(value).match(/\b(?:make|rewrite|improve|edit)\s+(?:this\s+)?(?:question\s*)?(\d+)\b/);
   return match ? Math.max(1, Number(match[1]) || 1) : null;
 };
+const isPreviewConfirmRequest = (value) => {
+  const text = lowerText(value);
+  return /^(yes|yep|yeah|correct|looks good|use it|use this|apply it|apply this|replace it)$/.test(text)
+    || /\b(yes|yep|yeah|use|apply|replace)\b.*\b(this|it)\b/.test(text)
+    || /\b(yes|yep|yeah)\b.*\b(?:q|question)\s*#?\s*\d+\b/.test(text)
+    || /\breplace\s*(?:q|question)?\s*#?\s*\d+\s*(?:with)?\s*(this|it)\b/.test(text);
+};
 const parseRoundNumber = (value) => {
   const match = lowerText(value).match(/\bround\s*(\d+)\b/);
   return match ? Math.max(1, Number(match[1]) || 1) : null;
@@ -882,7 +889,7 @@ const BuildSession = () => {
     setBuilderChatMessages((prev) => [...prev, { role: "user", content: request }].slice(-12));
     setBuilderChatLoading(true);
     try {
-      if (chatPreview && /^(yes|yep|looks good|use it|apply it|replace it)$/i.test(request)) {
+      if (chatPreview && isPreviewConfirmRequest(request)) {
         acceptChatPreview();
         return { ok: true, message: chatPreview.kind === "replace" ? `Question ${pendingQuestionNumber} has been replaced.` : `Question ${pendingQuestionNumber} has been updated.`, taskComplete: true, lastAiSuggestion: chatPreview.question };
       }

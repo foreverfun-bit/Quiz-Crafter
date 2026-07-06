@@ -122,9 +122,15 @@ const normalizeWorkingState = (state = {}) => ({ ...emptyWorkingState, ...(state
 const isFollowUpForPendingTask = (text, state) => {
   const lower = clean(text).toLowerCase();
   if (!state?.currentTask && !state?.awaitingConfirmation && !state?.pendingGeneratedQuestion) return false;
-  return /^(try again|again|another|give me another|harder|make it harder|easier|make it easier|yes|yep|looks good|use it|apply it|replace it|rewrite it|improve it|cancel|nevermind|never mind)$/i.test(lower);
+  return /^(try again|again|another|give me another|harder|make it harder|easier|make it easier|rewrite it|improve it|cancel|nevermind|never mind)$/i.test(lower) || isConfirmFollowUp(lower);
 };
-const isConfirmFollowUp = (text) => /^(yes|yep|looks good|use it|apply it|replace it)$/i.test(clean(text));
+const isConfirmFollowUp = (text) => {
+  const lower = clean(text).toLowerCase();
+  return /^(yes|yep|yeah|correct|looks good|use it|use this|apply it|apply this|replace it)$/.test(lower)
+    || /\b(yes|yep|yeah|use|apply|replace)\b.*\b(this|it)\b/.test(lower)
+    || /\b(yes|yep|yeah)\b.*\b(question|q)\s*#?\s*\d+\b/.test(lower)
+    || /\breplace\s*(question|q)?\s*#?\s*\d+\s*(with)?\s*(this|it)\b/.test(lower);
+};
 const isCancelFollowUp = (text) => /^(cancel|nevermind|never mind)$/i.test(clean(text));
 const applyWorkingStateFromResult = (current, request, result = {}) => {
   if (!result?.ok) return normalizeWorkingState({ ...current, lastUserFeedback: request });
