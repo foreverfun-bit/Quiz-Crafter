@@ -96,7 +96,7 @@ const nextVenueDate = (venue) => {
 const isApplicationAction = (text) => {
   const lower = clean(text).toLowerCase();
   if (!lower) return false;
-  const questionRef = /\b(question|q)\s*#?\s*\d+\b/.test(lower);
+  const questionRef = /\b(question|q)\s*#?\s*\d+\b/.test(lower) || /\b(replace|delete|remove|retire)\s*#?\s*\d+\b/.test(lower);
   const roundRef = /\bround\s*#?\s*\d+\b/.test(lower);
   if (/\b(replace|delete|remove|retire)\b/.test(lower) && questionRef) return true;
   if (/\b(add|move)\b/.test(lower) && (questionRef || roundRef || /\bround\b/.test(lower))) return true;
@@ -280,7 +280,7 @@ export default function FloatingCopilot({ user }) {
       return;
     }
 
-    const shouldUseBuildTool = location.pathname.startsWith("/build") && (isApplicationAction(request) || isFollowUpForPendingTask(request, workingState));
+    const shouldUseBuildTool = location.pathname.startsWith("/build") && (isApplicationAction(request) || isConfirmFollowUp(request) || isFollowUpForPendingTask(request, workingState));
     if (shouldUseBuildTool) {
       const commandId = `build-${Date.now()}-${Math.random().toString(16).slice(2)}`;
       const progress = isConfirmFollowUp(request)
