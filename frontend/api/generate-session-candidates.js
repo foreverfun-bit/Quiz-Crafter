@@ -36,7 +36,7 @@ const BROAD_CATEGORIES = ["Art", "Books", "Food & Drink", "Geography", "History"
 const APPROVED_CATEGORY_STRICT_THRESHOLD = 14;
 const EXISTING_QUESTIONS_CACHE_MS = 5 * 60 * 1000;
 const STYLE_EXAMPLE_LIMIT = 24;
-const DUPLICATE_EXAMPLE_LIMIT = 55;
+const DUPLICATE_EXAMPLE_LIMIT = 24;
 let existingQuestionsCache = { expiresAt: 0, data: null, pending: null, libraryLimit: 0, sessionLimit: 0 };
 
 const BANNED_GENERIC_PATTERNS = [
@@ -409,6 +409,13 @@ Host context:
 - The biggest need is fresh-but-playable questions: fun angles, useful clue paths, and categories that regular bar teams recognize.
 - The host has been hosting since 2019 and has already used a lot of common trivia.
 
+Priority order:
+1. Playable for a US bar-trivia room.
+2. Fits the requested question type, category constraints, round, and host style.
+3. Fresh angle with a satisfying clue path.
+4. Avoids duplicates and stale quiz-bank facts.
+If these priorities conflict, choose playable and host-ready over obscure, overly constrained, or technically novel.
+
 Return valid JSON only. No markdown. No comments. No extra keys outside the requested object.
 
 Use this exact shape:
@@ -611,6 +618,7 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
   const excludedCategories = new Set(cleanExcludeCategories.map(categoryKey));
   const approvedCategorySet = new Set(cleanApprovedCategories.map(categoryKey));
   const lockedCategorySet = new Set(cleanLockedCategories.map(categoryKey));
+  const shouldBlockRepeatedAnswers = questionType !== "true_false";
 
   if (!Array.isArray(candidates)) throw new Error("No candidates returned");
 
@@ -651,7 +659,7 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
       rejected.push({ index, question: item.question_text, reason: "too_similar_to_rejected_question" });
       return;
     }
-    if (rejectedAnswerFingerprints.has(itemAnswer)) {
+    if (shouldBlockRepeatedAnswers && rejectedAnswerFingerprints.has(itemAnswer)) {
       rejected.push({ index, question: item.question_text, reason: "rejected_answer_repeated" });
       return;
     }
@@ -664,7 +672,7 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
         rejected.push({ index, question: item.question_text, reason: "duplicate_answer_angle" });
         return;
       }
-      if (itemAnswer && (existingAnswers.has(itemAnswer) || batchAnswers.has(itemAnswer))) {
+      if (shouldBlockRepeatedAnswers && itemAnswer && (existingAnswers.has(itemAnswer) || batchAnswers.has(itemAnswer))) {
         rejected.push({ index, question: item.question_text, reason: "duplicate_correct_answer" });
         return;
       }
@@ -672,7 +680,7 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
 
     batchFingerprints.add(itemFingerprint);
     batchAnswerPairs.add(itemAnswerPair);
-    if (itemAnswer) batchAnswers.add(itemAnswer);
+    if (shouldBlockRepeatedAnswers && itemAnswer) batchAnswers.add(itemAnswer);
     accepted.push(item);
   });
 

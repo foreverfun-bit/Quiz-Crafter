@@ -118,7 +118,7 @@ Fact-safety rules:
 Question-shaping rules:
 ${typeSpecificRules}
 ${categoryRules}
-- Prefer obscure-but-fair angles over generic trivia. Avoid common questions like basic capitals, obvious Oscar winners, or first-president style facts unless the input specifically asks for them.
+- Prefer fresh-but-playable angles over generic trivia. Avoid common questions like basic capitals, obvious Oscar winners, or first-president style facts unless the input specifically asks for them, but do not make the answer obscure just to be different.
 - Keep wording concise, host-friendly, and easy to read aloud.
 - The final question should not be too wordy, too academic, or too easy unless the rough input requires it.
 `.trim();
