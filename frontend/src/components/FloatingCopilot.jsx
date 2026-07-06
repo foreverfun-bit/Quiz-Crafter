@@ -93,6 +93,23 @@ const nextVenueDate = (venue) => {
 };
 
 const isBuildCommand = (text) => /\b(build|round|replace|rewrite|question|fun fact|harder|easier|library|search|finish session|make this|convert)\b/i.test(text);
+const buildProgressText = (text) => {
+  const lower = text.toLowerCase();
+  if (/\breplace\b/.test(lower)) return `Replacing ${clean(text.match(/question\s*#?\s*\d+/i)?.[0]) || "that question"}...`;
+  if (/\b(rewrite|make|harder|easier|fun fact|convert)\b/.test(lower)) return `Updating ${clean(text.match(/question\s*#?\s*\d+/i)?.[0]) || "that question"}...`;
+  if (/\b(build|finish)\b/.test(lower)) return "Building from the active session...";
+  if (/\b(search|library|find)\b/.test(lower)) return "Searching the active workspace...";
+  return "Working in the active Build session...";
+};
+const formatBuildResult = (result = {}) => {
+  if (!result.ok) return result.message || "I couldn't complete that action in the active Build session.";
+  const lines = [result.message || "Done."];
+  if (result.preview?.question_text) {
+    lines.push("", `Preview: ${result.preview.question_text}`, `Answer: ${result.preview.correct_answer || "TBD"}`);
+  }
+  if (result.undoAvailable) lines.push("", "Undo is available in the Build helper strip.");
+  return lines.join("\n");
+};
 const routeForIntent = (text) => {
   const lower = text.toLowerCase();
   if (/\b(import|pdf|csv|upload)\b/.test(lower)) return "/import";
@@ -187,8 +204,8 @@ export default function FloatingCopilot({ user }) {
     return "Ask Quiz Crafter anything about this page...";
   }, [location.pathname]);
 
-  const runBuildCommand = (request) => {
-    window.dispatchEvent(new CustomEvent("quiz-crafter-copilot-command", { detail: { request } }));
+  const runBuildCommand = (request, commandId) => {
+    window.dispatchEvent(new CustomEvent("quiz-crafter-copilot-command", { detail: { request, commandId } }));
   };
 
   const handleSubmit = async (messageOverride = "") => {
@@ -199,8 +216,9 @@ export default function FloatingCopilot({ user }) {
     setMessages(nextMessages);
 
     if (location.pathname.startsWith("/build") && isBuildCommand(request)) {
-      runBuildCommand(request);
-      setMessages((current) => [...current, { role: "assistant", content: "I sent that into the Build workspace so it can use the current round and session tools directly." }].slice(-24));
+      const commandId = `build-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      setMessages((current) => [...current, { role: "assistant", content: buildProgressText(request), commandId, pending: true }].slice(-24));
+      runBuildCommand(request, commandId);
       return;
     }
 
@@ -227,13 +245,27 @@ export default function FloatingCopilot({ user }) {
   };
 
   useEffect(() => {
+    const handleBuildResult = (event) => {
+      const { commandId, result } = event.detail || {};
+      if (!commandId) return;
+      setMessages((current) => {
+        const hasPending = current.some((message) => message.commandId === commandId);
+        const formatted = formatBuildResult(result);
+        if (!hasPending) return [...current, { role: "assistant", content: formatted }].slice(-24);
+        return current.map((message) => message.commandId === commandId ? { role: "assistant", content: formatted, commandId } : message).slice(-24);
+      });
+    };
     const handleOpenRequest = (event) => {
       const prompt = clean(event.detail?.prompt);
       setOpen(true);
       if (prompt) window.setTimeout(() => handleSubmit(prompt), 0);
     };
+    window.addEventListener("quiz-crafter-copilot-result", handleBuildResult);
     window.addEventListener("quiz-crafter-open-copilot", handleOpenRequest);
-    return () => window.removeEventListener("quiz-crafter-open-copilot", handleOpenRequest);
+    return () => {
+      window.removeEventListener("quiz-crafter-copilot-result", handleBuildResult);
+      window.removeEventListener("quiz-crafter-open-copilot", handleOpenRequest);
+    };
   });
 
   const startResize = (event) => {
@@ -294,6 +326,7 @@ export default function FloatingCopilot({ user }) {
               {messages.map((message, index) => (
                 <div key={`${message.role}-${index}`} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
                   <div className={`max-w-[88%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-relaxed ${message.role === "user" ? "border border-[#71E0DC]/25 bg-[#71E0DC]/15 text-white" : "border border-white/10 bg-zinc-900/90 text-zinc-200"}`}>
+                    {message.pending && <Loader2 size={14} className="mr-2 inline animate-spin text-[#71E0DC]" />}
                     {message.content}
                   </div>
                 </div>

@@ -886,27 +886,27 @@ const BuildSession = () => {
         setShowAiPanel(false);
         setShowCoHost(false);
         appendBuilderAssistant("I opened the manual question editor. Write the question here, or give me a rough idea and use the sparkle button to draft it.");
-        return;
+        return { ok: true, message: "Manual question entry is open." };
       }
       if (/\b(use template|apply template|start from template)\b/i.test(request)) {
         createUndoSnapshot("Apply template");
         handleStartFromTemplate();
         appendBuilderAssistant("I applied the selected template. The round list is ready for you to build into.");
-        return;
+        return { ok: true, message: "Template applied to the build.", undoAvailable: true };
       }
       if (/\b(save session|save build)\b/i.test(request)) {
         await handleSave(false);
         appendBuilderAssistant("I saved this build so you can come back to it.");
-        return;
+        return { ok: true, message: "Build saved." };
       }
       if (/\b(export csv)\b/i.test(request)) {
         appendBuilderAssistant("CSV export is available after saving/opening the session detail. Save the build first, then export from the session screen.");
-        return;
+        return { ok: false, message: "I can't export this build directly yet. Save the build first, then export from the session screen." };
       }
       if (intent === "import_file") {
         appendBuilderAssistant("Imports still live on the Import CSV/PDF screen so you can review detected rows before they touch the database. Opening that next.");
         navigate("/import");
-        return;
+        return { ok: true, message: "Opened Import so you can review detected rows before saving them." };
       }
       if (intent === "search_library") {
         const query = request.replace(/\b(search|find|library|saved question|from my library|about|for)\b/gi, " ").replace(/\s+/g, " ").trim();
@@ -917,20 +917,20 @@ const BuildSession = () => {
         setShowWriteForm(false);
         setShowCoHost(false);
         appendBuilderAssistant(`I opened your unused library${query ? ` and searched for "${query}"` : ""}. Pick any question to add it to ${targetRound.name}.`);
-        return;
+        return { ok: true, message: `Opened the unused library${query ? ` and searched for "${query}"` : ""}.` };
       }
       if (intent === "generate_full_session") {
         createUndoSnapshot("Finish full session");
         await handleBuildFullSession();
         appendBuilderAssistant("I filled the open gaps across the session using the current template, approved categories, and questions already in the build.");
-        return;
+        return { ok: true, message: "Generated questions for the open session gaps.", undoAvailable: true };
       }
       if (intent === "generate_round") {
         createUndoSnapshot(`Build ${targetRound.name}`);
         await handleBuildFullSession({ onlyRoundId: targetRound.id });
         setActiveRoundId(targetRound.id);
         appendBuilderAssistant(`I filled open spots in ${targetRound.name}. Review the round list and undo if the direction feels off.`);
-        return;
+        return { ok: true, message: `${targetRound.name} has been built or filled where possible.`, undoAvailable: true };
       }
       if (intent === "add_questions") {
         const themeParts = [theme, request, `Target round: ${targetRound.name}.`, targetRound.description ? `Round direction: ${targetRound.description}` : ""].filter(Boolean);
@@ -948,19 +948,19 @@ const BuildSession = () => {
         setGenerationStatus("");
         setActiveRoundId(targetRound.id);
         appendBuilderAssistant(`I found ${generated.length} possible ${generated.length === 1 ? "question" : "questions"} for ${targetRound.name}. Pick the ones you want to add.`);
-        return;
+        return { ok: true, message: `Found ${generated.length} candidate ${generated.length === 1 ? "question" : "questions"} for ${targetRound.name}. Review them in the Build results area.` };
       }
       if (["replace_question", "rewrite_question", "make_harder", "make_easier", "add_fun_fact"].includes(intent)) {
         if (/\bweakest|balance|review\b/i.test(request) && !parseQuestionNumber(request)) {
           setCohostPrompt(request);
           await handleAskCoHost();
           appendBuilderAssistant("I reviewed the round balance. If I draft replacements, they will appear in the co-host drafts.");
-          return;
+          return { ok: true, message: "Review complete. Check the Build workspace for co-host notes or drafts." };
         }
         const targetQuestion = findQuestionFromPrompt(request);
         if (!targetQuestion) {
           appendBuilderAssistant("I need a question number for that. Try: \"Replace question 4\" or \"Make question 6 easier.\"");
-          return;
+          return { ok: false, message: `I couldn't ${intent === "replace_question" ? "replace" : "update"} that question because no matching question number is in the active round.` };
         }
         const direction = intent === "make_easier" ? "Make this easier and more gettable for a US bar-trivia crowd." : intent === "make_harder" ? "Make this harder but still fair and playable." : intent === "add_fun_fact" ? "Add or improve the fun fact. Keep the same question, answer, category, and type." : request;
         if (intent === "replace_question") {
@@ -969,32 +969,41 @@ const BuildSession = () => {
           if (!replacement) throw new Error("No replacement came back.");
           setChatPreview({ kind: "replace", originalQuestion: targetQuestion, question: replacement, roundId: targetRound.id });
           appendBuilderAssistant(`I found a replacement for Question ${parseQuestionNumber(request) || 1}. Preview it before saving.`);
-          return;
+          return { ok: true, message: `Replacement preview is ready for Question ${parseQuestionNumber(request) || 1}.`, preview: replacement, undoAvailable: false };
         }
         const result = await handleChatEditQuestion(targetQuestion, direction);
         if (result?.question) {
           setChatPreview({ kind: "rewrite", originalQuestion: targetQuestion, question: result.question, roundId: targetRound.id });
           appendBuilderAssistant(result.answer || "I made a preview rewrite. Accept it to update the question.");
+          return { ok: true, message: result.answer || `Rewrite preview is ready for Question ${parseQuestionNumber(request) || 1}.`, preview: result.question, undoAvailable: false };
         }
-        return;
+        return { ok: false, message: "I couldn't create a usable preview for that question." };
       }
       setCohostPrompt(request);
       await handleAskCoHost();
-      appendBuilderAssistant("I sent that to the co-host brain. If it drafts usable questions, they will appear in the co-host preview.");
+      appendBuilderAssistant("Co-host review complete. If it drafted usable questions, they will appear in the co-host preview.");
+      return { ok: true, message: "Co-host review complete. Check the Build workspace for notes or drafts." };
     } catch (error) {
       console.error("Builder chat command error:", error);
       appendBuilderAssistant(error.response?.data?.error || error.message || "I could not finish that request. Try naming a round, question number, type, or count.");
       toast.error(error.response?.data?.error || error.message || "Ask Quiz Crafter failed");
+      return { ok: false, message: error.response?.data?.error || error.message || "I could not finish that request. Try naming a round, question number, type, or count." };
     } finally {
       setBuilderChatLoading(false);
       setGenerationStatus("");
     }
   };
   useEffect(() => {
-    const handleCopilotCommand = (event) => {
+    const handleCopilotCommand = async (event) => {
       const request = normalizeText(event.detail?.request);
+      const commandId = event.detail?.commandId;
       if (!request) return;
-      runBuilderChat(request);
+      try {
+        const result = await runBuilderChat(request);
+        if (commandId) window.dispatchEvent(new CustomEvent("quiz-crafter-copilot-result", { detail: { commandId, result: result || { ok: true, message: "Build action finished." } } }));
+      } catch (error) {
+        if (commandId) window.dispatchEvent(new CustomEvent("quiz-crafter-copilot-result", { detail: { commandId, result: { ok: false, message: error.message || "I couldn't access the active Build session." } } }));
+      }
     };
     window.addEventListener("quiz-crafter-copilot-command", handleCopilotCommand);
     return () => window.removeEventListener("quiz-crafter-copilot-command", handleCopilotCommand);
