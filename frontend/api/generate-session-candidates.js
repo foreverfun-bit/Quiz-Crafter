@@ -82,6 +82,7 @@ export default async function handler(req, res) {
       rejectedCategories = [],
       lockedCategories = [],
       rejectedQuestions = [],
+      rejectedAnswers = [],
       currentBatchQuestions = [],
       sessionContext = null,
       generationMode = "polished",
@@ -104,6 +105,7 @@ export default async function handler(req, res) {
     const cleanRejectedCategories = dedupeCategoryStrings(normalizeStringArray(rejectedCategories).filter((category) => !containsCategory(cleanLockedCategories, category)));
     const cleanExcludeCategories = dedupeCategoryStrings([...normalizeStringArray(excludeCategories), ...cleanRejectedCategories].filter((category) => !containsCategory(cleanLockedCategories, category)));
     const cleanRejectedQuestions = dedupeStrings([...normalizeStringArray(rejectedQuestions), ...normalizeStringArray(currentBatchQuestions)]);
+    const cleanRejectedAnswers = dedupeStrings(normalizeStringArray(rejectedAnswers));
     const cleanSessionContext = normalizeSessionContext(sessionContext);
     const cleanHostStyleProfile = normalizeHostStyleProfile(hostStyleProfile);
     const requireApprovedCategories = cleanLockedCategories.length > 0 || cleanApprovedCategories.length > 0;
@@ -114,7 +116,10 @@ export default async function handler(req, res) {
     const existingAnswerPairs = new Set(existingQuestions.map((q) => answerPairFingerprint(q.question_text, q.correct_answer)));
     const existingAnswers = new Set(existingQuestions.map((q) => answerFingerprint(q.correct_answer)).filter(Boolean));
     const rejectedQuestionFingerprints = new Set(cleanRejectedQuestions.map(fingerprint));
-    const rejectedAnswerFingerprints = new Set(cleanRejectedQuestions.map(answerFingerprint).filter(Boolean));
+    const rejectedAnswerFingerprints = new Set([
+      ...cleanRejectedAnswers.map(answerFingerprint),
+      ...cleanRejectedQuestions.map(extractRejectedAnswer).filter(Boolean).map(answerFingerprint),
+    ].filter(Boolean));
 
     const prompt = buildPrompt({
       config,
@@ -127,6 +132,7 @@ export default async function handler(req, res) {
       cleanLockedCategories,
       categoryExpansionMode,
       cleanRejectedQuestions,
+      cleanRejectedAnswers,
       cleanSessionContext,
       existingQuestions,
       styleExamples,
@@ -184,7 +190,6 @@ export default async function handler(req, res) {
         cleanApprovedCategories: [],
         requireApprovedCategories: false,
         cleanLockedCategories: [],
-        rejectedAnswerFingerprints: new Set(),
         existingFingerprints: new Set(),
         existingAnswerPairs: new Set(),
         existingAnswers: new Set(),
@@ -353,7 +358,7 @@ function formatContextQuestion(question) {
   return `- [${question.round || "Session"} / ${question.category || "Uncategorized"} / ${question.question_type || "written"}] ${question.question_text} Answer: ${question.correct_answer}`;
 }
 
-function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, categoryExpansionMode, cleanRejectedQuestions = [], cleanSessionContext = null, existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt, fastMode = false, cleanHostStyleProfile = null }) {
+function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, categoryExpansionMode, cleanRejectedQuestions = [], cleanRejectedAnswers = [], cleanSessionContext = null, existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt, fastMode = false, cleanHostStyleProfile = null }) {
   const overGenerateCount = fastMode ? Math.min(8, Math.max(safeCount + 1, Math.ceil(safeCount * 1.35))) : Math.min(18, Math.max(safeCount + 4, Math.ceil(safeCount * 1.7)));
   const lockedCategoryText = cleanLockedCategories.length ? `Locked categories are active. The category field must exactly match one of these locked categories: ${cleanLockedCategories.join(", ")}. Generate all candidates inside these locked categories until the host unlocks them.` : "";
   const approvedCategoryText = cleanLockedCategories.length
@@ -378,7 +383,10 @@ function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, clea
     : "";
   const duplicateExamples = existingQuestions.slice(0, fastMode ? 16 : DUPLICATE_EXAMPLE_LIMIT).map((q) => `- ${q.question_text}${q.correct_answer ? ` Answer: ${q.correct_answer}` : ""}`).join("\n");
   const duplicateText = avoidDuplicates && duplicateExamples ? `Avoid duplicating, lightly rewording, using the same answer, or using the same answer-angle as these existing and past-session questions:\n${duplicateExamples}` : "";
-  const rejectedText = cleanRejectedQuestions.length ? `The host explicitly rejected these generated questions. Do not return them, close rewrites, same-answer variations, or same topic-angle cousins:\n${cleanRejectedQuestions.map((question) => `- ${question}`).join("\n")}` : "";
+  const rejectedText = cleanRejectedQuestions.length || cleanRejectedAnswers.length ? [
+    cleanRejectedQuestions.length ? `The host explicitly rejected these generated questions. Do not return them, close rewrites, same-answer variations, or same topic-angle cousins:\n${cleanRejectedQuestions.map((question) => `- ${question}`).join("\n")}` : "",
+    cleanRejectedAnswers.length ? `Also do not use these rejected correct answers again for this refresh/regeneration:\n${cleanRejectedAnswers.map((answer) => `- ${answer}`).join("\n")}` : "",
+  ].filter(Boolean).join("\n") : "";
   const usedText = excludeUsed ? "Assume the host has already used years of common trivia. Avoid the most repeated stock facts, but do not compensate by choosing tiny or joyless facts. Use familiar subjects with fresher angles." : "";
   const hostHardText = difficultyKey === "host_hard" ? "Host Hard calibration: this means polished and fresh, not brutally obscure. A good team should be able to reason toward the answer from the wording even if they do not know it cold." : "";
   const noveltySeed = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -639,6 +647,10 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
       rejected.push({ index, question: item.question_text, reason: "permanently_rejected_question" });
       return;
     }
+    if (isTooSimilarToAny(itemFingerprint, rejectedQuestionFingerprints)) {
+      rejected.push({ index, question: item.question_text, reason: "too_similar_to_rejected_question" });
+      return;
+    }
     if (rejectedAnswerFingerprints.has(itemAnswer)) {
       rejected.push({ index, question: item.question_text, reason: "rejected_answer_repeated" });
       return;
@@ -725,6 +737,29 @@ function answerFingerprint(answer) {
 
 function answerPairFingerprint(questionText, answer) {
   return `${fingerprint(questionText)}::${answerFingerprint(answer)}`;
+}
+
+function extractRejectedAnswer(value) {
+  const text = cleanText(value);
+  const match = text.match(/\b(?:answer|correct_answer)\s*[:=]\s*([^|;.]+)$/i) || text.match(/\banswer\s*[:=]\s*([^|;.]+)/i);
+  return match ? match[1] : "";
+}
+
+function isTooSimilarToAny(itemFingerprint, fingerprintSet) {
+  if (!itemFingerprint || !fingerprintSet?.size) return false;
+  const itemTokens = new Set(itemFingerprint.split(" ").filter(Boolean));
+  if (itemTokens.size < 4) return false;
+  for (const rejectedFingerprint of fingerprintSet) {
+    const rejectedTokens = new Set(String(rejectedFingerprint || "").split(" ").filter(Boolean));
+    if (rejectedTokens.size < 4) continue;
+    let shared = 0;
+    itemTokens.forEach((token) => {
+      if (rejectedTokens.has(token)) shared += 1;
+    });
+    const overlap = shared / Math.min(itemTokens.size, rejectedTokens.size);
+    if (overlap >= 0.7 && shared >= 4) return true;
+  }
+  return false;
 }
 
 async function fetchExistingQuestions(libraryLimit = 1500, sessionLimit = 500) {

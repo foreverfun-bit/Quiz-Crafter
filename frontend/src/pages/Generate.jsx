@@ -73,6 +73,18 @@ const cleanCategoryList = (values, preferred = []) => dedupeCategories(cleanList
 const normalizeText = (value) => String(value || "").replace(/\s+/g, " ").trim();
 const fingerprint = (value) => normalizeText(value).toLowerCase().replace(/[^a-z0-9]/g, "");
 const candidateFingerprint = (candidate) => fingerprint(`${candidate?.question_text || ""} ${candidate?.correct_answer || ""}`);
+const answerKey = (value) => normalizeText(value).toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
+const wordFingerprint = (value) => normalizeText(value).toLowerCase().replace(/[^a-z0-9\s]/g, "").split(" ").filter((word) => word.length > 2).sort().join(" ");
+const isNearDuplicateCandidate = (candidate, original) => {
+  if (!candidate || !original) return false;
+  if (answerKey(candidate.correct_answer) && answerKey(candidate.correct_answer) === answerKey(original.correct_answer)) return true;
+  const candidateWords = new Set(wordFingerprint(candidate.question_text).split(" ").filter(Boolean));
+  const originalWords = new Set(wordFingerprint(original.question_text).split(" ").filter(Boolean));
+  if (candidateWords.size < 4 || originalWords.size < 4) return false;
+  let shared = 0;
+  candidateWords.forEach((word) => { if (originalWords.has(word)) shared += 1; });
+  return shared >= 4 && shared / Math.min(candidateWords.size, originalWords.size) >= 0.7;
+};
 
 const readJsonArray = (key) => {
   try {
@@ -178,7 +190,7 @@ const Generate = ({ initialCreateMode = "generate" }) => {
     setGroupedCandidates(emptyGroupedCandidates);
   };
 
-  const getGenerationPreferences = (extraRejectedQuestions = [], lockedCategoriesOverride = null) => {
+  const getGenerationPreferences = (extraRejectedQuestions = [], lockedCategoriesOverride = null, extraRejectedAnswers = []) => {
     const prefs = readCategoryPrefs();
     const latestMemory = readQuestionMemory();
     setQuestionMemory(latestMemory);
@@ -189,6 +201,7 @@ const Generate = ({ initialCreateMode = "generate" }) => {
       rejectedCategories: cleanCategoryList(prefs.rejected),
       lockedCategories: cleanCategoryList(lockedCategoriesOverride || lockedCategories, prefs.approved),
       rejectedQuestions: cleanList(rejectedQuestions),
+      rejectedAnswers: cleanList(extraRejectedAnswers),
     };
   };
 
@@ -216,8 +229,8 @@ const Generate = ({ initialCreateMode = "generate" }) => {
     toast.success(`${cleanCategory} unlocked`);
   };
 
-  const callGenerateRoute = async ({ questionType, count, themeValue, excludeCategories = [], extraRejectedQuestions = [], difficultyOverride = null, lockedCategoriesOverride = null }) => {
-    const preferences = getGenerationPreferences(extraRejectedQuestions, lockedCategoriesOverride);
+  const callGenerateRoute = async ({ questionType, count, themeValue, excludeCategories = [], extraRejectedQuestions = [], extraRejectedAnswers = [], difficultyOverride = null, lockedCategoriesOverride = null }) => {
+    const preferences = getGenerationPreferences(extraRejectedQuestions, lockedCategoriesOverride, extraRejectedAnswers);
     const latestStyle = readHostStyleProfile();
     setHostStyleProfile(latestStyle);
 
@@ -305,12 +318,14 @@ const Generate = ({ initialCreateMode = "generate" }) => {
     try {
       const generated = await callGenerateRoute({
         questionType: type,
-        count: 1,
-        themeValue: mode === "theme" ? roundThemeSubject : theme || "",
-        extraRejectedQuestions: [candidateFingerprint(current)],
+        count: 6,
+        themeValue: [mode === "theme" ? roundThemeSubject : theme || "", "Refresh this candidate with a genuinely different trivia fact. Do not reuse the same correct answer, subject, or angle.", `Rejected question: ${current.question_text}`, `Rejected answer: ${current.correct_answer}`].filter(Boolean).join("\n"),
+        extraRejectedQuestions: [candidateFingerprint(current), current.question_text],
+        extraRejectedAnswers: [current.correct_answer],
       });
+      const fresh = generated.find((candidate) => !isNearDuplicateCandidate(candidate, current));
 
-      if (!generated.length) {
+      if (!fresh) {
         toast.error("Could not find a fresh replacement");
         return;
       }
@@ -318,7 +333,7 @@ const Generate = ({ initialCreateMode = "generate" }) => {
       setGroupedCandidates((prev) => {
         const updated = {
           ...prev,
-          [type]: prev[type].map((candidate, i) => (i === index ? generated[0] : candidate)),
+          [type]: prev[type].map((candidate, i) => (i === index ? fresh : candidate)),
         };
         rememberGenerated(updated);
         return updated;
