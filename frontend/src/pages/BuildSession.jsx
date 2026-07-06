@@ -185,6 +185,18 @@ const buildStateFromSavedSession = (session) => {
   return { questions, rounds: rounds.length ? rounds : createDefaultRounds(), activeRoundId: rounds[0]?.id || defaultRounds[0].id };
 };
 const newRoundId = () => `round-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const mergeTemplateRoundsWithExisting = (templateRounds, currentRounds) => {
+  const normalizedTemplateRounds = normalizeRounds(templateRounds);
+  const normalizedCurrentRounds = normalizeRounds(currentRounds);
+  const merged = normalizedTemplateRounds.map((templateRound, index) => ({
+    ...templateRound,
+    questionIds: [...(normalizedCurrentRounds[index]?.questionIds || [])],
+  }));
+  if (normalizedCurrentRounds.length > normalizedTemplateRounds.length) {
+    merged.push(...normalizedCurrentRounds.slice(normalizedTemplateRounds.length));
+  }
+  return merged;
+};
 const loadLocalCategoryPrefs = () => { try { const parsed = JSON.parse(localStorage.getItem(CATEGORY_PREF_KEY) || "{}"); return { approved: uniqueCategories(Array.isArray(parsed.approved) ? parsed.approved : []), rejected: uniqueCategories(Array.isArray(parsed.rejected) ? parsed.rejected : []) }; } catch { return { approved: [], rejected: [] }; } };
 const saveLocalCategoryPrefs = (approved, rejected) => {
   const prefs = { approved: uniqueCategories([...approved]), rejected: uniqueCategories([...rejected]) };
@@ -839,22 +851,21 @@ const BuildSession = () => {
   const handleStartFromTemplate = () => {
     const template = templates.find((item) => item.id === selectedTemplateId) || templates[0];
     if (!template) return toast.error("Create a template in Setup first");
-    if (selectedTotal > 0 && !window.confirm("Start from this template and replace the current round layout? Your library questions will stay available.")) return;
-    const activeVenueId = readActiveVenueId();
-    const venue = venues.find((item) => item.id === activeVenueId) || venues[0] || null;
+    if (selectedTotal > 0) createUndoSnapshot("Apply template");
+    const venue = venues.find((item) => item.id === selectedVenueId) || venues.find((item) => item.id === readActiveVenueId()) || venues[0] || null;
     const draft = makeTemplateBuildDraft(template, venue);
     writeTemplateBuildDraft(template, venue);
-    const nextRounds = normalizeRounds(draft.rounds);
-    setSessionName(draft.sessionName || sessionName);
-    setSessionDate(draft.sessionDate || sessionDate);
+    const nextRounds = selectedTotal > 0 ? mergeTemplateRoundsWithExisting(draft.rounds, safeRounds) : normalizeRounds(draft.rounds);
+    setSessionName((current) => current || draft.sessionName || sessionName);
+    setSessionDate((current) => current || draft.sessionDate || sessionDate);
     setSelectedVenueId(draft.venueId || selectedVenueId);
     setRounds(nextRounds);
     setActiveRoundId(getInitialActiveRoundId(nextRounds, draft.activeRoundId));
-    setTheme(draft.theme || "");
+    setTheme((current) => current || draft.theme || "");
     setShowAiPanel(false);
     setShowWriteForm(false);
     setShowLibrary(false);
-    toast.success(`Started from ${template.name}`);
+    toast.success(selectedTotal > 0 ? `Applied ${template.name} and kept ${selectedTotal} question${selectedTotal === 1 ? "" : "s"}` : `Started from ${template.name}`);
   };
   const createUndoSnapshot = (label = "AI action") => setBuilderUndoSnapshot({ label, questions: safeQuestions(questions), rounds: normalizeRounds(rounds), activeRoundId, theme, difficulty, aiCandidates: safeQuestions(aiCandidates), time: Date.now() });
   const restoreBuilderUndo = () => {
@@ -1169,7 +1180,7 @@ const BuildSession = () => {
   return <div className="p-4 lg:p-6 max-w-7xl mx-auto animate-fade-in" data-testid="build-session-page">
     <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-4 mb-4"><div><h1 className="text-3xl md:text-4xl font-bold text-white mb-1">Build <span className="gradient-text">Session</span></h1><p className="text-zinc-500">Create or continue the active trivia session.</p></div><div className="flex gap-2 flex-wrap"><Button onClick={() => handleSave(false)} disabled={saving} className="gradient-btn" data-testid="save-build-btn">{saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</> : <><Save className="mr-2" size={18} />Save Build</>}</Button><DropdownMenu><DropdownMenuTrigger asChild><Button variant="outline" className="border-white/15 text-zinc-300 hover:text-white hover:bg-zinc-800" aria-label="More build actions"><MoreHorizontal size={18} /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" className="border-white/10 bg-zinc-950 text-zinc-200"><DropdownMenuItem onClick={() => handleSave(true)} className="cursor-pointer focus:bg-zinc-800" data-testid="go-live-btn"><Sparkles size={15} className="mr-2" />Go Live</DropdownMenuItem><DropdownMenuItem onClick={() => askFloatingCopilot("Review this session and tell me what feels weak, repetitive, missing, or off-style.")} className="cursor-pointer focus:bg-zinc-800"><Check size={15} className="mr-2" />Review Session</DropdownMenuItem><DropdownMenuItem onClick={() => askFloatingCopilot("Create host notes for this session: pacing notes, category callouts, and any fun hosting beats.")} className="cursor-pointer focus:bg-zinc-800"><MessageSquare size={15} className="mr-2" />Create Host Notes</DropdownMenuItem><DropdownMenuItem onClick={() => askFloatingCopilot("Export CSV for this build or tell me the next step if I need to save first.")} className="cursor-pointer focus:bg-zinc-800"><Save size={15} className="mr-2" />Export CSV</DropdownMenuItem>{selectedTotal > 0 && <DropdownMenuItem onClick={handleClearSession} className="cursor-pointer text-red-200 focus:bg-red-500/10 focus:text-red-200"><X size={15} className="mr-2" />Clear Build</DropdownMenuItem>}</DropdownMenuContent></DropdownMenu></div></div>
     {loading && <div className="mb-4 flex items-center gap-2 rounded-md border border-[#71E0DC]/20 bg-[#071A1D]/70 px-3 py-2 text-sm text-[#AEEBFF]"><Loader2 className="h-4 w-4 animate-spin" />Loading your saved builds and question library...</div>}
-    <Card className="glass-card mb-4"><CardHeader className="pb-2"><CardTitle className="text-white text-lg">Session Setup</CardTitle></CardHeader><CardContent className="p-4 pt-0 space-y-3"><div className="grid grid-cols-1 lg:grid-cols-[1fr_155px_220px_260px_auto] gap-3 items-end"><Field label="Session Name"><Input value={sessionName} onChange={(e) => setSessionName(e.target.value)} placeholder="e.g., Tuesday Night Trivia" className="bg-zinc-950/50 border-white/10 text-white" /></Field><Field label="Date"><Input type="date" value={sessionDate} onChange={(e) => setSessionDate(e.target.value)} className="bg-zinc-950/50 border-white/10 text-white" /></Field><Field label="Venue"><select value={selectedVenueId} onChange={(e) => setSelectedVenueId(e.target.value)} className="w-full h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3"><option value="">No venue</option>{venues.map((venue) => <option key={venue.id} value={venue.id}>{venue.name || venue.nightName || "Untitled venue"}</option>)}</select></Field><Field label="Template"><select value={selectedTemplateId} onChange={(event) => setSelectedTemplateId(event.target.value)} className="w-full h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3">{templates.map((template) => <option key={template.id} value={template.id}>{template.name} - {template.roundCount} rounds</option>)}</select></Field><Button type="button" onClick={handleStartFromTemplate} disabled={!templates.length || generating} className="h-10 border border-white/10 bg-zinc-950/70 text-zinc-100 hover:border-[#71E0DC]/40 hover:bg-zinc-900"><Layers size={16} className="mr-2" />Use Template</Button></div>{approvedCategories.length > 0 && <p className="text-xs text-zinc-500">AI category pool: {approvedCategories.slice(0, 12).join(", ")}{approvedCategories.length > 12 ? "..." : ""}</p>}</CardContent></Card>
+    <Card className="glass-card mb-4"><CardHeader className="pb-2"><CardTitle className="text-white text-lg">Session Setup</CardTitle></CardHeader><CardContent className="p-4 pt-0 space-y-3"><div className="grid grid-cols-1 lg:grid-cols-[1fr_155px_220px_260px_auto] gap-3 items-end"><Field label="Session Name"><Input value={sessionName} onChange={(e) => setSessionName(e.target.value)} placeholder="e.g., Tuesday Night Trivia" className="bg-zinc-950/50 border-white/10 text-white" /></Field><Field label="Date"><Input type="date" value={sessionDate} onChange={(e) => setSessionDate(e.target.value)} className="bg-zinc-950/50 border-white/10 text-white" /></Field><Field label="Venue"><select value={selectedVenueId} onChange={(e) => setSelectedVenueId(e.target.value)} className="w-full h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3"><option value="">No venue</option>{venues.map((venue) => <option key={venue.id} value={venue.id}>{venue.name || venue.nightName || "Untitled venue"}</option>)}</select></Field><Field label="Template"><select value={selectedTemplateId} onChange={(event) => setSelectedTemplateId(event.target.value)} className="w-full h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3">{templates.map((template) => <option key={template.id} value={template.id}>{template.name} - {template.roundCount} rounds</option>)}</select></Field><Button type="button" onClick={handleStartFromTemplate} disabled={!templates.length || generating} className="h-10 border border-white/10 bg-zinc-950/70 text-zinc-100 hover:border-[#71E0DC]/40 hover:bg-zinc-900"><Layers size={16} className="mr-2" />{selectedTotal > 0 ? "Apply Template" : "Use Template"}</Button></div>{approvedCategories.length > 0 && <p className="text-xs text-zinc-500">AI category pool: {approvedCategories.slice(0, 12).join(", ")}{approvedCategories.length > 12 ? "..." : ""}</p>}</CardContent></Card>
     <BuildAssistantStrip onAsk={askFloatingCopilot} activeRoundName={activeRound.name} undoSnapshot={builderUndoSnapshot} onUndo={restoreBuilderUndo} loading={builderChatLoading || generating} generationStatus={generationStatus} generationMode={generationMode} setGenerationMode={setGenerationMode} />
     <BuildAssistantResults preview={chatPreview} onAcceptPreview={acceptChatPreview} onDiscardPreview={() => setChatPreview(null)} aiCandidates={aiCandidates} aiActionId={aiActionId} onAddToSession={handleAddAiCandidateToSession} onSaveToLibrary={handleSaveAiCandidateToLibrary} onRegenerate={handleRegenerateAiCandidate} onConvertType={handleConvertAiCandidateType} onTuneDifficulty={handleTuneAiCandidateDifficulty} onStyleFeedback={handleAiStyleFeedback} />
     <div className="space-y-5"><RoundDropdown rounds={rounds} activeRoundId={activeRoundId} menuOpen={roundMenuOpen} setMenuOpen={setRoundMenuOpen} onSelect={setActiveRoundId} onRename={handleRenameRound} onDescribe={handleDescribeRound} onDelete={handleDeleteRound} onAdd={handleAddRound} />
