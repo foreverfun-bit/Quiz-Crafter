@@ -5,6 +5,7 @@ export const QUESTION_MEMORY_PROFILE_KEY = "quiz_crafter_question_memory_v1";
 
 export const memoryStatuses = {
   available: { label: "Available", blocksBuild: false, blocksAI: false },
+  reusable: { label: "Reusable", blocksBuild: false, blocksAI: false },
   used_recently: { label: "Used Recently", blocksBuild: true, blocksAI: true },
   needs_rewrite: { label: "Needs Rewrite", blocksBuild: true, blocksAI: true },
   too_common: { label: "Too Common", blocksBuild: true, blocksAI: true },

@@ -109,6 +109,7 @@ export default async function handler(req, res) {
     const cleanRejectedAnswers = dedupeStrings(normalizeStringArray(rejectedAnswers));
     const cleanSessionContext = normalizeSessionContext(sessionContext);
     const cleanHostStyleProfile = normalizeHostStyleProfile(hostStyleProfile);
+    const allowUsedSources = hasReuseIntent(cleanTheme);
     const requireApprovedCategories = cleanLockedCategories.length > 0 || cleanApprovedCategories.length > 0;
     const categoryExpansionMode = false;
     const existingQuestions = avoidDuplicates || excludeUsed ? await fetchExistingQuestions(fastMode ? 220 : 1500, fastMode ? 100 : 500) : [];
@@ -132,7 +133,16 @@ export default async function handler(req, res) {
       existingQuestions,
       rejectedQuestionFingerprints,
       rejectedAnswerFingerprints,
+      allowUsedSources,
     });
+    const sourceNotice = !allowUsedSources && !sourceSeeds.some((seed) => seed.source_type === "unused_library" || seed.source_type === "reusable") && hasMatchingUsedSourceQuestion(existingQuestions, {
+      normalizedQuestionType,
+      preferredCategories: cleanLockedCategories.length ? cleanLockedCategories : cleanApprovedCategories,
+      cleanTheme,
+      blockedCategories: new Set(cleanExcludeCategories.map(categoryKey)),
+    })
+      ? "I only found used questions in this category. Want to reuse one, search external sources, or generate a new draft?"
+      : "";
     let parsed = null;
     let usedSourceBackedPrompt = false;
     if (sourceSeeds.length) {
@@ -272,7 +282,7 @@ export default async function handler(req, res) {
       }
     }
 
-    return res.status(200).json({ candidates: validation.candidates.slice(0, safeCount), rejected: validation.rejected, requested: safeCount });
+    return res.status(200).json({ candidates: validation.candidates.slice(0, safeCount), rejected: validation.rejected, requested: safeCount, source_notice: sourceNotice });
   } catch (error) {
     console.error("generate-session-candidates error:", error);
     return res.status(500).json({ error: error?.message || "Failed to generate candidates" });
@@ -485,10 +495,12 @@ Return valid JSON only:
       "difficulty": "${difficultyKey}",
       "question_type": "${config.outputType}",
       "image_url": ""${imagePromptField},
-      "source_type": "question_bank | open_trivia_db | wikipedia",
+      "source_type": "unused_library | reusable | external_source | ai_fallback | used_before",
       "source_url": "https://...",
       "source_label": "Source label",
       "confidence": 0.85,
+      "originality_score": 0.75,
+      "similarity_score": 0.15,
       "needsReview": false
     }
   ]
@@ -496,6 +508,7 @@ Return valid JSON only:
 
 Rules:
 - Every candidate must be grounded in one source seed and include its source_index.
+- Preserve the source seed's source_type, source_label, and source_url.
 - You may rewrite wording, adjust difficulty, generate plausible wrong answers, and format a fun fact.
 - Do not add facts that are not supported by the seed unless you mark needsReview true and lower confidence below 0.65.
 - ${config.roundGuidance}
@@ -737,6 +750,28 @@ function isServerQuestionUsed(question) {
   );
 }
 
+function questionStatus(question) {
+  return cleanText(question?.memory_status || question?.rating || question?.status).toLowerCase().replace(/\s+/g, "_");
+}
+
+function isReusableQuestion(question) {
+  const status = questionStatus(question);
+  return Boolean(question?.is_reusable || question?.reusable || status === "reusable" || status === "reuse" || status === "evergreen");
+}
+
+function isBlockedSourceQuestion(question, { allowUsedSources = false } = {}) {
+  const status = questionStatus(question);
+  const blockedStatuses = new Set(["used", "used_recently", "retired", "too_common", "rejected", "needs_rewrite", "disliked", "dislike"]);
+  if (isReusableQuestion(question)) return false;
+  if (blockedStatuses.has(status)) return !allowUsedSources;
+  if (isServerQuestionUsed(question)) return !allowUsedSources;
+  return false;
+}
+
+function hasReuseIntent(value) {
+  return /\b(reuse|re-used|reused|used before|past question|past session|old session|old question|pull from old|from old sessions)\b/i.test(cleanText(value));
+}
+
 async function requestCandidates(prompt, { fastMode = false } = {}) {
   if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured in Vercel");
 
@@ -798,7 +833,7 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
     const itemAnswerPair = answerPairFingerprint(item.question_text, item.correct_answer);
     const itemAnswer = answerFingerprint(item.correct_answer);
     const itemCategoryKey = categoryKey(item.category);
-    const isOwnSourceCandidate = item.source_type === "question_bank" || item.source_type === "past_session";
+    const isOwnSourceCandidate = ["unused_library", "reusable", "question_bank"].includes(item.source_type);
 
     if (isGenericQuestion(item.question_text)) {
       rejected.push({ index, question: item.question_text, reason: "generic_overused_trivia_pattern" });
@@ -863,10 +898,12 @@ function normalizeCandidate(candidate, config, questionType, difficultyKey, incl
   const incorrectAnswers = Array.isArray(candidate.incorrect_answers) ? candidate.incorrect_answers.map(cleanText).filter(Boolean) : [];
   const sourceIndex = Math.max(0, Number(candidate.source_index || 0) - 1);
   const sourceSeed = sourceSeeds[sourceIndex] || null;
-  const sourceType = cleanText(candidate.source_type) || sourceSeed?.source_type || (sourceBacked ? "source_pool" : "ai_fallback");
+  const sourceType = normalizeSourceType(cleanText(candidate.source_type) || sourceSeed?.source_type || (sourceBacked ? "external_source" : "ai_fallback"));
   const sourceUrl = cleanText(candidate.source_url) || sourceSeed?.source_url || "";
-  const sourceLabel = cleanText(candidate.source_label) || sourceSeed?.source_label || (sourceBacked ? "Source-backed candidate" : "AI fallback");
+  const sourceLabel = normalizeSourceLabel(sourceType, cleanText(candidate.source_label) || sourceSeed?.source_label);
   const confidence = clampConfidence(candidate.confidence ?? sourceSeed?.confidence ?? (sourceBacked ? 0.68 : 0.45));
+  const originalityScore = clampConfidence(candidate.originality_score ?? sourceSeed?.originality_score ?? (sourceType === "used_before" ? 0.2 : sourceBacked ? 0.7 : 0.4));
+  const similarityScore = clampConfidence(candidate.similarity_score ?? sourceSeed?.similarity_score ?? (sourceType === "used_before" ? 1 : 0.25));
   const needsReview = typeof candidate.needsReview === "boolean" ? candidate.needsReview : (!sourceBacked || Boolean(sourceSeed?.needsReview));
 
   if (!category || !questionText || !correctAnswer) return { ok: false, reason: "missing_required_text" };
@@ -899,9 +936,30 @@ function normalizeCandidate(candidate, config, questionType, difficultyKey, incl
       source_url: sourceUrl,
       source_label: sourceLabel,
       confidence,
+      originality_score: originalityScore,
+      similarity_score: similarityScore,
       needsReview,
     },
   };
+}
+
+function normalizeSourceType(value) {
+  const key = cleanText(value).toLowerCase().replace(/[\s-]+/g, "_");
+  if (["question_bank", "library", "unused_question_bank"].includes(key)) return "unused_library";
+  if (["open_trivia_db", "wikipedia", "wikidata", "source_pool"].includes(key)) return "external_source";
+  if (["ai", "ai_draft", "ai_fallback"].includes(key)) return "ai_fallback";
+  if (["used", "used_before", "past_session", "past_question"].includes(key)) return "used_before";
+  if (key === "reusable") return "reusable";
+  return key || "ai_fallback";
+}
+
+function normalizeSourceLabel(sourceType, sourceLabel = "") {
+  if (sourceType === "unused_library") return "Unused Library";
+  if (sourceType === "reusable") return "Reusable";
+  if (sourceType === "external_source") return "External Source";
+  if (sourceType === "used_before") return "Used Before";
+  if (sourceType === "ai_fallback") return "AI Draft";
+  return sourceLabel || "Source";
 }
 
 function clampConfidence(value) {
@@ -953,12 +1011,12 @@ function isTooSimilarToAny(itemFingerprint, fingerprintSet) {
   return false;
 }
 
-async function collectSourceSeeds({ cleanTheme, cleanApprovedCategories, cleanLockedCategories, cleanExcludeCategories, normalizedQuestionType, safeCount, existingQuestions, rejectedQuestionFingerprints, rejectedAnswerFingerprints }) {
+async function collectSourceSeeds({ cleanTheme, cleanApprovedCategories, cleanLockedCategories, cleanExcludeCategories, normalizedQuestionType, safeCount, existingQuestions, rejectedQuestionFingerprints, rejectedAnswerFingerprints, allowUsedSources = false }) {
   const blockedCategories = new Set(cleanExcludeCategories.map(categoryKey));
   const preferredCategories = cleanLockedCategories.length ? cleanLockedCategories : cleanApprovedCategories;
   const themeTerms = tokenizeSourceQuery([cleanTheme, ...preferredCategories.slice(0, 5)].join(" "));
   const sourceSeeds = [
-    ...buildQuestionBankSeeds(existingQuestions, { normalizedQuestionType, preferredCategories, themeTerms, blockedCategories }),
+    ...buildQuestionBankSeeds(existingQuestions, { normalizedQuestionType, preferredCategories, themeTerms, blockedCategories, allowUsedSources }),
     ...await fetchOpenTriviaSeeds({ cleanTheme, preferredCategories, safeCount }),
     ...await fetchWikipediaSeeds({ cleanTheme, preferredCategories, safeCount }),
   ]
@@ -968,29 +1026,49 @@ async function collectSourceSeeds({ cleanTheme, cleanApprovedCategories, cleanLo
   return dedupeSourceSeeds(sourceSeeds).slice(0, SOURCE_SEED_LIMIT);
 }
 
-function buildQuestionBankSeeds(existingQuestions, { normalizedQuestionType, preferredCategories, themeTerms, blockedCategories }) {
+function buildQuestionBankSeeds(existingQuestions, { normalizedQuestionType, preferredCategories, themeTerms, blockedCategories, allowUsedSources = false }) {
   const preferredKeys = new Set(preferredCategories.map(categoryKey));
   return (Array.isArray(existingQuestions) ? existingQuestions : [])
     .filter((question) => question.source === "library")
-    .filter((question) => !isServerQuestionUsed(question))
+    .filter((question) => !isBlockedSourceQuestion(question, { allowUsedSources }))
     .filter((question) => question.question_text && question.correct_answer)
     .filter((question) => !blockedCategories.has(categoryKey(question.category)))
-    .map((question) => ({
-      source_type: "question_bank",
-      source_label: "Unused Question Bank",
-      source_url: "",
-      category: question.category || "General",
-      question_text: question.question_text,
-      correct_answer: question.correct_answer,
-      fun_fact: question.fun_fact,
-      fact: [question.question_text, question.fun_fact].filter(Boolean).join(" "),
-      confidence: 0.8,
-      needsReview: false,
-      score: scoreSourceMatch(question, { normalizedQuestionType, preferredKeys, themeTerms }),
-    }))
+    .map((question) => {
+      const reusable = isReusableQuestion(question);
+      const used = isServerQuestionUsed(question) || ["used", "used_recently"].includes(questionStatus(question));
+      return {
+        source_type: reusable ? "reusable" : used ? "used_before" : "unused_library",
+        source_label: reusable ? "Reusable" : used ? "Used Before" : "Unused Library",
+        source_url: "",
+        category: question.category || "General",
+        question_text: question.question_text,
+        correct_answer: question.correct_answer,
+        fun_fact: question.fun_fact,
+        fact: [question.question_text, question.fun_fact].filter(Boolean).join(" "),
+        confidence: reusable ? 0.78 : used ? 0.62 : 0.82,
+        needsReview: used,
+        originality_score: used ? 0.25 : reusable ? 0.55 : 0.72,
+        similarity_score: used ? 1 : 0,
+        source_priority: used ? 5 : reusable ? 2 : 1,
+        score: scoreSourceMatch(question, { normalizedQuestionType, preferredKeys, themeTerms }) + (reusable ? 3 : 0) - (used ? 4 : 0),
+      };
+    })
     .filter((seed) => seed.score > 0)
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => a.source_priority - b.source_priority || b.score - a.score)
     .slice(0, 8);
+}
+
+function hasMatchingUsedSourceQuestion(existingQuestions, { normalizedQuestionType, preferredCategories, cleanTheme, blockedCategories }) {
+  const preferredKeys = new Set(preferredCategories.map(categoryKey));
+  const themeTerms = tokenizeSourceQuery([cleanTheme, ...preferredCategories.slice(0, 5)].join(" "));
+  return (Array.isArray(existingQuestions) ? existingQuestions : []).some((question) => {
+    if (question.source !== "library") return false;
+    if (!isServerQuestionUsed(question) && !["used", "used_recently"].includes(questionStatus(question))) return false;
+    if (isReusableQuestion(question)) return false;
+    if (!question.question_text || !question.correct_answer) return false;
+    if (blockedCategories.has(categoryKey(question.category))) return false;
+    return scoreSourceMatch(question, { normalizedQuestionType, preferredKeys, themeTerms }) > 0;
+  });
 }
 
 function scoreSourceMatch(question, { normalizedQuestionType, preferredKeys, themeTerms }) {
@@ -1015,8 +1093,8 @@ async function fetchOpenTriviaSeeds({ cleanTheme, preferredCategories, safeCount
     const data = await response.json();
     if (!Array.isArray(data?.results)) return [];
     return data.results.map((item) => ({
-      source_type: "open_trivia_db",
-      source_label: `Open Trivia DB${item.category ? `: ${decodeHtml(item.category)}` : ""}`,
+      source_type: "external_source",
+      source_label: "External Source",
       source_url: "https://opentdb.com/",
       category: mapOpenTriviaCategory(decodeHtml(item.category)),
       question_text: decodeHtml(item.question),
@@ -1025,6 +1103,8 @@ async function fetchOpenTriviaSeeds({ cleanTheme, preferredCategories, safeCount
       fact: `${decodeHtml(item.question)} Answer: ${decodeHtml(item.correct_answer)}`,
       confidence: 0.72,
       needsReview: true,
+      originality_score: 0.68,
+      similarity_score: 0.1,
     }));
   } catch (error) {
     console.warn("Open Trivia DB source fetch failed:", error.message || error);
@@ -1051,8 +1131,8 @@ async function fetchWikipediaSeeds({ cleanTheme, preferredCategories, safeCount 
       }
     }));
     return summaries.filter(Boolean).map((item) => ({
-      source_type: "wikipedia",
-      source_label: `Wikipedia: ${cleanText(item.title)}`,
+      source_type: "external_source",
+      source_label: "External Source",
       source_url: item.content_urls?.desktop?.page || item.content_urls?.mobile?.page || "",
       category: inferCategoryFromText([item.title, item.description, item.extract, ...preferredCategories].join(" ")),
       question_text: "",
@@ -1061,6 +1141,8 @@ async function fetchWikipediaSeeds({ cleanTheme, preferredCategories, safeCount 
       fact: cleanText(item.extract),
       confidence: 0.82,
       needsReview: false,
+      originality_score: 0.75,
+      similarity_score: 0.08,
     })).filter((seed) => seed.fact && seed.correct_answer);
   } catch (error) {
     console.warn("Wikipedia source fetch failed:", error.message || error);
@@ -1195,6 +1277,7 @@ async function fetchExistingQuestionsUncached(supabaseUrl, supabaseKey, libraryL
 
   const [libraryQuestions, sessions] = await Promise.all([
     fetchJsonWithFallback([
+      `${base}/rest/v1/questions?select=question_text,correct_answer,category,question_type,fun_fact,is_liked,is_disliked,liked,disliked,rating,status,memory_status,is_reusable,reusable,is_used,used,used_at,times_used&order=created_at.desc&limit=${libraryLimit}`,
       `${base}/rest/v1/questions?select=question_text,correct_answer,category,question_type,fun_fact,is_liked,is_disliked,liked,disliked,rating,status,is_used,used,used_at,times_used&order=created_at.desc&limit=${libraryLimit}`,
       `${base}/rest/v1/questions?select=question_text,correct_answer,category,question_type,fun_fact,rating&order=created_at.desc&limit=${libraryLimit}`,
       `${base}/rest/v1/questions?select=question_text,correct_answer,category,question_type,fun_fact&order=created_at.desc&limit=${libraryLimit}`,
@@ -1218,6 +1301,10 @@ async function fetchExistingQuestionsUncached(supabaseUrl, supabaseKey, libraryL
       is_liked: Boolean(q.is_liked || q.liked),
       is_disliked: Boolean(q.is_disliked || q.disliked),
       rating: cleanText(q.rating || q.status),
+      status: cleanText(q.status),
+      memory_status: cleanText(q.memory_status),
+      is_reusable: q.is_reusable === true,
+      reusable: q.reusable === true,
       is_used: q.is_used === true,
       used: q.used === true,
       used_at: q.used_at || "",

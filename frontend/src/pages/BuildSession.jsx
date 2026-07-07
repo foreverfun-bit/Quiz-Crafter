@@ -693,6 +693,7 @@ const BuildSession = () => {
       const requestCount = generationMode === "quick" ? Math.min(6, Math.max(targetBatch + 1, targetBatch * 2)) : Math.min(9, Math.max(targetBatch + 3, targetBatch * 2));
       try {
         const { data } = await requestGeneratedForFullRound({ round, type, count: requestCount, excludedCategories: [...generatedCategories, ...accepted.map((question) => question.category)], generatedQuestions: [...generatedQuestions, ...accepted], attempt });
+        if (data?.source_notice) toast.info(data.source_notice);
         const uniqueCandidates = uniqueGeneratedQuestions(normalizeGeneratedForRound(data?.candidates, round, type), [...generatedQuestions, ...accepted]);
         const preferredKeys = new Set(uniqueCandidates.filter(isPreferredFullBuildCandidate).map((question) => fingerprint(question.question_text)));
         const orderedCandidates = [...uniqueCandidates.filter((question) => preferredKeys.has(fingerprint(question.question_text))), ...uniqueCandidates.filter((question) => !preferredKeys.has(fingerprint(question.question_text)))].slice(0, targetBatch);
@@ -722,6 +723,7 @@ const BuildSession = () => {
         const batchCount = Math.min(3, requestedTotal - offset);
         setGenerationStatus(`${accepted.length} of ${requestedTotal} candidates ready`);
         const { data } = await requestGeneratedQuestions({ countOverride: batchCount });
+        if (data?.source_notice) toast.info(data.source_notice);
         const generated = uniqueGeneratedQuestions(normalizeGeneratedCandidates(data?.candidates, activeRound.id, generateType), accepted).slice(0, batchCount);
         if (generated.length) {
           accepted.push(...generated);
@@ -823,7 +825,7 @@ const BuildSession = () => {
     }
   };
   const handleBuildActiveRound = () => { createUndoSnapshot(`Build ${activeRound.name}`); return handleBuildFullSession({ onlyRoundId: activeRound.id }); };
-  const handleAddAiCandidateToSession = (candidate) => { createUndoSnapshot("Add AI candidate"); addGeneratedToRound([candidate]); setAiCandidates((prev) => prev.filter((item) => String(item.id) !== String(candidate.id))); rememberStyleFeedback(candidate, "keep", "Added generated question to session").then(setHostStyleProfile).catch((error) => console.warn("Style feedback save unavailable:", error)); appendBuilderAssistant(`I added that ${questionTypeLabel(normalizeType(candidate)).toLowerCase()} question to ${activeRound.name}.`); toast.success("Added to session"); };
+  const handleAddAiCandidateToSession = (candidate) => { if (candidate?.source_type === "used_before" && !window.confirm("This question has already been used. Add anyway?")) return; createUndoSnapshot("Add AI candidate"); addGeneratedToRound([candidate]); setAiCandidates((prev) => prev.filter((item) => String(item.id) !== String(candidate.id))); rememberStyleFeedback(candidate, "keep", "Added generated question to session").then(setHostStyleProfile).catch((error) => console.warn("Style feedback save unavailable:", error)); appendBuilderAssistant(`I added that ${questionTypeLabel(normalizeType(candidate)).toLowerCase()} question to ${activeRound.name}.`); toast.success("Added to session"); };
   const handleSaveAiCandidateToLibrary = async (candidate) => { const saved = await handleSaveQuestionToLibrary(candidate); if (saved) { rememberStyleFeedback(candidate, "keep", "Saved generated question to library").then(setHostStyleProfile).catch((error) => console.warn("Style feedback save unavailable:", error)); setAiCandidates((prev) => prev.filter((item) => String(item.id) !== String(candidate.id))); } };
   const handleAiStyleFeedback = async (candidate, action) => {
     const labels = { keep: "Kept as your style", too_easy: "Marked too easy", too_common: "Marked too common", not_my_style: "Marked not your style", more_like_this: "Style memory updated" };
@@ -999,6 +1001,7 @@ const BuildSession = () => {
           const batchCount = Math.min(3, requestedCount - offset);
           setGenerationStatus(`${generated.length} of ${requestedCount} candidates ready`);
           const { data } = await requestGeneratedQuestions({ countOverride: batchCount, typeOverride: requestedType, themeOverride: themeParts.join("\n"), roundOverride: targetRound });
+          if (data?.source_notice) toast.info(data.source_notice);
           const batch = uniqueGeneratedQuestions(normalizeGeneratedCandidates(data?.candidates, targetRound.id, requestedType), generated).slice(0, batchCount);
           generated.push(...batch);
           if (batch.length) setAiCandidates((prev) => [...prev, ...batch]);
