@@ -93,19 +93,20 @@ const nextVenueDate = (venue) => {
   return date.toISOString();
 };
 
-const isApplicationAction = (text) => {
+const isPreviewRequest = (text) => {
   const lower = clean(text).toLowerCase();
   if (!lower) return false;
-  const questionRef = /\b(question|q)\s*#?\s*\d+\b/.test(lower) || /\b(replace|delete|remove|retire)\s*#?\s*\d+\b/.test(lower);
-  const roundRef = /\bround\s*#?\s*\d+\b/.test(lower);
-  if (/\b(replace|delete|remove|retire)\b/.test(lower) && questionRef) return true;
-  if (/\b(add|move)\b/.test(lower) && (questionRef || roundRef || /\bround\b/.test(lower))) return true;
-  if (/\b(save)\b/.test(lower) && /\b(question|build|session|this)\b/.test(lower)) return true;
+  const questionRef = /\b(question|q)\s*#?\s*\d+\b/.test(lower) || /\b(replace|rewrite|make|improve)\s*#?\s*\d+\b/.test(lower);
+  return questionRef && /\b(replace|rewrite|improve|make harder|make easier|harder|easier|fun fact)\b/.test(lower);
+};
+const isConfirmedApplicationAction = (text, state = {}) => {
+  const lower = clean(text).toLowerCase();
+  if (!lower) return false;
+  if (state?.awaitingConfirmation && isConfirmFollowUp(lower)) return true;
+  if (/\b(save build|save session)\b/.test(lower)) return true;
+  if (/\b(use|apply)\b.*\btemplate\b/.test(lower)) return true;
   if (/\b(import|upload)\b/.test(lower) && /\b(pdf|csv|file)\b/.test(lower)) return true;
   if (/\b(export)\b/.test(lower) && /\b(csv|session|results|questions)\b/.test(lower)) return true;
-  if (/\bduplicate\b/.test(lower) && /\bsession\b/.test(lower)) return true;
-  if (/\b(use|apply)\b/.test(lower) && /\btemplate\b/.test(lower)) return true;
-  if (/\b(build|fill|finish)\b/.test(lower) && (roundRef || /\b(full session|this round|the round|session)\b/.test(lower))) return true;
   return false;
 };
 const emptyWorkingState = {
@@ -150,11 +151,11 @@ const applyWorkingStateFromResult = (current, request, result = {}) => {
 };
 const buildProgressText = (text) => {
   const lower = text.toLowerCase();
-  if (/\breplace\b/.test(lower)) return `Replacing ${clean(text.match(/question\s*#?\s*\d+/i)?.[0]) || "that question"}...`;
-  if (/\b(rewrite|make|harder|easier|fun fact|convert)\b/.test(lower)) return `Updating ${clean(text.match(/question\s*#?\s*\d+/i)?.[0]) || "that question"}...`;
-  if (/\b(build|finish)\b/.test(lower)) return "Building from the active session...";
+  if (/\breplace\b/.test(lower)) return `Preparing a replacement preview for ${clean(text.match(/question\s*#?\s*\d+/i)?.[0]) || "that question"}...`;
+  if (/\b(rewrite|make|harder|easier|fun fact|convert)\b/.test(lower)) return `Preparing an edit preview for ${clean(text.match(/question\s*#?\s*\d+/i)?.[0]) || "that question"}...`;
+  if (/\b(build|finish)\b/.test(lower)) return "Drafting candidates for review...";
   if (/\b(search|library|find)\b/.test(lower)) return "Searching the active workspace...";
-  return "Working in the active Build session...";
+  return "Preparing a preview...";
 };
 const formatBuildResult = (result = {}) => {
   if (!result.ok) return result.message || "I couldn't complete that action in the active Build session.";
@@ -173,7 +174,7 @@ const routeForIntent = (text) => {
   if (/\bduplicate\b/.test(lower) && /\bsession\b/.test(lower)) return "/past-sessions";
   if (/\b(venue|template|branding|style memory|settings|manage)\b/.test(lower)) return "/manage";
   if (/\b(host|live|run trivia|answers|players)\b/.test(lower)) return "/host-tools";
-  if (isApplicationAction(lower)) return "/build";
+  if (isPreviewRequest(lower) || isConfirmedApplicationAction(lower)) return "/build";
   return "";
 };
 
@@ -280,7 +281,11 @@ export default function FloatingCopilot({ user }) {
       return;
     }
 
-    const shouldUseBuildTool = location.pathname.startsWith("/build") && (isApplicationAction(request) || isConfirmFollowUp(request) || isFollowUpForPendingTask(request, workingState));
+    const shouldUseBuildTool = location.pathname.startsWith("/build") && (
+      isPreviewRequest(request) ||
+      isConfirmedApplicationAction(request, workingState) ||
+      (workingState.awaitingConfirmation && isFollowUpForPendingTask(request, workingState))
+    );
     if (shouldUseBuildTool) {
       const commandId = `build-${Date.now()}-${Math.random().toString(16).slice(2)}`;
       const progress = isConfirmFollowUp(request)

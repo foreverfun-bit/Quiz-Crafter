@@ -916,8 +916,22 @@ const BuildSession = () => {
     setBuilderChatLoading(true);
     try {
       if (chatPreview && isPreviewConfirmRequest(request)) {
+        const originalQuestion = chatPreview.originalQuestion;
+        const newQuestion = chatPreview.question;
+        const actionType = chatPreview.kind === "replace" ? "replace_question" : "rewrite_question";
         acceptChatPreview();
-        return { ok: true, message: chatPreview.kind === "replace" ? `Question ${pendingQuestionNumber} has been replaced.` : `Question ${pendingQuestionNumber} has been updated.`, taskComplete: true, lastAiSuggestion: chatPreview.question };
+        return {
+          ok: true,
+          success: true,
+          action_type: actionType,
+          changed_item_id: originalQuestion?.id,
+          old_value: originalQuestion,
+          new_value: newQuestion,
+          message: chatPreview.kind === "replace" ? `Done - Question ${pendingQuestionNumber} was replaced.` : `Done - Question ${pendingQuestionNumber} was updated.`,
+          taskComplete: true,
+          undoAvailable: true,
+          lastAiSuggestion: newQuestion
+        };
       }
       if (chatPreview && /^(try again|again|another|give me another)$/i.test(request)) {
         const original = chatPreview.originalQuestion;
@@ -981,17 +995,27 @@ const BuildSession = () => {
         return { ok: true, message: `Opened the unused library${query ? ` and searched for "${query}"` : ""}.` };
       }
       if (intent === "generate_full_session") {
-        createUndoSnapshot("Finish full session");
-        await handleBuildFullSession();
-        appendBuilderAssistant("I filled the open gaps across the session using the current template, approved categories, and questions already in the build.");
-        return { ok: true, message: "Generated questions for the open session gaps.", undoAvailable: true };
+        appendBuilderAssistant("I won't auto-fill the session from chat. I can draft candidates for you to approve first.");
+        const draftCount = Math.min(3, Math.max(1, requestedCount || 3));
+        const { data } = await requestGeneratedQuestions({ countOverride: draftCount, typeOverride: requestedType, themeOverride: [theme, request, `Draft candidates for ${targetRound.name}. Do not add anything to the build automatically.`].filter(Boolean).join("\n"), roundOverride: targetRound });
+        if (data?.source_notice) toast.info(data.source_notice);
+        const generated = uniqueGeneratedQuestions(normalizeGeneratedCandidates(data?.candidates, targetRound.id, requestedType), []).slice(0, draftCount);
+        if (!generated.length) throw new Error("No candidate drafts came back.");
+        setAiCandidates((prev) => [...generated, ...prev]);
+        setActiveRoundId(targetRound.id);
+        appendBuilderAssistant(`I drafted ${generated.length} candidate${generated.length === 1 ? "" : "s"} for ${targetRound.name}. Use the Add button on any one you want.`);
+        return { ok: true, success: true, action_type: "draft_candidates", changed_item_id: null, old_value: null, new_value: generated, message: `Drafted ${generated.length} candidate${generated.length === 1 ? "" : "s"} for review. Nothing was added yet.`, awaitingConfirmation: false, task: { type: "draft_candidates", session: sessionName, round: targetRound.name } };
       }
       if (intent === "generate_round") {
-        createUndoSnapshot(`Build ${targetRound.name}`);
-        await handleBuildFullSession({ onlyRoundId: targetRound.id });
+        const draftCount = Math.min(3, Math.max(1, requestedCount || 3));
+        const { data } = await requestGeneratedQuestions({ countOverride: draftCount, typeOverride: requestedType, themeOverride: [theme, request, `Draft candidates for ${targetRound.name}. Do not add anything to the build automatically.`].filter(Boolean).join("\n"), roundOverride: targetRound });
+        if (data?.source_notice) toast.info(data.source_notice);
+        const generated = uniqueGeneratedQuestions(normalizeGeneratedCandidates(data?.candidates, targetRound.id, requestedType), []).slice(0, draftCount);
+        if (!generated.length) throw new Error("No candidate drafts came back.");
+        setAiCandidates((prev) => [...generated, ...prev]);
         setActiveRoundId(targetRound.id);
-        appendBuilderAssistant(`I filled open spots in ${targetRound.name}. Review the round list and undo if the direction feels off.`);
-        return { ok: true, message: `${targetRound.name} has been built or filled where possible.`, undoAvailable: true };
+        appendBuilderAssistant(`I drafted ${generated.length} candidate${generated.length === 1 ? "" : "s"} for ${targetRound.name}. Use the Add button on any one you want.`);
+        return { ok: true, success: true, action_type: "draft_candidates", changed_item_id: null, old_value: null, new_value: generated, message: `Drafted ${generated.length} candidate${generated.length === 1 ? "" : "s"} for review. Nothing was added yet.`, awaitingConfirmation: false, task: { type: "draft_candidates", session: sessionName, round: targetRound.name } };
       }
       if (intent === "add_questions") {
         const themeParts = [theme, request, `Target round: ${targetRound.name}.`, targetRound.description ? `Round direction: ${targetRound.description}` : ""].filter(Boolean);
