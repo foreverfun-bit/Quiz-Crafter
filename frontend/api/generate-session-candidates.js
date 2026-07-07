@@ -37,6 +37,7 @@ const APPROVED_CATEGORY_STRICT_THRESHOLD = 14;
 const EXISTING_QUESTIONS_CACHE_MS = 5 * 60 * 1000;
 const STYLE_EXAMPLE_LIMIT = 24;
 const DUPLICATE_EXAMPLE_LIMIT = 24;
+const SOURCE_SEED_LIMIT = 18;
 let existingQuestionsCache = { expiresAt: 0, data: null, pending: null, libraryLimit: 0, sessionLimit: 0 };
 
 const BANNED_GENERIC_PATTERNS = [
@@ -121,28 +122,61 @@ export default async function handler(req, res) {
       ...cleanRejectedQuestions.map(extractRejectedAnswer).filter(Boolean).map(answerFingerprint),
     ].filter(Boolean));
 
-    const prompt = buildPrompt({
-      config,
-      safeCount,
-      difficultyKey,
-      difficultyProfile,
+    const sourceSeeds = await collectSourceSeeds({
       cleanTheme,
-      cleanExcludeCategories,
       cleanApprovedCategories,
       cleanLockedCategories,
-      categoryExpansionMode,
-      cleanRejectedQuestions,
-      cleanRejectedAnswers,
-      cleanSessionContext,
+      cleanExcludeCategories,
+      normalizedQuestionType,
+      safeCount,
       existingQuestions,
-      styleExamples,
-      excludeUsed,
-      avoidDuplicates,
-      includeImagePrompt,
-      fastMode,
-      cleanHostStyleProfile,
+      rejectedQuestionFingerprints,
+      rejectedAnswerFingerprints,
     });
-    const parsed = await requestCandidates(prompt, { fastMode });
+    let parsed = null;
+    let usedSourceBackedPrompt = false;
+    if (sourceSeeds.length) {
+      const sourcePrompt = buildSourceBackedPrompt({
+        config,
+        safeCount,
+        difficultyKey,
+        difficultyProfile,
+        cleanTheme,
+        cleanApprovedCategories,
+        cleanLockedCategories,
+        cleanExcludeCategories,
+        cleanSessionContext,
+        sourceSeeds,
+        includeImagePrompt,
+        cleanHostStyleProfile,
+      });
+      parsed = await requestCandidates(sourcePrompt, { fastMode });
+      usedSourceBackedPrompt = true;
+    }
+    if (!parsed?.candidates?.length) {
+      const prompt = buildPrompt({
+        config,
+        safeCount,
+        difficultyKey,
+        difficultyProfile,
+        cleanTheme,
+        cleanExcludeCategories,
+        cleanApprovedCategories,
+        cleanLockedCategories,
+        categoryExpansionMode,
+        cleanRejectedQuestions,
+        cleanRejectedAnswers,
+        cleanSessionContext,
+        existingQuestions,
+        styleExamples,
+        excludeUsed,
+        avoidDuplicates,
+        includeImagePrompt,
+        fastMode,
+        cleanHostStyleProfile,
+      });
+      parsed = await requestCandidates(prompt, { fastMode });
+    }
     const validationInput = {
       candidates: parsed.candidates,
       config,
@@ -159,6 +193,8 @@ export default async function handler(req, res) {
       rejectedAnswerFingerprints,
       avoidDuplicates,
       includeImagePrompt,
+      sourceSeeds,
+      sourceBacked: usedSourceBackedPrompt,
     };
     let validation = normalizeCandidates(validationInput);
 
@@ -195,6 +231,45 @@ export default async function handler(req, res) {
         existingAnswers: new Set(),
         avoidDuplicates: false,
       });
+    }
+    if (!validation.candidates.length && usedSourceBackedPrompt) {
+      const fallbackPrompt = buildPrompt({
+        config,
+        safeCount,
+        difficultyKey,
+        difficultyProfile,
+        cleanTheme,
+        cleanExcludeCategories,
+        cleanApprovedCategories,
+        cleanLockedCategories,
+        categoryExpansionMode,
+        cleanRejectedQuestions,
+        cleanRejectedAnswers,
+        cleanSessionContext,
+        existingQuestions,
+        styleExamples,
+        excludeUsed,
+        avoidDuplicates,
+        includeImagePrompt,
+        fastMode,
+        cleanHostStyleProfile,
+      });
+      const fallbackParsed = await requestCandidates(fallbackPrompt, { fastMode });
+      const fallbackValidationInput = {
+        ...validationInput,
+        candidates: fallbackParsed.candidates,
+        sourceSeeds: [],
+        sourceBacked: false,
+      };
+      validation = normalizeCandidates(fallbackValidationInput);
+      if (!validation.candidates.length && Array.isArray(fallbackParsed.candidates) && fallbackParsed.candidates.length) {
+        validation = normalizeCandidates({
+          ...fallbackValidationInput,
+          cleanApprovedCategories: [],
+          requireApprovedCategories: false,
+          avoidDuplicates: false,
+        });
+      }
     }
 
     return res.status(200).json({ candidates: validation.candidates.slice(0, safeCount), rejected: validation.rejected, requested: safeCount });
@@ -356,6 +431,86 @@ function buildHostStyleProfileText(profile) {
 
 function formatContextQuestion(question) {
   return `- [${question.round || "Session"} / ${question.category || "Uncategorized"} / ${question.question_type || "written"}] ${question.question_text} Answer: ${question.correct_answer}`;
+}
+
+function buildSourceBackedPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanApprovedCategories, cleanLockedCategories, cleanExcludeCategories, cleanSessionContext = null, sourceSeeds = [], includeImagePrompt, cleanHostStyleProfile = null }) {
+  const approvedCategoryText = cleanLockedCategories.length
+    ? `Use exactly one of these locked categories: ${cleanLockedCategories.join(", ")}.`
+    : cleanApprovedCategories.length
+      ? `Use only these approved category names when possible, exact spelling: ${cleanApprovedCategories.join(", ")}.`
+      : "Use a broad useful trivia category.";
+  const excludedCategoryText = cleanExcludeCategories.length ? `Do not use these categories: ${cleanExcludeCategories.join(", ")}.` : "";
+  const themeText = cleanTheme ? `Request/theme: ${cleanTheme}` : "Request/theme: general live trivia.";
+  const sessionContextText = cleanSessionContext && (cleanSessionContext.builtQuestions.length || cleanSessionContext.activeRoundQuestions.length)
+    ? `Current session context. Do not duplicate these:\n${[...cleanSessionContext.activeRoundQuestions, ...cleanSessionContext.builtQuestions].slice(0, 30).map(formatContextQuestion).join("\n")}`
+    : "";
+  const hostStyleProfileText = buildHostStyleProfileText(cleanHostStyleProfile);
+  const imagePromptField = includeImagePrompt ? ',\n      "image_prompt": "A concise visual clue idea that does not reveal the answer"' : ',\n      "image_prompt": ""';
+  const imagePromptRule = includeImagePrompt
+    ? "- image_prompt may describe a useful visual clue that does not reveal the answer."
+    : "- image_prompt must be empty.";
+  const sourceText = sourceSeeds.map((seed, index) => [
+    `Source ${index + 1}:`,
+    `- type: ${seed.source_type}`,
+    `- label: ${seed.source_label}`,
+    seed.source_url ? `- url: ${seed.source_url}` : "",
+    `- category hint: ${seed.category || "General"}`,
+    seed.question_text ? `- source question: ${seed.question_text}` : "",
+    seed.correct_answer ? `- answer/fact subject: ${seed.correct_answer}` : "",
+    seed.fact ? `- fact: ${seed.fact}` : "",
+    seed.fun_fact ? `- source note: ${seed.fun_fact}` : "",
+    `- confidence: ${seed.confidence}`,
+  ].filter(Boolean).join("\n")).join("\n\n");
+
+  return `
+Create exactly ${safeCount} ${config.label} trivia questions by curating and rewriting the source seeds below.
+
+You are an editor and trivia host, not the fact source. Do not invent unsupported facts when a source-backed option is available.
+
+${themeText}
+
+Source seeds:
+${sourceText}
+
+Return valid JSON only:
+{
+  "candidates": [
+    {
+      "source_index": 1,
+      "category": "History",
+      "question_text": "Host-ready trivia question.",
+      "correct_answer": "Correct answer",
+      "incorrect_answers": [],
+      "fun_fact": "One short sentence.",
+      "difficulty": "${difficultyKey}",
+      "question_type": "${config.outputType}",
+      "image_url": ""${imagePromptField},
+      "source_type": "question_bank | open_trivia_db | wikipedia",
+      "source_url": "https://...",
+      "source_label": "Source label",
+      "confidence": 0.85,
+      "needsReview": false
+    }
+  ]
+}
+
+Rules:
+- Every candidate must be grounded in one source seed and include its source_index.
+- You may rewrite wording, adjust difficulty, generate plausible wrong answers, and format a fun fact.
+- Do not add facts that are not supported by the seed unless you mark needsReview true and lower confidence below 0.65.
+- ${config.roundGuidance}
+- ${config.answerRule}
+- question_type must be "${config.outputType}".
+- difficulty must be "${difficultyKey}". ${difficultyProfile.guidance}
+- ${approvedCategoryText}
+- ${excludedCategoryText}
+- ${imagePromptRule}
+- Keep it playable for a US bar-trivia room. Fresh angle, clear clue path, no sterile encyclopedia wording.
+- For multiple choice, wrong answers should be plausible and comparable.
+- For written answer, the answer should be familiar/gettable enough without options.
+${hostStyleProfileText}
+${sessionContextText}
+`.trim();
 }
 
 function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, categoryExpansionMode, cleanRejectedQuestions = [], cleanRejectedAnswers = [], cleanSessionContext = null, existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt, fastMode = false, cleanHostStyleProfile = null }) {
@@ -609,7 +764,7 @@ async function requestCandidates(prompt, { fastMode = false } = {}) {
   }
 }
 
-function normalizeCandidates({ candidates, config, questionType, difficultyKey, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, requireApprovedCategories = true, existingFingerprints, existingAnswerPairs, existingAnswers, rejectedQuestionFingerprints, rejectedAnswerFingerprints, avoidDuplicates, includeImagePrompt }) {
+function normalizeCandidates({ candidates, config, questionType, difficultyKey, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, requireApprovedCategories = true, existingFingerprints, existingAnswerPairs, existingAnswers, rejectedQuestionFingerprints, rejectedAnswerFingerprints, avoidDuplicates, includeImagePrompt, sourceSeeds = [], sourceBacked = false }) {
   const rejected = [];
   const accepted = [];
   const batchFingerprints = new Set();
@@ -623,7 +778,7 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
   if (!Array.isArray(candidates)) throw new Error("No candidates returned");
 
   candidates.forEach((candidate, index) => {
-    const normalized = normalizeCandidate(candidate, config, questionType, difficultyKey, includeImagePrompt);
+    const normalized = normalizeCandidate(candidate, config, questionType, difficultyKey, includeImagePrompt, { sourceSeeds, sourceBacked });
     if (!normalized.ok) {
       rejected.push({ index, reason: normalized.reason });
       return;
@@ -634,6 +789,7 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
     const itemAnswerPair = answerPairFingerprint(item.question_text, item.correct_answer);
     const itemAnswer = answerFingerprint(item.correct_answer);
     const itemCategoryKey = categoryKey(item.category);
+    const isOwnSourceCandidate = item.source_type === "question_bank" || item.source_type === "past_session";
 
     if (isGenericQuestion(item.question_text)) {
       rejected.push({ index, question: item.question_text, reason: "generic_overused_trivia_pattern" });
@@ -668,11 +824,11 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
         rejected.push({ index, question: item.question_text, reason: "duplicate_question" });
         return;
       }
-      if (existingAnswerPairs.has(itemAnswerPair) || batchAnswerPairs.has(itemAnswerPair)) {
+      if (!isOwnSourceCandidate && (existingAnswerPairs.has(itemAnswerPair) || batchAnswerPairs.has(itemAnswerPair))) {
         rejected.push({ index, question: item.question_text, reason: "duplicate_answer_angle" });
         return;
       }
-      if (shouldBlockRepeatedAnswers && itemAnswer && (existingAnswers.has(itemAnswer) || batchAnswers.has(itemAnswer))) {
+      if (!isOwnSourceCandidate && shouldBlockRepeatedAnswers && itemAnswer && (existingAnswers.has(itemAnswer) || batchAnswers.has(itemAnswer))) {
         rejected.push({ index, question: item.question_text, reason: "duplicate_correct_answer" });
         return;
       }
@@ -687,7 +843,7 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
   return { candidates: accepted, rejected };
 }
 
-function normalizeCandidate(candidate, config, questionType, difficultyKey, includeImagePrompt) {
+function normalizeCandidate(candidate, config, questionType, difficultyKey, includeImagePrompt, { sourceSeeds = [], sourceBacked = false } = {}) {
   if (!candidate || typeof candidate !== "object") return { ok: false, reason: "candidate_not_object" };
 
   const category = cleanText(candidate.category);
@@ -696,6 +852,13 @@ function normalizeCandidate(candidate, config, questionType, difficultyKey, incl
   const funFact = cleanText(candidate.fun_fact);
   const imagePrompt = includeImagePrompt ? cleanText(candidate.image_prompt) : "";
   const incorrectAnswers = Array.isArray(candidate.incorrect_answers) ? candidate.incorrect_answers.map(cleanText).filter(Boolean) : [];
+  const sourceIndex = Math.max(0, Number(candidate.source_index || 0) - 1);
+  const sourceSeed = sourceSeeds[sourceIndex] || null;
+  const sourceType = cleanText(candidate.source_type) || sourceSeed?.source_type || (sourceBacked ? "source_pool" : "ai_fallback");
+  const sourceUrl = cleanText(candidate.source_url) || sourceSeed?.source_url || "";
+  const sourceLabel = cleanText(candidate.source_label) || sourceSeed?.source_label || (sourceBacked ? "Source-backed candidate" : "AI fallback");
+  const confidence = clampConfidence(candidate.confidence ?? sourceSeed?.confidence ?? (sourceBacked ? 0.68 : 0.45));
+  const needsReview = typeof candidate.needsReview === "boolean" ? candidate.needsReview : (!sourceBacked || Boolean(sourceSeed?.needsReview));
 
   if (!category || !questionText || !correctAnswer) return { ok: false, reason: "missing_required_text" };
 
@@ -723,8 +886,19 @@ function normalizeCandidate(candidate, config, questionType, difficultyKey, incl
       question_type: config.outputType,
       image_url: "",
       image_prompt: imagePrompt,
+      source_type: sourceType,
+      source_url: sourceUrl,
+      source_label: sourceLabel,
+      confidence,
+      needsReview,
     },
   };
+}
+
+function clampConfidence(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0.5;
+  return Math.max(0, Math.min(1, numeric));
 }
 
 function isGenericQuestion(questionText) {
@@ -768,6 +942,216 @@ function isTooSimilarToAny(itemFingerprint, fingerprintSet) {
     if (overlap >= 0.7 && shared >= 4) return true;
   }
   return false;
+}
+
+async function collectSourceSeeds({ cleanTheme, cleanApprovedCategories, cleanLockedCategories, cleanExcludeCategories, normalizedQuestionType, safeCount, existingQuestions, rejectedQuestionFingerprints, rejectedAnswerFingerprints }) {
+  const blockedCategories = new Set(cleanExcludeCategories.map(categoryKey));
+  const preferredCategories = cleanLockedCategories.length ? cleanLockedCategories : cleanApprovedCategories;
+  const themeTerms = tokenizeSourceQuery([cleanTheme, ...preferredCategories.slice(0, 5)].join(" "));
+  const sourceSeeds = [
+    ...buildQuestionBankSeeds(existingQuestions, { normalizedQuestionType, preferredCategories, themeTerms, blockedCategories }),
+    ...await fetchOpenTriviaSeeds({ cleanTheme, preferredCategories, safeCount }),
+    ...await fetchWikipediaSeeds({ cleanTheme, preferredCategories, safeCount }),
+  ]
+    .filter((seed) => seed && !blockedCategories.has(categoryKey(seed.category)))
+    .filter((seed) => !rejectedQuestionFingerprints.has(fingerprint(seed.question_text || seed.fact || "")))
+    .filter((seed) => !rejectedAnswerFingerprints.has(answerFingerprint(seed.correct_answer || "")));
+  return dedupeSourceSeeds(sourceSeeds).slice(0, SOURCE_SEED_LIMIT);
+}
+
+function buildQuestionBankSeeds(existingQuestions, { normalizedQuestionType, preferredCategories, themeTerms, blockedCategories }) {
+  const preferredKeys = new Set(preferredCategories.map(categoryKey));
+  return (Array.isArray(existingQuestions) ? existingQuestions : [])
+    .filter((question) => question.source === "library" || question.source === "session")
+    .filter((question) => question.question_text && question.correct_answer)
+    .filter((question) => !blockedCategories.has(categoryKey(question.category)))
+    .map((question) => ({
+      source_type: question.source === "session" ? "past_session" : "question_bank",
+      source_label: question.source === "session" ? "Approved past session" : "Question Bank",
+      source_url: "",
+      category: question.category || "General",
+      question_text: question.question_text,
+      correct_answer: question.correct_answer,
+      fun_fact: question.fun_fact,
+      fact: [question.question_text, question.fun_fact].filter(Boolean).join(" "),
+      confidence: question.source === "library" ? 0.8 : 0.75,
+      needsReview: false,
+      score: scoreSourceMatch(question, { normalizedQuestionType, preferredKeys, themeTerms }),
+    }))
+    .filter((seed) => seed.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8);
+}
+
+function scoreSourceMatch(question, { normalizedQuestionType, preferredKeys, themeTerms }) {
+  let score = 0;
+  if (question.question_type === normalizedQuestionType) score += 5;
+  if (preferredKeys.size && preferredKeys.has(categoryKey(question.category))) score += 7;
+  if (isLikedQuestion(question)) score += 5;
+  if (isDislikedQuestion(question)) score -= 8;
+  const haystack = tokenizeSourceQuery([question.category, question.question_text, question.correct_answer, question.fun_fact].join(" "));
+  const overlap = themeTerms.filter((term) => haystack.includes(term)).length;
+  score += overlap * 3;
+  if (!themeTerms.length && !preferredKeys.size) score += 1;
+  return score;
+}
+
+async function fetchOpenTriviaSeeds({ cleanTheme, preferredCategories, safeCount }) {
+  const categoryId = chooseOpenTriviaCategory(cleanTheme, preferredCategories);
+  const url = `https://opentdb.com/api.php?amount=${Math.min(10, Math.max(4, safeCount * 2))}${categoryId ? `&category=${categoryId}` : ""}`;
+  try {
+    const response = await fetchWithTimeout(url, {}, 3500);
+    if (!response.ok) return [];
+    const data = await response.json();
+    if (!Array.isArray(data?.results)) return [];
+    return data.results.map((item) => ({
+      source_type: "open_trivia_db",
+      source_label: `Open Trivia DB${item.category ? `: ${decodeHtml(item.category)}` : ""}`,
+      source_url: "https://opentdb.com/",
+      category: mapOpenTriviaCategory(decodeHtml(item.category)),
+      question_text: decodeHtml(item.question),
+      correct_answer: decodeHtml(item.correct_answer),
+      fun_fact: "",
+      fact: `${decodeHtml(item.question)} Answer: ${decodeHtml(item.correct_answer)}`,
+      confidence: 0.72,
+      needsReview: true,
+    }));
+  } catch (error) {
+    console.warn("Open Trivia DB source fetch failed:", error.message || error);
+    return [];
+  }
+}
+
+async function fetchWikipediaSeeds({ cleanTheme, preferredCategories, safeCount }) {
+  const query = buildWikipediaQuery(cleanTheme, preferredCategories);
+  if (!query) return [];
+  try {
+    const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&format=json&origin=*&srlimit=${Math.min(8, Math.max(4, safeCount * 2))}&srsearch=${encodeURIComponent(query)}`;
+    const searchResponse = await fetchWithTimeout(searchUrl, {}, 3500);
+    if (!searchResponse.ok) return [];
+    const searchData = await searchResponse.json();
+    const titles = (searchData?.query?.search || []).map((item) => cleanText(item.title)).filter(Boolean).slice(0, 6);
+    const summaries = await Promise.all(titles.map(async (title) => {
+      try {
+        const summaryResponse = await fetchWithTimeout(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`, {}, 3500);
+        if (!summaryResponse.ok) return null;
+        return summaryResponse.json();
+      } catch {
+        return null;
+      }
+    }));
+    return summaries.filter(Boolean).map((item) => ({
+      source_type: "wikipedia",
+      source_label: `Wikipedia: ${cleanText(item.title)}`,
+      source_url: item.content_urls?.desktop?.page || item.content_urls?.mobile?.page || "",
+      category: inferCategoryFromText([item.title, item.description, item.extract, ...preferredCategories].join(" ")),
+      question_text: "",
+      correct_answer: cleanText(item.title),
+      fun_fact: cleanText(item.description),
+      fact: cleanText(item.extract),
+      confidence: 0.82,
+      needsReview: false,
+    })).filter((seed) => seed.fact && seed.correct_answer);
+  } catch (error) {
+    console.warn("Wikipedia source fetch failed:", error.message || error);
+    return [];
+  }
+}
+
+function dedupeSourceSeeds(seeds) {
+  const seen = new Set();
+  return seeds.filter((seed) => {
+    const key = `${answerFingerprint(seed.correct_answer)}::${fingerprint(seed.question_text || seed.fact)}`;
+    if (!key.replace(/[:\s]/g, "") || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function tokenizeSourceQuery(value) {
+  return cleanText(value).toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((word) => word.length > 2 && !STOP_WORDS.has(word)).slice(0, 24);
+}
+
+function buildWikipediaQuery(cleanTheme, preferredCategories) {
+  const terms = tokenizeSourceQuery(cleanTheme);
+  if (terms.length) return terms.slice(0, 6).join(" ");
+  if (preferredCategories.length) return preferredCategories.slice(0, 2).join(" ");
+  return "";
+}
+
+function chooseOpenTriviaCategory(cleanTheme, preferredCategories) {
+  const text = [cleanTheme, ...preferredCategories].join(" ").toLowerCase();
+  const matches = [
+    [/movie|film|cinema/, 11],
+    [/music|song|band/, 12],
+    [/television|tv/, 14],
+    [/video game|gaming/, 15],
+    [/board game|tabletop/, 16],
+    [/science|nature/, 17],
+    [/computer|technology|internet/, 18],
+    [/math/, 19],
+    [/sport/, 21],
+    [/geography|map|country|city/, 22],
+    [/history/, 23],
+    [/art/, 25],
+    [/celebrity|pop culture/, 26],
+    [/animal/, 27],
+    [/vehicle|car/, 28],
+    [/comic/, 29],
+    [/gadget|technology/, 30],
+  ];
+  return matches.find(([pattern]) => pattern.test(text))?.[1] || "";
+}
+
+function mapOpenTriviaCategory(category) {
+  const text = cleanText(category);
+  if (/film/i.test(text)) return "Movies";
+  if (/music/i.test(text)) return "Music";
+  if (/television/i.test(text)) return "Television";
+  if (/video games/i.test(text)) return "Video Games";
+  if (/science|nature/i.test(text)) return "Science";
+  if (/computer|gadget/i.test(text)) return "Technology";
+  if (/geography/i.test(text)) return "Geography";
+  if (/history/i.test(text)) return "History";
+  if (/sports/i.test(text)) return "Sports";
+  if (/art/i.test(text)) return "Art";
+  if (/animal/i.test(text)) return "Animals";
+  if (/vehicle/i.test(text)) return "Cars";
+  return text.replace(/^Entertainment:\s*/i, "").replace(/^Science:\s*/i, "") || "General";
+}
+
+function inferCategoryFromText(text) {
+  const value = cleanText(text).toLowerCase();
+  if (/film|movie|actor|director|cinema/.test(value)) return "Movies";
+  if (/album|song|music|band|singer/.test(value)) return "Music";
+  if (/television|series|episode/.test(value)) return "Television";
+  if (/city|country|river|mountain|island|located/.test(value)) return "Geography";
+  if (/war|century|king|queen|president|ancient|founded/.test(value)) return "History";
+  if (/animal|species|bird|fish|mammal/.test(value)) return "Animals";
+  if (/food|drink|dish|cuisine/.test(value)) return "Food & Drink";
+  if (/sport|league|team|player/.test(value)) return "Sports";
+  if (/science|chemical|planet|biology|physics/.test(value)) return "Science";
+  return "General";
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 4000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function decodeHtml(value) {
+  return cleanText(value)
+    .replace(/&quot;/g, "\"")
+    .replace(/&#039;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
 }
 
 async function fetchExistingQuestions(libraryLimit = 1500, sessionLimit = 500) {
