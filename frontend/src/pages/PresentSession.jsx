@@ -40,9 +40,48 @@ const getPublicOrigin = () => {
   return window.location.origin;
 };
 
+const MEDIA_PLACEHOLDERS = new Set(["question", "image", "picture", "photo", "media", "n/a", "na", "none", "null", "undefined"]);
+
+const cleanMediaValue = (value) => {
+  const text = String(value || "").trim();
+  if (!text || MEDIA_PLACEHOLDERS.has(text.toLowerCase())) return "";
+  return text;
+};
+
+const looksLikeMediaValue = (value) => {
+  const text = cleanMediaValue(value);
+  if (!text) return false;
+  if (/^(data:image\/|https?:\/\/|\/)/i.test(text)) return true;
+  if (/\.(png|jpe?g|gif|webp|svg)(\?|#|$)/i.test(text)) return true;
+  if (/storage\/v1\/object|supabase|cloudinary|canva|drive\.google|dropbox|images?|photos?/i.test(text)) return true;
+  return false;
+};
+
+const firstQuestionImageUrl = (question = {}) => {
+  const candidates = [
+    question.image_url,
+    question.imageUrl,
+    question.media_url,
+    question.mediaUrl,
+    question.question_image_url,
+    question.questionImageUrl,
+    question.picture_url,
+    question.pictureUrl,
+    question.photo_url,
+    question.photoUrl,
+    question.correct_answer_image,
+    question.correctAnswerImage,
+    question.answer_image,
+    question.answerImage,
+    question.reveal_image_url,
+    question.revealImageUrl,
+  ];
+  return candidates.map(cleanMediaValue).find(looksLikeMediaValue) || "";
+};
+
 const buildStorageUrl = (path) => {
-  if (!path) return "";
-  const value = String(path);
+  const value = cleanMediaValue(path);
+  if (!value) return "";
   if (value.startsWith("data:") || value.startsWith("http://") || value.startsWith("https://")) return value;
   if (!STORAGE_BASE) return value;
   return `${STORAGE_BASE}${value.replace(/^\/+/, "")}`;
@@ -135,7 +174,7 @@ const flattenSession = (session) => {
         questionText: question.question_text || question.question || "",
         answer: question.correct_answer || question.answer || "",
         funFact: question.fun_fact || "",
-        imageUrl: question.image_url || "",
+        imageUrl: firstQuestionImageUrl(question),
         imageTiming: normalizeImageTiming(question.image_timing || question.image_display_timing || question.media_timing || question.mediaTiming),
         options: buildAnswerOptions(question, questionType),
         type: questionType,
