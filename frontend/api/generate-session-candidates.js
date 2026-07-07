@@ -728,6 +728,15 @@ function isDislikedQuestion(question) {
   return Boolean(question.is_disliked || question.disliked || rating === "disliked" || rating === "dislike" || rating === "rejected");
 }
 
+function isServerQuestionUsed(question) {
+  return Boolean(
+    question?.is_used === true ||
+    question?.used === true ||
+    question?.used_at ||
+    Number(question?.times_used || 0) > 0
+  );
+}
+
 async function requestCandidates(prompt, { fastMode = false } = {}) {
   if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured in Vercel");
 
@@ -962,19 +971,20 @@ async function collectSourceSeeds({ cleanTheme, cleanApprovedCategories, cleanLo
 function buildQuestionBankSeeds(existingQuestions, { normalizedQuestionType, preferredCategories, themeTerms, blockedCategories }) {
   const preferredKeys = new Set(preferredCategories.map(categoryKey));
   return (Array.isArray(existingQuestions) ? existingQuestions : [])
-    .filter((question) => question.source === "library" || question.source === "session")
+    .filter((question) => question.source === "library")
+    .filter((question) => !isServerQuestionUsed(question))
     .filter((question) => question.question_text && question.correct_answer)
     .filter((question) => !blockedCategories.has(categoryKey(question.category)))
     .map((question) => ({
-      source_type: question.source === "session" ? "past_session" : "question_bank",
-      source_label: question.source === "session" ? "Approved past session" : "Question Bank",
+      source_type: "question_bank",
+      source_label: "Unused Question Bank",
       source_url: "",
       category: question.category || "General",
       question_text: question.question_text,
       correct_answer: question.correct_answer,
       fun_fact: question.fun_fact,
       fact: [question.question_text, question.fun_fact].filter(Boolean).join(" "),
-      confidence: question.source === "library" ? 0.8 : 0.75,
+      confidence: 0.8,
       needsReview: false,
       score: scoreSourceMatch(question, { normalizedQuestionType, preferredKeys, themeTerms }),
     }))
@@ -1185,7 +1195,7 @@ async function fetchExistingQuestionsUncached(supabaseUrl, supabaseKey, libraryL
 
   const [libraryQuestions, sessions] = await Promise.all([
     fetchJsonWithFallback([
-      `${base}/rest/v1/questions?select=question_text,correct_answer,category,question_type,fun_fact,is_liked,is_disliked,liked,disliked,rating,status&order=created_at.desc&limit=${libraryLimit}`,
+      `${base}/rest/v1/questions?select=question_text,correct_answer,category,question_type,fun_fact,is_liked,is_disliked,liked,disliked,rating,status,is_used,used,used_at,times_used&order=created_at.desc&limit=${libraryLimit}`,
       `${base}/rest/v1/questions?select=question_text,correct_answer,category,question_type,fun_fact,rating&order=created_at.desc&limit=${libraryLimit}`,
       `${base}/rest/v1/questions?select=question_text,correct_answer,category,question_type,fun_fact&order=created_at.desc&limit=${libraryLimit}`,
     ], headers),
@@ -1208,6 +1218,10 @@ async function fetchExistingQuestionsUncached(supabaseUrl, supabaseKey, libraryL
       is_liked: Boolean(q.is_liked || q.liked),
       is_disliked: Boolean(q.is_disliked || q.disliked),
       rating: cleanText(q.rating || q.status),
+      is_used: q.is_used === true,
+      used: q.used === true,
+      used_at: q.used_at || "",
+      times_used: Number(q.times_used || 0),
       source: q.source || "library",
     }))
     .filter((q) => q.question_text);
