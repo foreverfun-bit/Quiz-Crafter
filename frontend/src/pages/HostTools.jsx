@@ -513,9 +513,15 @@ const persistActivity = (sessionId, current, payload) => {
 
 const summarize = (items, labelKey) => Object.values(items.reduce((groups, item) => {
   const label = item[labelKey] || "Unlabeled";
-  if (!groups[label]) groups[label] = { label, likes: 0, dislikes: 0 };
+  if (!groups[label]) groups[label] = { label, likes: 0, dislikes: 0, votes: [] };
   if (item.sentiment === "like") groups[label].likes += 1;
   if (item.sentiment === "dislike") groups[label].dislikes += 1;
+  groups[label].votes.push({
+    playerId: item.playerId || "",
+    playerName: item.playerName || "Team",
+    sentiment: item.sentiment,
+    submittedAt: item.submittedAt || "",
+  });
   return groups;
 }, {})).sort((a, b) => (b.likes + b.dislikes) - (a.likes + a.dislikes));
 
@@ -694,7 +700,15 @@ const ResponseRow = ({ row, players }) => <div className="rounded-lg border bord
 const ProgressRow = ({ row, total }) => <div className="rounded-lg border border-white/10 bg-zinc-950/60 p-3"><div className="flex items-center justify-between gap-3"><p className="font-semibold text-zinc-200 truncate capitalize">{row.label}</p><span className="text-sm font-black text-white">{row.total}</span></div><div className="mt-3 h-2 rounded-full bg-zinc-900 overflow-hidden"><div className="h-full rounded-full bg-[#71E0DC]" style={{ width: `${total ? Math.min(100, (row.total / total) * 100) : 0}%` }} /></div></div>;
 const MiniStat = ({ label, value, tone }) => <div className={`rounded-md border p-2 ${tone === "like" ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300" : tone === "dislike" ? "border-red-500/20 bg-red-500/10 text-red-300" : "border-white/10 bg-zinc-900 text-zinc-200"}`}><p className="text-[11px] text-zinc-500">{label}</p><p className="text-lg font-black">{value}</p></div>;
 
-const FeedbackCard = ({ title, rows, empty }) => <Card className="glass-card"><CardHeader><CardTitle className="text-white flex items-center gap-2"><Sparkles className="text-[#71E0DC]" />{title}</CardTitle></CardHeader><CardContent className="space-y-2 max-h-[520px] overflow-y-auto">{rows.map((row) => <div key={row.label} className="rounded-lg border border-white/10 bg-zinc-950/60 p-3"><p className="text-sm font-semibold text-zinc-200 mb-2 line-clamp-2">{row.label}</p><div className="grid grid-cols-2 gap-2"><div className="rounded-md bg-emerald-500/10 border border-emerald-500/20 p-2 text-center"><p className="text-xs text-zinc-500">Likes</p><p className="text-xl font-black text-emerald-300">{row.likes}</p></div><div className="rounded-md bg-red-500/10 border border-red-500/20 p-2 text-center"><p className="text-xs text-zinc-500">Dislikes</p><p className="text-xl font-black text-red-300">{row.dislikes}</p></div></div></div>)}{!rows.length && <p className="text-sm text-zinc-500 text-center py-8">{empty}</p>}</CardContent></Card>;
+const FeedbackCard = ({ title, rows, empty }) => <Card className="glass-card"><CardHeader><CardTitle className="text-white flex items-center gap-2"><Sparkles className="text-[#71E0DC]" />{title}</CardTitle></CardHeader><CardContent className="space-y-2 max-h-[560px] overflow-y-auto">{rows.map((row) => <div key={row.label} className="rounded-lg border border-white/10 bg-zinc-950/60 p-3"><p className="text-sm font-semibold text-zinc-200 mb-2 line-clamp-2">{row.label}</p><div className="grid grid-cols-1 gap-2"><FeedbackVoteList row={row} sentiment="like" label="Likes" count={row.likes} /><FeedbackVoteList row={row} sentiment="dislike" label="Dislikes" count={row.dislikes} /></div></div>)}{!rows.length && <p className="text-sm text-zinc-500 text-center py-8">{empty}</p>}</CardContent></Card>;
+
+const FeedbackVoteList = ({ row, sentiment, label, count }) => {
+  const votes = (row.votes || []).filter((vote) => vote.sentiment === sentiment).sort((a, b) => String(a.submittedAt || "").localeCompare(String(b.submittedAt || "")));
+  const tone = sentiment === "like" ? "emerald" : "red";
+  const badgeClass = tone === "emerald" ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/20" : "bg-red-500/15 text-red-300 border border-red-500/20";
+  const shellClass = tone === "emerald" ? "border-emerald-500/20 bg-emerald-500/10" : "border-red-500/20 bg-red-500/10";
+  return <div className={`rounded-md border p-2 ${shellClass}`}><div className="mb-2 flex items-center justify-between gap-2"><p className="text-xs font-bold uppercase tracking-wide text-zinc-500">{label}</p><Badge className={badgeClass}>{count}</Badge></div>{votes.length ? <div className="flex flex-wrap gap-1.5">{votes.map((vote, index) => <span key={`${vote.playerId || vote.playerName}-${vote.submittedAt || index}`} title={formatDateTime(vote.submittedAt)} className="rounded-full border border-white/10 bg-zinc-950/70 px-2 py-1 text-xs font-semibold text-zinc-200">{vote.playerName || "Team"}</span>)}</div> : <p className="text-xs text-zinc-600">No teams</p>}</div>;
+};
 
 const IdeasFeedbackCard = ({ ideas }) => <Card className="glass-card xl:col-span-2"><CardHeader><CardTitle className="text-white flex items-center gap-2"><MessageSquare className="text-[#71E0DC]" />End-of-Session Ideas</CardTitle></CardHeader><CardContent className="space-y-3 max-h-[520px] overflow-y-auto">{ideas.map((idea, index) => <div key={`${idea.playerId}-${idea.submittedAt}-${index}`} className="rounded-lg border border-white/10 bg-zinc-950/60 p-4"><div className="flex flex-wrap items-center justify-between gap-2 mb-3"><p className="font-bold text-white">{idea.playerName || "Team"}</p><p className="text-xs text-zinc-500">{formatDateTime(idea.submittedAt)}</p></div>{idea.category && <p className="text-sm text-zinc-300"><span className="text-[#71E0DC] font-semibold">Category idea:</span> {idea.category}</p>}{idea.question && <p className="text-sm text-zinc-300 mt-2"><span className="text-[#AEB2EF] font-semibold">Question idea:</span> {idea.question}</p>}</div>)}{!ideas.length && <p className="text-sm text-zinc-500 text-center py-8">Player category and question ideas from the post-game feedback screen will appear here.</p>}</CardContent></Card>;
 
