@@ -395,20 +395,59 @@ const HostTools = () => {
 
       <Card className="glass-card mb-6"><CardContent className="p-4 grid grid-cols-1 lg:grid-cols-[1fr_auto_auto] gap-3 items-end"><label className="text-sm text-zinc-400">Session<select value={selectedSessionId} onChange={(event) => setSelectedSessionId(event.target.value)} className="mt-1 w-full h-11 rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60">{sessions.map((session) => <option key={session.id} value={session.id}>{session.name || session.session_name || "Untitled Session"}</option>)}</select></label><Badge className="h-10 justify-center bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20"><Users size={15} className="mr-1" />{emailPlayers.length} this session</Badge><Badge className="h-10 justify-center bg-[#AEB2EF]/15 text-[#AEB2EF] border border-[#AEB2EF]/20"><Mail size={15} className="mr-1" />{allEmailContacts.length} total opt-ins</Badge></CardContent></Card>
 
-      <HostReviewWorkspace analytics={analytics} questionFeedback={questionFeedback} categoryRows={categoryRows} playerIdeas={playerIdeas} message={message} setMessage={setMessage} sendUpdate={sendUpdate} openEmailDraft={openEmailDraft} copyEmails={copyEmails} contacts={allEmailContacts} exportResults={exportResults} scheduleNextShow={scheduleNextShow} buildNextSession={buildNextSession} />
+      <HostReviewWorkspace selectedSession={selectedSession} analytics={analytics} questionFeedback={questionFeedback} categoryRows={categoryRows} playerIdeas={playerIdeas} message={message} setMessage={setMessage} sendUpdate={sendUpdate} openEmailDraft={openEmailDraft} copyEmails={copyEmails} contacts={allEmailContacts} exportResults={exportResults} scheduleNextShow={scheduleNextShow} buildNextSession={buildNextSession} />
     </div>
   );
 };
 
 const Panel = ({ title, icon: Icon, children }) => <Card className="glass-card"><CardHeader><CardTitle className="text-white flex items-center gap-2"><Icon className="text-[#71E0DC]" />{title}</CardTitle></CardHeader><CardContent className="space-y-4">{children}</CardContent></Card>;
 
-const HostReviewWorkspace = ({ analytics, questionFeedback, categoryRows, playerIdeas, message, setMessage, sendUpdate, openEmailDraft, copyEmails, contacts, exportResults, scheduleNextShow, buildNextSession }) => {
+const HostReviewWorkspace = ({ selectedSession, analytics, questionFeedback, categoryRows, playerIdeas, message, setMessage, sendUpdate, openEmailDraft, copyEmails, contacts, exportResults, scheduleNextShow, buildNextSession }) => {
+  const [selectedTeamId, setSelectedTeamId] = useState("");
+  const [selectedQuestionKey, setSelectedQuestionKey] = useState("");
+  const [teamFilter, setTeamFilter] = useState("all");
+  const [teamRoundFilter, setTeamRoundFilter] = useState("all");
+  const [teamCategoryFilter, setTeamCategoryFilter] = useState("all");
   const summary = analytics.summary || {};
-  const performance = analytics.performance || {};
-  return <section className="space-y-6"><Panel title="Session Summary" icon={BarChart3}><div className="grid grid-cols-2 lg:grid-cols-6 gap-3"><ReviewMetric label="Attendance" value={analytics.totals.players} sub={`${analytics.totals.emailOptIns} email opt-ins`} /><ReviewMetric label="Average Score" value={analytics.totals.averageScore} sub="across ranked teams" /><ReviewMetric label="Duration" value={analytics.totals.sessionDuration || "Not tracked"} sub="first to last signal" /><ReviewMetric label="Hardest" value={summary.hardestQuestion ? `${summary.hardestQuestion.correctPercent}%` : "-"} sub={summary.hardestQuestion?.category || "No answers yet"} /><ReviewMetric label="Easiest" value={summary.easiestQuestion ? `${summary.easiestQuestion.correctPercent}%` : "-"} sub={summary.easiestQuestion?.category || "No answers yet"} /><ReviewMetric label="Top Category" value={summary.highestRatedCategory?.label || "-"} sub={summary.highestRatedCategory ? `${summary.highestRatedCategory.likes} likes` : "No category votes"} /></div></Panel><Panel title="Question Performance" icon={TrendingUp}><div className="grid grid-cols-1 xl:grid-cols-2 gap-4"><PerformanceBlock title="Best Performing" rows={performance.bestPerforming} empty="Balanced, well-received questions will appear here." tone="good" /><PerformanceBlock title="Weak Questions" rows={performance.weakQuestions} empty="Low-rated, skipped, or poor-performing questions will appear here." tone="bad" /><PerformanceBlock title="Too Easy" rows={performance.tooEasy} empty="Questions with very high correct rates will appear here." /><PerformanceBlock title="Too Difficult" rows={performance.tooDifficult} empty="Questions with very low correct rates will appear here." /><PerformanceBlock title="Most Skipped" rows={performance.mostSkipped} empty="Skipped or low-response questions will appear here." /><PerformanceBlock title="Most Liked" rows={performance.mostLiked} empty="Player-liked questions will appear here." tone="good" /></div></Panel><Panel title="Quiz Crafter Review" icon={Sparkles}><div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-5"><div className="space-y-3">{analytics.reviewNotes.map((note) => <div key={note.title} className="rounded-xl border border-white/10 bg-zinc-950/60 p-4"><p className="font-black text-white">{note.title}</p><p className="mt-1 text-sm text-zinc-400">{note.body}</p></div>)}</div><div className="space-y-2"><Button onClick={() => toast.info("Rewrite workflow will open from selected weak questions next.")} className="w-full gradient-btn">Rewrite Weak Questions</Button><Button onClick={buildNextSession} variant="outline" className="w-full border-white/10 text-zinc-300 hover:text-white">Build Similar Questions</Button><Button onClick={() => toast.success("Marked for review. Retire controls will connect to Question Bank next.")} variant="outline" className="w-full border-white/10 text-zinc-300 hover:text-white">Retire Weak Questions</Button></div></div></Panel><Panel title="Player Feedback" icon={ThumbsUp}><div className="grid grid-cols-1 xl:grid-cols-3 gap-4"><FeedbackCard title="Question Likes & Dislikes" rows={questionFeedback} empty="Question thumbs will appear here after players rate live questions." /><FeedbackCard title="Category Likes & Dislikes" rows={categoryRows} empty="Category reactions appear after players rate round intros." /><IdeasFeedbackCard ideas={playerIdeas} /></div></Panel><Panel title="Follow-Up" icon={CheckCircle}><div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-5"><div><p className="text-sm text-zinc-400">Turn tonight into the next prep move. Outreach now lives here as a task, not a separate destination.</p><textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Thank-you note, schedule reminder, or next-show teaser..." className="mt-4 min-h-32 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><p className="mt-2 text-xs text-zinc-500">{contacts.length} total email opt-ins saved.</p></div><div className="grid gap-2"><Button onClick={exportResults} className="gradient-btn"><Copy size={16} className="mr-2" />Export Results</Button><Button onClick={scheduleNextShow} variant="outline" className="border-white/10 text-zinc-300 hover:text-white">Schedule Next Show</Button><Button onClick={openEmailDraft} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Mail size={16} className="mr-2" />Thank Players</Button><Button onClick={sendUpdate} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Send size={16} className="mr-2" />Send In-App Update</Button><Button onClick={copyEmails} variant="outline" className="border-white/10 text-zinc-300 hover:text-white">Copy Email List</Button><Button onClick={buildNextSession} variant="outline" className="border-white/10 text-zinc-300 hover:text-white">Build Next Session</Button></div></div></Panel></section>;
+  const teams = analytics.teamStats || [];
+  const questions = analytics.questionRows || [];
+  const selectedTeam = teams.find((team) => team.id === selectedTeamId) || teams[0] || null;
+  const selectedQuestion = questions.find((question) => question.key === selectedQuestionKey) || questions[0] || null;
+  const roundOptions = [...new Set((selectedTeam?.answers || []).map((answer) => answer.roundName).filter(Boolean))];
+  const categoryOptions = [...new Set((selectedTeam?.answers || []).map((answer) => answer.category).filter(Boolean))];
+  const filteredTeamAnswers = (selectedTeam?.answers || []).filter((answer) => (teamFilter === "all" || answer.status === teamFilter) && (teamRoundFilter === "all" || answer.roundName === teamRoundFilter) && (teamCategoryFilter === "all" || answer.category === teamCategoryFilter));
+  const sessionName = selectedSession?.name || selectedSession?.session_name || "Selected session";
+  const venue = selectedSession?.venue_name || selectedSession?.venue || selectedSession?.venueName || "No venue saved";
+  const sessionDate = formatSessionDate(selectedSession);
+  const strongestTeam = [...teams].sort((a, b) => b.accuracy - a.accuracy || b.correct - a.correct)[0];
+  const difficultRound = mostDifficultRound(questions);
+  const wrongPatterns = commonWrongAnswers(questions);
+
+  return <section className="space-y-6"><Panel title="Session Overview" icon={BarChart3}><div className="rounded-xl border border-white/10 bg-zinc-950/50 p-4"><div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.25em] text-[#71E0DC]">{venue}</p><h2 className="mt-1 text-2xl font-black text-white">{sessionName}</h2><p className="mt-1 text-sm text-zinc-500">{sessionDate}</p></div><Badge className="w-fit bg-zinc-800 text-zinc-300">{analytics.totals.sessionDuration || "Duration not tracked"}</Badge></div></div><div className="grid grid-cols-2 lg:grid-cols-4 gap-3"><ReviewMetric label="Teams" value={analytics.totals.players} sub="participated" /><ReviewMetric label="Questions" value={analytics.totals.questions} sub="in session" /><ReviewMetric label="Average Score" value={analytics.totals.averageScore} sub="per team" /><ReviewMetric label="Session Accuracy" value={`${analytics.totals.overallAccuracy || 0}%`} sub="graded answers" /><ReviewMetric label="Highest Score" value={teams[0]?.name || "-"} sub={teams[0] ? `${teams[0].score} points` : "No scores"} /><ReviewMetric label="Hardest" value={summary.hardestQuestion ? `${summary.hardestQuestion.correctPercent}%` : "-"} sub={summary.hardestQuestion?.category || "No answers"} /><ReviewMetric label="Easiest" value={summary.easiestQuestion ? `${summary.easiestQuestion.correctPercent}%` : "-"} sub={summary.easiestQuestion?.category || "No answers"} /><ReviewMetric label="Most Accurate" value={strongestTeam?.name || "-"} sub={strongestTeam ? `${strongestTeam.accuracy}% correct` : "No graded answers"} /></div></Panel><ResultsExportPanel selectedSession={selectedSession} analytics={analytics} exportResults={exportResults} /><Panel title="Teams" icon={Users}><TeamResultsTable teams={teams} selectedTeamId={selectedTeam?.id} onSelect={setSelectedTeamId} /><TeamDetail team={selectedTeam} answers={filteredTeamAnswers} filter={teamFilter} setFilter={setTeamFilter} roundFilter={teamRoundFilter} setRoundFilter={setTeamRoundFilter} categoryFilter={teamCategoryFilter} setCategoryFilter={setTeamCategoryFilter} roundOptions={roundOptions} categoryOptions={categoryOptions} /></Panel><Panel title="Questions" icon={MessageSquare}><QuestionResultsTable questions={questions} selectedQuestionKey={selectedQuestion?.key} onSelect={setSelectedQuestionKey} /><QuestionDetail question={selectedQuestion} /></Panel><Panel title="Answer Matrix" icon={CheckCircle}><AnswerMatrix teams={teams} questions={questions} /></Panel><Panel title="Accuracy and Insights" icon={TrendingUp}><div className="grid grid-cols-1 lg:grid-cols-2 gap-4"><InsightCard title="Most accurate team" value={strongestTeam?.name || "-"} detail={strongestTeam ? `${strongestTeam.accuracy}% across ${strongestTeam.answered} answers` : "No graded answers yet"} /><InsightCard title="Most difficult round" value={difficultRound?.label || "-"} detail={difficultRound ? `${difficultRound.accuracy}% accuracy` : "No round data"} /><InsightCard title="Low accuracy questions" value={(analytics.performance?.tooDifficult || []).length} detail={(analytics.performance?.tooDifficult || []).map((row) => row.category).join(", ") || "None flagged"} /><InsightCard title="Common wrong answers" value={wrongPatterns.length} detail={wrongPatterns.slice(0, 3).map((row) => `${row.answer} (${row.total})`).join(", ") || "No repeated wrong answers"} /></div><div className="mt-4 rounded-xl border border-white/10 bg-zinc-950/50 p-4"><p className="mb-3 text-sm font-black text-white">Secondary AI review</p><div className="grid grid-cols-1 lg:grid-cols-2 gap-3">{analytics.reviewNotes.map((note) => <div key={note.title} className="rounded-lg border border-white/10 bg-zinc-950/60 p-3"><p className="font-bold text-white">{note.title}</p><p className="mt-1 text-sm text-zinc-400">{note.body}</p></div>)}</div></div></Panel><Panel title="Player Feedback" icon={ThumbsUp}><div className="grid grid-cols-1 xl:grid-cols-3 gap-4"><FeedbackCard title="Question Likes & Dislikes" rows={questionFeedback} empty="Question thumbs will appear here after players rate live questions." /><FeedbackCard title="Category Likes & Dislikes" rows={categoryRows} empty="Category reactions appear after players rate round intros." /><IdeasFeedbackCard ideas={playerIdeas} /></div></Panel><Panel title="Follow-Up" icon={CheckCircle}><div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-5"><div><p className="text-sm text-zinc-400">Turn tonight into the next prep move.</p><textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Thank-you note, schedule reminder, or next-show teaser..." className="mt-4 min-h-32 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><p className="mt-2 text-xs text-zinc-500">{contacts.length} total email opt-ins saved.</p></div><div className="grid gap-2"><Button onClick={scheduleNextShow} variant="outline" className="border-white/10 text-zinc-300 hover:text-white">Schedule Next Show</Button><Button onClick={openEmailDraft} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Mail size={16} className="mr-2" />Thank Players</Button><Button onClick={sendUpdate} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Send size={16} className="mr-2" />Send In-App Update</Button><Button onClick={copyEmails} variant="outline" className="border-white/10 text-zinc-300 hover:text-white">Copy Email List</Button><Button onClick={buildNextSession} className="gradient-btn">Build Next Session</Button></div></div></Panel></section>;
 };
 
 const ReviewMetric = ({ label, value, sub }) => <div className="rounded-xl border border-white/10 bg-zinc-950/60 p-4"><p className="text-xs font-bold uppercase tracking-wide text-zinc-500">{label}</p><p className="mt-2 truncate text-2xl font-black text-white">{value}</p><p className="mt-1 truncate text-xs text-zinc-500">{sub}</p></div>;
+
+const ResultsExportPanel = ({ selectedSession, analytics, exportResults }) => {
+  const sessionSlug = (selectedSession?.name || selectedSession?.session_name || "trivia-results").replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+  const exportTeamResults = () => downloadCsv(`${sessionSlug}-team-results.csv`, [["Placement", "Team", "Final Score", "Correct", "Incorrect", "Answered", "Accuracy"], ...analytics.teamStats.map((team) => [team.placement, team.name, team.score, team.correct, team.incorrect, team.answered, `${team.accuracy}%`])]);
+  const exportQuestionPerformance = () => downloadCsv(`${sessionSlug}-question-performance.csv`, [["Question", "Round", "Category", "Question Text", "Correct Answer", "Answered", "Correct", "Incorrect", "Accuracy", "Avg Seconds", "Likes", "Dislikes"], ...analytics.questionRows.map((question) => [question.index + 1, question.roundName, question.category, question.label, question.answer, question.responses, question.correct, question.incorrect, `${question.correctPercent}%`, question.avgSeconds ?? "", question.likes, question.dislikes])]);
+  const exportAnswerMatrix = () => downloadCsv(`${sessionSlug}-answer-matrix.csv`, [["Team", "Score", ...analytics.questionRows.map((question) => `Q${question.index + 1}`)], ...analytics.teamStats.map((team) => [team.name, team.score, ...analytics.questionRows.map((question) => answerSymbol(team.answers?.[question.index]?.status))])]);
+  return <Panel title="Export" icon={Copy}><div className="grid grid-cols-1 md:grid-cols-4 gap-2"><Button onClick={exportResults} className="gradient-btn">Full Results CSV</Button><Button onClick={exportTeamResults} variant="outline" className="border-white/10 text-zinc-300 hover:text-white">Team Results CSV</Button><Button onClick={exportQuestionPerformance} variant="outline" className="border-white/10 text-zinc-300 hover:text-white">Question CSV</Button><Button onClick={exportAnswerMatrix} variant="outline" className="border-white/10 text-zinc-300 hover:text-white">Matrix CSV</Button></div></Panel>;
+};
+
+const TeamResultsTable = ({ teams, selectedTeamId, onSelect }) => <div className="overflow-x-auto rounded-xl border border-white/10"><table className="w-full min-w-[860px] text-sm"><thead><tr className="border-b border-white/10 bg-zinc-950/70 text-left text-xs uppercase tracking-wide text-zinc-500"><th className="p-3">Place</th><th className="p-3">Team</th><th className="p-3">Final Score</th><th className="p-3">Correct</th><th className="p-3">Incorrect</th><th className="p-3">Answered</th><th className="p-3">Accuracy</th></tr></thead><tbody>{teams.map((team) => <tr key={team.id || team.name} onClick={() => onSelect(team.id)} className={`cursor-pointer border-b border-white/5 hover:bg-white/5 ${selectedTeamId === team.id ? "bg-[#71E0DC]/10" : ""}`}><td className="p-3 font-mono text-zinc-400">#{team.placement}</td><td className="p-3 font-bold text-white">{team.name}</td><td className="p-3 font-black text-[#71E0DC]">{team.score}</td><td className="p-3 text-emerald-300">{team.correct}</td><td className="p-3 text-red-300">{team.incorrect}</td><td className="p-3 text-zinc-300">{team.answered}</td><td className="p-3"><Badge className="bg-[#AEB2EF]/15 text-[#AEB2EF]">{team.accuracy}%</Badge></td></tr>)}{!teams.length && <tr><td colSpan={7} className="p-8 text-center text-zinc-500">Team results will appear after a hosted session is saved.</td></tr>}</tbody></table></div>;
+
+const TeamDetail = ({ team, answers, filter, setFilter, roundFilter, setRoundFilter, categoryFilter, setCategoryFilter, roundOptions, categoryOptions }) => <div className="rounded-xl border border-white/10 bg-zinc-950/45 p-4"><div className="mb-4 flex flex-col lg:flex-row lg:items-end lg:justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-wide text-zinc-500">Team Detail</p><h3 className="text-xl font-black text-white">{team?.name || "Select a team"}</h3></div><div className="flex flex-wrap gap-2"><SelectMini value={filter} onChange={setFilter} options={[["all", "All"], ["correct", "Correct only"], ["incorrect", "Incorrect only"], ["missing", "No answer"]]} /><SelectMini value={roundFilter} onChange={setRoundFilter} options={[["all", "All rounds"], ...roundOptions.map((round) => [round, round])]} /><SelectMini value={categoryFilter} onChange={setCategoryFilter} options={[["all", "All categories"], ...categoryOptions.map((category) => [category, category])]} /></div></div><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-sm"><thead><tr className="border-b border-white/10 text-left text-xs uppercase tracking-wide text-zinc-500"><th className="py-2 pr-3">Q#</th><th className="py-2 pr-3">Round</th><th className="py-2 pr-3">Category</th><th className="py-2 pr-3">Type</th><th className="py-2 pr-3">Question</th><th className="py-2 pr-3">Team Answer</th><th className="py-2 pr-3">Correct Answer</th><th className="py-2 pr-3">Status</th><th className="py-2 pr-3">Points</th><th className="py-2 pr-3">Time</th></tr></thead><tbody>{answers.map((answer) => <tr key={answer.key} className="border-b border-white/5 text-zinc-300"><td className="py-3 pr-3 font-mono text-zinc-500">{answer.questionIndex + 1}</td><td className="py-3 pr-3">{answer.roundName}</td><td className="py-3 pr-3">{answer.category}</td><td className="py-3 pr-3">{String(answer.type).replace("_", "/")}</td><td className="py-3 pr-3 max-w-[260px] truncate">{answer.question}</td><td className="py-3 pr-3 max-w-[220px] truncate">{answer.answer || "-"}</td><td className="py-3 pr-3 max-w-[180px] truncate text-emerald-300">{answer.correctAnswer}</td><td className="py-3 pr-3"><CorrectBadge status={answer.status} /></td><td className="py-3 pr-3 font-bold">{answer.points > 0 ? `+${answer.points}` : answer.points}</td><td className="py-3 pr-3 text-zinc-500">{answer.seconds !== null && answer.seconds !== undefined && answer.seconds !== "" ? `${Number(answer.seconds).toFixed(1)}s` : "-"}</td></tr>)}</tbody></table></div>{team && !answers.length && <p className="py-6 text-center text-sm text-zinc-500">No answers match those filters.</p>}</div>;
+
+const QuestionResultsTable = ({ questions, selectedQuestionKey, onSelect }) => <div className="overflow-x-auto rounded-xl border border-white/10"><table className="w-full min-w-[1080px] text-sm"><thead><tr className="border-b border-white/10 bg-zinc-950/70 text-left text-xs uppercase tracking-wide text-zinc-500"><th className="p-3">Q#</th><th className="p-3">Round</th><th className="p-3">Category</th><th className="p-3">Question</th><th className="p-3">Answer</th><th className="p-3">Answered</th><th className="p-3">Correct</th><th className="p-3">Incorrect</th><th className="p-3">Accuracy</th><th className="p-3">Avg Time</th><th className="p-3">Feedback</th></tr></thead><tbody>{questions.map((question) => <tr key={question.key} onClick={() => onSelect(question.key)} className={`cursor-pointer border-b border-white/5 hover:bg-white/5 ${selectedQuestionKey === question.key ? "bg-[#71E0DC]/10" : ""}`}><td className="p-3 font-mono text-zinc-400">{question.index + 1}</td><td className="p-3">{question.roundName}</td><td className="p-3">{question.category}</td><td className="p-3 max-w-[280px] truncate font-semibold text-white">{question.label}</td><td className="p-3 max-w-[160px] truncate text-emerald-300">{question.answer}</td><td className="p-3">{question.responses}</td><td className="p-3 text-emerald-300">{question.correct}</td><td className="p-3 text-red-300">{question.incorrect}</td><td className="p-3"><Badge className="bg-[#AEB2EF]/15 text-[#AEB2EF]">{question.correctPercent}%</Badge></td><td className="p-3">{question.avgSeconds === null ? "-" : `${question.avgSeconds}s`}</td><td className="p-3">{question.likes} / {question.dislikes}</td></tr>)}{!questions.length && <tr><td colSpan={11} className="p-8 text-center text-zinc-500">Question performance appears after a session is selected.</td></tr>}</tbody></table></div>;
+
+const QuestionDetail = ({ question }) => <div className="rounded-xl border border-white/10 bg-zinc-950/45 p-4"><div className="mb-4"><p className="text-xs font-bold uppercase tracking-wide text-zinc-500">Question Detail</p><h3 className="line-clamp-2 text-lg font-black text-white">{question?.label || "Select a question"}</h3>{question && <p className="mt-1 text-sm text-zinc-500">{question.roundName} / {question.category} / {String(question.type).replace("_", "/")}</p>}</div>{question && <div className="grid grid-cols-1 xl:grid-cols-[1fr_320px] gap-4"><div className="overflow-x-auto"><table className="w-full min-w-[720px] text-sm"><thead><tr className="border-b border-white/10 text-left text-xs uppercase tracking-wide text-zinc-500"><th className="py-2 pr-3">Team</th><th className="py-2 pr-3">Answer</th><th className="py-2 pr-3">Status</th><th className="py-2 pr-3">Points</th><th className="py-2 pr-3">Time</th></tr></thead><tbody>{question.teamAnswers.map((answer) => <tr key={answer.playerId} className="border-b border-white/5 text-zinc-300"><td className="py-3 pr-3 font-bold text-white">{answer.team}</td><td className="py-3 pr-3 max-w-[260px] truncate">{answer.answer || "-"}</td><td className="py-3 pr-3"><CorrectBadge status={answer.status} /></td><td className="py-3 pr-3 font-bold">{answer.points > 0 ? `+${answer.points}` : answer.points}</td><td className="py-3 pr-3 text-zinc-500">{answer.seconds !== null && answer.seconds !== undefined && answer.seconds !== "" ? `${Number(answer.seconds).toFixed(1)}s` : "-"}</td></tr>)}</tbody></table></div><div className="space-y-3"><div className="rounded-lg border border-white/10 bg-zinc-950/60 p-3"><p className="text-xs uppercase tracking-wide text-zinc-500">Correct answer</p><p className="mt-1 font-bold text-emerald-300">{question.answer || "Not set"}</p></div><div className="rounded-lg border border-white/10 bg-zinc-950/60 p-3"><p className="text-xs uppercase tracking-wide text-zinc-500">Reactions</p><p className="mt-2 text-sm text-zinc-300">{question.likes} likes / {question.dislikes} dislikes</p><div className="mt-2 flex flex-wrap gap-1.5">{question.votes.map((vote, index) => <span key={`${vote.playerId}-${index}`} className={`rounded-full px-2 py-1 text-xs font-bold ${vote.sentiment === "like" ? "bg-emerald-500/15 text-emerald-300" : "bg-red-500/15 text-red-300"}`}>{vote.playerName || "Team"} {vote.sentiment === "like" ? "liked" : "disliked"}</span>)}</div></div></div></div>}</div>;
+
+const AnswerMatrix = ({ teams, questions }) => <div className="overflow-auto rounded-xl border border-white/10 max-h-[560px]"><table className="min-w-max text-sm"><thead><tr className="bg-zinc-950"><th className="sticky left-0 top-0 z-20 min-w-48 border-b border-r border-white/10 bg-zinc-950 p-3 text-left text-xs uppercase tracking-wide text-zinc-500">Team</th>{questions.map((question) => <th key={question.key} className="sticky top-0 z-10 border-b border-white/10 bg-zinc-950 p-2 text-center text-xs text-zinc-400" title={question.label}>Q{question.index + 1}</th>)}</tr></thead><tbody>{teams.map((team) => <tr key={team.id || team.name}><td className="sticky left-0 z-10 border-r border-white/10 bg-zinc-950 p-3 font-bold text-white">{team.name}</td>{questions.map((question) => { const answer = team.answers?.[question.index]; return <td key={`${team.id}-${question.key}`} title={`${team.name}\nAnswer: ${answer?.answer || "No answer"}\nCorrect: ${answer?.correctAnswer || question.answer}\nPoints: ${answer?.points || 0}\nTime: ${answer?.seconds ?? "-"}`} className={`min-w-14 border-b border-white/5 p-2 text-center font-black ${answer?.status === "correct" ? "bg-emerald-500/15 text-emerald-300" : answer?.status === "incorrect" ? "bg-red-500/15 text-red-300" : answer?.status === "missing" ? "bg-zinc-900 text-zinc-600" : "bg-amber-500/10 text-amber-200"}`}>{answerSymbol(answer?.status)}</td>; })}</tr>)}</tbody></table>{!teams.length && <p className="p-8 text-center text-sm text-zinc-500">The answer matrix appears after teams submit answers.</p>}</div>;
+
+const SelectMini = ({ value, onChange, options }) => <select value={value} onChange={(event) => onChange(event.target.value)} className="h-9 rounded-lg border border-white/10 bg-zinc-950 px-3 text-sm text-zinc-200 outline-none focus:border-[#71E0DC]/60">{options.map(([optionValue, label]) => <option key={optionValue} value={optionValue}>{label}</option>)}</select>;
+const InsightCard = ({ title, value, detail }) => <div className="rounded-xl border border-white/10 bg-zinc-950/60 p-4"><p className="text-xs font-bold uppercase tracking-wide text-zinc-500">{title}</p><p className="mt-2 text-xl font-black text-white">{value}</p><p className="mt-1 text-sm text-zinc-400">{detail}</p></div>;
 
 const PerformanceBlock = ({ title, rows = [], empty, tone }) => <div className="rounded-xl border border-white/10 bg-zinc-950/45 p-4"><div className="mb-3 flex items-center justify-between gap-2"><h3 className="font-black text-white">{title}</h3><Badge className={tone === "good" ? "bg-emerald-500/15 text-emerald-300" : tone === "bad" ? "bg-red-500/15 text-red-300" : "bg-zinc-800 text-zinc-300"}>{rows.length}</Badge></div><div className="space-y-2">{rows.slice(0, 4).map((row) => <div key={row.key || row.label} className="rounded-lg border border-white/10 bg-zinc-950/70 p-3"><p className="line-clamp-2 text-sm font-semibold text-zinc-200">{row.label}</p><div className="mt-2 flex flex-wrap gap-2"><Badge className="bg-[#71E0DC]/15 text-[#71E0DC]">{row.category}</Badge><Badge className="bg-[#AEB2EF]/15 text-[#AEB2EF]">{row.correctPercent}% correct</Badge><Badge className="bg-zinc-800 text-zinc-300">{row.responses} answers</Badge>{Number(row.likes || 0) > 0 && <Badge className="bg-emerald-500/15 text-emerald-300">{row.likes} likes</Badge>}{Number(row.dislikes || 0) > 0 && <Badge className="bg-red-500/15 text-red-300">{row.dislikes} dislikes</Badge>}</div></div>)}{!rows.length && <p className="rounded-lg border border-white/10 bg-zinc-950/60 p-4 text-center text-sm text-zinc-500">{empty}</p>}</div></div>;
 
@@ -560,6 +599,8 @@ const summarize = (items, labelKey) => Object.values(items.reduce((groups, item)
 const getQuestionText = (question) => question?.question_text || question?.question || "";
 const getQuestionType = (question) => question?.question_type || (question?.incorrect_answers ? "multiple_choice" : "written");
 const getQuestionCategory = (question) => question?.category || "Uncategorized";
+const getQuestionRoundOrder = (question, index = 0) => Number(question?.round_order || question?.round_number || question?.round || Math.floor(index / 10) + 1) || 1;
+const getQuestionRoundName = (question, index = 0) => question?.round_name || question?.round_title || `Round ${getQuestionRoundOrder(question, index)}`;
 const getQuestionKey = (question, index) => String(question?.id || `${index}-${getQuestionText(question)}`);
 const getQuestionAnswer = (question) => question?.correct_answer || question?.answer || "";
 const getQuestionOptions = (question) => {
@@ -569,6 +610,7 @@ const getQuestionOptions = (question) => {
 };
 const answerKey = (answer) => `${answer.playerId}-${answer.questionIndex}`;
 const percent = (value, total) => total > 0 ? Math.round((value / total) * 100) : 0;
+const average = (values) => values.length ? Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1)) : null;
 const compactLabel = (value, fallback = "Unknown") => String(value || fallback).replace(/\s+/g, " ").trim();
 const sortByTotal = (rows) => [...rows].sort((a, b) => (b.total || 0) - (a.total || 0));
 const scoreRows = (rows) => [...rows].map((row) => ({ ...row, score: Number(row.likes || 0) - Number(row.dislikes || 0), total: Number(row.likes || 0) + Number(row.dislikes || 0) }));
@@ -596,11 +638,13 @@ const makeReviewNotes = ({ categoryRows, weakQuestions, tooEasy, tooDifficult, h
 
 const buildAnalytics = ({ selectedSession, players, feedback, categoryFeedback, playerIdeas, answers, activity, emailPlayers, leaderboard, gradedAnswers }) => {
   const questions = sessionQuestions(selectedSession);
+  const participants = mergeManyByKey((item) => item.id, players, leaderboard).filter((item) => item.id);
   const questionRows = questions.map((question, index) => {
     const text = compactLabel(getQuestionText(question), `Question ${index + 1}`);
     const votes = feedback.filter((item) => Number(item.questionIndex) === index || item.questionText === text);
     const responses = answers.filter((answer) => Number(answer.questionIndex) === index);
     const correctResponses = responses.filter((answer) => gradedAnswers[answerKey(answer)]?.status === "correct").length;
+    const incorrectResponses = responses.filter((answer) => gradedAnswers[answerKey(answer)]?.status === "incorrect").length;
     const options = getQuestionOptions(question);
     const answerGroups = Object.values(responses.reduce((groups, answer) => {
       const label = compactLabel(answer.answer, "Blank");
@@ -619,10 +663,28 @@ const buildAnalytics = ({ selectedSession, players, feedback, categoryFeedback, 
       return { label: option, total: match?.total || 0, correct: match?.correct || compactLabel(option).toLowerCase() === compactLabel(getQuestionAnswer(question)).toLowerCase(), percent: percent(match?.total || 0, responses.length), teams: match?.teams || [] };
     });
     const extraRows = answerGroups.filter((row) => !optionRows.some((option) => option.label === row.label)).map((row) => ({ ...row, percent: percent(row.total, responses.length) }));
+    const teamAnswers = participants.map((player) => {
+      const response = responses.find((answer) => answer.playerId === player.id);
+      const grade = response ? gradedAnswers[answerKey(response)] || {} : {};
+      const seconds = response?.responseSeconds ?? response?.secondsToSubmit ?? response?.elapsedSeconds ?? null;
+      return {
+        playerId: player.id,
+        team: player.name || "Team",
+        answer: response ? compactLabel(response.answer, "Blank") : "",
+        correctAnswer: getQuestionAnswer(question),
+        status: response ? grade.status || (compactLabel(response.answer).toLowerCase() === compactLabel(getQuestionAnswer(question)).toLowerCase() ? "correct" : "ungraded") : "missing",
+        points: response ? Number(grade.points || 0) : 0,
+        seconds,
+        submittedAt: response?.submittedAt || "",
+      };
+    });
+    const responseSeconds = responses.map((answer) => answer.responseSeconds ?? answer.secondsToSubmit ?? answer.elapsedSeconds).filter((value) => value !== null && value !== undefined && value !== "").map(Number).filter(Number.isFinite);
     return {
       key: getQuestionKey(question, index),
       label: text,
       index,
+      roundName: getQuestionRoundName(question, index),
+      roundOrder: getQuestionRoundOrder(question, index),
       category: getQuestionCategory(question),
       type: getQuestionType(question),
       answer: getQuestionAnswer(question),
@@ -630,8 +692,12 @@ const buildAnalytics = ({ selectedSession, players, feedback, categoryFeedback, 
       dislikes: votes.filter((item) => item.sentiment === "dislike").length,
       responses: responses.length,
       correct: correctResponses,
+      incorrect: incorrectResponses,
       correctPercent: percent(correctResponses, responses.length),
-      responseRate: percent(responses.length, players.length),
+      responseRate: percent(responses.length, participants.length),
+      avgSeconds: average(responseSeconds),
+      votes,
+      teamAnswers,
       optionRows: [...optionRows, ...extraRows].sort((a, b) => b.total - a.total),
     };
   });
@@ -656,12 +722,31 @@ const buildAnalytics = ({ selectedSession, players, feedback, categoryFeedback, 
       submittedAt: answer.submittedAt || "",
     };
   }).sort((a, b) => a.questionIndex - b.questionIndex || String(a.submittedAt).localeCompare(String(b.submittedAt)));
-  const rankingSource = Array.isArray(leaderboard) && leaderboard.length ? leaderboard : players;
+  const rankingSource = Array.isArray(leaderboard) && leaderboard.length ? leaderboard : participants;
   const teamStats = rankingSource.map((team) => {
     const teamAnswers = answers.filter((answer) => answer.playerId === team.id);
     const correct = teamAnswers.filter((answer) => gradedAnswers[answerKey(answer)]?.status === "correct").length;
-    return { id: team.id, name: team.name || "Team", score: Number(team.score || 0), answered: teamAnswers.length, correct, correctPercent: percent(correct, questions.length) };
-  }).sort((a, b) => b.score - a.score || b.correct - a.correct || a.name.localeCompare(b.name));
+    const incorrect = teamAnswers.filter((answer) => gradedAnswers[answerKey(answer)]?.status === "incorrect").length;
+    const detailedAnswers = questions.map((question, questionIndex) => {
+      const answer = teamAnswers.find((item) => Number(item.questionIndex) === questionIndex);
+      const grade = answer ? gradedAnswers[answerKey(answer)] || {} : {};
+      const seconds = answer?.responseSeconds ?? answer?.secondsToSubmit ?? answer?.elapsedSeconds ?? null;
+      return {
+        key: `${team.id}-${questionIndex}`,
+        questionIndex,
+        roundName: getQuestionRoundName(question, questionIndex),
+        category: getQuestionCategory(question),
+        type: getQuestionType(question),
+        question: compactLabel(getQuestionText(question), `Question ${questionIndex + 1}`),
+        answer: answer ? compactLabel(answer.answer, "Blank") : "",
+        correctAnswer: getQuestionAnswer(question),
+        status: answer ? grade.status || (compactLabel(answer.answer).toLowerCase() === compactLabel(getQuestionAnswer(question)).toLowerCase() ? "correct" : "ungraded") : "missing",
+        points: answer ? Number(grade.points || 0) : 0,
+        seconds,
+      };
+    });
+    return { id: team.id, name: team.name || "Team", score: Number(team.score || 0), answered: teamAnswers.length, correct, incorrect, accuracy: percent(correct, teamAnswers.length), correctPercent: percent(correct, questions.length), answers: detailedAnswers };
+  }).sort((a, b) => b.score - a.score || b.correct - a.correct || a.name.localeCompare(b.name)).map((team, index) => ({ ...team, placement: index + 1 }));
   const typeMix = sortByTotal(Object.values(questions.reduce((groups, question) => {
     const label = getQuestionType(question).replace("_", "/");
     if (!groups[label]) groups[label] = { label, total: 0 };
@@ -681,6 +766,8 @@ const buildAnalytics = ({ selectedSession, players, feedback, categoryFeedback, 
     return groups;
   }, {})).sort((a, b) => b.total - a.total);
   const averageScore = teamStats.length ? Math.round(teamStats.reduce((sum, team) => sum + Number(team.score || 0), 0) / teamStats.length) : 0;
+  const totalGraded = teamStats.reduce((sum, team) => sum + team.correct + team.incorrect, 0);
+  const totalCorrect = teamStats.reduce((sum, team) => sum + team.correct, 0);
   const completedRows = questionRows.filter((row) => row.responses > 0);
   const easiestQuestion = [...completedRows].sort((a, b) => b.correctPercent - a.correctPercent || b.responses - a.responses)[0] || null;
   const hardestQuestion = [...completedRows].sort((a, b) => a.correctPercent - b.correctPercent || b.responses - a.responses)[0] || null;
@@ -696,7 +783,7 @@ const buildAnalytics = ({ selectedSession, players, feedback, categoryFeedback, 
 
   return {
     totals: {
-      players: players.length,
+      players: participants.length,
       emailOptIns: emailPlayers.length,
       questions: questions.length,
       answers: answers.length,
@@ -706,6 +793,7 @@ const buildAnalytics = ({ selectedSession, players, feedback, categoryFeedback, 
       ideas: playerIdeas.length,
       screenExits: activity.filter((item) => item.eventType === "left_screen").length,
       averageScore,
+      overallAccuracy: percent(totalCorrect, totalGraded),
       sessionDuration,
     },
     summary: { easiestQuestion, hardestQuestion, highestRatedCategory },
@@ -748,6 +836,40 @@ const FeedbackVoteList = ({ row, sentiment, label, count }) => {
 };
 
 const IdeasFeedbackCard = ({ ideas }) => <Card className="glass-card xl:col-span-2"><CardHeader><CardTitle className="text-white flex items-center gap-2"><MessageSquare className="text-[#71E0DC]" />End-of-Session Ideas</CardTitle></CardHeader><CardContent className="space-y-3 max-h-[520px] overflow-y-auto">{ideas.map((idea, index) => <div key={`${idea.playerId}-${idea.submittedAt}-${index}`} className="rounded-lg border border-white/10 bg-zinc-950/60 p-4"><div className="flex flex-wrap items-center justify-between gap-2 mb-3"><p className="font-bold text-white">{idea.playerName || "Team"}</p><p className="text-xs text-zinc-500">{formatDateTime(idea.submittedAt)}</p></div>{idea.category && <p className="text-sm text-zinc-300"><span className="text-[#71E0DC] font-semibold">Category idea:</span> {idea.category}</p>}{idea.question && <p className="text-sm text-zinc-300 mt-2"><span className="text-[#AEB2EF] font-semibold">Question idea:</span> {idea.question}</p>}</div>)}{!ideas.length && <p className="text-sm text-zinc-500 text-center py-8">Player category and question ideas from the post-game feedback screen will appear here.</p>}</CardContent></Card>;
+
+const answerSymbol = (status) => status === "correct" ? "✓" : status === "incorrect" ? "×" : status === "missing" ? "-" : "◐";
+
+const downloadCsv = (filename, rows) => {
+  const csv = rows.map((row) => row.map((cell) => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+};
+
+const formatSessionDate = (session) => {
+  const raw = session?.session_date || session?.hosted_at || session?.date || session?.created_at;
+  if (!raw) return "No date saved";
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return String(raw);
+  return date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+};
+
+const mostDifficultRound = (questions = []) => {
+  const rounds = Object.values(questions.reduce((groups, question) => {
+    const label = question.roundName || "Round";
+    if (!groups[label]) groups[label] = { label, correct: 0, answered: 0 };
+    groups[label].correct += Number(question.correct || 0);
+    groups[label].answered += Number(question.responses || 0);
+    return groups;
+  }, {})).filter((round) => round.answered > 0).map((round) => ({ ...round, accuracy: percent(round.correct, round.answered) }));
+  return rounds.sort((a, b) => a.accuracy - b.accuracy || b.answered - a.answered)[0] || null;
+};
+
+const commonWrongAnswers = (questions = []) => questions.flatMap((question) => (question.optionRows || []).filter((option) => !option.correct && option.total > 1).map((option) => ({ question: question.label, answer: option.label, total: option.total }))).sort((a, b) => b.total - a.total);
 
 const formatDateTime = (value) => {
   if (!value) return "";
