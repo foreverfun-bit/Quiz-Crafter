@@ -56,7 +56,7 @@ const isNearDuplicateQuestion = (candidate, original) => {
 const cleanList = (values) => values.map((value) => normalizeText(value)).filter(Boolean);
 const lowerText = (value) => normalizeText(value).toLowerCase();
 const parseQuestionNumber = (value) => {
-  const match = lowerText(value).match(/\b(?:q|question)\s*#?\s*(\d+)\b/) || lowerText(value).match(/\breplace\s+(\d+)\b/) || lowerText(value).match(/\b(?:make|rewrite|improve|edit)\s+(?:this\s+)?(?:question\s*)?(\d+)\b/);
+  const match = lowerText(value).match(/\b(?:q|question)\s*#?\s*(\d+)\b/) || lowerText(value).match(/\breplace\s+#?\s*(\d+)\b/) || lowerText(value).match(/\b(?:make|rewrite|improve|edit)\s+(?:this\s+)?(?:question\s*)?#?\s*(\d+)\b/) || lowerText(value).match(/#\s*(\d+)\b/);
   return match ? Math.max(1, Number(match[1]) || 1) : null;
 };
 const isPreviewConfirmRequest = (value) => {
@@ -887,10 +887,11 @@ const BuildSession = () => {
     if (!number) return activeRound;
     return safeRounds[number - 1] || activeRound;
   };
-  const findQuestionFromPrompt = (request) => {
+  const findQuestionFromPrompt = (request, round = activeRound) => {
     const number = parseQuestionNumber(request);
     if (!number) return null;
-    return activeRoundQuestions[number - 1] || null;
+    const roundQuestions = (round?.questionIds || []).map((id) => questionById.get(String(id))).filter(Boolean);
+    return roundQuestions[number - 1] || null;
   };
   const appendBuilderAssistant = (content) => setBuilderChatMessages((prev) => [...prev, { role: "assistant", content }].slice(-12));
   const acceptChatPreview = () => {
@@ -1043,7 +1044,7 @@ const BuildSession = () => {
           appendBuilderAssistant("I reviewed the round balance. If I draft replacements, they will appear in the co-host drafts.");
           return { ok: true, message: "Review complete." };
         }
-        const targetQuestion = findQuestionFromPrompt(request);
+        const targetQuestion = findQuestionFromPrompt(request, targetRound);
         if (!targetQuestion) {
           appendBuilderAssistant("I need a question number for that. Try: \"Replace question 4\" or \"Make question 6 easier.\"");
           return { ok: false, message: `I couldn't ${intent === "replace_question" ? "replace" : "update"} that question because no matching question number is in the active round.` };
