@@ -166,17 +166,18 @@ const HostTools = () => {
       };
       try {
         const profileState = await loadHostToolsSessionState(selectedSessionId);
+        const hostedResults = getHostedResultsSnapshot(selectedSession);
         const snapshot = profileState.results && typeof profileState.results === "object" ? { ...profileState, ...profileState.results } : profileState;
         const drafts = { ...localDrafts, ...(profileState.drafts && typeof profileState.drafts === "object" ? profileState.drafts : {}) };
         const nextState = {
-          players: mergeByKey(snapshot.players, localState.players, (item) => item.id),
-          feedback: mergeByKey(snapshot.feedback, localState.feedback, (item) => `${item.playerId}-${item.questionIndex}`),
-          categoryFeedback: mergeByKey(snapshot.categoryFeedback, localState.categoryFeedback, (item) => `${item.playerId}-${item.roundKey || item.roundName}-${item.category}`),
-          ideas: mergeByKey(snapshot.ideas, localState.ideas, (item) => `${item.playerId}-${item.submittedAt}`),
-          answers: mergeByKey(snapshot.answers, localState.answers, (item) => `${item.playerId}-${item.questionIndex}`),
-          activity: [...(Array.isArray(snapshot.activity) ? snapshot.activity : []), ...(Array.isArray(localState.activity) ? localState.activity : [])].slice(-800),
-          leaderboard: mergeByKey(snapshot.leaderboard, localState.leaderboard, (item) => item.id),
-          gradedAnswers: { ...(snapshot.gradedAnswers && typeof snapshot.gradedAnswers === "object" ? snapshot.gradedAnswers : {}), ...(localState.gradedAnswers && typeof localState.gradedAnswers === "object" ? localState.gradedAnswers : {}) },
+          players: mergeManyByKey((item) => item.id, hostedResults.players, snapshot.players, localState.players),
+          feedback: mergeManyByKey((item) => `${item.playerId}-${item.questionIndex}`, hostedResults.feedback, snapshot.feedback, localState.feedback),
+          categoryFeedback: mergeManyByKey((item) => `${item.playerId}-${item.roundKey || item.roundName}-${item.category}`, hostedResults.categoryFeedback, snapshot.categoryFeedback, localState.categoryFeedback),
+          ideas: mergeManyByKey((item) => `${item.playerId}-${item.submittedAt}`, hostedResults.ideas, snapshot.ideas, localState.ideas),
+          answers: mergeManyByKey((item) => `${item.playerId}-${item.questionIndex}`, hostedResults.answers, snapshot.answers, localState.answers),
+          activity: [...(Array.isArray(hostedResults.activity) ? hostedResults.activity : []), ...(Array.isArray(snapshot.activity) ? snapshot.activity : []), ...(Array.isArray(localState.activity) ? localState.activity : [])].slice(-800),
+          leaderboard: mergeManyByKey((item) => item.id, hostedResults.leaderboard, snapshot.leaderboard, localState.leaderboard),
+          gradedAnswers: { ...(hostedResults.gradedAnswers && typeof hostedResults.gradedAnswers === "object" ? hostedResults.gradedAnswers : {}), ...(snapshot.gradedAnswers && typeof snapshot.gradedAnswers === "object" ? snapshot.gradedAnswers : {}), ...(localState.gradedAnswers && typeof localState.gradedAnswers === "object" ? localState.gradedAnswers : {}) },
         };
         setPlayers(nextState.players);
         setFeedback(nextState.feedback);
@@ -195,14 +196,25 @@ const HostTools = () => {
         saveHostToolsSessionState(selectedSessionId, nextState).catch((error) => console.warn("Host tools profile save unavailable:", error));
       } catch (error) {
         console.warn("Host tools profile sync unavailable:", error);
-        setPlayers(localState.players);
-        setFeedback(localState.feedback);
-        setCategoryFeedback(localState.categoryFeedback);
-        setPlayerIdeas(localState.ideas);
-        setAnswers(localState.answers);
-        setActivity(localState.activity);
-        setLeaderboard(localState.leaderboard);
-        setGradedAnswers(localState.gradedAnswers);
+        const hostedResults = getHostedResultsSnapshot(selectedSession);
+        const fallbackState = {
+          players: mergeManyByKey((item) => item.id, hostedResults.players, localState.players),
+          feedback: mergeManyByKey((item) => `${item.playerId}-${item.questionIndex}`, hostedResults.feedback, localState.feedback),
+          categoryFeedback: mergeManyByKey((item) => `${item.playerId}-${item.roundKey || item.roundName}-${item.category}`, hostedResults.categoryFeedback, localState.categoryFeedback),
+          ideas: mergeManyByKey((item) => `${item.playerId}-${item.submittedAt}`, hostedResults.ideas, localState.ideas),
+          answers: mergeManyByKey((item) => `${item.playerId}-${item.questionIndex}`, hostedResults.answers, localState.answers),
+          activity: [...(Array.isArray(hostedResults.activity) ? hostedResults.activity : []), ...(Array.isArray(localState.activity) ? localState.activity : [])].slice(-800),
+          leaderboard: mergeManyByKey((item) => item.id, hostedResults.leaderboard, localState.leaderboard),
+          gradedAnswers: { ...(hostedResults.gradedAnswers && typeof hostedResults.gradedAnswers === "object" ? hostedResults.gradedAnswers : {}), ...(localState.gradedAnswers && typeof localState.gradedAnswers === "object" ? localState.gradedAnswers : {}) },
+        };
+        setPlayers(fallbackState.players);
+        setFeedback(fallbackState.feedback);
+        setCategoryFeedback(fallbackState.categoryFeedback);
+        setPlayerIdeas(fallbackState.ideas);
+        setAnswers(fallbackState.answers);
+        setActivity(fallbackState.activity);
+        setLeaderboard(fallbackState.leaderboard);
+        setGradedAnswers(fallbackState.gradedAnswers);
         setMessage(localDrafts.message || "");
         setSocialPost(localDrafts.socialPost || "");
         setAiDirection(localDrafts.aiDirection || "Make it playful, punny, and useful without giving away answers.");
@@ -245,7 +257,7 @@ const HostTools = () => {
       channelRef.current = null;
       setConnected(false);
     };
-  }, [selectedSessionId]);
+  }, [selectedSessionId, selectedSession]);
 
   useEffect(() => {
     if (!selectedSessionId || loadedDraftSessionRef.current !== selectedSessionId) return undefined;
@@ -475,6 +487,24 @@ const mergeByKey = (remote, local, makeKey) => {
     if (key) map.set(key, { ...(map.get(key) || {}), ...item });
   });
   return [...map.values()];
+};
+
+const mergeManyByKey = (makeKey, ...lists) => {
+  const map = new Map();
+  lists.forEach((list) => {
+    (Array.isArray(list) ? list : []).forEach((item) => {
+      const key = makeKey(item);
+      if (key) map.set(key, { ...(map.get(key) || {}), ...item });
+    });
+  });
+  return [...map.values()];
+};
+
+const getHostedResultsSnapshot = (session) => {
+  const results = session?.hosted_results;
+  if (!results || typeof results !== "object" || Array.isArray(results)) return {};
+  const nested = results.results && typeof results.results === "object" && !Array.isArray(results.results) ? results.results : {};
+  return { ...results, ...nested };
 };
 
 const persistPlayer = (sessionId, current, payload) => {
