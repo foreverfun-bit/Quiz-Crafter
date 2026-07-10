@@ -168,6 +168,8 @@ export default async function handler(req, res) {
         includeImagePrompt,
         cleanHostStyleProfile,
         sessionStyleProfile,
+        cleanRejectedQuestions,
+        cleanRejectedAnswers,
       });
       parsed = await requestCandidates(sourcePrompt, { fastMode });
       usedSourceBackedPrompt = true;
@@ -456,7 +458,7 @@ function formatContextQuestion(question) {
   return `- [${question.round || "Session"} / ${question.category || "Uncategorized"} / ${question.question_type || "written"}] ${question.question_text} Answer: ${question.correct_answer}`;
 }
 
-function buildSourceBackedPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanApprovedCategories, cleanLockedCategories, cleanExcludeCategories, cleanSessionContext = null, sourceSeeds = [], includeImagePrompt, cleanHostStyleProfile = null, sessionStyleProfile = null }) {
+function buildSourceBackedPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanApprovedCategories, cleanLockedCategories, cleanExcludeCategories, cleanSessionContext = null, sourceSeeds = [], includeImagePrompt, cleanHostStyleProfile = null, sessionStyleProfile = null, cleanRejectedQuestions = [], cleanRejectedAnswers = [] }) {
   const approvedCategoryText = cleanLockedCategories.length
     ? `Use exactly one of these locked categories: ${cleanLockedCategories.join(", ")}.`
     : cleanApprovedCategories.length
@@ -467,6 +469,10 @@ function buildSourceBackedPrompt({ config, safeCount, difficultyKey, difficultyP
   const sessionContextText = cleanSessionContext && (cleanSessionContext.builtQuestions.length || cleanSessionContext.activeRoundQuestions.length)
     ? `Current session context. Do not duplicate these:\n${[...cleanSessionContext.activeRoundQuestions, ...cleanSessionContext.builtQuestions].slice(0, 30).map(formatContextQuestion).join("\n")}`
     : "";
+  const rejectedText = cleanRejectedQuestions.length || cleanRejectedAnswers.length ? [
+    cleanRejectedQuestions.length ? `Rejected candidate(s). Do not return these, close rewrites, same-answer variants, same subject, or same topic angle:\n${cleanRejectedQuestions.map((question) => `- ${question}`).join("\n")}` : "",
+    cleanRejectedAnswers.length ? `Rejected answer(s). Do not use these correct answers again for this regeneration:\n${cleanRejectedAnswers.map((answer) => `- ${answer}`).join("\n")}` : "",
+  ].filter(Boolean).join("\n") : "";
   const hostStyleProfileText = buildHostStyleProfileText(cleanHostStyleProfile);
   const sessionStyleText = sessionStyleProfile?.text || "";
   const imagePromptField = includeImagePrompt ? ',\n      "image_prompt": "A concise visual clue idea that does not reveal the answer"' : ',\n      "image_prompt": ""';
@@ -526,6 +532,7 @@ Rules:
 - Every candidate must be grounded in one source seed and include its source_index.
 - Preserve the source seed's source_type, source_label, and source_url.
 - You may rewrite wording, adjust difficulty, generate plausible wrong answers, and format a fun fact.
+- If this is a regeneration, choose a materially different source seed and answer angle from the rejected candidate. Same category is okay; same fact is not.
 - Do not add facts that are not supported by the seed unless you mark needsReview true and lower confidence below 0.65.
 - ${config.roundGuidance}
 - ${config.answerRule}
@@ -540,6 +547,7 @@ Rules:
 ${hostStyleProfileText}
 ${sessionStyleText}
 ${sessionContextText}
+${rejectedText}
 `.trim();
 }
 
@@ -1152,6 +1160,7 @@ async function collectSourceSeeds({ cleanTheme, cleanApprovedCategories, cleanLo
   ]
     .filter((seed) => seed && !blockedCategories.has(categoryKey(seed.category)))
     .filter((seed) => !rejectedQuestionFingerprints.has(fingerprint(seed.question_text || seed.fact || "")))
+    .filter((seed) => !isTooSimilarToAny(fingerprint(seed.question_text || seed.fact || ""), rejectedQuestionFingerprints))
     .filter((seed) => !rejectedAnswerFingerprints.has(answerFingerprint(seed.correct_answer || "")));
   return dedupeSourceSeeds(sourceSeeds).slice(0, SOURCE_SEED_LIMIT);
 }
