@@ -38,6 +38,7 @@ const EXISTING_QUESTIONS_CACHE_MS = 5 * 60 * 1000;
 const STYLE_EXAMPLE_LIMIT = 24;
 const DUPLICATE_EXAMPLE_LIMIT = 24;
 const SOURCE_SEED_LIMIT = 18;
+const SESSION_STYLE_REFERENCE_LIMIT = 8;
 let existingQuestionsCache = { expiresAt: 0, data: null, pending: null, libraryLimit: 0, sessionLimit: 0 };
 
 const BANNED_GENERIC_PATTERNS = [
@@ -114,6 +115,12 @@ export default async function handler(req, res) {
     const categoryExpansionMode = false;
     const existingQuestions = avoidDuplicates || excludeUsed ? await fetchExistingQuestions(fastMode ? 220 : 1500, fastMode ? 100 : 500) : [];
     const styleExamples = fastMode ? [] : buildStyleExamples(existingQuestions, normalizedQuestionType, cleanApprovedCategories);
+    const sessionStyleProfile = fastMode ? null : buildSessionStyleProfile(existingQuestions, {
+      cleanTheme,
+      cleanSessionContext,
+      questionType: normalizedQuestionType,
+      difficultyKey,
+    });
     const existingFingerprints = new Set(existingQuestions.map((q) => fingerprint(q.question_text)));
     const existingAnswerPairs = new Set(existingQuestions.map((q) => answerPairFingerprint(q.question_text, q.correct_answer)));
     const existingAnswers = new Set(existingQuestions.map((q) => answerFingerprint(q.correct_answer)).filter(Boolean));
@@ -134,6 +141,7 @@ export default async function handler(req, res) {
       rejectedQuestionFingerprints,
       rejectedAnswerFingerprints,
       allowUsedSources,
+      allowQuestionBankSources: allowUsedSources || hasQuestionBankIntent(cleanTheme),
     });
     const sourceNotice = !allowUsedSources && !sourceSeeds.some((seed) => seed.source_type === "unused_library" || seed.source_type === "reusable") && hasMatchingUsedSourceQuestion(existingQuestions, {
       normalizedQuestionType,
@@ -159,6 +167,7 @@ export default async function handler(req, res) {
         sourceSeeds,
         includeImagePrompt,
         cleanHostStyleProfile,
+        sessionStyleProfile,
       });
       parsed = await requestCandidates(sourcePrompt, { fastMode });
       usedSourceBackedPrompt = true;
@@ -184,6 +193,7 @@ export default async function handler(req, res) {
         includeImagePrompt,
         fastMode,
         cleanHostStyleProfile,
+        sessionStyleProfile,
       });
       parsed = await requestCandidates(prompt, { fastMode });
     }
@@ -205,6 +215,7 @@ export default async function handler(req, res) {
       includeImagePrompt,
       sourceSeeds,
       sourceBacked: usedSourceBackedPrompt,
+      sessionStyleProfile,
     };
     let validation = normalizeCandidates(validationInput);
 
@@ -213,7 +224,7 @@ export default async function handler(req, res) {
         ...validationInput,
         cleanApprovedCategories: [],
         requireApprovedCategories: false,
-        avoidDuplicates: false,
+        avoidDuplicates: Boolean(avoidDuplicates),
       });
     }
     if (!validation.candidates.length && Array.isArray(parsed.candidates) && parsed.candidates.length) {
@@ -223,10 +234,10 @@ export default async function handler(req, res) {
         cleanApprovedCategories: [],
         requireApprovedCategories: false,
         cleanLockedCategories: cleanLockedCategories.length ? cleanLockedCategories : [],
-        existingFingerprints: new Set(),
-        existingAnswerPairs: new Set(),
-        existingAnswers: new Set(),
-        avoidDuplicates: false,
+        existingFingerprints: avoidDuplicates ? existingFingerprints : new Set(),
+        existingAnswerPairs: avoidDuplicates ? existingAnswerPairs : new Set(),
+        existingAnswers: avoidDuplicates ? existingAnswers : new Set(),
+        avoidDuplicates: Boolean(avoidDuplicates),
       });
     }
     if (!validation.candidates.length && Array.isArray(parsed.candidates) && parsed.candidates.length && !cleanLockedCategories.length) {
@@ -236,10 +247,10 @@ export default async function handler(req, res) {
         cleanApprovedCategories: [],
         requireApprovedCategories: false,
         cleanLockedCategories: [],
-        existingFingerprints: new Set(),
-        existingAnswerPairs: new Set(),
-        existingAnswers: new Set(),
-        avoidDuplicates: false,
+        existingFingerprints: avoidDuplicates ? existingFingerprints : new Set(),
+        existingAnswerPairs: avoidDuplicates ? existingAnswerPairs : new Set(),
+        existingAnswers: avoidDuplicates ? existingAnswers : new Set(),
+        avoidDuplicates: Boolean(avoidDuplicates),
       });
     }
     if (!validation.candidates.length && usedSourceBackedPrompt) {
@@ -263,6 +274,7 @@ export default async function handler(req, res) {
         includeImagePrompt,
         fastMode,
         cleanHostStyleProfile,
+        sessionStyleProfile,
       });
       const fallbackParsed = await requestCandidates(fallbackPrompt, { fastMode });
       const fallbackValidationInput = {
@@ -270,6 +282,7 @@ export default async function handler(req, res) {
         candidates: fallbackParsed.candidates,
         sourceSeeds: [],
         sourceBacked: false,
+        sessionStyleProfile,
       };
       validation = normalizeCandidates(fallbackValidationInput);
       if (!validation.candidates.length && Array.isArray(fallbackParsed.candidates) && fallbackParsed.candidates.length) {
@@ -277,12 +290,12 @@ export default async function handler(req, res) {
           ...fallbackValidationInput,
           cleanApprovedCategories: [],
           requireApprovedCategories: false,
-          avoidDuplicates: false,
+          avoidDuplicates: Boolean(avoidDuplicates),
         });
       }
     }
 
-    return res.status(200).json({ candidates: validation.candidates.slice(0, safeCount), rejected: validation.rejected, requested: safeCount, source_notice: sourceNotice });
+    return res.status(200).json({ candidates: validation.candidates.slice(0, safeCount), rejected: validation.rejected, requested: safeCount, source_notice: sourceNotice, style_reference_note: sessionStyleProfile?.note || "" });
   } catch (error) {
     console.error("generate-session-candidates error:", error);
     return res.status(500).json({ error: error?.message || "Failed to generate candidates" });
@@ -443,7 +456,7 @@ function formatContextQuestion(question) {
   return `- [${question.round || "Session"} / ${question.category || "Uncategorized"} / ${question.question_type || "written"}] ${question.question_text} Answer: ${question.correct_answer}`;
 }
 
-function buildSourceBackedPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanApprovedCategories, cleanLockedCategories, cleanExcludeCategories, cleanSessionContext = null, sourceSeeds = [], includeImagePrompt, cleanHostStyleProfile = null }) {
+function buildSourceBackedPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanApprovedCategories, cleanLockedCategories, cleanExcludeCategories, cleanSessionContext = null, sourceSeeds = [], includeImagePrompt, cleanHostStyleProfile = null, sessionStyleProfile = null }) {
   const approvedCategoryText = cleanLockedCategories.length
     ? `Use exactly one of these locked categories: ${cleanLockedCategories.join(", ")}.`
     : cleanApprovedCategories.length
@@ -455,6 +468,7 @@ function buildSourceBackedPrompt({ config, safeCount, difficultyKey, difficultyP
     ? `Current session context. Do not duplicate these:\n${[...cleanSessionContext.activeRoundQuestions, ...cleanSessionContext.builtQuestions].slice(0, 30).map(formatContextQuestion).join("\n")}`
     : "";
   const hostStyleProfileText = buildHostStyleProfileText(cleanHostStyleProfile);
+  const sessionStyleText = sessionStyleProfile?.text || "";
   const imagePromptField = includeImagePrompt ? ',\n      "image_prompt": "A concise visual clue idea that does not reveal the answer"' : ',\n      "image_prompt": ""';
   const imagePromptRule = includeImagePrompt
     ? "- image_prompt may describe a useful visual clue that does not reveal the answer."
@@ -501,6 +515,8 @@ Return valid JSON only:
       "confidence": 0.85,
       "originality_score": 0.75,
       "similarity_score": 0.15,
+      "style_note": "Based on your previous summer sessions",
+      "originality_note": "New question - not previously used",
       "needsReview": false
     }
   ]
@@ -522,11 +538,12 @@ Rules:
 - For multiple choice, wrong answers should be plausible and comparable.
 - For written answer, the answer should be familiar/gettable enough without options.
 ${hostStyleProfileText}
+${sessionStyleText}
 ${sessionContextText}
 `.trim();
 }
 
-function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, categoryExpansionMode, cleanRejectedQuestions = [], cleanRejectedAnswers = [], cleanSessionContext = null, existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt, fastMode = false, cleanHostStyleProfile = null }) {
+function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, categoryExpansionMode, cleanRejectedQuestions = [], cleanRejectedAnswers = [], cleanSessionContext = null, existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt, fastMode = false, cleanHostStyleProfile = null, sessionStyleProfile = null }) {
   const overGenerateCount = fastMode ? Math.min(8, Math.max(safeCount + 1, Math.ceil(safeCount * 1.35))) : Math.min(18, Math.max(safeCount + 4, Math.ceil(safeCount * 1.7)));
   const lockedCategoryText = cleanLockedCategories.length ? `Locked categories are active. The category field must exactly match one of these locked categories: ${cleanLockedCategories.join(", ")}. Generate all candidates inside these locked categories until the host unlocks them.` : "";
   const approvedCategoryText = cleanLockedCategories.length
@@ -540,6 +557,7 @@ function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, clea
   const themeText = cleanTheme ? `Theme/vibe/category guidance: ${cleanTheme}. Stay useful to that direction, but avoid repetitive question angles.` : "";
   const tasteProfileText = fastMode ? "" : buildTasteProfileText(styleExamples, cleanSessionContext);
   const hostStyleProfileText = buildHostStyleProfileText(cleanHostStyleProfile);
+  const sessionStyleText = sessionStyleProfile?.text || "";
   const styleText = styleExamples.length ? `Style calibration examples. These are not a source to copy from; they are the host's taste profile. Match their practical qualities: readable aloud, fresh-but-playable, specific without being tiny-name trivia, playful but clean, and useful for a US live bar crowd. Do not copy, lightly rewrite, reuse their answers, or generate the same topic angles:\n${styleExamples.map(formatStyleExample).join("\n")}` : "";
   const sessionContextText = cleanSessionContext && (cleanSessionContext.builtQuestions.length || cleanSessionContext.activeRoundQuestions.length || cleanSessionContext.roundDescriptions.length)
     ? [
@@ -597,7 +615,9 @@ Use this exact shape:
       "fun_fact": "One short sentence.",
       "difficulty": "${difficultyKey}",
       "question_type": "${config.outputType}",
-      "image_url": ""${imagePromptField}
+      "image_url": ""${imagePromptField},
+      "style_note": "Based on your previous summer sessions",
+      "originality_note": "New question - not previously used"
     }
   ]
 }
@@ -639,6 +659,7 @@ Trivia host style:
 - difficulty must be "${difficultyKey}".
 ${imagePromptRule}
 ${hostStyleProfileText}
+${sessionStyleText}
 ${hostHardText}
 ${tasteProfileText}
 ${sessionContextText}
@@ -695,6 +716,98 @@ function buildTasteProfileText(styleExamples, cleanSessionContext) {
 - Good candidates should feel like a clever live-host clue: a concrete hook, a fair path to the answer, and a little "oh, that's neat" reveal.
 - Bad candidates are generic quiz-bank facts, sterile textbook definitions, obscure foreign recall with no context, answer-only categories, and claims that feel like a coin flip.
 - If the prompt or round direction conflicts with this taste profile, follow the host taste profile first.`;
+}
+
+function buildSessionStyleProfile(existingQuestions, { cleanTheme = "", cleanSessionContext = null, questionType = "written", difficultyKey = "medium" } = {}) {
+  const sessionGroups = new Map();
+  (Array.isArray(existingQuestions) ? existingQuestions : [])
+    .filter((question) => question?.source === "session" && question.question_text)
+    .forEach((question) => {
+      const key = question.session_key || question.session_id || `session-${question.session_index || "unknown"}`;
+      const existing = sessionGroups.get(key) || { key, meta: question.session_meta || {}, questions: [] };
+      existing.questions.push(question);
+      sessionGroups.set(key, existing);
+    });
+
+  const sessions = [...sessionGroups.values()]
+    .map((session) => ({ ...session, score: scoreSessionStyleReference(session, { cleanTheme, cleanSessionContext, questionType }) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, SESSION_STYLE_REFERENCE_LIMIT)
+    .filter((session) => session.questions.length);
+
+  if (!sessions.length) return null;
+
+  const allQuestions = sessions.flatMap((session) => session.questions);
+  const typeCounts = countBy(allQuestions, (question) => normalizeFetchedType(question.question_type));
+  const categoryCounts = countBy(allQuestions, (question) => cleanText(question.category) || "Uncategorized");
+  const roundCounts = countBy(allQuestions, (question) => cleanText(question.round) || cleanText(question.source_slot) || normalizeFetchedType(question.question_type));
+  const averageQuestionLength = Math.round(allQuestions.reduce((sum, question) => sum + cleanText(question.question_text).length, 0) / allQuestions.length);
+  const funFacts = allQuestions.map((question) => cleanText(question.fun_fact)).filter(Boolean);
+  const averageFunFactLength = funFacts.length ? Math.round(funFacts.reduce((sum, fact) => sum + fact.length, 0) / funFacts.length) : 0;
+  const typeMix = formatCountList(typeCounts, 5);
+  const topCategories = formatCountList(categoryCounts, 12);
+  const roundPattern = formatCountList(roundCounts, 8);
+  const sessionNames = sessions.map((session) => session.meta.name).filter(Boolean).slice(0, 3);
+  const seasonalNote = inferSeasonalStyleNote(cleanTheme, cleanSessionContext, sessions);
+  const note = seasonalNote || (sessionNames.length ? `Based on prior sessions like ${sessionNames.join(", ")}` : "Based on your prior session structure");
+
+  return {
+    note,
+    text: `Session-style reference summary (${sessions.length} relevant past session${sessions.length === 1 ? "" : "s"}). These are training examples for structure, pacing, category balance, wording, and fun fact style only. Do not copy, reuse, lightly rewrite, or return any question or answer from these sessions.
+- Usual question-type mix in references: ${typeMix || "mixed"}.
+- Common round/category structure in references: ${roundPattern || "varied rounds"}.
+- Category balance to echo without repeating exact questions: ${topCategories || "varied broad categories"}.
+- Typical question length: about ${averageQuestionLength} characters. Keep clues readable aloud.
+- Fun fact style: ${funFacts.length ? `short host note, about ${averageFunFactLength} characters on average` : "short, interesting, host-friendly color when available"}.
+- Requested type/difficulty now: ${questionType} / ${difficultyKey}. Match the closest reference pattern while creating entirely new facts and clue angles.
+- Candidate labels should include a short style_note such as "${note}" and originality_note "New question - not previously used".`,
+  };
+}
+
+function scoreSessionStyleReference(session, { cleanTheme = "", cleanSessionContext = null, questionType = "written" } = {}) {
+  const themeTerms = new Set(tokenizeSourceQuery(cleanTheme));
+  const currentCategories = new Set([
+    ...(cleanSessionContext?.activeRoundQuestions || []),
+    ...(cleanSessionContext?.builtQuestions || []),
+  ].map((question) => categoryKey(question.category)).filter(Boolean));
+  const metaText = tokenizeSourceQuery([session.meta?.name, session.meta?.venue, session.meta?.date].join(" "));
+  let score = Math.min(10, session.questions.length);
+  session.questions.forEach((question) => {
+    if (normalizeFetchedType(question.question_type) === questionType) score += 2;
+    if (currentCategories.has(categoryKey(question.category))) score += 1;
+    if (isLikedQuestion(question)) score += 2;
+    if (question.fun_fact) score += 0.5;
+    const haystack = tokenizeSourceQuery([question.category, question.question_text, question.correct_answer, question.fun_fact].join(" "));
+    haystack.forEach((term) => { if (themeTerms.has(term)) score += 1; });
+  });
+  metaText.forEach((term) => { if (themeTerms.has(term)) score += 2; });
+  return score;
+}
+
+function countBy(items, getKey) {
+  const counts = new Map();
+  items.forEach((item) => {
+    const key = cleanText(getKey(item));
+    if (key) counts.set(key, (counts.get(key) || 0) + 1);
+  });
+  return counts;
+}
+
+function formatCountList(counts, limit) {
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([label, count]) => `${label} (${count})`)
+    .join(", ");
+}
+
+function inferSeasonalStyleNote(cleanTheme, cleanSessionContext, sessions) {
+  const text = [cleanTheme, cleanSessionContext?.sessionName, cleanSessionContext?.venue, ...sessions.map((session) => `${session.meta?.name || ""} ${session.meta?.date || ""}`)].join(" ").toLowerCase();
+  if (/\b(summer|jun|june|jul|july|aug|august)\b/.test(text)) return "Based on your previous summer sessions";
+  if (/\b(fall|autumn|sep|sept|oct|nov|halloween)\b/.test(text)) return "Based on your previous fall sessions";
+  if (/\b(winter|dec|jan|feb|holiday|christmas|new year)\b/.test(text)) return "Based on your previous winter sessions";
+  if (/\b(spring|mar|apr|may|easter)\b/.test(text)) return "Based on your previous spring sessions";
+  return "";
 }
 
 function sampleStable(items, limit) {
@@ -772,6 +885,10 @@ function hasReuseIntent(value) {
   return /\b(reuse|re-used|reused|used before|past question|past session|old session|old question|pull from old|from old sessions)\b/i.test(cleanText(value));
 }
 
+function hasQuestionBankIntent(value) {
+  return /\b(question bank|library|saved question|saved questions|unused question|unused questions|from my questions|from my bank)\b/i.test(cleanText(value));
+}
+
 async function requestCandidates(prompt, { fastMode = false } = {}) {
   if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured in Vercel");
 
@@ -808,7 +925,7 @@ async function requestCandidates(prompt, { fastMode = false } = {}) {
   }
 }
 
-function normalizeCandidates({ candidates, config, questionType, difficultyKey, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, requireApprovedCategories = true, existingFingerprints, existingAnswerPairs, existingAnswers, rejectedQuestionFingerprints, rejectedAnswerFingerprints, avoidDuplicates, includeImagePrompt, sourceSeeds = [], sourceBacked = false }) {
+function normalizeCandidates({ candidates, config, questionType, difficultyKey, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, requireApprovedCategories = true, existingFingerprints, existingAnswerPairs, existingAnswers, rejectedQuestionFingerprints, rejectedAnswerFingerprints, avoidDuplicates, includeImagePrompt, sourceSeeds = [], sourceBacked = false, sessionStyleProfile = null }) {
   const rejected = [];
   const accepted = [];
   const batchFingerprints = new Set();
@@ -822,7 +939,7 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
   if (!Array.isArray(candidates)) throw new Error("No candidates returned");
 
   candidates.forEach((candidate, index) => {
-    const normalized = normalizeCandidate(candidate, config, questionType, difficultyKey, includeImagePrompt, { sourceSeeds, sourceBacked });
+    const normalized = normalizeCandidate(candidate, config, questionType, difficultyKey, includeImagePrompt, { sourceSeeds, sourceBacked, sessionStyleProfile });
     if (!normalized.ok) {
       rejected.push({ index, reason: normalized.reason });
       return;
@@ -834,7 +951,12 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
     const itemAnswer = answerFingerprint(item.correct_answer);
     const itemCategoryKey = categoryKey(item.category);
     const isOwnSourceCandidate = ["unused_library", "reusable", "question_bank"].includes(item.source_type);
+    const hasUsedSourceSeed = sourceSeeds.some((seed) => seed.source_type === "used_before");
 
+    if (item.source_type === "used_before" && !hasUsedSourceSeed) {
+      rejected.push({ index, question: item.question_text, reason: "used_question_not_requested" });
+      return;
+    }
     if (isGenericQuestion(item.question_text)) {
       rejected.push({ index, question: item.question_text, reason: "generic_overused_trivia_pattern" });
       return;
@@ -868,6 +990,10 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
         rejected.push({ index, question: item.question_text, reason: "duplicate_question" });
         return;
       }
+      if (isTooSimilarToAny(itemFingerprint, existingFingerprints)) {
+        rejected.push({ index, question: item.question_text, reason: "near_duplicate_existing_question" });
+        return;
+      }
       if (!isOwnSourceCandidate && (existingAnswerPairs.has(itemAnswerPair) || batchAnswerPairs.has(itemAnswerPair))) {
         rejected.push({ index, question: item.question_text, reason: "duplicate_answer_angle" });
         return;
@@ -887,7 +1013,7 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
   return { candidates: accepted, rejected };
 }
 
-function normalizeCandidate(candidate, config, questionType, difficultyKey, includeImagePrompt, { sourceSeeds = [], sourceBacked = false } = {}) {
+function normalizeCandidate(candidate, config, questionType, difficultyKey, includeImagePrompt, { sourceSeeds = [], sourceBacked = false, sessionStyleProfile = null } = {}) {
   if (!candidate || typeof candidate !== "object") return { ok: false, reason: "candidate_not_object" };
 
   const category = cleanText(candidate.category);
@@ -905,6 +1031,8 @@ function normalizeCandidate(candidate, config, questionType, difficultyKey, incl
   const originalityScore = clampConfidence(candidate.originality_score ?? sourceSeed?.originality_score ?? (sourceType === "used_before" ? 0.2 : sourceBacked ? 0.7 : 0.4));
   const similarityScore = clampConfidence(candidate.similarity_score ?? sourceSeed?.similarity_score ?? (sourceType === "used_before" ? 1 : 0.25));
   const needsReview = typeof candidate.needsReview === "boolean" ? candidate.needsReview : (!sourceBacked || Boolean(sourceSeed?.needsReview));
+  const styleNote = cleanText(candidate.style_note) || sessionStyleProfile?.note || "Based on your prior session style";
+  const originalityNote = cleanText(candidate.originality_note) || (sourceType === "used_before" ? "Used before - add only if you chose to reuse it" : "New question - not previously used");
 
   if (!category || !questionText || !correctAnswer) return { ok: false, reason: "missing_required_text" };
 
@@ -938,6 +1066,8 @@ function normalizeCandidate(candidate, config, questionType, difficultyKey, incl
       confidence,
       originality_score: originalityScore,
       similarity_score: similarityScore,
+      style_note: styleNote,
+      originality_note: originalityNote,
       needsReview,
     },
   };
@@ -1011,12 +1141,12 @@ function isTooSimilarToAny(itemFingerprint, fingerprintSet) {
   return false;
 }
 
-async function collectSourceSeeds({ cleanTheme, cleanApprovedCategories, cleanLockedCategories, cleanExcludeCategories, normalizedQuestionType, safeCount, existingQuestions, rejectedQuestionFingerprints, rejectedAnswerFingerprints, allowUsedSources = false }) {
+async function collectSourceSeeds({ cleanTheme, cleanApprovedCategories, cleanLockedCategories, cleanExcludeCategories, normalizedQuestionType, safeCount, existingQuestions, rejectedQuestionFingerprints, rejectedAnswerFingerprints, allowUsedSources = false, allowQuestionBankSources = false }) {
   const blockedCategories = new Set(cleanExcludeCategories.map(categoryKey));
   const preferredCategories = cleanLockedCategories.length ? cleanLockedCategories : cleanApprovedCategories;
   const themeTerms = tokenizeSourceQuery([cleanTheme, ...preferredCategories.slice(0, 5)].join(" "));
   const sourceSeeds = [
-    ...buildQuestionBankSeeds(existingQuestions, { normalizedQuestionType, preferredCategories, themeTerms, blockedCategories, allowUsedSources }),
+    ...(allowQuestionBankSources ? buildQuestionBankSeeds(existingQuestions, { normalizedQuestionType, preferredCategories, themeTerms, blockedCategories, allowUsedSources }) : []),
     ...await fetchOpenTriviaSeeds({ cleanTheme, preferredCategories, safeCount }),
     ...await fetchWikipediaSeeds({ cleanTheme, preferredCategories, safeCount }),
   ]
@@ -1283,10 +1413,11 @@ async function fetchExistingQuestionsUncached(supabaseUrl, supabaseKey, libraryL
       `${base}/rest/v1/questions?select=question_text,correct_answer,category,question_type,fun_fact&order=created_at.desc&limit=${libraryLimit}`,
     ], headers),
     fetchJsonWithFallback([
+      `${base}/rest/v1/sessions?select=*&order=created_at.desc&limit=${sessionLimit}`,
       `${base}/rest/v1/sessions?select=true_false_questions,multiple_choice_questions,written_questions,picture_questions&order=created_at.desc&limit=${sessionLimit}`,
     ], headers),
   ]);
-  const sessionQuestions = Array.isArray(sessions) ? sessions.flatMap(extractSessionQuestions) : [];
+  const sessionQuestions = Array.isArray(sessions) ? sessions.flatMap((session, index) => extractSessionQuestions(session, index)) : [];
 
   return [
     ...(Array.isArray(libraryQuestions) ? libraryQuestions.map((q) => ({ ...q, source: "library" })) : []),
@@ -1310,6 +1441,12 @@ async function fetchExistingQuestionsUncached(supabaseUrl, supabaseKey, libraryL
       used_at: q.used_at || "",
       times_used: Number(q.times_used || 0),
       source: q.source || "library",
+      session_key: q.session_key || "",
+      session_id: q.session_id || "",
+      session_index: q.session_index ?? "",
+      session_meta: q.session_meta || null,
+      source_slot: q.source_slot || "",
+      round: cleanText(q.round || q.round_name),
     }))
     .filter((q) => q.question_text);
 }
@@ -1330,9 +1467,30 @@ function normalizeFetchedType(value) {
   return value === "true_false" || value === "multiple_choice" || value === "written" ? value : "written";
 }
 
-function extractSessionQuestions(session) {
-  return [session?.true_false_questions, session?.multiple_choice_questions, session?.written_questions, session?.picture_questions]
-    .flatMap((value) => (Array.isArray(value) ? value : []));
+function extractSessionQuestions(session, sessionIndex = 0) {
+  const sessionId = cleanText(session?.id) || `session-${sessionIndex}`;
+  const sessionMeta = {
+    id: sessionId,
+    name: cleanText(session?.name || session?.session_name || session?.title),
+    venue: cleanText(session?.venue_name || session?.venue || session?.venueName),
+    date: cleanText(session?.session_date || session?.event_date || session?.hosted_at || session?.date || session?.created_at),
+  };
+  const slots = [
+    ["true_false", session?.true_false_questions],
+    ["multiple_choice", session?.multiple_choice_questions],
+    ["written", session?.written_questions],
+    ["picture", session?.picture_questions],
+  ];
+  return slots.flatMap(([slot, value]) => (Array.isArray(value) ? value.map((question, index) => ({
+    ...question,
+    question_type: question?.question_type || (slot === "picture" ? "written" : slot),
+    source_slot: slot,
+    source_position: index,
+    session_key: sessionId || `session-${sessionIndex}`,
+    session_id: sessionId,
+    session_index: sessionIndex,
+    session_meta: sessionMeta,
+  })) : []));
 }
 
 const STOP_WORDS = new Set(["a", "an", "and", "are", "as", "at", "be", "by", "did", "do", "does", "for", "from", "has", "have", "in", "is", "it", "its", "of", "on", "or", "that", "the", "this", "to", "was", "were", "what", "when", "where", "which", "who", "whom", "whose", "why", "with"]);
