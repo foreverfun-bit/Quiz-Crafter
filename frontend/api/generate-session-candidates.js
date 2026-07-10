@@ -255,7 +255,7 @@ export default async function handler(req, res) {
         avoidDuplicates: Boolean(avoidDuplicates),
       });
     }
-    if (!validation.candidates.length && usedSourceBackedPrompt) {
+    if (!validation.candidates.length && usedSourceBackedPrompt && !fastMode) {
       const fallbackPrompt = buildPrompt({
         config,
         safeCount,
