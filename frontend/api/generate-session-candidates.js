@@ -130,7 +130,8 @@ export default async function handler(req, res) {
       ...cleanRejectedQuestions.map(extractRejectedAnswer).filter(Boolean).map(answerFingerprint),
     ].filter(Boolean));
 
-    const sourceSeeds = await collectSourceSeeds({
+    const isQuickRegeneration = fastMode && cleanRejectedQuestions.length > 0;
+    const sourceSeeds = isQuickRegeneration ? [] : await collectSourceSeeds({
       cleanTheme,
       cleanApprovedCategories,
       cleanLockedCategories,
@@ -630,7 +631,7 @@ Use this exact shape:
   ]
 }
 
-${fastMode ? "Quick draft mode: move fast. Return complete usable drafts with concise wording, plausible wrong answers when needed, and one short fun fact." : "Polished mode: spend extra care on clue path, wrong answers, and fun facts."}
+${fastMode ? "Quick draft mode: move fast. Return complete usable drafts with concise wording, plausible wrong answers when needed, and one short fun fact. If this is a regeneration, prioritize a materially different answer/topic angle over perfect polish." : "Polished mode: spend extra care on clue path, wrong answers, and fun facts."}
 
 Freshness rules:
 - Do not produce classic bar-trivia staples or their reworded cousins.
