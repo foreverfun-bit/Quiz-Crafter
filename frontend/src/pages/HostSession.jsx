@@ -1313,17 +1313,23 @@ const QuestionNavStrip = ({ questions, rounds, currentIndex, hostIndex, isReview
         {rounds.map((round) => <option key={round.key} value={round.key}>{round.name}</option>)}
       </select>
       <button type="button" onClick={onPrev} disabled={hostIndex === 0} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-white/10 bg-zinc-950 text-zinc-300 hover:border-[#71E0DC]/40 hover:text-[#71E0DC] disabled:opacity-30" aria-label="Previous question"><ChevronLeft size={16} /></button>
-      <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto py-0.5">
-        {questions.map((question, index) => {
-          const isLive = index === currentIndex;
-          const isSelected = index === hostIndex;
-          const isDone = index < currentIndex;
-          return <button key={question.id} type="button" onClick={() => onSelectPill(index)} title={question.questionText} className={`relative flex h-8 min-w-8 shrink-0 items-center justify-center rounded-md px-2 text-xs font-bold transition ${isSelected ? "bg-[#71E0DC]/15 text-[#71E0DC] ring-1 ring-[#71E0DC]/50" : isDone ? "bg-zinc-900 text-zinc-400" : "bg-zinc-900/60 text-zinc-500 hover:text-zinc-300"}`}>
-            {index + 1}
-            {isBonusQuestion(question) && <span className="absolute -top-1.5 left-0.5 text-[9px] text-amber-300">&#9733;</span>}
-            {isLive && <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-rose-400 ring-2 ring-zinc-950 animate-pulse" />}
-          </button>;
-        })}
+      <div className="flex min-w-0 flex-1 items-center gap-3 overflow-x-auto py-0.5">
+        {rounds.map((round) => (
+          <div key={round.key} className="flex shrink-0 items-center gap-1.5 rounded-lg border border-white/5 bg-white/[0.02] px-1.5 py-1">
+            <span title={round.name} className="shrink-0 max-w-[9ch] truncate pr-1 text-[10px] font-bold uppercase tracking-wide text-zinc-600">{round.name}</span>
+            {round.questions.map((question, localIndex) => {
+              const index = round.startIndex + localIndex;
+              const isLive = index === currentIndex;
+              const isSelected = index === hostIndex;
+              const isDone = index < currentIndex;
+              return <button key={question.id} type="button" onClick={() => onSelectPill(index)} title={question.questionText} className={`relative flex h-8 min-w-8 shrink-0 items-center justify-center rounded-md px-2 text-xs font-bold transition ${isSelected ? "bg-[#71E0DC]/15 text-[#71E0DC] ring-1 ring-[#71E0DC]/50" : isDone ? "bg-zinc-900 text-zinc-400" : "bg-zinc-900/60 text-zinc-500 hover:text-zinc-300"}`}>
+                {index + 1}
+                {isBonusQuestion(question) && <span className="absolute -top-1.5 left-0.5 text-[9px] text-amber-300">&#9733;</span>}
+                {isLive && <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-rose-400 ring-2 ring-zinc-950 animate-pulse" />}
+              </button>;
+            })}
+          </div>
+        ))}
       </div>
       <button type="button" onClick={onNext} disabled={hostIndex >= questions.length - 1} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-white/10 bg-zinc-950 text-zinc-300 hover:border-[#71E0DC]/40 hover:text-[#71E0DC] disabled:opacity-30" aria-label="Next question"><ChevronRight size={16} /></button>
       <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-rose-400/30 bg-rose-400/10 px-2.5 py-1.5 text-xs font-bold text-rose-200">
