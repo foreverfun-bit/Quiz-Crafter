@@ -1,6 +1,7 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { uploadQuestionMedia } from "../lib/mediaUpload";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent } from "../components/ui/card";
@@ -179,7 +180,6 @@ const readStoredBranding = (sessionId, session = null) => {
   }
 };
 const writeStoredBranding = (sessionId, branding) => { try { localStorage.setItem(hostBrandingKey(sessionId), JSON.stringify(normalizeBranding(branding))); } catch { /* Ignore storage failures so branding never crashes hosting. */ } };
-const fileToDataUrl = (file) => new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file); });
 
 const parseOptions = (value) => {
   if (!value) return [];
@@ -1291,7 +1291,12 @@ const HostCustomizePanel = ({ branding, defaultBranding, onSave, onSaveDefault, 
     const file = event.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith("image/")) return toast.error("Choose an image file for the logo");
-    update("logoUrl", await fileToDataUrl(file));
+    try {
+      update("logoUrl", await uploadQuestionMedia(file));
+    } catch (error) {
+      console.error("Upload logo error:", error);
+      toast.error(error.message || "Failed to upload logo");
+    }
   };
   return <Card className="glass-card mb-4"><CardContent className="p-4"><div className="flex items-center justify-between gap-3 mb-4"><div><h2 className="text-lg font-bold text-white flex items-center gap-2"><Palette size={18} style={{ color: "var(--host-primary)" }} />Customize Host Screen</h2><p className="text-xs text-zinc-500">Default branding is used for new host sessions. This session can still be customized.</p></div><Button size="sm" variant="ghost" onClick={onClose} className="text-zinc-400 hover:text-white">Close</Button></div><div className="grid grid-cols-1 lg:grid-cols-[160px_1fr] gap-4"><div className="rounded-lg border border-white/10 bg-zinc-950/60 p-3 flex flex-col items-center justify-center min-h-36">{safeForm.logoUrl ? <img src={safeForm.logoUrl} alt="Logo preview" className="max-h-24 max-w-full rounded-md bg-white object-contain p-2" /> : <div className="h-24 w-24 rounded-md border border-white/10 bg-zinc-900 flex items-center justify-center text-zinc-500"><Image size={28} /></div>}<p className="mt-3 text-sm font-bold text-white text-center">{safeForm.name || "Host Name"}</p></div><div className="space-y-3"><div className="grid grid-cols-1 md:grid-cols-2 gap-3"><label className="text-xs text-zinc-400">Host name<input value={safeForm.name || ""} onChange={(event) => update("name", event.target.value)} className="mt-1 h-10 w-full rounded-md bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><label className="text-xs text-zinc-400">Logo URL<input value={safeForm.logoUrl || ""} onChange={(event) => update("logoUrl", event.target.value)} placeholder="https://..." className="mt-1 h-10 w-full rounded-md bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label></div><div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end"><label className="text-xs text-zinc-400">Upload logo<span className="mt-1 h-10 rounded-md border border-white/10 bg-zinc-950 px-3 text-zinc-200 flex items-center gap-2 cursor-pointer hover:border-[#71E0DC]/50"><Upload size={15} />Choose file<input type="file" accept="image/*" onChange={uploadLogo} className="hidden" /></span></label><ColorField label="Primary color" value={safeForm.primaryColor} onChange={(value) => update("primaryColor", value)} /><ColorField label="Accent color" value={safeForm.accentColor} onChange={(value) => update("accentColor", value)} /></div><div className="rounded-md border border-white/10 bg-zinc-950/50 p-3"><div className="flex items-center justify-between gap-3 flex-wrap"><div><p className="text-sm font-semibold text-white">Current default</p><p className="text-xs text-zinc-500">{safeDefault.name} · {safeDefault.primaryColor} / {safeDefault.accentColor}</p></div><Button size="sm" variant="outline" onClick={() => setForm(normalizeBranding(onUseDefault()))} className="border-white/10 text-zinc-300 hover:text-white">Use Default</Button></div></div><div className="flex justify-end gap-2 pt-1 flex-wrap"><Button variant="outline" onClick={() => setForm(DEFAULT_BRANDING)} className="border-white/10 text-zinc-300 hover:text-white">Reset</Button><Button variant="outline" onClick={() => onSaveDefault(safeForm)} className="border-white/10 text-zinc-300 hover:text-white">Save as Default</Button><Button onClick={() => onSave(safeForm)} className="text-zinc-950 font-semibold hover:opacity-90" style={{ background: `linear-gradient(90deg, ${safeForm.primaryColor}, ${safeForm.accentColor})` }}><Save size={16} className="mr-2" />Save This Session</Button></div></div></div></CardContent></Card>;
 };
