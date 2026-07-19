@@ -144,10 +144,3 @@
 .animate-slide-up {
   animation: slideUp 0.5s ease-out;
 }
-
-/* Debug wrapper */
-@layer base {
-  [data-debug-wrapper="true"] {
-    display: contents !important;
-  }
-}
