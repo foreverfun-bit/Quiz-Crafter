@@ -1286,7 +1286,7 @@ const HostSession = () => {
             {!focusMode && <div className="mt-4"><PhonePlayPanel players={activePlayers} answers={activeCurrentAnswers} activity={currentActivity} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} displayedQuestion={displayedQuestion} pointsPerQuestion={Number(viewPointsPerQuestion) || getDefaultPoints(displayedQuestion)} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} setMode={releaseMode} /></div>}
           </>}
         </main>
-        {!focusMode && <PlaybackRail mode={presentMode} setMode={releaseMode} rounds={rounds} introRoundKey={selectedIntroKey} chooseIntroRound={chooseIntroRound} isReviewing={isReviewing} showAnswer={isReviewing ? true : showAnswer} onRevealAnswer={toggleAnswer} showFunFact={isReviewing ? false : showFunFact} onShowFunFact={toggleFunFact} hasRevealExtra={hasRevealExtra} hasFunFact={Boolean(displayedQuestion.funFact)} timeRemaining={isReviewing ? null : timeRemaining} timerSeconds={viewTimerSeconds} startTimer={startTimer} resetTimer={isReviewing ? () => {} : resetTimer} currentIndex={currentIndex} total={questions.length} onOpenDrawer={setActiveDrawer} flaggedTeamCount={flaggedTeamCount} currentQuestionLabel={`Q${hostIndex + 1}`} />}
+        {!focusMode && <PlaybackRail mode={presentMode} setMode={releaseMode} rounds={rounds} introRoundKey={selectedIntroKey} chooseIntroRound={chooseIntroRound} isReviewing={isReviewing} showAnswer={isReviewing ? true : showAnswer} onRevealAnswer={toggleAnswer} showFunFact={isReviewing ? false : showFunFact} onShowFunFact={toggleFunFact} hasRevealExtra={hasRevealExtra} hasFunFact={Boolean(displayedQuestion.funFact)} timeRemaining={isReviewing ? null : timeRemaining} timerSeconds={viewTimerSeconds} startTimer={startTimer} resetTimer={isReviewing ? () => {} : resetTimer} hostIndex={hostIndex} total={questions.length} onPrev={() => reviewQuestion(hostIndex - 1)} onNext={() => reviewQuestion(hostIndex + 1)} onOpenDrawer={setActiveDrawer} flaggedTeamCount={flaggedTeamCount} currentQuestionLabel={`Q${hostIndex + 1}`} />}
       </div>
     </div>
     {scoreModal && <ScoreAdjustModal modal={scoreModal} setModal={setScoreModal} adjustScore={adjustScore} setScore={setScore} />}
@@ -1354,7 +1354,7 @@ const PLAYBACK_TOOLS = [
   { key: "feedback", label: "Feedback", icon: ThumbsUp },
 ];
 
-const PlaybackRail = ({ mode, setMode, rounds, introRoundKey, chooseIntroRound, isReviewing, showAnswer, onRevealAnswer, showFunFact, onShowFunFact, hasRevealExtra, hasFunFact, timeRemaining, timerSeconds, startTimer, resetTimer, currentIndex, total, onOpenDrawer, flaggedTeamCount, currentQuestionLabel }) => {
+const PlaybackRail = ({ mode, setMode, rounds, introRoundKey, chooseIntroRound, isReviewing, showAnswer, onRevealAnswer, showFunFact, onShowFunFact, hasRevealExtra, hasFunFact, timeRemaining, timerSeconds, startTimer, resetTimer, hostIndex, total, onPrev, onNext, onOpenDrawer, flaggedTeamCount, currentQuestionLabel }) => {
   const nonQuestionMode = mode === "bonus_pause" || mode === "winners" || mode === "feedback";
   const sceneActive = (key) => mode === key;
   const sceneButtonClass = (active) => `h-14 rounded-lg text-[11px] font-bold flex flex-col items-center justify-center gap-1 transition ${active ? "text-zinc-950" : "border border-white/10 text-zinc-300 hover:bg-white/5 hover:text-white"}`;
@@ -1374,10 +1374,12 @@ const PlaybackRail = ({ mode, setMode, rounds, introRoundKey, chooseIntroRound, 
           </button>)}
         </div>
         <div className="space-y-2.5 p-3.5">
-          <div className="flex items-center justify-center gap-3 py-1">
+          <div className="flex items-center justify-center gap-4 py-1">
+            <button type="button" onClick={onPrev} disabled={hostIndex <= 0} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-zinc-950 text-zinc-300 hover:border-[#71E0DC]/40 hover:text-[#71E0DC] disabled:opacity-30" aria-label="Previous question"><ChevronLeft size={17} /></button>
             <div className="flex h-16 w-16 items-center justify-center rounded-full border-4 border-[#71E0DC]/25" style={{ borderTopColor: "var(--host-primary)" }}>
               <span className="font-mono text-sm font-bold text-white">{timeRemaining !== null ? `${timeRemaining}s` : `${Number(timerSeconds) || 0}s`}</span>
             </div>
+            <button type="button" onClick={onNext} disabled={hostIndex >= total - 1} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-zinc-950 text-zinc-300 hover:border-[#71E0DC]/40 hover:text-[#71E0DC] disabled:opacity-30" aria-label="Next question"><ChevronRight size={17} /></button>
           </div>
           <div className="grid grid-cols-2 gap-2">
             <Button size="sm" onClick={startTimer} disabled={isReviewing} className="h-10 gradient-btn disabled:opacity-40"><Play size={15} className="mr-1.5" />Start Timer</Button>
