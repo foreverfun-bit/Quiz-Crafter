@@ -1279,13 +1279,13 @@ const HostSession = () => {
     {!focusMode && <TopBar navigate={navigate} id={id} sessionName={sessionName} venueName={session?.venue_name || session?.venueName || session?.venue || ""} questions={questions} players={players} currentIndex={currentIndex} liveStatus={liveStatus} openPresentation={openPresentation} setFocusMode={setFocusMode} progress={progress} branding={branding} customizeOpen={customizeOpen} setCustomizeOpen={setCustomizeOpen} endSession={endSession} collapsed={topbarCollapsed} onToggleCollapse={() => setTopbarCollapsed((value) => !value)} />}
     <div className={`max-w-[1680px] mx-auto p-4 lg:p-8 ${focusMode ? "min-h-screen flex flex-col" : ""}`}>
       {focusMode && <div className="flex justify-between items-center mb-4"><Badge className="bg-zinc-800 text-zinc-300">{currentRound?.name || "Round"} - {currentIndex + 1} / {questions.length}</Badge><Button variant="outline" onClick={() => setFocusMode(false)} className="border-white/10 text-zinc-300 hover:text-white">Exit Focus</Button></div>}
-      {!focusMode && <QuestionNavStrip questions={questions} rounds={rounds} currentIndex={currentIndex} hostIndex={hostIndex} isReviewing={isReviewing} currentRound={currentRound} onSelectPill={reviewQuestion} onPrev={() => reviewQuestion(hostIndex - 1)} onNext={() => reviewQuestion(hostIndex + 1)} onBackToLive={returnToLiveQuestion} onGoLive={releaseReviewedQuestion} />}
+      {!focusMode && <QuestionNavStrip questions={questions} rounds={rounds} currentIndex={currentIndex} hostIndex={hostIndex} isReviewing={isReviewing} currentRound={currentRound} onSelectPill={reviewQuestion} onPrev={() => reviewQuestion(hostIndex - 1)} onNext={() => reviewQuestion(hostIndex + 1)} onBackToLive={returnToLiveQuestion} onGoLive={releaseReviewedQuestion} onSelectRoundIntro={(roundKey) => releaseMode("categories", roundKey)} />}
       <div className={focusMode ? "flex-1 flex items-center" : "grid grid-cols-1 2xl:grid-cols-[minmax(0,1fr)_360px] gap-7"}>
         <main className="w-full">
           {!focusMode && customizeOpen && <HostCustomizePanel branding={branding} defaultBranding={readDefaultBranding()} onSave={saveBranding} onSaveDefault={saveBrandingAsDefault} onUseDefault={useDefaultBranding} onClose={() => setCustomizeOpen(false)} />}
           {presentMode === "categories" && !isReviewing ? <RoundIntroStage round={introRound} gameStarted={gameStarted} onStartIntro={startTriviaIntro} onStartQuestion={startIntroQuestion} /> : presentMode === "bonus_pause" && !isReviewing ? <BonusPauseStage round={rounds.find((round) => pendingBonusIndex >= round.startIndex && pendingBonusIndex < round.startIndex + round.questions.length)} leaderboard={leaderboard} /> : presentMode === "winners" && !isReviewing ? <WinnersStage leaderboard={leaderboard} /> : presentMode === "feedback" && !isReviewing ? <FeedbackStage ideas={playerIdeas} /> : <QuestionStage question={displayedQuestion} index={hostIndex} total={questions.length} showAnswer={isReviewing ? true : showAnswer} showFunFact={isReviewing ? false : showFunFact} focusMode={focusMode} pointsPerQuestion={viewPointsPerQuestion} timerSeconds={viewTimerSeconds} timeRemaining={isReviewing ? null : timeRemaining} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} wagerTiming={viewWagerTiming} onUpdateSettings={isReviewing ? () => {} : updateQuestionSettings} branding={branding} players={activePlayers} answers={activeCurrentAnswers} activity={currentActivity} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} setMode={releaseMode} isReviewing={isReviewing} />}
         </main>
-        {!focusMode && <PlaybackRail mode={presentMode} setMode={releaseMode} rounds={rounds} introRoundKey={selectedIntroKey} chooseIntroRound={chooseIntroRound} isReviewing={isReviewing} showAnswer={isReviewing ? true : showAnswer} onRevealAnswer={toggleAnswer} showFunFact={isReviewing ? false : showFunFact} onShowFunFact={toggleFunFact} hasRevealExtra={hasRevealExtra} hasFunFact={Boolean(displayedQuestion.funFact)} timeRemaining={isReviewing ? null : timeRemaining} timerSeconds={viewTimerSeconds} startTimer={startTimer} resetTimer={isReviewing ? () => {} : resetTimer} hostIndex={hostIndex} total={questions.length} onPrev={() => reviewQuestion(hostIndex - 1)} onNext={() => reviewQuestion(hostIndex + 1)} onOpenDrawer={setActiveDrawer} flaggedTeamCount={flaggedTeamCount} currentQuestionLabel={`Q${hostIndex + 1}`} />}
+        {!focusMode && <PlaybackRail mode={presentMode} setMode={releaseMode} rounds={rounds} introRoundKey={selectedIntroKey} chooseIntroRound={chooseIntroRound} isReviewing={isReviewing} showAnswer={isReviewing ? true : showAnswer} onRevealAnswer={toggleAnswer} showFunFact={isReviewing ? false : showFunFact} onShowFunFact={toggleFunFact} hasRevealExtra={hasRevealExtra} hasFunFact={Boolean(displayedQuestion.funFact)} timeRemaining={isReviewing ? null : timeRemaining} timerSeconds={viewTimerSeconds} startTimer={startTimer} resetTimer={isReviewing ? () => {} : resetTimer} currentIndex={currentIndex} total={questions.length} onPrev={() => goToQuestion(currentIndex - 1, { startTimer: false })} onNext={() => goToQuestion(currentIndex + 1, { startTimer: true })} onOpenDrawer={setActiveDrawer} flaggedTeamCount={flaggedTeamCount} currentQuestionLabel={`Q${currentIndex + 1}`} />}
       </div>
     </div>
     {scoreModal && <ScoreAdjustModal modal={scoreModal} setModal={setScoreModal} adjustScore={adjustScore} setScore={setScore} />}
@@ -1301,7 +1301,7 @@ const HostSession = () => {
   </div>;
 };
 
-const QuestionNavStrip = ({ questions, rounds, currentIndex, hostIndex, isReviewing, currentRound, onSelectPill, onPrev, onNext, onBackToLive, onGoLive }) => {
+const QuestionNavStrip = ({ questions, rounds, currentIndex, hostIndex, isReviewing, currentRound, onSelectPill, onPrev, onNext, onBackToLive, onGoLive, onSelectRoundIntro }) => {
   const activeRound = currentRound || rounds[0];
   const jumpToRound = (roundKey) => {
     const round = rounds.find((item) => item.key === roundKey);
@@ -1313,23 +1313,19 @@ const QuestionNavStrip = ({ questions, rounds, currentIndex, hostIndex, isReview
         {rounds.map((round) => <option key={round.key} value={round.key}>{round.name}</option>)}
       </select>
       <button type="button" onClick={onPrev} disabled={hostIndex === 0} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-white/10 bg-zinc-950 text-zinc-300 hover:border-[#71E0DC]/40 hover:text-[#71E0DC] disabled:opacity-30" aria-label="Previous question"><ChevronLeft size={16} /></button>
-      <div className="flex min-w-0 flex-1 items-center gap-3 overflow-x-auto py-0.5">
-        {rounds.map((round) => (
-          <div key={round.key} className="flex shrink-0 items-center gap-1.5 rounded-lg border border-white/5 bg-white/[0.02] px-1.5 py-1">
-            <span title={round.name} className="shrink-0 max-w-[9ch] truncate pr-1 text-[10px] font-bold uppercase tracking-wide text-zinc-600">{round.name}</span>
-            {round.questions.map((question, localIndex) => {
-              const index = round.startIndex + localIndex;
-              const isLive = index === currentIndex;
-              const isSelected = index === hostIndex;
-              const isDone = index < currentIndex;
-              return <button key={question.id} type="button" onClick={() => onSelectPill(index)} title={question.questionText} className={`relative flex h-8 min-w-8 shrink-0 items-center justify-center rounded-md px-2 text-xs font-bold transition ${isSelected ? "bg-[#71E0DC]/15 text-[#71E0DC] ring-1 ring-[#71E0DC]/50" : isDone ? "bg-zinc-900 text-zinc-400" : "bg-zinc-900/60 text-zinc-500 hover:text-zinc-300"}`}>
-                {index + 1}
-                {isBonusQuestion(question) && <span className="absolute -top-1.5 left-0.5 text-[9px] text-amber-300">&#9733;</span>}
-                {isLive && <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-rose-400 ring-2 ring-zinc-950 animate-pulse" />}
-              </button>;
-            })}
-          </div>
-        ))}
+      <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto py-0.5">
+        <button type="button" onClick={() => onSelectRoundIntro(activeRound?.key)} title={`Show ${activeRound?.name || "round"} intro`} className="shrink-0 max-w-[12ch] truncate rounded-md border border-white/10 bg-zinc-900/60 px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-wide text-zinc-400 hover:border-[#71E0DC]/40 hover:text-[#71E0DC]">{activeRound?.name || "Round"}</button>
+        {(activeRound?.questions || []).map((question, localIndex) => {
+          const index = activeRound.startIndex + localIndex;
+          const isLive = index === currentIndex;
+          const isSelected = index === hostIndex;
+          const isDone = index < currentIndex;
+          return <button key={question.id} type="button" onClick={() => onSelectPill(index)} title={question.questionText} className={`relative flex h-8 min-w-8 shrink-0 items-center justify-center rounded-md px-2 text-xs font-bold transition ${isSelected ? "bg-[#71E0DC]/15 text-[#71E0DC] ring-1 ring-[#71E0DC]/50" : isDone ? "bg-zinc-900 text-zinc-400" : "bg-zinc-900/60 text-zinc-500 hover:text-zinc-300"}`}>
+            {index + 1}
+            {isBonusQuestion(question) && <span className="absolute -top-1.5 left-0.5 text-[9px] text-amber-300">&#9733;</span>}
+            {isLive && <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-rose-400 ring-2 ring-zinc-950 animate-pulse" />}
+          </button>;
+        })}
       </div>
       <button type="button" onClick={onNext} disabled={hostIndex >= questions.length - 1} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-white/10 bg-zinc-950 text-zinc-300 hover:border-[#71E0DC]/40 hover:text-[#71E0DC] disabled:opacity-30" aria-label="Next question"><ChevronRight size={16} /></button>
       <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-rose-400/30 bg-rose-400/10 px-2.5 py-1.5 text-xs font-bold text-rose-200">
@@ -1355,7 +1351,7 @@ const PLAYBACK_TOOLS = [
   { key: "feedback", label: "Feedback", icon: ThumbsUp },
 ];
 
-const PlaybackRail = ({ mode, setMode, rounds, introRoundKey, chooseIntroRound, isReviewing, showAnswer, onRevealAnswer, showFunFact, onShowFunFact, hasRevealExtra, hasFunFact, timeRemaining, timerSeconds, startTimer, resetTimer, hostIndex, total, onPrev, onNext, onOpenDrawer, flaggedTeamCount, currentQuestionLabel }) => {
+const PlaybackRail = ({ mode, setMode, rounds, introRoundKey, chooseIntroRound, isReviewing, showAnswer, onRevealAnswer, showFunFact, onShowFunFact, hasRevealExtra, hasFunFact, timeRemaining, timerSeconds, startTimer, resetTimer, currentIndex, total, onPrev, onNext, onOpenDrawer, flaggedTeamCount, currentQuestionLabel }) => {
   const nonQuestionMode = mode === "bonus_pause" || mode === "winners" || mode === "feedback";
   const sceneActive = (key) => mode === key;
   const sceneButtonClass = (active) => `h-14 rounded-lg text-[11px] font-bold flex flex-col items-center justify-center gap-1 transition ${active ? "text-zinc-950" : "border border-white/10 text-zinc-300 hover:bg-white/5 hover:text-white"}`;
@@ -1376,11 +1372,11 @@ const PlaybackRail = ({ mode, setMode, rounds, introRoundKey, chooseIntroRound, 
         </div>
         <div className="space-y-2.5 p-3.5">
           <div className="flex items-center justify-center gap-4 py-1">
-            <button type="button" onClick={onPrev} disabled={hostIndex <= 0} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-zinc-950 text-zinc-300 hover:border-[#71E0DC]/40 hover:text-[#71E0DC] disabled:opacity-30" aria-label="Previous question"><ChevronLeft size={17} /></button>
+            <button type="button" onClick={onPrev} disabled={isReviewing || currentIndex <= 0} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-zinc-950 text-zinc-300 hover:border-[#71E0DC]/40 hover:text-[#71E0DC] disabled:opacity-30" aria-label="Previous question"><ChevronLeft size={17} /></button>
             <div className="flex h-16 w-16 items-center justify-center rounded-full border-4 border-[#71E0DC]/25" style={{ borderTopColor: "var(--host-primary)" }}>
               <span className="font-mono text-sm font-bold text-white">{timeRemaining !== null ? `${timeRemaining}s` : `${Number(timerSeconds) || 0}s`}</span>
             </div>
-            <button type="button" onClick={onNext} disabled={hostIndex >= total - 1} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-zinc-950 text-zinc-300 hover:border-[#71E0DC]/40 hover:text-[#71E0DC] disabled:opacity-30" aria-label="Next question"><ChevronRight size={17} /></button>
+            <button type="button" onClick={onNext} disabled={isReviewing || currentIndex >= total - 1} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-zinc-950 text-zinc-300 hover:border-[#71E0DC]/40 hover:text-[#71E0DC] disabled:opacity-30" aria-label="Next question"><ChevronRight size={17} /></button>
           </div>
           <div className="grid grid-cols-2 gap-2">
             <Button size="sm" onClick={startTimer} disabled={isReviewing} className="h-10 gradient-btn disabled:opacity-40"><Play size={15} className="mr-1.5" />Start Timer</Button>
