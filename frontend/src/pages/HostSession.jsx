@@ -353,10 +353,7 @@ const persistLiveIdea = (sessionId, payload) => {
 
 const getDefaultPoints = (question) => POINTS_BY_TYPE[question?.type] || 100;
 const getQuestionPoints = (question) => Number(question?.points ?? 0) > 0 ? Number(question.points) : getDefaultPoints(question);
-const isBonusQuestion = (question) => {
-  const text = [question?.category, question?.roundName, question?.round_name, question?.tag, question?.label].filter(Boolean).join(" ");
-  return Boolean(question?.is_bonus || question?.bonus || /\bbonus\b/i.test(text));
-};
+const isBonusQuestion = (question) => String(question?.category || "").trim().toUpperCase() === "BONUS";
 const answerKey = (answer) => `${answer.playerId}-${answer.questionIndex}`;
 const normalizeAnswerText = (value) => String(value || "").trim().toLowerCase().replace(/[’']/g, "'").replace(/[^a-z0-9]+/g, " ").trim();
 const isCorrectSubmission = (answer, question) => Boolean(question?.answer) && normalizeAnswerText(answer?.answer) === normalizeAnswerText(question.answer);

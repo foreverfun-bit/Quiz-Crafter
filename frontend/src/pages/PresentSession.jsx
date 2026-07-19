@@ -187,7 +187,7 @@ const flattenSession = (session) => {
         timerSeconds: Number(question.timer_seconds ?? question.time_limit ?? 30) || 30,
         wagerLimit: Number(question.wager_limit ?? question.free_wager_limit ?? 0) || 0,
         wagerTiming: normalizeWagerTiming(question.wager_timing || question.wagerTiming),
-        isBonus: Boolean(question.is_bonus || question.bonus || /\bbonus\b/i.test([question.category, getRoundName(question, roundOrder)].filter(Boolean).join(" "))),
+        isBonus: String(question.category || "").trim().toUpperCase() === "BONUS",
       };
     });
   });
