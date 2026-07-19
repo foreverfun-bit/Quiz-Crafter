@@ -2,6 +2,7 @@
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { uploadQuestionMedia } from "../lib/mediaUpload";
+import { ensureLiveGame, fetchLivePlayers, subscribeLivePlayers, upsertLivePlayer, setLivePlayerScore, removeLivePlayer } from "../lib/liveGame";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent } from "../components/ui/card";
@@ -360,11 +361,6 @@ const answerKey = (answer) => `${answer.playerId}-${answer.questionIndex}`;
 const normalizeAnswerText = (value) => String(value || "").trim().toLowerCase().replace(/[’']/g, "'").replace(/[^a-z0-9]+/g, " ").trim();
 const isCorrectSubmission = (answer, question) => Boolean(question?.answer) && normalizeAnswerText(answer?.answer) === normalizeAnswerText(question.answer);
 const serializeRoundIntro = (round) => round ? { key: round.key, name: round.name, description: round.description || "", categories: [...new Set((round.questions || []).map((question) => question.category).filter(Boolean))], questionCount: round.questions?.length || 0, startIndex: round.startIndex } : null;
-const presentationLeaderboard = (leaderboard, mode) => {
-  if (!["leaderboard", "winners", "bonus_pause"].includes(mode)) return [];
-  const limit = mode === "winners" ? 3 : 12;
-  return [...leaderboard].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)).slice(0, limit).map((team) => ({ id: team.id, name: team.name, score: Number(team.score || 0) }));
-};
 const getTeamScore = (leaderboard, teamId) => Number(leaderboard.find((team) => team.id === teamId)?.score || 0);
 const isLateSubmission = (answer) => answer?.secondsRemainingAtSubmit !== null && answer?.secondsRemainingAtSubmit !== undefined && Number(answer.secondsRemainingAtSubmit) <= 5;
 const hasSubmittedWager = (answer) => Boolean(answer?.wagerMode) && (answer?.wagerSubmitted === true || answer?.wagerTiming !== "after_answer" || Number(answer?.wagerAmount || 0) > 0);
@@ -425,6 +421,7 @@ const HostSession = () => {
   const liveStateSaveRef = useRef(0);
   const liveStateSaveKeyRef = useRef("");
   const [session, setSession] = useState(null);
+  const [liveGameId, setLiveGameId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [reviewIndex, setReviewIndex] = useState(null);
@@ -490,12 +487,37 @@ const HostSession = () => {
   }, [id, navigate]);
 
   useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    ensureLiveGame(id, { sessionName: session?.name || session?.session_name || "Trivia Night" })
+      .then((game) => { if (!cancelled) setLiveGameId(game.id); })
+      .catch((error) => console.warn("Live game setup unavailable:", error));
+    return () => { cancelled = true; };
+  }, [id, session]);
+
+  useEffect(() => {
+    if (!liveGameId) return undefined;
+    let cancelled = false;
+    fetchLivePlayers(liveGameId)
+      .then((rows) => { if (!cancelled) setLeaderboard(rows.map((row) => ({ id: row.id, name: row.name, score: Number(row.score || 0) }))); })
+      .catch((error) => console.warn("Live roster load unavailable:", error));
+    const unsubscribe = subscribeLivePlayers(liveGameId, ({ eventType, new: newRow, old: oldRow }) => {
+      setLeaderboard((current) => {
+        if (eventType === "DELETE") return current.filter((team) => team.id !== oldRow.id);
+        const nextTeam = { id: newRow.id, name: newRow.name, score: Number(newRow.score || 0) };
+        const exists = current.some((team) => team.id === nextTeam.id);
+        return exists ? current.map((team) => (team.id === nextTeam.id ? nextTeam : team)) : [...current, nextTeam];
+      });
+    });
+    return () => { cancelled = true; unsubscribe(); };
+  }, [liveGameId]);
+
+  useEffect(() => {
     const loadProfileHostState = async () => {
       try {
         const state = await loadHostToolsSessionState(id);
         const snapshot = state.results && typeof state.results === "object" ? { ...state, ...state.results } : state;
         if (Array.isArray(snapshot.players)) setPlayers(snapshot.players);
-        if (Array.isArray(snapshot.leaderboard)) setLeaderboard(snapshot.leaderboard);
         if (Array.isArray(snapshot.answers)) setAnswers(snapshot.answers);
         if (Array.isArray(snapshot.activity)) setPlayerActivity(snapshot.activity);
         if (Array.isArray(snapshot.feedback)) setFeedback(snapshot.feedback);
@@ -550,7 +572,6 @@ const HostSession = () => {
           saveHostToolsSessionState(id, { players: next }).catch((error) => console.warn("Players profile save unavailable:", error));
           return next;
         });
-        setLeaderboard((teams) => teams.some((team) => team.id === payload.playerId) ? teams.map((team) => team.id === payload.playerId ? { ...team, name: payload.playerName || team.name || "Team" } : team) : [...teams, { id: payload.playerId, name: payload.playerName || "Team", score: 0 }]);
       })
       .on("broadcast", { event: "player_rename" }, ({ payload }) => {
         if (!payload?.playerId || !payload.playerName) return;
@@ -559,7 +580,6 @@ const HostSession = () => {
           saveHostToolsSessionState(id, { players: next }).catch((error) => console.warn("Players profile save unavailable:", error));
           return next;
         });
-        setLeaderboard((teams) => teams.map((team) => team.id === payload.playerId ? { ...team, name: payload.playerName } : team));
         setAnswers((current) => {
           const next = current.map((answer) => answer.playerId === payload.playerId ? { ...answer, playerName: payload.playerName } : answer);
           writeStoredList(hostToolsStorageKey(id, "answers"), next);
@@ -710,9 +730,6 @@ const HostSession = () => {
       showAnswer: showAnswerValue,
       revealedAnswer: showAnswerValue ? question.answer : "",
       showFunFact: showFunFactValue,
-      leaderboard: presentationLeaderboard(leaderboard, mode),
-      playerScores: [...leaderboard].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)).map((team) => ({ id: team.id, name: team.name, score: Number(team.score || 0) })),
-      playerCount: players.length,
       pointsPerQuestion: activePoints,
       wagerMode: wagerModeValue,
       wagerLimit: activeWagerLimit,
@@ -762,7 +779,7 @@ const HostSession = () => {
     if (state) persistLiveState(state);
   // The live snapshot helpers intentionally read the latest host state in this render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, session, sessionName, questions.length, liveDisplayedQuestion, currentIndex, pendingBonusIndex, rounds, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, leaderboard, players.length, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerSeconds, timerEndAt, acceptingAnswers, branding]);
+  }, [id, session, sessionName, questions.length, liveDisplayedQuestion, currentIndex, pendingBonusIndex, rounds, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerSeconds, timerEndAt, acceptingAnswers, branding]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -1043,17 +1060,27 @@ const HostSession = () => {
   const addTeam = () => {
     const name = teamName.trim();
     if (!name) return;
-    setLeaderboard((teams) => [...teams, { id: `${Date.now()}-${name}`, name, score: Number(teamScore || 0) }]);
+    const nextTeam = { id: crypto.randomUUID(), name, score: Number(teamScore || 0) };
+    setLeaderboard((teams) => [...teams, nextTeam]);
+    if (liveGameId) upsertLivePlayer(liveGameId, nextTeam).catch((error) => console.warn("Live roster save unavailable:", error));
     setTeamName("");
     setTeamScore("");
     releaseMode("leaderboard");
   };
 
-  const adjustScore = (teamId, amount) => setLeaderboard((teams) => teams.map((team) => team.id === teamId ? { ...team, score: Number(team.score || 0) + amount } : team));
-  const setScore = (teamId, score) => setLeaderboard((teams) => teams.map((team) => team.id === teamId ? { ...team, score: Number(score || 0) } : team));
+  const adjustScore = (teamId, amount) => {
+    const nextScore = Number((leaderboard.find((team) => team.id === teamId)?.score) || 0) + amount;
+    setLeaderboard((teams) => teams.map((team) => team.id === teamId ? { ...team, score: nextScore } : team));
+    setLivePlayerScore(teamId, nextScore).catch((error) => console.warn("Live roster save unavailable:", error));
+  };
+  const setScore = (teamId, score) => {
+    setLeaderboard((teams) => teams.map((team) => team.id === teamId ? { ...team, score: Number(score || 0) } : team));
+    setLivePlayerScore(teamId, score).catch((error) => console.warn("Live roster save unavailable:", error));
+  };
   const removeTeam = (teamId) => {
     setLeaderboard((teams) => teams.filter((team) => team.id !== teamId));
     setPlayers((current) => current.filter((player) => player.id !== teamId));
+    removeLivePlayer(teamId).catch((error) => console.warn("Live roster removal unavailable:", error));
   };
   const openScoreModal = (teamId, context = {}) => {
     const team = leaderboard.find((item) => item.id === teamId) || players.find((item) => item.id === teamId);

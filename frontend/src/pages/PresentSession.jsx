@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import { QRCodeCanvas } from "qrcode.react";
 import { supabase } from "../lib/supabase";
 import { mergeNewerLiveState } from "../lib/liveState";
+import { findLiveGame, fetchLivePlayers, subscribeLivePlayers } from "../lib/liveGame";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent } from "../components/ui/card";
 import {
@@ -241,7 +242,42 @@ const PresentSession = () => {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [presentState, setPresentState] = useState(() => readPresentState(id) || {});
+  const [liveGameId, setLiveGameId] = useState(null);
+  const [livePlayers, setLivePlayers] = useState([]);
   const hasLiveStateRef = useRef(false);
+
+  useEffect(() => {
+    if (liveGameId) return undefined;
+    let cancelled = false;
+    const lookup = async () => {
+      try {
+        const game = await findLiveGame(id);
+        if (game && !cancelled) setLiveGameId(game.id);
+      } catch (error) {
+        console.warn("Live game lookup unavailable:", error);
+      }
+    };
+    lookup();
+    const interval = window.setInterval(lookup, 2000);
+    return () => { cancelled = true; window.clearInterval(interval); };
+  }, [id, liveGameId]);
+
+  useEffect(() => {
+    if (!liveGameId) return undefined;
+    let cancelled = false;
+    fetchLivePlayers(liveGameId)
+      .then((rows) => { if (!cancelled) setLivePlayers(rows.map((row) => ({ id: row.id, name: row.name, score: Number(row.score || 0) }))); })
+      .catch((error) => console.warn("Live roster load unavailable:", error));
+    const unsubscribe = subscribeLivePlayers(liveGameId, ({ eventType, new: newRow, old: oldRow }) => {
+      setLivePlayers((current) => {
+        if (eventType === "DELETE") return current.filter((team) => team.id !== oldRow.id);
+        const nextTeam = { id: newRow.id, name: newRow.name, score: Number(newRow.score || 0) };
+        const exists = current.some((team) => team.id === nextTeam.id);
+        return exists ? current.map((team) => (team.id === nextTeam.id ? nextTeam : team)) : [...current, nextTeam];
+      });
+    });
+    return () => { cancelled = true; unsubscribe(); };
+  }, [liveGameId]);
 
   useEffect(() => {
     const loadSession = async () => {
@@ -320,7 +356,9 @@ const PresentSession = () => {
   const displayRound = mode === "categories" ? introRound : currentRound;
   const sessionName = presentState.sessionName || session?.name || session?.session_name || "Trivia Session";
   const joinUrl = presentState.joinUrl || `${getPublicOrigin()}/join?session=${id}`;
-  const playerCount = Number.isFinite(Number(presentState.playerCount)) ? Number(presentState.playerCount) : (presentState.players || []).length;
+  const playerCount = livePlayers.length;
+  const sortedLeaderboard = useMemo(() => [...livePlayers].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)), [livePlayers]);
+  const presentedLeaderboard = sortedLeaderboard.slice(0, mode === "winners" ? 3 : 12);
   const showLobby = mode === "qr" || !hasPresentationStarted(presentState, currentIndex);
 
   if (loading) {
@@ -362,10 +400,10 @@ const PresentSession = () => {
 
         <main className="min-h-0 flex-1 flex items-center justify-center overflow-hidden py-3">
           {mode === "categories" && <CategoriesView round={introRound} rounds={rounds} />}
-          {mode === "leaderboard" && <LeaderboardView leaderboard={presentState.leaderboard || []} />}
-          {mode === "winners" && <WinnersView leaderboard={presentState.leaderboard || []} sessionName={sessionName} />}
+          {mode === "leaderboard" && <LeaderboardView leaderboard={presentedLeaderboard} />}
+          {mode === "winners" && <WinnersView leaderboard={presentedLeaderboard} sessionName={sessionName} />}
           {mode === "feedback" && <FeedbackView />}
-          {mode === "bonus_pause" && <BonusPauseView round={presentState.pendingBonusRound || currentRound} leaderboard={presentState.leaderboard || []} />}
+          {mode === "bonus_pause" && <BonusPauseView round={presentState.pendingBonusRound || currentRound} leaderboard={presentedLeaderboard} />}
           {mode === "qr" && <LobbyView sessionName={sessionName} joinUrl={joinUrl} playerCount={playerCount} compact={false} />}
           {mode !== "qr" && mode !== "categories" && mode !== "leaderboard" && mode !== "winners" && mode !== "feedback" && mode !== "bonus_pause" && (
             <QuestionView question={currentQuestion} index={currentIndex} total={questions.length} showAnswer={presentState.showAnswer} showFunFact={presentState.showFunFact} />
