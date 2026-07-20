@@ -814,28 +814,36 @@ const HostSession = () => {
       setTimerEndAt(null);
       setPresentMode("bonus_pause");
       setGameStarted(true);
+      // Broadcast this transition immediately instead of waiting on the
+      // reactive snapshot effect -- the host can click straight through to
+      // the bonus question next, and that call's own broadcast shouldn't be
+      // racing a still-pending one for this state.
+      const pauseState = buildLiveState({
+        question: currentQuestion,
+        index: currentIndex,
+        mode: "bonus_pause",
+        pendingIndex: index,
+        showAnswerValue: false,
+        showFunFactValue: false,
+        timerEndAtValue: null,
+        gameStartedValue: true,
+      });
+      if (pauseState) persistLiveState(pauseState, true);
       return;
     }
     // Reminders, not automation: the host still decides. The bonus_pause
-    // flow above already forces a stop *before* a bonus question; nothing
-    // forces a stop *after* one, and nothing calls out an unshown fun fact,
-    // so those two are worth a nudge here.
-    if (index !== currentIndex && currentQuestion) {
+    // flow above already forces a stop *before* a bonus question, and the
+    // leaderboard nudge for *after* one fires when the bonus answer is
+    // revealed (see toggleAnswer) so it lands before the host moves on, not
+    // after. An unshown fun fact can only be known in hindsight, once the
+    // host has actually left the question behind.
+    if (index !== currentIndex && currentQuestion && currentQuestion.funFact && !funFactShown) {
       const missedIndex = currentIndex;
-      if (currentQuestion.funFact && !funFactShown) {
-        pushNudge({
-          message: `You didn't show the fun fact for Q${missedIndex + 1} before moving on.`,
-          actionLabel: "Review That Question",
-          onAction: () => reviewQuestion(missedIndex),
-        });
-      }
-      if (isBonusQuestion(currentQuestion)) {
-        pushNudge({
-          message: `Q${missedIndex + 1} was a bonus question — show the leaderboard before continuing?`,
-          actionLabel: "Show Leaderboard",
-          onAction: () => releaseMode("leaderboard"),
-        });
-      }
+      pushNudge({
+        message: `You didn't show the fun fact for Q${missedIndex + 1} before moving on.`,
+        actionLabel: "Review That Question",
+        onAction: () => reviewQuestion(missedIndex),
+      });
     }
     setReviewIndex(null);
     setPointsPerQuestion(getQuestionPoints(targetQuestion));
@@ -892,7 +900,20 @@ const HostSession = () => {
 
   const toggleAnswer = () => {
     if (isReviewing) return;
-    setShowAnswer((value) => !value);
+    setShowAnswer((value) => {
+      const next = !value;
+      // Nudge here, not after the host has already moved on -- revealing the
+      // bonus answer is the natural moment to remind them, while they're
+      // still on the question instead of after players have moved ahead.
+      if (next && isBonusQuestion(liveDisplayedQuestion)) {
+        pushNudge({
+          message: "This is a bonus question — show the leaderboard once teams have answered?",
+          actionLabel: "Show Leaderboard",
+          onAction: () => releaseMode("leaderboard"),
+        });
+      }
+      return next;
+    });
     setGameStarted(true);
     setPresentMode("question");
   };
