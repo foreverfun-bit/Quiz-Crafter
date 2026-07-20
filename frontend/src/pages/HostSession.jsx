@@ -1055,12 +1055,16 @@ const HostSession = () => {
     writeStoredList(hostToolsStorageKey(id, "disputes"), disputeNotes);
     setGameStarted(true);
     setPresentMode("winners");
-    toast.success("Hosted session ended");
     saveHostToolsSessionState(id, { endedAt, currentIndex, presentMode: "winners" }).catch((error) => console.warn("End session profile marker unavailable:", error));
     hostedResultsRef.current = { ...results, liveState: liveStateRef.current, liveStateUpdatedAt: new Date().toISOString() };
-    supabase.from("sessions").update({ hosted_at: endedAt, hosted_results: hostedResultsRef.current }).eq("id", id).then(({ error }) => {
-      if (error) console.warn("End session database backup unavailable:", error);
-    }).catch((error) => console.warn("End session database backup unavailable:", error));
+    const { error } = await supabase.from("sessions").update({ hosted_at: endedAt, hosted_results: hostedResultsRef.current, is_past: true }).eq("id", id);
+    if (error) {
+      console.error("End session database save failed:", error);
+      toast.error("Session ended, but saving the results failed. Results are kept on this device -- try again before closing this tab.");
+    } else {
+      setSession((current) => ({ ...current, is_past: true, hosted_at: endedAt, hosted_results: hostedResultsRef.current }));
+      toast.success("Hosted session ended and results saved");
+    }
   };
   const openPresentation = () => window.open(`/present-session/${id}`, "_blank", "noopener,noreferrer");
   const copyJoinLink = async () => {
