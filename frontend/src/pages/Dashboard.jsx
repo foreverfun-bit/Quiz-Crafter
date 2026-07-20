@@ -413,6 +413,10 @@ const Dashboard = () => {
       </div>
 
       <div className="mb-5">
+        <RecentSessionsCard recentSessions={recentSessions} onOpen={(session) => navigate(`/session/${session.id}`)} onHost={(session) => navigate(`/host-session/${session.id}`)} onAll={() => navigate("/past-sessions")} onBuild={handleContinueBuild} />
+      </div>
+
+      <div className="mb-5">
         <LikedCategoriesCard categories={likedCategories} onCategories={() => navigate("/categories")} />
       </div>
 
@@ -550,7 +554,6 @@ const AssistantBriefing = ({ firstName, nextShow, savedBuild, progress, nextPrep
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
           <Button className="gradient-btn" onClick={onBuild}>Continue Building</Button>
-          <Button variant="outline" onClick={onBuild} className="border-white/20 text-white hover:bg-zinc-800">Finish with AI</Button>
           <Button variant="outline" onClick={onImport} className="border-white/20 text-white hover:bg-zinc-800">Import Questions</Button>
           <Button variant="outline" onClick={onNewBuild} className="border-white/20 text-white hover:bg-zinc-800">Start New Session</Button>
           {canHost && <Button variant="outline" onClick={onHostSession} className="border-[#71E0DC]/30 text-[#71E0DC] hover:bg-[#71E0DC]/10">Open Host Mode</Button>}
