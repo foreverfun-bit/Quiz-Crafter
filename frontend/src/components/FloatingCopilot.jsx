@@ -99,6 +99,16 @@ const isPreviewRequest = (text) => {
   const questionRef = /\b(question|q)\s*#?\s*\d+\b/.test(lower) || /\b(replace|rewrite|make|improve)\s*#?\s*\d+\b/.test(lower);
   return questionRef && /\b(replace|rewrite|improve|make harder|make easier|harder|easier|fun fact)\b/.test(lower);
 };
+// Mirrors classifyBuildIntent() in BuildSession.jsx -- requests that engine already knows
+// how to turn into real draft candidates in the active build, not just a chat reply.
+const isBuildDraftRequest = (text) => {
+  const lower = clean(text).toLowerCase();
+  if (!lower) return false;
+  if (/\bfull session|finish (?:the )?(?:session|game)|complete (?:the )?(?:session|game)\b/.test(lower)) return true;
+  if (/\bbuild\s+(?:this\s+|the\s+)?round|fill\s+(?:this\s+|the\s+)?round|finish\s+(?:this\s+|the\s+)?round\b/.test(lower)) return true;
+  if (/\b(add|generate|give me|make|draft)\b/.test(lower) && /\b(question|questions|candidate|candidates)\b/.test(lower)) return true;
+  return false;
+};
 const isConfirmedApplicationAction = (text, state = {}) => {
   const lower = clean(text).toLowerCase();
   if (!lower) return false;
@@ -174,7 +184,7 @@ const routeForIntent = (text) => {
   if (/\bduplicate\b/.test(lower) && /\bsession\b/.test(lower)) return "/past-sessions";
   if (/\b(venue|template|branding|style memory|settings|manage)\b/.test(lower)) return "/manage";
   if (/\b(host|live|run trivia|answers|players)\b/.test(lower)) return "/host-tools";
-  if (isPreviewRequest(lower) || isConfirmedApplicationAction(lower)) return "/build";
+  if (isPreviewRequest(lower) || isConfirmedApplicationAction(lower) || isBuildDraftRequest(lower)) return "/build";
   return "";
 };
 
@@ -284,6 +294,7 @@ export default function FloatingCopilot({ user }) {
     const shouldUseBuildTool = location.pathname.startsWith("/build") && (
       isPreviewRequest(request) ||
       isConfirmedApplicationAction(request, workingState) ||
+      isBuildDraftRequest(request) ||
       (workingState.awaitingConfirmation && isFollowUpForPendingTask(request, workingState))
     );
     if (shouldUseBuildTool) {
