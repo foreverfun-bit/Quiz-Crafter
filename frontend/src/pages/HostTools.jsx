@@ -104,11 +104,11 @@ const HostTools = () => {
       const savedLocalBranding = readSavedDefaultBranding();
       const localBranding = savedLocalBranding || readDefaultBranding();
       try {
-        const { data, error } = await supabase.auth.getUser();
+        const { data, error } = await supabase.auth.getSession();
         if (error) throw error;
         const setupSettings = await loadHostSetupSettings().catch(() => ({}));
         const setupBranding = setupSettings.branding && typeof setupSettings.branding === "object" ? normalizeBranding(setupSettings.branding) : null;
-        const remoteBranding = data?.user?.user_metadata?.[metadataBrandingKey];
+        const remoteBranding = data?.session?.user?.user_metadata?.[metadataBrandingKey];
         if (setupBranding || (remoteBranding && typeof remoteBranding === "object")) {
           const cleanBranding = normalizeBranding(setupBranding || remoteBranding);
           setBranding(cleanBranding);

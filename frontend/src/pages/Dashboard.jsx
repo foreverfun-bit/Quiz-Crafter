@@ -174,9 +174,9 @@ const Dashboard = () => {
       setActiveVenueId(readActiveVenueId());
 
       try {
-        const { data, error } = await supabase.auth.getUser();
+        const { data, error } = await supabase.auth.getSession();
         if (error) throw error;
-        const metadata = data?.user?.user_metadata || {};
+        const metadata = data?.session?.user?.user_metadata || {};
         const setupSettings = await loadHostSetupSettings().catch(() => ({}));
         const setupVenues = Array.isArray(setupSettings.venues) ? setupSettings.venues.map(normalizeVenue) : [];
         const setupTemplates = Array.isArray(setupSettings.templates) ? setupSettings.templates.map(normalizeTemplate) : [];

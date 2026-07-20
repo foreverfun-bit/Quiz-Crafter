@@ -70,10 +70,10 @@ const ShowTemplates = ({ embedded = false }) => {
 
     const loadRemote = async () => {
       try {
-        const { data, error } = await supabase.auth.getUser();
+        const { data, error } = await supabase.auth.getSession();
         if (error) throw error;
-        const remoteTemplates = data?.user?.user_metadata?.[metadataTemplatesKey];
-        const remoteVenues = data?.user?.user_metadata?.[metadataVenuesKey];
+        const remoteTemplates = data?.session?.user?.user_metadata?.[metadataTemplatesKey];
+        const remoteVenues = data?.session?.user?.user_metadata?.[metadataVenuesKey];
         const setupSettings = await loadHostSetupSettings().catch(() => ({}));
         const setupTemplates = Array.isArray(setupSettings.templates) ? setupSettings.templates.map(normalizeTemplate) : [];
         const setupVenues = Array.isArray(setupSettings.venues) ? setupSettings.venues.map(normalizeVenue) : [];

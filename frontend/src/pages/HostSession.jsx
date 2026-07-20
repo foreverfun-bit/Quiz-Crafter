@@ -159,9 +159,9 @@ const brandingChanged = (left, right) => JSON.stringify(normalizeBranding(left |
 const loadDefaultBrandingFromProfile = async () => {
   const setupSettings = await loadHostSetupSettings().catch(() => ({}));
   if (setupSettings.branding && typeof setupSettings.branding === "object") return normalizeBranding(setupSettings.branding);
-  const { data, error } = await supabase.auth.getUser();
+  const { data, error } = await supabase.auth.getSession();
   if (error) throw error;
-  const remoteBranding = data?.user?.user_metadata?.[metadataBrandingKey];
+  const remoteBranding = data?.session?.user?.user_metadata?.[metadataBrandingKey];
   return remoteBranding && typeof remoteBranding === "object" ? normalizeBranding(remoteBranding) : null;
 };
 const saveDefaultBrandingToProfile = async (branding) => {
