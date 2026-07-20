@@ -465,8 +465,6 @@ const HostSession = () => {
   const [branding, setBranding] = useState(() => readStoredBranding(id));
   const [topbarCollapsed, setTopbarCollapsed] = useState(false);
   const [activeDrawer, setActiveDrawer] = useState(null);
-  const [funFactShown, setFunFactShown] = useState(false);
-  const [nudges, setNudges] = useState([]);
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 500);
@@ -831,20 +829,6 @@ const HostSession = () => {
       if (pauseState) persistLiveState(pauseState, true);
       return;
     }
-    // Reminders, not automation: the host still decides. The bonus_pause
-    // flow above already forces a stop *before* a bonus question, and the
-    // leaderboard nudge for *after* one fires when the bonus answer is
-    // revealed (see toggleAnswer) so it lands before the host moves on, not
-    // after. An unshown fun fact can only be known in hindsight, once the
-    // host has actually left the question behind.
-    if (index !== currentIndex && currentQuestion && currentQuestion.funFact && !funFactShown) {
-      const missedIndex = currentIndex;
-      pushNudge({
-        message: `You didn't show the fun fact for Q${missedIndex + 1} before moving on.`,
-        actionLabel: "Review That Question",
-        onAction: () => reviewQuestion(missedIndex),
-      });
-    }
     setReviewIndex(null);
     setPointsPerQuestion(getQuestionPoints(targetQuestion));
     setTimerSeconds(Number(targetQuestion?.timerSeconds || 30));
@@ -856,7 +840,6 @@ const HostSession = () => {
     setPendingBonusIndex(null);
     setShowAnswer(false);
     setShowFunFact(false);
-    setFunFactShown(false);
     const nextTimerEndAt = options.startTimer ? Date.now() + Math.max(1, Number(targetQuestion?.timerSeconds || 30)) * 1000 : null;
     setTimerEndAt(nextTimerEndAt);
     setPresentMode("question");
@@ -900,20 +883,7 @@ const HostSession = () => {
 
   const toggleAnswer = () => {
     if (isReviewing) return;
-    setShowAnswer((value) => {
-      const next = !value;
-      // Nudge here, not after the host has already moved on -- revealing the
-      // bonus answer is the natural moment to remind them, while they're
-      // still on the question instead of after players have moved ahead.
-      if (next && isBonusQuestion(liveDisplayedQuestion)) {
-        pushNudge({
-          message: "This is a bonus question — show the leaderboard once teams have answered?",
-          actionLabel: "Show Leaderboard",
-          onAction: () => releaseMode("leaderboard"),
-        });
-      }
-      return next;
-    });
+    setShowAnswer((value) => !value);
     setGameStarted(true);
     setPresentMode("question");
   };
@@ -921,7 +891,6 @@ const HostSession = () => {
   const toggleFunFact = () => {
     if (isReviewing) return;
     setShowFunFact((value) => !value);
-    setFunFactShown(true);
     setGameStarted(true);
     releaseMode("question");
   };
@@ -1247,9 +1216,6 @@ const HostSession = () => {
     }
   };
 
-  const pushNudge = (nudge) => setNudges((current) => [...current, { id: `nudge-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, ...nudge }]);
-  const dismissNudge = (nudgeId) => setNudges((current) => current.filter((item) => item.id !== nudgeId));
-
   useEffect(() => {
     if (!displayedQuestion || !showAnswer) return;
     currentAnswers.forEach((answer) => {
@@ -1324,7 +1290,6 @@ const HostSession = () => {
       {activeDrawer === "emergency" && <EmergencyPanel currentIndex={currentIndex} emergencyOverride={emergencyOverride} generatedEmergency={generatedEmergency} emergencyLoading={emergencyLoading} generateEmergencyQuestion={generateEmergencyQuestion} activateEmergencyQuestion={activateEmergencyQuestion} clearEmergency={() => setEmergencyOverride(null)} startTimerOnly={startTimerOnly} goToQuestion={goToQuestion} editBuild={() => navigate(`/build/${id}`)} />}
       {activeDrawer === "feedback" && <LiveSignalsPanel feedback={feedback} categoryFeedback={categoryFeedback} ideas={playerIdeas} currentIndex={currentIndex} displayedQuestion={displayedQuestion} />}
     </ToolDrawer>}
-    <NudgeStack nudges={nudges} onDismiss={dismissNudge} />
   </div>;
 };
 
@@ -1715,22 +1680,6 @@ const ToolDrawer = ({ activeDrawer, onClose, children }) => {
     </div>
   </>;
 };
-
-const NudgeStack = ({ nudges, onDismiss }) => <div className="fixed bottom-5 right-5 z-50 flex w-full max-w-sm flex-col-reverse gap-2.5">
-  {nudges.map((nudge) => <Card key={nudge.id} className="border-amber-400/35 bg-zinc-950 shadow-2xl animate-slide-up" style={{ borderLeftWidth: 3, borderLeftColor: "#FBBF24" }}>
-    <CardContent className="p-3.5">
-      <div className="flex items-start gap-2.5">
-        <Timer size={15} className="mt-0.5 shrink-0 text-amber-300" />
-        <p className="flex-1 text-xs leading-relaxed text-zinc-200">{nudge.message}</p>
-        <button type="button" onClick={() => onDismiss(nudge.id)} className="shrink-0 text-zinc-500 hover:text-zinc-300" aria-label="Dismiss"><XCircle size={15} /></button>
-      </div>
-      <div className="mt-2.5 flex gap-2">
-        <Button size="sm" variant="outline" onClick={() => onDismiss(nudge.id)} className="h-7 flex-1 border-white/10 text-zinc-300 hover:text-white text-xs">Skip</Button>
-        <Button size="sm" onClick={() => { nudge.onAction(); onDismiss(nudge.id); }} className="h-7 flex-1 bg-amber-300 text-zinc-950 hover:bg-amber-200 text-xs">{nudge.actionLabel}</Button>
-      </div>
-    </CardContent>
-  </Card>)}
-</div>;
 
 const revealTextClass = (text = "") => {
   const length = String(text || "").length;
