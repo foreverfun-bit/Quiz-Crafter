@@ -981,6 +981,7 @@ const HostSession = () => {
           excludeUsed: true,
           avoidDuplicates: true,
           rejectedQuestions: [displayedQuestion?.questionText].filter(Boolean),
+          venueId: session?.venue_id || null,
         }),
       });
       const data = await response.json();

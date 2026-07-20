@@ -206,6 +206,7 @@ async function handler(req, res) {
                     "For true_false, correct_answer must be exactly True or False.",
                     "For written, answers must be familiar/gettable enough for a live bar team.",
                     "Use only approved_categories if any are provided.",
+                    "If host_context.venue.insights is present, prefer categories listed under loved there and avoid repeating categories or specific questions listed under struggled/disliked there, unless the host explicitly asks otherwise.",
                     "Do not claim to save or edit anything directly.",
                   ]
                 : [
