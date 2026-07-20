@@ -923,7 +923,7 @@ const BuildSession = () => {
   };
   const handleSaveAiCandidateToLibrary = async (candidate) => { const saved = await handleSaveQuestionToLibrary(candidate); if (saved) { rememberStyleFeedback(candidate, "keep", "Saved generated question to library").then(setHostStyleProfile).catch((error) => console.warn("Style feedback save unavailable:", error)); setAiCandidates((prev) => prev.filter((item) => String(item.id) !== String(candidate.id))); } };
   const handleAiStyleFeedback = async (candidate, action) => {
-    const labels = { keep: "Kept as your style", too_easy: "Marked too easy", too_hard: "Marked too hard", too_common: "Marked too common", not_my_style: "Marked not your style", more_like_this: "Style memory updated" };
+    const labels = { keep: "Kept as your style", too_easy: "Marked too easy -- finding a harder replacement...", too_hard: "Marked too hard -- finding an easier replacement...", too_common: "Marked too common -- finding a fresher replacement...", not_my_style: "Marked not your style -- finding a replacement...", more_like_this: "Style memory updated" };
     setAiCandidates((prev) => prev.map((item) => String(item.id) === String(candidate.id) ? { ...item, lastStyleFeedback: action } : item));
     try {
       const nextProfile = await rememberStyleFeedback(candidate, action, labels[action] || action);
@@ -937,7 +937,13 @@ const BuildSession = () => {
     } catch (error) {
       console.error("Style feedback error:", error);
       toast.error("Could not save that feedback -- try again");
+      return;
     }
+    const stillPending = aiCandidates.some((item) => String(item.id) === String(candidate.id));
+    if (!stillPending) return;
+    if (action === "too_easy") handleTuneAiCandidateDifficulty(candidate, "harder");
+    else if (action === "too_hard") handleTuneAiCandidateDifficulty(candidate, "easier");
+    else if (action === "too_common" || action === "not_my_style") handleRegenerateAiCandidate(candidate, "question");
   };
   const handleAddCoHostCandidateToSession = (candidate) => { addGeneratedToRound([candidate]); setCohostCandidates((prev) => prev.filter((item) => String(item.id) !== String(candidate.id))); rememberStyleFeedback(candidate, "keep", "Added co-host question to session").then(setHostStyleProfile).catch((error) => console.warn("Style feedback save unavailable:", error)); toast.success("Added to session"); };
   const handleSaveCoHostCandidateToLibrary = async (candidate) => { const saved = await handleSaveQuestionToLibrary(candidate); if (saved) { rememberStyleFeedback(candidate, "keep", "Saved co-host question to library").then(setHostStyleProfile).catch((error) => console.warn("Style feedback save unavailable:", error)); setCohostCandidates((prev) => prev.filter((item) => String(item.id) !== String(candidate.id))); } };
@@ -1109,14 +1115,26 @@ const BuildSession = () => {
         return { ok: true, success: true, action_type: "draft_candidates", changed_item_id: null, old_value: null, new_value: generated, message: `Drafted ${generated.length} candidate${generated.length === 1 ? "" : "s"} for review. Nothing was added yet.`, awaitingConfirmation: false, task: { type: "draft_candidates", session: sessionName, round: targetRound.name } };
       }
       if (intent === "generate_round") {
-        const draftCount = Math.min(3, Math.max(1, requestedCount || 3));
-        const { data } = await requestGeneratedQuestions({ countOverride: draftCount, typeOverride: requestedType, themeOverride: [theme, request, `Draft candidates for ${targetRound.name}. Do not add anything to the build automatically.`].filter(Boolean).join("\n"), roundOverride: targetRound });
-        if (data?.source_notice) toast.info(data.source_notice);
-        const generated = uniqueGeneratedQuestions(normalizeGeneratedCandidates(data?.candidates, targetRound.id, requestedType), []).slice(0, draftCount);
+        const roundTemplate = templates.find((item) => item.id === selectedTemplateId) || templates[0];
+        const targetPerRound = Math.max(1, Math.min(20, Number(roundTemplate?.questionsPerRound || 10) || 10));
+        const neededForRound = Math.max(3, targetPerRound - (targetRound.questionIds || []).length);
+        const draftCount = Math.min(10, parseRequestedCount(request, neededForRound));
+        const themeParts = [theme, request, `Draft candidates for ${targetRound.name}. Do not add anything to the build automatically.`].filter(Boolean);
+        const generated = [];
+        setAiCandidates([]);
+        for (let offset = 0; offset < draftCount; offset += 3) {
+          const batchCount = Math.min(3, draftCount - offset);
+          setGenerationStatus(`${generated.length} of ${draftCount} candidates ready`);
+          const { data } = await requestGeneratedQuestions({ countOverride: batchCount, typeOverride: requestedType, themeOverride: themeParts.join("\n"), roundOverride: targetRound });
+          if (data?.source_notice) toast.info(data.source_notice);
+          const batch = uniqueGeneratedQuestions(normalizeGeneratedCandidates(data?.candidates, targetRound.id, requestedType), generated).slice(0, batchCount);
+          generated.push(...batch);
+          if (batch.length) setAiCandidates((prev) => [...prev, ...batch]);
+        }
         if (!generated.length) throw new Error("No candidate drafts came back.");
-        setAiCandidates((prev) => [...generated, ...prev]);
+        setGenerationStatus("");
         setActiveRoundId(targetRound.id);
-        appendBuilderAssistant(`I drafted ${generated.length} candidate${generated.length === 1 ? "" : "s"} for ${targetRound.name}. Use the Add button on any one you want.`);
+        appendBuilderAssistant(`I drafted ${generated.length} candidate${generated.length === 1 ? "" : "s"} for ${targetRound.name}. Pick the ones you want, or use Add all.`);
         return { ok: true, success: true, action_type: "draft_candidates", changed_item_id: null, old_value: null, new_value: generated, message: `Drafted ${generated.length} candidate${generated.length === 1 ? "" : "s"} for review. Nothing was added yet.`, awaitingConfirmation: false, task: { type: "draft_candidates", session: sessionName, round: targetRound.name } };
       }
       if (intent === "add_questions") {
