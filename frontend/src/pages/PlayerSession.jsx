@@ -2,13 +2,14 @@
 import { useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { mergeNewerLiveState } from "../lib/liveState";
+import { findLiveGame, fetchLivePlayers, subscribeLivePlayers, upsertLivePlayer } from "../lib/liveGame";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent } from "../components/ui/card";
 import { CheckCircle, Pencil, Send, Sparkles, Tags, ThumbsDown, ThumbsUp, Timer, Trophy, X } from "lucide-react";
 import { toast } from "sonner";
 
-const makePlayerId = () => `player-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const makePlayerId = () => crypto.randomUUID();
 const DEFAULT_HOST_LOGO_SRC = process.env.REACT_APP_BRAND_LOGO_URL || "/quiz-crafter-logo.svg";
 const QUIZ_CRAFTER_LOGO_SRC = "/quiz-crafter-logo.svg";
 
@@ -163,6 +164,8 @@ const PlayerSession = () => {
   const [renameValue, setRenameValue] = useState("");
   const [session, setSession] = useState(null);
   const [hostState, setHostState] = useState(null);
+  const [liveGameId, setLiveGameId] = useState(null);
+  const [livePlayers, setLivePlayers] = useState([]);
   const [answer, setAnswer] = useState("");
   const [wagerAmount, setWagerAmount] = useState("0");
   const [updatePreference, setUpdatePreference] = useState("none");
@@ -199,6 +202,44 @@ const PlayerSession = () => {
     loadDurableState();
     return () => window.clearInterval(interval);
   }, [id]);
+
+  useEffect(() => {
+    if (liveGameId) return undefined;
+    let cancelled = false;
+    const lookup = async () => {
+      try {
+        const game = await findLiveGame(id);
+        if (game && !cancelled) setLiveGameId(game.id);
+      } catch (error) {
+        console.warn("Live game lookup unavailable:", error);
+      }
+    };
+    lookup();
+    const interval = window.setInterval(lookup, 2000);
+    return () => { cancelled = true; window.clearInterval(interval); };
+  }, [id, liveGameId]);
+
+  useEffect(() => {
+    if (!liveGameId) return undefined;
+    let cancelled = false;
+    fetchLivePlayers(liveGameId)
+      .then((rows) => { if (!cancelled) setLivePlayers(rows.map((row) => ({ id: row.id, name: row.name, score: Number(row.score || 0) }))); })
+      .catch((error) => console.warn("Live roster load unavailable:", error));
+    const unsubscribe = subscribeLivePlayers(liveGameId, ({ eventType, new: newRow, old: oldRow }) => {
+      setLivePlayers((current) => {
+        if (eventType === "DELETE") return current.filter((team) => team.id !== oldRow.id);
+        const nextTeam = { id: newRow.id, name: newRow.name, score: Number(newRow.score || 0) };
+        const exists = current.some((team) => team.id === nextTeam.id);
+        return exists ? current.map((team) => (team.id === nextTeam.id ? nextTeam : team)) : [...current, nextTeam];
+      });
+    });
+    return () => { cancelled = true; unsubscribe(); };
+  }, [liveGameId]);
+
+  useEffect(() => {
+    if (!player || !liveGameId) return;
+    upsertLivePlayer(liveGameId, { id: player.id, name: player.name }).catch((error) => console.warn("Live roster join unavailable:", error));
+  }, [player, liveGameId]);
 
   useEffect(() => {
     if (player) return undefined;
@@ -248,10 +289,11 @@ const PlayerSession = () => {
   }, [id, player]);
 
   const currentQuestion = useMemo(() => (hostState?.currentQuestion ? { ...hostState.currentQuestion, answer: hostState.showAnswer ? (hostState.revealedAnswer || hostState.currentQuestion.answer || "") : "" } : null), [hostState]);
-  const leaderboard = useMemo(() => [...(hostState?.playerScores || hostState?.leaderboard || [])].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)), [hostState]);
+  const sortedPlayers = useMemo(() => [...livePlayers].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)), [livePlayers]);
+  const leaderboard = sortedPlayers;
   const roundCategories = useMemo(() => buildRoundCategories(session), [session]);
   const branding = useMemo(() => mergeBranding(session, hostState), [session, hostState]);
-  const myScore = leaderboard.find((team) => team.id === player?.id)?.score || 0;
+  const myScore = sortedPlayers.find((team) => team.id === player?.id)?.score || 0;
   const sessionName = hostState?.sessionName || session?.name || session?.session_name || "Trivia Session";
   const timeRemaining = hostState?.timerEndAt ? Math.max(0, Math.ceil((new Date(hostState.timerEndAt).getTime() - now) / 1000)) : null;
   const acceptingAnswers = timeRemaining === null || timeRemaining > 0;

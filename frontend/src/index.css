@@ -145,9 +145,20 @@
   animation: slideUp 0.5s ease-out;
 }
 
-/* Debug wrapper */
-@layer base {
-  [data-debug-wrapper="true"] {
-    display: contents !important;
+/* Ambient stage-light drift used by the present screen's background glow */
+@keyframes drift-a {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(3vw, 2vw); }
+}
+
+@keyframes drift-b {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(-3vw, 3vw); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-\[drift-a_26s_ease-in-out_infinite\],
+  .animate-\[drift-b_32s_ease-in-out_infinite\] {
+    animation: none;
   }
 }

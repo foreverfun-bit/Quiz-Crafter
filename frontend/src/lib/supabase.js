@@ -144,6 +144,13 @@ class ProxyQueryBuilder {
   }
 }
 
+const nativeFrom = supabaseClient.from.bind(supabaseClient);
 supabaseClient.from = (table) => new ProxyQueryBuilder(table);
 
 export const supabase = supabaseClient;
+
+// Bypasses the /api/supabase-data proxy for tables whose access is governed
+// by Postgres RLS directly rather than the proxy's signed-in-user-scoping
+// model (e.g. live_game_* tables, which anonymous players read/write under
+// row-level policies). Shares the same auth session as `supabase`.
+export const supabaseTable = (table) => nativeFrom(table);

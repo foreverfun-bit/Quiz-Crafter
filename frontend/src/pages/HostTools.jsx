@@ -12,14 +12,25 @@ const SOCIAL_STORAGE_KEY = "quiz-crafter-social-links";
 const OUTREACH_CONTACTS_STORAGE_KEY = "quiz-crafter-outreach-contacts-v1";
 const HOST_DEFAULT_BRANDING_KEY = "quiz-crafter-host-branding-defaults";
 const metadataBrandingKey = "quiz_crafter_host_branding_defaults_v1";
-const DEFAULT_BRANDING = { name: "Forever Fun Events", logoUrl: "/quiz-crafter-logo.svg", primaryColor: "#71E0DC", accentColor: "#AEB2EF" };
+const DEFAULT_BRANDING = { name: "Forever Fun Events", logoUrl: "/quiz-crafter-logo.svg", primaryColor: "#71E0DC", accentColor: "#AEB2EF", correctColor: "", optionColor: "#7C8496", lobbyTagline: "Let's get quizzical." };
 const readJson = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); } catch { return fallback; } };
 const writeJson = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* Keep tools usable if browser storage is full. */ } };
 const sanitizeHexColor = (value, fallback) => /^#[0-9a-f]{6}$/i.test(String(value || "")) ? value : fallback;
 const normalizeBranding = (branding = {}) => {
   const source = branding && typeof branding === "object" ? branding : {};
   const logoUrl = String(source.logoUrl || "").trim();
-  return { name: String(source.name || "").trim() || DEFAULT_BRANDING.name, logoUrl: logoUrl === "/forever-fun-logo.png" ? DEFAULT_BRANDING.logoUrl : logoUrl, primaryColor: sanitizeHexColor(source.primaryColor, DEFAULT_BRANDING.primaryColor), accentColor: sanitizeHexColor(source.accentColor, DEFAULT_BRANDING.accentColor) };
+  // correctColor/optionColor/lobbyTagline are edited from the per-session Customize
+  // panel, not here -- this just has to round-trip them so saving default branding
+  // from Host Tools doesn't wipe out what a host set on the present screen.
+  return {
+    name: String(source.name || "").trim() || DEFAULT_BRANDING.name,
+    logoUrl: logoUrl === "/forever-fun-logo.png" ? DEFAULT_BRANDING.logoUrl : logoUrl,
+    primaryColor: sanitizeHexColor(source.primaryColor, DEFAULT_BRANDING.primaryColor),
+    accentColor: sanitizeHexColor(source.accentColor, DEFAULT_BRANDING.accentColor),
+    correctColor: /^#[0-9a-f]{6}$/i.test(String(source.correctColor || "")) ? source.correctColor : "",
+    optionColor: sanitizeHexColor(source.optionColor, DEFAULT_BRANDING.optionColor),
+    lobbyTagline: String(source.lobbyTagline || "").trim() || DEFAULT_BRANDING.lobbyTagline,
+  };
 };
 const readSavedDefaultBranding = () => {
   try {
