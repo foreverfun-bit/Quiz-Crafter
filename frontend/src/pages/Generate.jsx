@@ -15,6 +15,7 @@ import {
 import {
   Sparkles,
   CheckCircle,
+  Check,
   ArrowDown,
   ArrowUp,
   List,
@@ -451,6 +452,10 @@ const Generate = ({ initialCreateMode = "generate" }) => {
   const handleStyleFeedback = (type, index, action) => {
     const candidate = groupedCandidates[type]?.[index];
     if (!candidate) return;
+    setGroupedCandidates((prev) => ({
+      ...prev,
+      [type]: prev[type].map((item, i) => (i === index ? { ...item, lastStyleFeedback: action } : item)),
+    }));
     rememberStyleFeedback(candidate, action).then(setHostStyleProfile).catch((error) => console.warn("Style feedback save unavailable:", error));
     toast.success(action === "more_like_this" ? "Quiz Crafter will make more like this" : "Style memory updated");
   };
@@ -584,17 +589,21 @@ const Generate = ({ initialCreateMode = "generate" }) => {
               { key: "too_common", label: "Too common" },
               { key: "not_my_style", label: "Not my style" },
               { key: "more_like_this", label: "More like this" },
-            ].map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                onClick={() => handleStyleFeedback(type, index, item.key)}
-                disabled={isBusy || savingKey === saveId}
-                className="rounded-full border border-white/10 bg-zinc-900 px-2.5 py-1 text-[11px] font-semibold text-zinc-300 hover:border-[#71E0DC]/40 hover:text-white disabled:opacity-50"
-              >
-                {item.label}
-              </button>
-            ))}
+            ].map((item) => {
+              const selected = candidate.lastStyleFeedback === item.key;
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => handleStyleFeedback(type, index, item.key)}
+                  disabled={isBusy || savingKey === saveId}
+                  className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold disabled:opacity-50 ${selected ? "border-[#71E0DC]/50 bg-[#71E0DC]/20 text-white" : "border-white/10 bg-zinc-900 text-zinc-300 hover:border-[#71E0DC]/40 hover:text-white"}`}
+                >
+                  {selected && <Check size={11} className="mr-1 inline" />}
+                  {item.label}
+                </button>
+              );
+            })}
           </div>
 
           <div
