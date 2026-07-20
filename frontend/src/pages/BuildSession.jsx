@@ -11,7 +11,7 @@ import { Label } from "../components/ui/label";
 import { Textarea } from "../components/ui/textarea";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { Badge } from "../components/ui/badge";
-import { ArrowDown, ArrowUp, Ban, Check, CheckCircle, ChevronDown, Clock, Coins, Image, Layers, Link, List, Loader2, MessageSquare, Minus, MoreHorizontal, Pencil, Plus, RefreshCw, Save, Search, Settings, Sparkles, Tag, Trash2, Upload, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Ban, Check, CheckCircle, ChevronDown, Clock, Coins, Image, Layers, Link, List, Loader2, MapPin, MessageSquare, Minus, MoreHorizontal, Pencil, Plus, RefreshCw, Save, Search, Settings, Sparkles, Tag, ThumbsDown, ThumbsUp, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 import { canonicalCategory, categoryKey, dedupeCategories } from "../lib/categories";
@@ -326,6 +326,51 @@ const buildStateUpdatedAt = (state) => {
   const time = new Date(state?.updatedAt || 0).getTime();
   return Number.isNaN(time) || time <= 0 ? (hasBuildContent(state) ? 1 : 0) : time;
 };
+const fetchVenueInsights = async (venueId) => {
+  const { data: sessions, error: sessionsError } = await supabase
+    .from("sessions")
+    .select("id,name,session_name,session_date,event_date,created_at")
+    .eq("venue_id", venueId)
+    .order("created_at", { ascending: false })
+    .limit(20);
+  if (sessionsError) throw sessionsError;
+  if (!sessions?.length) return { sessionCount: 0 };
+
+  const sessionIds = sessions.map((session) => session.id);
+  const [questionFeedbackResult, categoryFeedbackResult, ideasResult] = await Promise.all([
+    supabase.from("session_question_feedback").select("category,sentiment,question_text").in("session_id", sessionIds).limit(1000),
+    supabase.from("session_category_feedback").select("category,sentiment").in("session_id", sessionIds).limit(1000),
+    supabase.from("session_player_ideas").select("category,question,submitted_at").in("session_id", sessionIds).order("submitted_at", { ascending: false }).limit(20),
+  ]);
+  if (questionFeedbackResult.error) throw questionFeedbackResult.error;
+  if (categoryFeedbackResult.error) throw categoryFeedbackResult.error;
+  if (ideasResult.error) throw ideasResult.error;
+
+  const categoryScores = new Map();
+  const bump = (category, sentiment) => {
+    const key = (category || "").trim();
+    if (!key) return;
+    const entry = categoryScores.get(key) || { likes: 0, dislikes: 0 };
+    if (sentiment === "like") entry.likes += 1;
+    else if (sentiment === "dislike") entry.dislikes += 1;
+    categoryScores.set(key, entry);
+  };
+  (categoryFeedbackResult.data || []).forEach((item) => bump(item.category, item.sentiment));
+  (questionFeedbackResult.data || []).forEach((item) => bump(item.category, item.sentiment));
+  const ranked = [...categoryScores.entries()].map(([category, { likes, dislikes }]) => ({ category, likes, dislikes, net: likes - dislikes })).sort((a, b) => b.net - a.net);
+
+  return {
+    sessionCount: sessions.length,
+    mostRecentDate: sessions[0]?.session_date || sessions[0]?.event_date || sessions[0]?.created_at || "",
+    pastNames: sessions.map((session) => session.name || session.session_name).filter(Boolean).slice(0, 6),
+    loved: ranked.filter((row) => row.net > 0).slice(0, 8),
+    struggled: ranked.filter((row) => row.net < 0).slice(-8).reverse(),
+    likedQuestions: (questionFeedbackResult.data || []).filter((item) => item.sentiment === "like" && item.question_text).slice(0, 4),
+    dislikedQuestions: (questionFeedbackResult.data || []).filter((item) => item.sentiment === "dislike" && item.question_text).slice(0, 4),
+    ideas: (ideasResult.data || []).filter((idea) => idea.category || idea.question),
+  };
+};
+
 const createBuildSnapshot = ({ sessionName, sessionDate, selectedVenueId, rounds, activeRoundId, theme, difficulty, typeFilter, generateType, generateCount, includeImageIdeas, questions }) => {
   const draftRounds = normalizeRounds(rounds);
   const draftQuestions = safeQuestions(questions);
@@ -427,6 +472,22 @@ const BuildSession = () => {
   const [selectedTemplateId, setSelectedTemplateId] = useState(() => readLocalTemplates()[0]?.id || "");
   const [profileBuildHydrated, setProfileBuildHydrated] = useState(Boolean(sessionId));
   const selectedVenue = useMemo(() => venues.find((venue) => venue.id === selectedVenueId) || null, [venues, selectedVenueId]);
+  const [venueInsights, setVenueInsights] = useState(null);
+  const [venueInsightsLoading, setVenueInsightsLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedVenueId) {
+      setVenueInsights(null);
+      return undefined;
+    }
+    setVenueInsightsLoading(true);
+    fetchVenueInsights(selectedVenueId)
+      .then((insights) => { if (!cancelled) setVenueInsights(insights); })
+      .catch((error) => { console.warn("Venue insights unavailable:", error); if (!cancelled) setVenueInsights(null); })
+      .finally(() => { if (!cancelled) setVenueInsightsLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedVenueId]);
 
   useEffect(() => { setProfileBuildHydrated(Boolean(sessionId)); }, [sessionId]);
   useEffect(() => {
@@ -1221,6 +1282,7 @@ const BuildSession = () => {
     <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-4 mb-4"><div><h1 className="text-3xl md:text-4xl font-bold text-white mb-1">Build <span className="gradient-text">Session</span></h1><p className="text-zinc-500">Create or continue the active trivia session.</p></div><div className="flex gap-2 flex-wrap"><Button onClick={() => handleSave(false)} disabled={saving} className="gradient-btn" data-testid="save-build-btn">{saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</> : <><Save className="mr-2" size={18} />Save Build</>}</Button><DropdownMenu><DropdownMenuTrigger asChild><Button variant="outline" className="border-white/15 text-zinc-300 hover:text-white hover:bg-zinc-800" aria-label="More build actions"><MoreHorizontal size={18} /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" className="border-white/10 bg-zinc-950 text-zinc-200"><DropdownMenuItem onClick={() => handleSave(true)} className="cursor-pointer focus:bg-zinc-800" data-testid="go-live-btn"><Sparkles size={15} className="mr-2" />Go Live</DropdownMenuItem><DropdownMenuItem onClick={() => askFloatingCopilot("Review this session and tell me what feels weak, repetitive, missing, or off-style.")} className="cursor-pointer focus:bg-zinc-800"><Check size={15} className="mr-2" />Review Session</DropdownMenuItem><DropdownMenuItem onClick={() => askFloatingCopilot("Create host notes for this session: pacing notes, category callouts, and any fun hosting beats.")} className="cursor-pointer focus:bg-zinc-800"><MessageSquare size={15} className="mr-2" />Create Host Notes</DropdownMenuItem><DropdownMenuItem onClick={() => askFloatingCopilot("Export CSV for this build or tell me the next step if I need to save first.")} className="cursor-pointer focus:bg-zinc-800"><Save size={15} className="mr-2" />Export CSV</DropdownMenuItem>{selectedTotal > 0 && <DropdownMenuItem onClick={handleClearSession} className="cursor-pointer text-red-200 focus:bg-red-500/10 focus:text-red-200"><X size={15} className="mr-2" />Clear Build</DropdownMenuItem>}</DropdownMenuContent></DropdownMenu></div></div>
     {loading && <div className="mb-4 flex items-center gap-2 rounded-md border border-[#71E0DC]/20 bg-[#071A1D]/70 px-3 py-2 text-sm text-[#AEEBFF]"><Loader2 className="h-4 w-4 animate-spin" />Loading your saved builds and question library...</div>}
     <Card className="glass-card mb-4"><CardHeader className="pb-2"><CardTitle className="text-white text-lg">Session Setup</CardTitle></CardHeader><CardContent className="p-4 pt-0 space-y-3"><div className="grid grid-cols-1 lg:grid-cols-[1fr_155px_220px_260px_auto] gap-3 items-end"><Field label="Session Name"><Input value={sessionName} onChange={(e) => setSessionName(e.target.value)} placeholder="e.g., Tuesday Night Trivia" className="bg-zinc-950/50 border-white/10 text-white" /></Field><Field label="Date"><Input type="date" value={sessionDate} onChange={(e) => setSessionDate(e.target.value)} className="bg-zinc-950/50 border-white/10 text-white" /></Field><Field label="Venue"><select value={selectedVenueId} onChange={(e) => setSelectedVenueId(e.target.value)} className="w-full h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3"><option value="">No venue</option>{venues.map((venue) => <option key={venue.id} value={venue.id}>{venue.name || venue.nightName || "Untitled venue"}</option>)}</select></Field><Field label="Template"><select value={selectedTemplateId} onChange={(event) => setSelectedTemplateId(event.target.value)} className="w-full h-10 rounded-md bg-zinc-950/50 border border-white/10 text-white px-3">{templates.map((template) => <option key={template.id} value={template.id}>{template.name} - {template.roundCount} rounds</option>)}</select></Field><Button type="button" onClick={handleStartFromTemplate} disabled={!templates.length || generating} className="h-10 border border-white/10 bg-zinc-950/70 text-zinc-100 hover:border-[#71E0DC]/40 hover:bg-zinc-900"><Layers size={16} className="mr-2" />{selectedTotal > 0 ? "Apply Template" : "Use Template"}</Button></div>{approvedCategories.length > 0 && <p className="text-xs text-zinc-500">AI category pool: {approvedCategories.slice(0, 12).join(", ")}{approvedCategories.length > 12 ? "..." : ""}</p>}</CardContent></Card>
+    {selectedVenueId && <VenueInsightsPanel venueName={selectedVenue?.name || selectedVenue?.nightName || "This venue"} insights={venueInsights} loading={venueInsightsLoading} />}
     <BuildAssistantStrip onAsk={askFloatingCopilot} onBuildRound={handleBuildActiveRound} activeRoundName={activeRound.name} undoSnapshot={builderUndoSnapshot} onUndo={restoreBuilderUndo} loading={builderChatLoading || generating} generationStatus={generationStatus} generationMode={generationMode} setGenerationMode={setGenerationMode} />
     <BuildAssistantResults preview={chatPreview} onAcceptPreview={acceptChatPreview} onDiscardPreview={() => setChatPreview(null)} aiCandidates={aiCandidates} aiActionId={aiActionId} onAddToSession={handleAddAiCandidateToSession} onSaveToLibrary={handleSaveAiCandidateToLibrary} onRegenerate={handleRegenerateAiCandidate} onConvertType={handleConvertAiCandidateType} onTuneDifficulty={handleTuneAiCandidateDifficulty} onStyleFeedback={handleAiStyleFeedback} />
     <div className="space-y-5"><RoundDropdown rounds={rounds} activeRoundId={activeRoundId} menuOpen={roundMenuOpen} setMenuOpen={setRoundMenuOpen} onSelect={setActiveRoundId} onRename={handleRenameRound} onDescribe={handleDescribeRound} onDelete={handleDeleteRound} onAdd={handleAddRound} />
@@ -1233,6 +1295,23 @@ const BuildSession = () => {
 };
 
 const Field = ({ label, children }) => <div className="space-y-2"><Label className="text-zinc-300">{label}</Label>{children}</div>;
+const VenueInsightsPanel = ({ venueName, insights, loading }) => {
+  if (loading) return <Card className="glass-card mb-4"><CardContent className="p-4 flex items-center gap-2 text-sm text-zinc-400"><Loader2 size={15} className="animate-spin" />Checking what {venueName} has liked so far...</CardContent></Card>;
+  if (!insights || !insights.sessionCount) return <Card className="glass-card mb-4"><CardContent className="p-4 flex items-center gap-2 text-sm text-zinc-500"><MapPin size={15} className="text-zinc-600" />No history yet at {venueName}. The AI will use your general style profile until you've played a session or two here.</CardContent></Card>;
+  return <Card className="glass-card mb-4 border-[#71E0DC]/15"><CardContent className="p-4 space-y-3">
+    <div className="flex items-center gap-2 text-white font-semibold"><MapPin size={16} className="text-[#71E0DC]" />What {venueName} has taught the AI</div>
+    <p className="text-xs text-zinc-500">Played here {insights.sessionCount} time{insights.sessionCount === 1 ? "" : "s"}{insights.mostRecentDate ? `, most recently ${insights.mostRecentDate}` : ""}.{insights.pastNames?.length ? ` Past sessions: ${insights.pastNames.join(", ")}.` : ""} This is automatically folded into generation for this venue.</p>
+    {(insights.loved?.length || insights.struggled?.length) && <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      {insights.loved?.length > 0 && <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3"><p className="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-emerald-300"><ThumbsUp size={13} />Landed well here</p><div className="flex flex-wrap gap-1.5">{insights.loved.map((row) => <Badge key={row.category} className="bg-emerald-500/15 text-emerald-200 border border-emerald-500/20">{row.category}</Badge>)}</div></div>}
+      {insights.struggled?.length > 0 && <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3"><p className="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-red-300"><ThumbsDown size={13} />Struggled here</p><div className="flex flex-wrap gap-1.5">{insights.struggled.map((row) => <Badge key={row.category} className="bg-red-500/15 text-red-200 border border-red-500/20">{row.category}</Badge>)}</div></div>}
+    </div>}
+    {(insights.likedQuestions?.length > 0 || insights.dislikedQuestions?.length > 0) && <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+      {insights.likedQuestions?.length > 0 && <div><p className="mb-1 font-bold text-zinc-400">Specific questions this crowd liked</p><ul className="space-y-1 text-zinc-500">{insights.likedQuestions.map((item, index) => <li key={index} className="line-clamp-2">- {item.question_text}</li>)}</ul></div>}
+      {insights.dislikedQuestions?.length > 0 && <div><p className="mb-1 font-bold text-zinc-400">Specific questions this crowd disliked</p><ul className="space-y-1 text-zinc-500">{insights.dislikedQuestions.map((item, index) => <li key={index} className="line-clamp-2">- {item.question_text}</li>)}</ul></div>}
+    </div>}
+    {insights.ideas?.length > 0 && <div className="text-xs"><p className="mb-1 font-bold text-zinc-400">Player-submitted ideas from past nights here</p><ul className="space-y-1 text-zinc-500">{insights.ideas.slice(0, 6).map((idea, index) => <li key={index} className="line-clamp-2">- {[idea.category, idea.question].filter(Boolean).join(": ")}</li>)}</ul></div>}
+  </CardContent></Card>;
+};
 const BuildAssistantStrip = ({ onAsk, onBuildRound, activeRoundName, undoSnapshot, onUndo, loading, generationStatus, generationMode, setGenerationMode }) => <div className="mb-4 rounded-xl border border-[#71E0DC]/15 bg-zinc-950/40 px-4 py-3"><div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3"><div><p className="text-sm font-bold text-white flex items-center gap-2"><Sparkles size={16} className="text-[#71E0DC]" />Need help building?</p><p className="text-xs text-zinc-500 mt-1">Ask Quiz Crafter from the assistant bubble. Results and previews will appear here.</p></div><div className="flex flex-wrap gap-2">{generationStatus && <span className="inline-flex items-center rounded-full border border-[#71E0DC]/20 bg-[#071A1D]/70 px-3 py-1.5 text-xs font-semibold text-[#71E0DC]"><Loader2 size={13} className="mr-2 animate-spin" />{generationStatus}</span>}<div className="inline-flex rounded-md border border-white/10 bg-zinc-950/70 p-1"><button type="button" onClick={() => setGenerationMode("quick")} className={`rounded px-2.5 py-1 text-[11px] font-bold ${generationMode === "quick" ? "bg-[#71E0DC] text-zinc-950" : "text-zinc-400 hover:text-white"}`}>Quick</button><button type="button" onClick={() => setGenerationMode("polished")} className={`rounded px-2.5 py-1 text-[11px] font-bold ${generationMode === "polished" ? "bg-[#AEB2EF] text-zinc-950" : "text-zinc-400 hover:text-white"}`}>Polished</button></div><Button type="button" variant="outline" disabled={loading} onClick={onBuildRound} className="h-9 border-white/10 text-zinc-300 hover:text-white"><Sparkles size={14} className="mr-2" />Build this round</Button><Button type="button" variant="outline" disabled={loading} onClick={() => onAsk(`Find replacements for the weakest question in ${activeRoundName}`)} className="h-9 border-white/10 text-zinc-300 hover:text-white"><RefreshCw size={14} className="mr-2" />Find replacements</Button><Button type="button" variant="outline" onClick={() => onAsk("I want to write my own question")} className="h-9 border-white/10 text-zinc-300 hover:text-white"><Pencil size={14} className="mr-2" />Write my own</Button>{undoSnapshot && <Button type="button" variant="outline" onClick={onUndo} className="h-9 border-[#71E0DC]/25 text-[#71E0DC] hover:text-white hover:bg-[#71E0DC]/10"><RefreshCw size={14} className="mr-2" />Undo</Button>}</div></div></div>;
 const BuildAssistantResults = ({ preview, onAcceptPreview, onDiscardPreview, aiCandidates, aiActionId, onAddToSession, onSaveToLibrary, onRegenerate, onConvertType, onTuneDifficulty, onStyleFeedback }) => {
   if (!preview && !aiCandidates.length) return null;
