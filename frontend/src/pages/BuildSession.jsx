@@ -395,7 +395,7 @@ const createBuildSnapshot = ({ sessionName, sessionDate, selectedVenueId, rounds
 const BuildSession = () => {
   const navigate = useNavigate();
   const { sessionId } = useParams();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
   const initialVenues = useMemo(() => readLocalVenues(), []);
   const initialTemplates = useMemo(() => readLocalTemplates(), []);
@@ -648,6 +648,26 @@ const BuildSession = () => {
   const mediaQuestion = mediaQuestionId ? questionById.get(String(mediaQuestionId)) : null;
   const settingsQuestion = settingsQuestionId ? questionById.get(String(settingsQuestionId)) : null;
   const availableQuestions = useMemo(() => { const query = searchQuery.trim().toLowerCase(); return normalizedQuestions.filter((question) => { const type = normalizeType(question); const id = String(question.id); const selected = selectedIds.has(id); const manuallyUnused = unusedQuestionIds.has(id); const blockedByMemory = !manuallyUnused && isMemoryBlocked(question, questionMemory); const used = !manuallyUnused && (isQuestionMarkedUsed(question, usedQuestionIds) || usedFingerprints.has(fingerprint(question.question_text))); if (typeFilter !== "all" && type !== typeFilter) return false; if (rejectedAi.has(fingerprint(question.question_text))) return false; if ((used || blockedByMemory) && !selected) return false; if (!query) return true; return [question.question_text, question.correct_answer, question.category, question.fun_fact].filter(Boolean).some((value) => String(value).toLowerCase().includes(query)); }); }, [normalizedQuestions, questionMemory, rejectedAi, searchQuery, selectedIds, typeFilter, usedFingerprints, usedQuestionIds, unusedQuestionIds]);
+  useEffect(() => {
+    if (loading) return;
+    const addId = searchParams.get("addQuestionId");
+    if (!addId) return;
+    const match = questionById.get(String(addId));
+    if (match) {
+      setRounds((prev) => prev.map((round) => {
+        if (round.id !== activeRound.id) return round;
+        const current = round.questionIds || [];
+        if (current.map(String).includes(String(match.id))) return round;
+        return { ...round, questionIds: [...current, match.id] };
+      }));
+      toast.success(`Added to ${activeRound.name}`);
+    } else {
+      toast.error("Could not find that question to add");
+    }
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("addQuestionId");
+    setSearchParams(nextParams, { replace: true });
+  }, [loading]);
   const handleAddRound = () => { const round = { id: newRoundId(), name: `Round ${rounds.length + 1}`, description: "", questionIds: [] }; setRounds((prev) => [...prev, round]); setActiveRoundId(round.id); };
   const handleDeleteRound = (roundId) => { if (rounds.length === 1) return toast.error("Keep at least one round"); const nextRound = rounds.find((round) => round.id !== roundId) || rounds[0]; setRounds((prev) => prev.filter((round) => round.id !== roundId)); if (activeRoundId === roundId) setActiveRoundId(nextRound.id); };
   const handleRenameRound = (roundId, name) => setRounds((prev) => prev.map((round) => (round.id === roundId ? { ...round, name } : round)));

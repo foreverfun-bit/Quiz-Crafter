@@ -17,6 +17,7 @@ import {
   Loader2,
   MessageSquare,
   Pencil,
+  Plus,
   Save,
   Search,
   Upload,
@@ -457,7 +458,7 @@ export default function Library() {
                   onCancel={cancelEditing}
                 />
               ) : (
-                <QuestionCard key={question.id} question={question} used={isUsed(question)} memory={getQuestionMemory(question, questionMemory)} onEdit={() => startEditing(question)} onToggleUsed={() => toggleUsed(question)} onMemory={(status) => updateMemory(question, status)} />
+                <QuestionCard key={question.id} question={question} used={isUsed(question)} memory={getQuestionMemory(question, questionMemory)} onEdit={() => startEditing(question)} onToggleUsed={() => toggleUsed(question)} onMemory={(status) => updateMemory(question, status)} onAddToBuild={() => navigate(`/build?addQuestionId=${question.id}`)} />
               );
             })}
           </div>
@@ -467,7 +468,7 @@ export default function Library() {
   );
 }
 
-const QuestionCard = ({ question, used, memory, onEdit, onToggleUsed, onMemory }) => {
+const QuestionCard = ({ question, used, memory, onEdit, onToggleUsed, onMemory, onAddToBuild }) => {
   const type = question.question_type || "written";
   const config = typeConfig[type] || typeConfig.written;
   const Icon = config.icon;
@@ -487,6 +488,9 @@ const QuestionCard = ({ question, used, memory, onEdit, onToggleUsed, onMemory }
             {question.image_url && <Badge className="bg-amber-500/10 text-amber-300 border border-amber-500/20">Image</Badge>}
           </div>
           <div className="flex gap-2 flex-wrap justify-end">
+            <Button size="sm" onClick={onAddToBuild} className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/25 hover:bg-[#71E0DC]/20">
+              <Plus size={14} className="mr-2" />Add to Build
+            </Button>
             <Button size="sm" variant="outline" onClick={onToggleUsed} className={used ? "border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/10" : "border-zinc-700 text-zinc-300 hover:text-white"}>
               <CheckCircle size={14} className="mr-2" />{used ? "Used" : "Mark Used"}
             </Button>
