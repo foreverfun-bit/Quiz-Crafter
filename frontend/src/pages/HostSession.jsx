@@ -1273,7 +1273,7 @@ const HostSession = () => {
           {!focusMode && customizeOpen && <HostCustomizePanel branding={branding} defaultBranding={readDefaultBranding()} onSave={saveBranding} onSaveDefault={saveBrandingAsDefault} onUseDefault={useDefaultBranding} onClose={() => setCustomizeOpen(false)} />}
           {!gameStarted && !isReviewing ? <LobbyStage playerCount={players.length} onStartTrivia={startTriviaIntro} /> : presentMode === "categories" && !isReviewing ? <RoundIntroStage round={introRound} gameStarted={gameStarted} onStartIntro={startTriviaIntro} onStartQuestion={startIntroQuestion} /> : presentMode === "bonus_pause" && !isReviewing ? <BonusPauseStage round={rounds.find((round) => pendingBonusIndex >= round.startIndex && pendingBonusIndex < round.startIndex + round.questions.length)} leaderboard={leaderboard} /> : presentMode === "winners" && !isReviewing ? <WinnersStage leaderboard={leaderboard} /> : presentMode === "feedback" && !isReviewing ? <FeedbackStage ideas={playerIdeas} /> : <QuestionStage question={displayedQuestion} index={hostIndex} total={questions.length} showAnswer={isReviewing ? true : showAnswer} showFunFact={isReviewing ? false : showFunFact} focusMode={focusMode} pointsPerQuestion={viewPointsPerQuestion} timerSeconds={viewTimerSeconds} timeRemaining={isReviewing ? null : timeRemaining} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} wagerTiming={viewWagerTiming} onUpdateSettings={isReviewing ? () => {} : updateQuestionSettings} branding={branding} players={activePlayers} answers={activeCurrentAnswers} activity={currentActivity} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} setMode={releaseMode} isReviewing={isReviewing} />}
         </main>
-        {!focusMode && <PlaybackRail mode={presentMode} setMode={releaseMode} rounds={rounds} introRoundKey={selectedIntroKey} chooseIntroRound={chooseIntroRound} isReviewing={isReviewing} showAnswer={isReviewing ? true : showAnswer} onRevealAnswer={toggleAnswer} showFunFact={isReviewing ? false : showFunFact} onShowFunFact={toggleFunFact} hasRevealExtra={hasRevealExtra} hasFunFact={Boolean(displayedQuestion.funFact)} timeRemaining={isReviewing ? null : timeRemaining} timerSeconds={viewTimerSeconds} startTimer={startTimer} resetTimer={isReviewing ? () => {} : resetTimer} currentIndex={currentIndex} total={questions.length} onPrev={() => goToQuestion(currentIndex - 1, { startTimer: false })} onNext={() => {
+        {!focusMode && <PlaybackRail mode={presentMode} setMode={releaseMode} rounds={rounds} introRoundKey={selectedIntroKey} chooseIntroRound={chooseIntroRound} onSelectRoundIntro={(roundKey) => releaseMode("categories", roundKey)} isReviewing={isReviewing} showAnswer={isReviewing ? true : showAnswer} onRevealAnswer={toggleAnswer} showFunFact={isReviewing ? false : showFunFact} onShowFunFact={toggleFunFact} hasRevealExtra={hasRevealExtra} hasFunFact={Boolean(displayedQuestion.funFact)} timeRemaining={isReviewing ? null : timeRemaining} timerSeconds={viewTimerSeconds} startTimer={startTimer} resetTimer={isReviewing ? () => {} : resetTimer} currentIndex={currentIndex} total={questions.length} onPrev={() => goToQuestion(currentIndex - 1, { startTimer: false })} onNext={() => {
           if (!gameStarted) return startTriviaIntro();
           if (presentMode === "categories") return startIntroQuestion();
           if (presentMode === "bonus_pause" && pendingBonusIndex !== null) return goToQuestion(pendingBonusIndex, { startTimer: true, pauseBeforeBonus: false });
@@ -1295,8 +1295,6 @@ const HostSession = () => {
 
 const QuestionNavStrip = ({ questions, rounds, currentIndex, hostIndex, isReviewing, currentRound, onSelectPill, onPrev, onNext, onBackToLive, onGoLive, onSelectRoundIntro }) => {
   const activeRound = currentRound || rounds[0];
-  const activeRoundListIndex = rounds.findIndex((round) => round.key === activeRound?.key);
-  const nextRound = activeRoundListIndex >= 0 ? rounds[activeRoundListIndex + 1] : null;
   const jumpToRound = (roundKey) => {
     const round = rounds.find((item) => item.key === roundKey);
     if (round) onSelectPill(round.startIndex);
@@ -1322,7 +1320,6 @@ const QuestionNavStrip = ({ questions, rounds, currentIndex, hostIndex, isReview
         })}
       </div>
       <button type="button" onClick={onNext} disabled={hostIndex >= questions.length - 1} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-white/10 bg-zinc-950 text-zinc-300 hover:border-[#71E0DC]/40 hover:text-[#71E0DC] disabled:opacity-30" aria-label="Next question"><ChevronRight size={16} /></button>
-      {nextRound && <button type="button" onClick={() => onSelectRoundIntro(nextRound.key)} title={`Show ${nextRound.name} intro`} className="flex shrink-0 items-center gap-1.5 rounded-md border border-[#71E0DC]/30 bg-[#71E0DC]/10 px-2.5 py-1.5 text-xs font-bold text-[#71E0DC] hover:border-[#71E0DC]/60"><span className="max-w-[10ch] truncate">Next Round</span><ChevronRight size={14} /></button>}
       <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-rose-400/30 bg-rose-400/10 px-2.5 py-1.5 text-xs font-bold text-rose-200">
         <span className="h-1.5 w-1.5 rounded-full bg-rose-400 animate-pulse" />
         LIVE: Q{currentIndex + 1}
@@ -1346,8 +1343,11 @@ const PLAYBACK_TOOLS = [
   { key: "feedback", label: "Feedback", icon: ThumbsUp },
 ];
 
-const PlaybackRail = ({ mode, setMode, rounds, introRoundKey, chooseIntroRound, isReviewing, showAnswer, onRevealAnswer, showFunFact, onShowFunFact, hasRevealExtra, hasFunFact, timeRemaining, timerSeconds, startTimer, resetTimer, currentIndex, total, onPrev, onNext, onOpenDrawer, flaggedTeamCount, currentQuestionLabel }) => {
+const PlaybackRail = ({ mode, setMode, rounds, introRoundKey, chooseIntroRound, onSelectRoundIntro, isReviewing, showAnswer, onRevealAnswer, showFunFact, onShowFunFact, hasRevealExtra, hasFunFact, timeRemaining, timerSeconds, startTimer, resetTimer, currentIndex, total, onPrev, onNext, onOpenDrawer, flaggedTeamCount, currentQuestionLabel }) => {
   const nonQuestionMode = mode === "bonus_pause" || mode === "winners" || mode === "feedback";
+  const liveRound = rounds.find((round) => currentIndex >= round.startIndex && currentIndex < round.startIndex + round.questions.length);
+  const liveRoundListIndex = rounds.findIndex((round) => round.key === liveRound?.key);
+  const nextRound = liveRoundListIndex >= 0 ? rounds[liveRoundListIndex + 1] : null;
   const sceneActive = (key) => mode === key;
   const sceneButtonClass = (active) => `h-14 rounded-lg text-[11px] font-bold flex flex-col items-center justify-center gap-1 transition ${active ? "text-zinc-950" : "border border-white/10 text-zinc-300 hover:bg-white/5 hover:text-white"}`;
   const sceneButtonStyle = (active) => active ? { background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" } : undefined;
@@ -1391,6 +1391,7 @@ const PlaybackRail = ({ mode, setMode, rounds, introRoundKey, chooseIntroRound, 
             {rounds.map((round) => <option key={round.key} value={round.key}>{round.name}</option>)}
           </select>
         </div>
+        {nextRound && <button type="button" onClick={() => onSelectRoundIntro(nextRound.key)} title={`Show ${nextRound.name} intro`} className="mb-2.5 flex w-full items-center justify-center gap-1.5 rounded-md border border-[#71E0DC]/30 bg-[#71E0DC]/10 px-2.5 py-1.5 text-xs font-bold text-[#71E0DC] hover:border-[#71E0DC]/60"><span className="truncate">Next Round: {nextRound.name}</span><ChevronRight size={14} /></button>}
         <div className="grid grid-cols-3 gap-2">
           <button type="button" onClick={() => setMode("qr")} className={sceneButtonClass(sceneActive("qr"))} style={sceneButtonStyle(sceneActive("qr"))}><QrCode size={16} /><span>Lobby / QR</span></button>
           <button type="button" onClick={() => setMode("categories")} className={sceneButtonClass(sceneActive("categories"))} style={sceneButtonStyle(sceneActive("categories"))}><Tags size={16} /><span>Round Intro</span></button>
