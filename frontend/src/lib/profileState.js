@@ -45,9 +45,9 @@ let metadataUpdateQueue = Promise.resolve();
 
 export const updateUserMetadata = (patch) => {
   const task = metadataUpdateQueue.catch(() => {}).then(async () => {
-    const { data, error: loadError } = await supabase.auth.getUser();
+    const { data, error: loadError } = await supabase.auth.getSession();
     if (loadError) throw loadError;
-    const currentMetadata = isPlainObject(data?.user?.user_metadata) ? data.user.user_metadata : {};
+    const currentMetadata = isPlainObject(data?.session?.user?.user_metadata) ? data.session.user.user_metadata : {};
     const nextMetadata = { ...currentMetadata, ...(isPlainObject(patch) ? patch : {}) };
     const { error } = await supabase.auth.updateUser({ data: nextMetadata });
     if (error) throw error;
@@ -88,8 +88,8 @@ const mergeSetupSettings = (primary, mirror) => {
 };
 
 export const loadHostSetupSettings = async () => {
-  const { data: userData } = await supabase.auth.getUser().catch(() => ({ data: null }));
-  const metadataSetup = parseSetupStatus(userData?.user?.user_metadata?.[profileKeys.hostSetup]);
+  const { data: sessionData } = await supabase.auth.getSession().catch(() => ({ data: null }));
+  const metadataSetup = parseSetupStatus(sessionData?.session?.user?.user_metadata?.[profileKeys.hostSetup]);
   const { data, error } = await supabase
     .from("category_preferences")
     .select("*")
@@ -123,9 +123,9 @@ export const saveHostSetupSettings = async (patch) => {
 };
 
 export const loadProfileValue = async (profileKey) => {
-  const { data, error } = await supabase.auth.getUser();
+  const { data, error } = await supabase.auth.getSession();
   if (error) throw error;
-  return data?.user?.user_metadata?.[profileKey];
+  return data?.session?.user?.user_metadata?.[profileKey];
 };
 
 export const syncProfileJson = async ({ localKey, profileKey, fallback, merge = "remote" }) => {

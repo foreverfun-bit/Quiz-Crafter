@@ -34,9 +34,9 @@ export const writeQuestionMemory = (memory) => {
 
 export const syncQuestionMemoryFromProfile = async (supabase) => {
   const localMemory = readQuestionMemory();
-  const { data, error } = await supabase.auth.getUser();
+  const { data, error } = await supabase.auth.getSession();
   if (error) throw error;
-  const remoteMemory = data?.user?.user_metadata?.[QUESTION_MEMORY_PROFILE_KEY];
+  const remoteMemory = data?.session?.user?.user_metadata?.[QUESTION_MEMORY_PROFILE_KEY];
   const nextMemory = remoteMemory && typeof remoteMemory === "object" ? { ...remoteMemory, ...localMemory } : localMemory;
   writeQuestionMemory(nextMemory);
   if (!remoteMemory || JSON.stringify(remoteMemory) !== JSON.stringify(nextMemory)) {

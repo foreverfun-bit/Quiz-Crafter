@@ -10,10 +10,11 @@ const sanitizeFileName = (name) => (name || "media").replace(/[^a-zA-Z0-9._-]/g,
 // which is what caused hosting to glitch as images grew or players joined.
 export const uploadQuestionMedia = async (file) => {
   if (!file) throw new Error("No file selected");
-  const { data: userData, error: userError } = await supabase.auth.getUser();
-  if (userError || !userData?.user?.id) throw new Error("You must be signed in to upload media");
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  const userId = sessionData?.session?.user?.id;
+  if (sessionError || !userId) throw new Error("You must be signed in to upload media");
 
-  const path = `${userData.user.id}/${crypto.randomUUID()}-${sanitizeFileName(file.name)}`;
+  const path = `${userId}/${crypto.randomUUID()}-${sanitizeFileName(file.name)}`;
   const { error: uploadError } = await supabase.storage
     .from(QUESTION_MEDIA_BUCKET)
     .upload(path, file, { cacheControl: "3600", upsert: false, contentType: file.type || undefined });

@@ -74,10 +74,10 @@ const Venues = ({ initialTab = "venues" }) => {
         setForm(normalizeVenue(localVenues[0]));
       }
       try {
-        const { data, error } = await supabase.auth.getUser();
+        const { data, error } = await supabase.auth.getSession();
         if (error) throw error;
-        const remoteVenues = data?.user?.user_metadata?.[metadataVenuesKey];
-        const remoteActive = data?.user?.user_metadata?.[metadataActiveVenueKey];
+        const remoteVenues = data?.session?.user?.user_metadata?.[metadataVenuesKey];
+        const remoteActive = data?.session?.user?.user_metadata?.[metadataActiveVenueKey];
         const setupSettings = await loadHostSetupSettings().catch(() => ({}));
         const setupVenues = Array.isArray(setupSettings.venues) ? setupSettings.venues.map(normalizeVenue) : [];
         const normalizedRemote = Array.isArray(remoteVenues) ? remoteVenues.map(normalizeVenue) : [];

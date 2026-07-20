@@ -27,11 +27,11 @@ export const ensureLiveGame = async (sessionId, { sessionName } = {}) => {
   const existing = await mostRecentLiveGame(sessionId);
   if (existing && existing.status !== "finished") return existing;
 
-  const { data: userData } = await supabase.auth.getUser();
+  const { data: sessionData } = await supabase.auth.getSession();
   const { data: created, error: createError } = await supabaseTable("live_games")
     .insert({
       session_id: sessionId,
-      host_user_id: userData?.user?.id,
+      host_user_id: sessionData?.session?.user?.id,
       session_name: sessionName || "Trivia Night",
       code: makeGameCode(),
     })

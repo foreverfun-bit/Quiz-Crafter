@@ -570,10 +570,10 @@ const BuildSession = () => {
     if (sessionId || loading || profileBuildHydrated) return;
     const hydrateProfileBuild = async () => {
       try {
-        const { data, error } = await supabase.auth.getUser();
+        const { data, error } = await supabase.auth.getSession();
         if (error) throw error;
-        const remoteState = normalizeBuildSavedState(data?.user?.user_metadata?.[metadataBuildKey]);
-        const clearedAt = new Date(data?.user?.user_metadata?.[metadataBuildClearedKey] || 0).getTime() || 0;
+        const remoteState = normalizeBuildSavedState(data?.session?.user?.user_metadata?.[metadataBuildKey]);
+        const clearedAt = new Date(data?.session?.user?.user_metadata?.[metadataBuildClearedKey] || 0).getTime() || 0;
         const localState = loadBuildSavedState();
         const remoteIsFresh = remoteState && hasBuildContent(remoteState) && buildStateUpdatedAt(remoteState) > clearedAt;
         const localIsFresh = localState && hasBuildContent(localState) && buildStateUpdatedAt(localState) > clearedAt;
@@ -603,9 +603,9 @@ const BuildSession = () => {
       setVenues(localVenues);
       setSelectedTemplateId((current) => current || localTemplates[0]?.id || "");
       try {
-        const { data, error } = await supabase.auth.getUser();
+        const { data, error } = await supabase.auth.getSession();
         if (error) throw error;
-        const metadata = data?.user?.user_metadata || {};
+        const metadata = data?.session?.user?.user_metadata || {};
         const setupSettings = await loadHostSetupSettings().catch(() => ({}));
         const setupTemplates = Array.isArray(setupSettings.templates) ? setupSettings.templates.map(normalizeTemplate) : [];
         const setupVenues = Array.isArray(setupSettings.venues) ? setupSettings.venues.map(normalizeVenue) : [];
