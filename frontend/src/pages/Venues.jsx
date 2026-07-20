@@ -168,7 +168,14 @@ const Venues = ({ initialTab = "venues" }) => {
     else toast.error("Venue saved only on this browser. Account sync failed.");
   };
 
+  const setDefaultVenue = async (venueId) => {
+    await persistVenues(venues, venueId);
+    toast.success("Set as default venue");
+  };
+
   const deleteVenue = async (venueId) => {
+    const venueToDelete = venues.find((venue) => venue.id === venueId);
+    if (!window.confirm(`Delete ${venueToDelete?.name || "this venue"}? Its schedule and logistics info will be removed.`)) return;
     const nextVenues = venues.filter((venue) => venue.id !== venueId);
     const nextActive = activeVenueId === venueId ? (nextVenues[0]?.id || "") : activeVenueId;
     await persistVenues(nextVenues, nextActive);
@@ -210,6 +217,7 @@ const Venues = ({ initialTab = "venues" }) => {
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="text-lg font-black text-white truncate">{venue.name}</h3>
+                      {activeVenueId === venue.id && <Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20">Default</Badge>}
                     </div>
                     <p className="text-sm text-zinc-400 truncate">{scheduleLabel(venue)}</p>
                     <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm text-zinc-500">
@@ -223,6 +231,7 @@ const Venues = ({ initialTab = "venues" }) => {
                 </div>
                 <div className="mt-4 flex flex-wrap gap-2">
                   <Button size="sm" variant="outline" onClick={() => editVenue(venue)} className="border-white/10 text-zinc-300 hover:text-white">Edit</Button>
+                  {activeVenueId !== venue.id && <Button size="sm" variant="outline" onClick={() => setDefaultVenue(venue.id)} className="border-white/10 text-zinc-300 hover:text-white">Set Default</Button>}
                   <Button size="sm" variant="ghost" onClick={() => deleteVenue(venue.id)} className="text-red-300 hover:text-red-200"><Trash2 size={15} /></Button>
                 </div>
               </CardContent>
