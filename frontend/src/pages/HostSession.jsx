@@ -1295,6 +1295,8 @@ const HostSession = () => {
 
 const QuestionNavStrip = ({ questions, rounds, currentIndex, hostIndex, isReviewing, currentRound, onSelectPill, onPrev, onNext, onBackToLive, onGoLive, onSelectRoundIntro }) => {
   const activeRound = currentRound || rounds[0];
+  const activeRoundListIndex = rounds.findIndex((round) => round.key === activeRound?.key);
+  const nextRound = activeRoundListIndex >= 0 ? rounds[activeRoundListIndex + 1] : null;
   const jumpToRound = (roundKey) => {
     const round = rounds.find((item) => item.key === roundKey);
     if (round) onSelectPill(round.startIndex);
@@ -1320,6 +1322,7 @@ const QuestionNavStrip = ({ questions, rounds, currentIndex, hostIndex, isReview
         })}
       </div>
       <button type="button" onClick={onNext} disabled={hostIndex >= questions.length - 1} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-white/10 bg-zinc-950 text-zinc-300 hover:border-[#71E0DC]/40 hover:text-[#71E0DC] disabled:opacity-30" aria-label="Next question"><ChevronRight size={16} /></button>
+      {nextRound && <button type="button" onClick={() => onSelectRoundIntro(nextRound.key)} title={`Show ${nextRound.name} intro`} className="flex shrink-0 items-center gap-1.5 rounded-md border border-[#71E0DC]/30 bg-[#71E0DC]/10 px-2.5 py-1.5 text-xs font-bold text-[#71E0DC] hover:border-[#71E0DC]/60"><span className="max-w-[10ch] truncate">Next Round</span><ChevronRight size={14} /></button>}
       <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-rose-400/30 bg-rose-400/10 px-2.5 py-1.5 text-xs font-bold text-rose-200">
         <span className="h-1.5 w-1.5 rounded-full bg-rose-400 animate-pulse" />
         LIVE: Q{currentIndex + 1}
