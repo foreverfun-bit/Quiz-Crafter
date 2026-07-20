@@ -615,14 +615,44 @@ const HostSession = () => {
       .on("broadcast", { event: "feedback_submit" }, ({ payload }) => {
         if (!payload?.playerId || payload.questionIndex === undefined) return;
         setFeedback(() => persistLiveVote(id, "feedback", payload, (item) => `${item.playerId}-${item.questionIndex}`));
+        supabase.from("session_question_feedback").upsert({
+          session_id: id,
+          player_id: payload.playerId,
+          player_name: payload.playerName || "",
+          sentiment: payload.sentiment,
+          question_index: payload.questionIndex,
+          question_id: payload.questionId || null,
+          question_text: payload.questionText || "",
+          category: payload.category || "",
+          round_name: payload.roundName || "",
+          submitted_at: payload.submittedAt || new Date().toISOString(),
+        }, { onConflict: "session_id,player_id,question_index" }).then(({ error }) => { if (error) console.warn("Question feedback save unavailable:", error); });
       })
       .on("broadcast", { event: "category_feedback_submit" }, ({ payload }) => {
         if (!payload?.playerId || !payload.category) return;
         setCategoryFeedback(() => persistLiveVote(id, "category-feedback", payload, (item) => `${item.playerId}-${item.roundKey || item.roundName}-${item.category}`));
+        supabase.from("session_category_feedback").upsert({
+          session_id: id,
+          player_id: payload.playerId,
+          player_name: payload.playerName || "",
+          sentiment: payload.sentiment,
+          category: payload.category,
+          round_key: payload.roundKey || payload.roundName || "",
+          round_name: payload.roundName || "",
+          submitted_at: payload.submittedAt || new Date().toISOString(),
+        }, { onConflict: "session_id,player_id,round_key,category" }).then(({ error }) => { if (error) console.warn("Category feedback save unavailable:", error); });
       })
       .on("broadcast", { event: "idea_submit" }, ({ payload }) => {
         if (!payload?.playerId) return;
         setPlayerIdeas(() => persistLiveIdea(id, payload));
+        supabase.from("session_player_ideas").insert({
+          session_id: id,
+          player_id: payload.playerId,
+          player_name: payload.playerName || "",
+          category: payload.category || "",
+          question: payload.question || "",
+          submitted_at: payload.submittedAt || new Date().toISOString(),
+        }).then(({ error }) => { if (error) console.warn("Player idea save unavailable:", error); });
       })
       .on("broadcast", { event: "present_ready" }, () => {
         const state = liveStateRef.current;

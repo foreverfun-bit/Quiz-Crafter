@@ -89,6 +89,7 @@ export default async function handler(req, res) {
       sessionContext = null,
       generationMode = "polished",
       hostStyleProfile = null,
+      venueId = null,
     } = req.body || {};
 
     if (!sessionId || !questionType) return res.status(400).json({ error: "Missing sessionId or questionType" });
@@ -110,6 +111,9 @@ export default async function handler(req, res) {
     const cleanRejectedAnswers = dedupeStrings(normalizeStringArray(rejectedAnswers));
     const cleanSessionContext = normalizeSessionContext(sessionContext);
     const cleanHostStyleProfile = normalizeHostStyleProfile(hostStyleProfile);
+    const cleanVenueId = cleanText(venueId);
+    const venueHistory = fastMode || !cleanVenueId ? null : await fetchVenueHistory(cleanVenueId);
+    const venueProfileText = buildVenueProfileText(venueHistory);
     const allowUsedSources = hasReuseIntent(cleanTheme);
     const requireApprovedCategories = cleanLockedCategories.length > 0 || cleanApprovedCategories.length > 0;
     const categoryExpansionMode = false;
@@ -171,6 +175,7 @@ export default async function handler(req, res) {
         sessionStyleProfile,
         cleanRejectedQuestions,
         cleanRejectedAnswers,
+        venueProfileText,
       });
       parsed = await requestCandidates(sourcePrompt, { fastMode });
       usedSourceBackedPrompt = true;
@@ -197,6 +202,7 @@ export default async function handler(req, res) {
         fastMode,
         cleanHostStyleProfile,
         sessionStyleProfile,
+        venueProfileText,
       });
       parsed = await requestCandidates(prompt, { fastMode });
     }
@@ -459,7 +465,7 @@ function formatContextQuestion(question) {
   return `- [${question.round || "Session"} / ${question.category || "Uncategorized"} / ${question.question_type || "written"}] ${question.question_text} Answer: ${question.correct_answer}`;
 }
 
-function buildSourceBackedPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanApprovedCategories, cleanLockedCategories, cleanExcludeCategories, cleanSessionContext = null, sourceSeeds = [], includeImagePrompt, cleanHostStyleProfile = null, sessionStyleProfile = null, cleanRejectedQuestions = [], cleanRejectedAnswers = [] }) {
+function buildSourceBackedPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanApprovedCategories, cleanLockedCategories, cleanExcludeCategories, cleanSessionContext = null, sourceSeeds = [], includeImagePrompt, cleanHostStyleProfile = null, sessionStyleProfile = null, cleanRejectedQuestions = [], cleanRejectedAnswers = [], venueProfileText = "" }) {
   const approvedCategoryText = cleanLockedCategories.length
     ? `Use exactly one of these locked categories: ${cleanLockedCategories.join(", ")}.`
     : cleanApprovedCategories.length
@@ -546,13 +552,14 @@ Rules:
 - For multiple choice, wrong answers should be plausible and comparable.
 - For written answer, the answer should be familiar/gettable enough without options.
 ${hostStyleProfileText}
+${venueProfileText}
 ${sessionStyleText}
 ${sessionContextText}
 ${rejectedText}
 `.trim();
 }
 
-function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, categoryExpansionMode, cleanRejectedQuestions = [], cleanRejectedAnswers = [], cleanSessionContext = null, existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt, fastMode = false, cleanHostStyleProfile = null, sessionStyleProfile = null }) {
+function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, categoryExpansionMode, cleanRejectedQuestions = [], cleanRejectedAnswers = [], cleanSessionContext = null, existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt, fastMode = false, cleanHostStyleProfile = null, sessionStyleProfile = null, venueProfileText = "" }) {
   const overGenerateCount = fastMode ? Math.min(8, Math.max(safeCount + 1, Math.ceil(safeCount * 1.35))) : Math.min(18, Math.max(safeCount + 4, Math.ceil(safeCount * 1.7)));
   const lockedCategoryText = cleanLockedCategories.length ? `Locked categories are active. The category field must exactly match one of these locked categories: ${cleanLockedCategories.join(", ")}. Generate all candidates inside these locked categories until the host unlocks them.` : "";
   const approvedCategoryText = cleanLockedCategories.length
@@ -668,6 +675,7 @@ Trivia host style:
 - difficulty must be "${difficultyKey}".
 ${imagePromptRule}
 ${hostStyleProfileText}
+${venueProfileText}
 ${sessionStyleText}
 ${hostHardText}
 ${tasteProfileText}
@@ -1384,6 +1392,82 @@ function decodeHtml(value) {
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">");
+}
+
+async function fetchVenueHistory(venueId) {
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.REACT_APP_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.REACT_APP_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !supabaseKey) return null;
+
+  try {
+    const base = supabaseUrl.replace(/\/$/, "");
+    const headers = { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` };
+    const encodedVenueId = encodeURIComponent(venueId);
+
+    const sessions = await fetchJsonWithFallback([
+      `${base}/rest/v1/sessions?select=id,name,session_name,session_date,event_date,created_at&venue_id=eq.${encodedVenueId}&order=created_at.desc&limit=20`,
+    ], headers);
+    if (!Array.isArray(sessions) || !sessions.length) return null;
+
+    const sessionIds = sessions.map((session) => session.id).filter(Boolean);
+    const idFilter = `(${sessionIds.map((sessionId) => `"${sessionId}"`).join(",")})`;
+
+    const [questionFeedback, categoryFeedback, ideas] = await Promise.all([
+      fetchJsonWithFallback([`${base}/rest/v1/session_question_feedback?select=category,sentiment,question_text&session_id=in.${idFilter}&limit=1000`], headers),
+      fetchJsonWithFallback([`${base}/rest/v1/session_category_feedback?select=category,sentiment&session_id=in.${idFilter}&limit=1000`], headers),
+      fetchJsonWithFallback([`${base}/rest/v1/session_player_ideas?select=category,question&session_id=in.${idFilter}&order=created_at.desc&limit=40`], headers),
+    ]);
+
+    return {
+      sessionCount: sessions.length,
+      mostRecentDate: cleanText(sessions[0]?.session_date || sessions[0]?.event_date || sessions[0]?.created_at),
+      pastThemes: sessions.map((session) => cleanText(session.name || session.session_name)).filter(Boolean).slice(0, 10),
+      questionFeedback: Array.isArray(questionFeedback) ? questionFeedback : [],
+      categoryFeedback: Array.isArray(categoryFeedback) ? categoryFeedback : [],
+      ideas: Array.isArray(ideas) ? ideas : [],
+    };
+  } catch (error) {
+    console.error("Venue history fetch failed:", error);
+    return null;
+  }
+}
+
+function buildVenueProfileText(history) {
+  if (!history || !history.sessionCount) return "";
+
+  const categoryScores = new Map();
+  const bump = (category, sentiment) => {
+    const key = cleanText(category);
+    if (!key) return;
+    const entry = categoryScores.get(key) || { likes: 0, dislikes: 0 };
+    if (sentiment === "like") entry.likes += 1;
+    else if (sentiment === "dislike") entry.dislikes += 1;
+    categoryScores.set(key, entry);
+  };
+  history.categoryFeedback.forEach((item) => bump(item.category, item.sentiment));
+  history.questionFeedback.forEach((item) => bump(item.category, item.sentiment));
+
+  const ranked = [...categoryScores.entries()]
+    .map(([category, { likes, dislikes }]) => ({ category, net: likes - dislikes }))
+    .sort((a, b) => b.net - a.net);
+  const loved = ranked.filter((row) => row.net > 0).slice(0, 8).map((row) => row.category);
+  const struggled = ranked.filter((row) => row.net < 0).slice(-8).map((row) => row.category).reverse();
+
+  const likedQuestions = history.questionFeedback.filter((item) => item.sentiment === "like" && item.question_text).slice(0, 4).map((item) => `- ${item.question_text}`);
+  const dislikedQuestions = history.questionFeedback.filter((item) => item.sentiment === "dislike" && item.question_text).slice(0, 4).map((item) => `- ${item.question_text}`);
+  const ideaLines = history.ideas.filter((idea) => idea.category || idea.question).slice(0, 6).map((idea) => `- ${[idea.category, idea.question].filter(Boolean).join(": ")}`);
+
+  return [
+    "Venue history for this location:",
+    `- Played here ${history.sessionCount} time${history.sessionCount === 1 ? "" : "s"} before${history.mostRecentDate ? `, most recently ${history.mostRecentDate}` : ""}.`,
+    history.pastThemes.length ? `- Past session names here: ${history.pastThemes.join(", ")}` : "",
+    loved.length ? `- Categories that have landed well here (live audience thumbs-up outweighing thumbs-down): ${loved.join(", ")}` : "",
+    struggled.length ? `- Categories that have struggled here (live audience thumbs-down outweighing thumbs-up): ${struggled.join(", ")}` : "",
+    likedQuestions.length ? `Specific questions this crowd liked here:\n${likedQuestions.join("\n")}` : "",
+    dislikedQuestions.length ? `Specific questions this crowd disliked here, avoid this style/topic again:\n${dislikedQuestions.join("\n")}` : "",
+    ideaLines.length ? `Player-submitted category/question ideas from past nights here:\n${ideaLines.join("\n")}` : "",
+    "Lean toward what has worked at this venue before. Avoid repeating categories or angles that have struggled here unless given a genuinely fresh angle.",
+  ].filter(Boolean).join("\n");
 }
 
 async function fetchExistingQuestions(libraryLimit = 1500, sessionLimit = 500) {
