@@ -580,6 +580,7 @@ const Generate = ({ initialCreateMode = "generate" }) => {
             {[
               { key: "keep", label: "Keep" },
               { key: "too_easy", label: "Too easy" },
+              { key: "too_hard", label: "Too hard" },
               { key: "too_common", label: "Too common" },
               { key: "not_my_style", label: "Not my style" },
               { key: "more_like_this", label: "More like this" },

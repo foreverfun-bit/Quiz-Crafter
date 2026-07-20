@@ -20,6 +20,7 @@ export const defaultHostStyleProfile = {
   feedbackCounts: {
     keep: 0,
     too_easy: 0,
+    too_hard: 0,
     too_common: 0,
     not_my_style: 0,
     more_like_this: 0,
@@ -97,11 +98,12 @@ export const rememberStyleFeedback = async (question, action, note = "") => {
     next.categoriesThatPerformWell = dedupeCategories([category, ...next.categoriesThatPerformWell]).slice(0, 30);
     next.examplesOfGoodQuestions = [cleanQuestionExample(question, note || action), ...next.examplesOfGoodQuestions].filter((item) => item.question_text).slice(0, 12);
   }
-  if (["too_easy", "too_common", "not_my_style"].includes(action)) {
+  if (["too_easy", "too_hard", "too_common", "not_my_style"].includes(action)) {
     if (category) next.categoriesThatPerformPoorly = dedupeCategories([category, ...next.categoriesThatPerformPoorly]).slice(0, 30);
     next.examplesOfBadQuestions = [cleanQuestionExample(question, note || action), ...next.examplesOfBadQuestions].filter((item) => item.question_text).slice(0, 12);
   }
   if (action === "too_easy") next.preferredDifficulty = "Slightly hard. Avoid too-obvious clues and give the question a stronger second step while staying fair.";
+  if (action === "too_hard") next.preferredDifficulty = "Too hard right now. Ease off obscure clues and make the answer more gettable for a strong bar-trivia team while staying interesting.";
   if (action === "too_common") next.writingStyleNotes = "Avoid common trivia-site staples, stock facts, and familiar reworded questions. Use fresher angles with real clue paths.";
   if (action === "not_my_style") next.writingStyleNotes = "Write more like Jewelzz/Forever Fun: live-host friendly, unique, playful, concise, category-varied, and not generic AI trivia.";
   return saveHostStyleProfile(next).catch((error) => {
