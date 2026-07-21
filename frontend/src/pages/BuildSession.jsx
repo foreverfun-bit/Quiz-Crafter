@@ -17,7 +17,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { canonicalCategory, categoryKey, dedupeCategories } from "../lib/categories";
 import { PROFILE_SHOW_TEMPLATES_KEY, PROFILE_VENUES_KEY, hasSavedLocalTemplates, makeTemplateBuildDraft, mergeProfileRecords, normalizeTemplate, normalizeVenue, readActiveVenueId, readLocalTemplates, readLocalVenues, readVenueBuildDraft, recordsChanged, VENUE_BUILD_DRAFT_KEY, writeLocalTemplates, writeLocalVenues, writeTemplateBuildDraft } from "../lib/venues";
 import { isMemoryBlocked, memoryRejectedQuestionTexts, readQuestionMemory, saveQuestionMemoryToProfile, syncQuestionMemoryFromProfile, upsertQuestionMemory } from "../lib/questionMemory";
-import { loadHostSetupSettings, profileKeys, saveHostSetupSettings, saveProfileValue, syncProfileJson, updateUserMetadata } from "../lib/profileState";
+import { loadHostSetupSettings, loadProfileValue, profileKeys, saveHostSetupSettings, saveProfileValue, syncProfileJson, updateUserMetadata } from "../lib/profileState";
 import { readHostStyleProfile, rememberStyleFeedback, syncHostStyleProfile } from "../lib/hostStyleMemory";
 import { useCopilot } from "../context/CopilotContext";
 
@@ -397,6 +397,17 @@ const BuildSession = () => {
   const { sessionId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
+  useEffect(() => {
+    if (sessionId || searchParams.get("new") === "1" || searchParams.get("venueId") || searchParams.get("date")) return;
+    loadProfileValue(profileKeys.currentProjectSessionId)
+      .then((currentId) => {
+        if (!currentId) return;
+        const extra = searchParams.toString();
+        navigate(`/build/${currentId}${extra ? `?${extra}` : ""}`, { replace: true });
+      })
+      .catch((error) => console.warn("Current project redirect unavailable:", error));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const initialVenues = useMemo(() => readLocalVenues(), []);
   const initialTemplates = useMemo(() => readLocalTemplates(), []);
   const buildContext = useMemo(() => (sessionId ? null : resolveBuildContext(searchParams, initialVenues, initialTemplates)), [sessionId, searchParams, initialVenues, initialTemplates]);
