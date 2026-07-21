@@ -18,12 +18,13 @@ import {
   Plus,
   Radio,
   Save,
+  Star,
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 import { mergeProfileRecords, normalizeVenue, readLocalVenues } from "../lib/venues";
-import { loadProfileValue, profileKeys } from "../lib/profileState";
+import { loadProfileValue, profileKeys, saveProfileValue } from "../lib/profileState";
 
 const questionTypes = [
   { value: "true_false", label: "True/False" },
@@ -146,6 +147,8 @@ const SessionDetail = () => {
   const [deleting, setDeleting] = useState(false);
   const [venues, setVenues] = useState([]);
   const [savingVenue, setSavingVenue] = useState(false);
+  const [currentProjectId, setCurrentProjectId] = useState(null);
+  const [savingCurrentProject, setSavingCurrentProject] = useState(false);
   const [isEditingImported, setIsEditingImported] = useState(false);
   const [savingImported, setSavingImported] = useState(false);
   const [editableSessionName, setEditableSessionName] = useState("");
@@ -171,7 +174,27 @@ const SessionDetail = () => {
         if (merged.length) setVenues(merged);
       })
       .catch((error) => console.warn("Venue list sync unavailable:", error));
+    loadProfileValue(profileKeys.currentProjectSessionId)
+      .then((current) => setCurrentProjectId(current || null))
+      .catch((error) => console.warn("Current project marker unavailable:", error));
   }, []);
+
+  const isCurrentProject = currentProjectId && String(currentProjectId) === String(id);
+
+  const handleToggleCurrentProject = async () => {
+    const nextValue = isCurrentProject ? null : id;
+    setSavingCurrentProject(true);
+    try {
+      await saveProfileValue(profileKeys.currentProjectSessionId, nextValue);
+      setCurrentProjectId(nextValue);
+      toast.success(nextValue ? "Marked as current project" : "Removed as current project");
+    } catch (error) {
+      console.error("Current project update error:", error);
+      toast.error(error.message || "Failed to update current project");
+    } finally {
+      setSavingCurrentProject(false);
+    }
+  };
 
   const handleVenueChange = async (venueId) => {
     const venue = venues.find((item) => item.id === venueId);
@@ -581,6 +604,16 @@ const SessionDetail = () => {
             </>
           ) : (
             <>
+              <Button
+                variant="outline"
+                onClick={handleToggleCurrentProject}
+                disabled={savingCurrentProject}
+                className={isCurrentProject ? "border-amber-400/40 bg-amber-400/15 text-amber-300 hover:bg-amber-400/20" : "border-white/15 text-zinc-300 hover:text-white hover:bg-zinc-800"}
+                data-testid="current-project-btn"
+              >
+                {savingCurrentProject ? <Loader2 size={16} className="mr-2 animate-spin" /> : <Star size={16} className={`mr-2 ${isCurrentProject ? "fill-amber-300" : ""}`} />}
+                {isCurrentProject ? "Current Project" : "Mark as Current Project"}
+              </Button>
               <Button onClick={handleGoLive} className="bg-gradient-to-r from-[#71E0DC] to-[#AEB2EF] text-zinc-900 font-bold hover:opacity-90" data-testid="go-live-btn">
                 <Radio size={16} className="mr-2" />Go Live
               </Button>

@@ -162,6 +162,8 @@ const Dashboard = () => {
   const [todos, setTodos] = useState([]);
   const [todoText, setTodoText] = useState("");
   const [loading, setLoading] = useState(true);
+  const [currentProjectSessionId, setCurrentProjectSessionId] = useState(null);
+  const [fetchedCurrentProjectSession, setFetchedCurrentProjectSession] = useState(null);
 
   useEffect(() => {
     const loadHostSetup = async () => {
@@ -177,6 +179,7 @@ const Dashboard = () => {
         const { data, error } = await supabase.auth.getSession();
         if (error) throw error;
         const metadata = data?.session?.user?.user_metadata || {};
+        setCurrentProjectSessionId(metadata[profileKeys.currentProjectSessionId] || null);
         const setupSettings = await loadHostSetupSettings().catch(() => ({}));
         const setupVenues = Array.isArray(setupSettings.venues) ? setupSettings.venues.map(normalizeVenue) : [];
         const setupTemplates = Array.isArray(setupSettings.templates) ? setupSettings.templates.map(normalizeTemplate) : [];
@@ -254,6 +257,16 @@ const Dashboard = () => {
     fetchStats();
   }, [user?.id]);
 
+  useEffect(() => {
+    if (!currentProjectSessionId || !user?.id) { setFetchedCurrentProjectSession(null); return; }
+    if (recentSessions.some((session) => String(session.id) === String(currentProjectSessionId))) return;
+    let cancelled = false;
+    supabase.from("sessions").select("*").eq("id", currentProjectSessionId).eq("user_id", user.id).single()
+      .then(({ data, error }) => { if (!cancelled && !error && data) setFetchedCurrentProjectSession(data); })
+      .catch((error) => console.warn("Current project session lookup unavailable:", error));
+    return () => { cancelled = true; };
+  }, [currentProjectSessionId, recentSessions, user?.id]);
+
   const firstName = useMemo(() => {
     const name = user?.name || user?.email || "Host";
     return String(name).split(/[ @]/)[0] || "Host";
@@ -285,9 +298,29 @@ const Dashboard = () => {
     questions: [],
     questionCount: questionCount(matchingSavedSession),
   } : null;
-  const relevantBuild = nextShow ? (nextShowBuild || matchingSessionBuild) : savedBuild;
-  const nextShowTemplateFallback = nextShow?.venue ? { questionsPerRound: nextShow.venue.questionsPerRound || 0, roundCount: nextShow.venue.roundCount || 0 } : null;
-  const buildProgress = getBuildProgress(relevantBuild, nextShowTemplateFallback || starterTemplate);
+
+  const currentProjectSession = currentProjectSessionId
+    ? recentSessions.find((session) => String(session.id) === String(currentProjectSessionId))
+      || (fetchedCurrentProjectSession && String(fetchedCurrentProjectSession.id) === String(currentProjectSessionId) ? fetchedCurrentProjectSession : null)
+    : null;
+  const currentProjectDateValue = currentProjectSession ? (currentProjectSession.session_date || currentProjectSession.event_date) : null;
+  const currentProjectShow = currentProjectSession ? {
+    venue: venues.find((venue) => venue.id === currentProjectSession.venue_id) || null,
+    date: currentProjectDateValue ? new Date(currentProjectDateValue) : null,
+  } : null;
+  const currentProjectBuild = currentProjectSession ? {
+    sessionName: currentProjectSession.name || currentProjectSession.session_name || "",
+    sessionDate: String(currentProjectDateValue || "").slice(0, 10),
+    venueId: currentProjectSession.venue_id || "",
+    rounds: [],
+    questions: [],
+    questionCount: questionCount(currentProjectSession),
+  } : null;
+
+  const effectiveShow = currentProjectSession ? currentProjectShow : nextShow;
+  const relevantBuild = currentProjectSession ? currentProjectBuild : (nextShow ? (nextShowBuild || matchingSessionBuild) : savedBuild);
+  const effectiveTemplateFallback = effectiveShow?.venue ? { questionsPerRound: effectiveShow.venue.questionsPerRound || 0, roundCount: effectiveShow.venue.roundCount || 0 } : null;
+  const buildProgress = getBuildProgress(relevantBuild, effectiveTemplateFallback || starterTemplate);
   const nextPrep = getNextPrep(buildProgress, starterTemplate, relevantBuild, unusedCount);
 
   const persistTodos = (nextTodos) => {
@@ -316,8 +349,10 @@ const Dashboard = () => {
     if (starterTemplate?.id) params.set("templateId", starterTemplate.id);
     return `/build?${params.toString()}`;
   };
-  const handleContinueBuild = () => navigate(buildUrlForShow(nextShow));
-  const handleBuildShow = (show) => navigate(buildUrlForShow(show));
+  const handleContinueBuild = () => {
+    if (currentProjectSession) { navigate(`/build/${currentProjectSession.id}`); return; }
+    navigate(buildUrlForShow(nextShow));
+  };
   const handleNewBlankBuild = async () => {
     try {
       const draft = readSavedBuildState();
@@ -400,13 +435,14 @@ const Dashboard = () => {
 
       <NextShowHero
         firstName={firstName}
-        nextShow={nextShow}
+        nextShow={effectiveShow}
+        isCurrentProject={Boolean(currentProjectSession)}
         savedBuild={relevantBuild}
         progress={buildProgress}
         nextPrep={nextPrep}
-        nextSession={nextSession}
+        nextSession={currentProjectSession || nextSession}
         onBuild={handleContinueBuild}
-        onHostSession={() => nextSession && navigate(`/host-session/${nextSession.id}`)}
+        onHostSession={() => { const targetId = currentProjectSession?.id || nextSession?.id; if (targetId) navigate(`/host-session/${targetId}`); }}
         onVenues={() => navigate("/venues")}
       />
 
@@ -497,7 +533,7 @@ const Dashboard = () => {
   );
 };
 
-const NextShowHero = ({ firstName, nextShow, savedBuild, progress, nextPrep, nextSession, onBuild, onHostSession, onVenues }) => {
+const NextShowHero = ({ firstName, nextShow, isCurrentProject, savedBuild, progress, nextPrep, nextSession, onBuild, onHostSession, onVenues }) => {
   const venue = nextShow?.venue;
   const date = nextShow?.date;
   const ready = progress.complete && Boolean(savedBuild?.questionCount);
@@ -510,7 +546,7 @@ const NextShowHero = ({ firstName, nextShow, savedBuild, progress, nextPrep, nex
           <div>
             <p className="text-sm text-zinc-500">{greeting}, {firstName}.</p>
             <div className="mt-2 flex flex-wrap items-center gap-2 mb-3">
-              <Badge className="bg-[#71E0DC] text-zinc-950">Next show</Badge>
+              <Badge className="bg-[#71E0DC] text-zinc-950">{isCurrentProject ? "Current project" : "Next show"}</Badge>
               <Badge className={ready ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-200"}>{nextPrep.status}</Badge>
             </div>
             <h2 className="text-2xl md:text-4xl font-bold text-white">
@@ -518,7 +554,7 @@ const NextShowHero = ({ firstName, nextShow, savedBuild, progress, nextPrep, nex
             </h2>
             <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm text-zinc-400">
               <span className="flex items-center gap-2"><MapPin size={16} className="text-[#71E0DC]" />{venue?.name || venue?.nightName || "Set a venue"}</span>
-              <span className="flex items-center gap-2"><Calendar size={16} className="text-[#AEB2EF]" />{date ? `${date.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })} at ${formatScheduleTime(venue.startTime, venue.timeZone)}` : "Date/time TBD"}</span>
+              <span className="flex items-center gap-2"><Calendar size={16} className="text-[#AEB2EF]" />{date ? `${date.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })}${venue ? ` at ${formatScheduleTime(venue.startTime, venue.timeZone)}` : ""}` : "Date/time TBD"}</span>
               <span className="flex items-center gap-2"><CheckCircle size={16} className="text-emerald-400" />{progress.current}/{progress.goal || "?"} questions</span>
             </div>
             <p className="mt-4 text-lg text-zinc-200">{nextPrep.message}</p>

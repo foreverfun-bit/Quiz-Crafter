@@ -47,7 +47,7 @@ import {
   Zap,
 } from "lucide-react";
 import { toast } from "sonner";
-import { loadHostSetupSettings, loadHostToolsSessionState, saveHostSetupSettings, saveHostToolsSessionState, updateUserMetadata } from "../lib/profileState";
+import { loadHostSetupSettings, loadHostToolsSessionState, loadProfileValue, profileKeys, saveHostSetupSettings, saveHostToolsSessionState, saveProfileValue, updateUserMetadata } from "../lib/profileState";
 
 const STORAGE_BASE = process.env.REACT_APP_SUPABASE_URL ? `${process.env.REACT_APP_SUPABASE_URL}/storage/v1/object/public/` : "";
 const DEFAULT_PUBLIC_SITE = "https://quizcrafter.com";
@@ -1065,6 +1065,9 @@ const HostSession = () => {
       setSession((current) => ({ ...current, is_past: true, hosted_at: endedAt, hosted_results: hostedResultsRef.current }));
       toast.success("Hosted session ended and results saved");
     }
+    loadProfileValue(profileKeys.currentProjectSessionId)
+      .then((current) => { if (current && String(current) === String(id)) return saveProfileValue(profileKeys.currentProjectSessionId, null); })
+      .catch((profileError) => console.warn("Current project marker clear unavailable:", profileError));
   };
   const openPresentation = () => window.open(`/present-session/${id}`, "_blank", "noopener,noreferrer");
   const copyJoinLink = async () => {
