@@ -786,7 +786,6 @@ const BuildSession = () => {
   };
   const isPreferredFullBuildCandidate = (question) => { const text = normalizeText(question?.question_text); const answer = normalizeText(question?.correct_answer); const category = normalizeText(question?.category); if (!text || !answer || !category || categoryKey(category) === "general") return false; if (text.length < 28) return false; if (/^(what|which|who) (is|was|are|were) the (capital|largest|highest|longest|oldest) /i.test(text)) return false; return true; };
   const uniqueGeneratedQuestions = (candidates, existing = []) => { const seen = new Set(existing.map((question) => fingerprint(question?.question_text || ""))); return candidates.filter((candidate) => { const key = fingerprint(candidate?.question_text || ""); if (!key || seen.has(key)) return false; seen.add(key); return true; }); };
-  const addGeneratedToSpecificRounds = (generatedByRound) => { const generated = Object.values(generatedByRound).flat(); if (!generated.length) return; setQuestions((prev) => [...generated, ...prev]); setRounds((prev) => prev.map((round) => ({ ...round, questionIds: [...(round.questionIds || []), ...(generatedByRound[round.id] || []).map((question) => question.id)] }))); };
   const requestGeneratedForFullRound = async ({ round, type, count, excludedCategories, generatedQuestions, attempt = 1 }) => { const latestMemory = readQuestionMemory(); setQuestionMemory(latestMemory); const latestStyle = readHostStyleProfile(); setHostStyleProfile(latestStyle); const rejectedQuestions = new Set([...rejectedAi, ...memoryRejectedQuestionTexts(latestMemory), ...generatedQuestions.map((question) => question.question_text)]); const { excludedCategories: cleanExcluded, approvedPool } = buildApprovedCategoryScope({ softExclusions: [...recentSessionCategories, ...selectedSessionCategories, ...excludedCategories] }); const fullTheme = [theme, `Build this as part of ${sessionName || "this show"}.`, `Round: ${round.name}.`, `Type: ${questionTypeLabel(type)}.`, round.description ? `Round direction: ${round.description}` : "", "Use approved categories, prefer ones not already used this session, and keep questions US-friendly, fresh, fair, and playable.", generationMode === "polished" ? "Polished mode: stronger wrong answers and cleaner fun facts are worth a little extra time." : "Quick draft mode: prioritize usable drafts fast; keep wording concise and complete.", attempt > 1 ? `Retry ${attempt}: avoid every rejected or already generated angle.` : ""].filter(Boolean).join("\n"); return axios.post("/api/generate-session-candidates", { sessionId: `full-${round.id}`, questionType: type, count, difficulty, theme: fullTheme, excludeUsed: true, avoidDuplicates: true, includeImagePrompt: false, excludeCategories: cleanExcluded, approvedCategories: approvedPool, rejectedCategories, rejectedQuestions: [...rejectedQuestions], sessionContext: buildAiSessionContext(), generationMode, hostStyleProfile: latestStyle, venueId: selectedVenueId || null }, { timeout: generationMode === "quick" ? 75000 : 120000 }); };
   const collectFullBuildCandidates = async ({ round, type, needed, generatedCategories, generatedQuestions, errors = [], onBatch = null }) => {
     const accepted = [];
@@ -946,7 +945,7 @@ const BuildSession = () => {
           generatedByRound[round.id].push(...uniqueBatch);
           generatedQuestions.push(...uniqueBatch);
           generatedCategories.push(...uniqueBatch.map((question) => question.category));
-          addGeneratedToSpecificRounds({ [round.id]: uniqueBatch });
+          setAiCandidates((prev) => [...prev, ...uniqueBatch]);
           const ready = existingCount + generatedByRound[round.id].length;
           setGenerationStatus(`${round.name}: ${Math.min(ready, targetPerRound)} of ${targetPerRound} questions ready`);
         };
@@ -968,6 +967,7 @@ const BuildSession = () => {
         if (finalMissing > 0) shortages.push(`${round.name}: ${finalMissing} short`);
       };
       if (onlyRoundId) {
+        setActiveRoundId(sourceRounds[0].id);
         await buildRound(sourceRounds[0]);
       } else {
         await Promise.all(sourceRounds.map((round) => buildRound(round)));
@@ -977,9 +977,9 @@ const BuildSession = () => {
         return toast.info("This build is already filled to the selected template count");
       }
       setGenerationStatus("Checking answers and fun facts...");
-      if (shortages.length || batchErrors.length) toast.warning(`Built ${generatedQuestions.length} questions, but ${shortages.join(", ")} after retries`);
-      else toast.success(`Built ${generatedQuestions.length} question${generatedQuestions.length === 1 ? "" : "s"} ${onlyRoundId ? "for this round" : "across the session"}`);
-      appendBuilderAssistant(`I added ${generatedQuestions.length} question${generatedQuestions.length === 1 ? "" : "s"} ${onlyRoundId ? `to ${sourceRounds[0]?.name || "this round"}` : "across the session"} in smaller batches.`);
+      if (shortages.length || batchErrors.length) toast.warning(`Drafted ${generatedQuestions.length} questions, but ${shortages.join(", ")} after retries`);
+      else toast.success(`Drafted ${generatedQuestions.length} question${generatedQuestions.length === 1 ? "" : "s"} ${onlyRoundId ? "for this round" : "across the session"} for review`);
+      appendBuilderAssistant(`I drafted ${generatedQuestions.length} question${generatedQuestions.length === 1 ? "" : "s"} ${onlyRoundId ? `for ${sourceRounds[0]?.name || "this round"}` : "across the session"}. Review them and add the ones you want.`);
     } catch (error) {
       console.error("Full session generation error:", error);
       toast.error(error.response?.data?.error || error.message || "Failed to build full session");
