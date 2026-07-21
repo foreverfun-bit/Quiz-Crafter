@@ -204,6 +204,7 @@ export default function FloatingCopilot({ user }) {
   const [baseContext, setBaseContext] = useState({});
   const [workingState, setWorkingState] = useState(() => normalizeWorkingState(readJson(COPILOT_STATE_KEY, emptyWorkingState)));
   const dragRef = useRef(null);
+  const messagesEndRef = useRef(null);
 
   const pageName = routeTitle(location.pathname);
   const hidden = location.pathname === "/login" || location.pathname.startsWith("/join") || location.pathname.startsWith("/play") || location.pathname.startsWith("/play-session") || location.pathname.startsWith("/present") || location.pathname.startsWith("/present-session");
@@ -212,6 +213,11 @@ export default function FloatingCopilot({ user }) {
   useEffect(() => writeJson(COPILOT_SIZE_KEY, size), [size]);
   useEffect(() => writeJson(COPILOT_MESSAGES_KEY, messages.slice(-24)), [messages]);
   useEffect(() => writeJson(COPILOT_STATE_KEY, workingState), [workingState]);
+
+  useEffect(() => {
+    if (!open) return;
+    messagesEndRef.current?.scrollIntoView({ block: "end" });
+  }, [open, messages, loading]);
 
   useEffect(() => {
     if (!user || hidden) return;
@@ -422,6 +428,7 @@ export default function FloatingCopilot({ user }) {
                 </div>
               ))}
               {loading && <div className="rounded-2xl border border-white/10 bg-zinc-900/90 px-4 py-3 text-sm text-zinc-400"><Loader2 size={14} className="mr-2 inline animate-spin text-[#71E0DC]" />Thinking with page context...</div>}
+              <div ref={messagesEndRef} />
             </div>
 
             <div className="border-t border-white/10 p-3">
