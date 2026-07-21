@@ -3,6 +3,9 @@ import { supabase } from "./supabase";
 const QUESTION_MEDIA_BUCKET = "question-media";
 const MAX_UPLOAD_ATTEMPTS = 3;
 const RETRY_DELAY_MS = [500, 1500];
+// Must match the question-media bucket's file_size_limit, or Storage rejects the
+// upload with an HTTP 400 that gives the host no indication the file was too big.
+const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 
 // Must match the question-media bucket's allowed_mime_types exactly, or Storage
 // rejects the upload with an HTTP 400 -- which is what happens when a dragged
@@ -58,6 +61,8 @@ const uploadOnce = async (file, userId) => {
 // actually fetchable before trusting it.
 export const uploadQuestionMedia = async (file) => {
   if (!file) throw new Error("No file selected");
+  if (file.size === 0) throw new Error("That image looks empty (0 bytes) -- if it's from a cloud-synced folder (OneDrive, Google Drive, etc.), make sure it's fully downloaded first, then try again");
+  if (file.size > MAX_FILE_SIZE_BYTES) throw new Error(`That image is too large (${(file.size / (1024 * 1024)).toFixed(1)}MB) -- images must be 10MB or smaller`);
   const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
   const userId = sessionData?.session?.user?.id;
   if (sessionError || !userId) throw new Error("You must be signed in to upload media");
