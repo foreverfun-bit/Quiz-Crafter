@@ -116,6 +116,31 @@ export const syncProfileJson = async ({ localKey, profileKey, fallback, merge = 
   return nextValue;
 };
 
+const CURRENT_PROJECT_LOCAL_KEY = "quiz-crafter-current-project-session-id";
+
+// Local storage is authoritative here once anything has been written locally --
+// the remote save (updateUser -> PUT /auth/v1/user) can be unavailable for
+// extended stretches, and silently reverting the marker on next page load
+// because the remote write never landed would be worse than just trusting
+// this browser's last write. Remote is only consulted as a first-time
+// fallback for a browser/device that has never toggled this locally.
+export const readCurrentProjectSessionId = () => {
+  try {
+    const raw = localStorage.getItem(CURRENT_PROJECT_LOCAL_KEY);
+    if (raw === null) return undefined;
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+};
+
+export const writeCurrentProjectSessionId = (sessionId) => {
+  const value = sessionId || null;
+  writeLocalJson(CURRENT_PROJECT_LOCAL_KEY, value);
+  saveProfileValue(profileKeys.currentProjectSessionId, value).catch((error) => console.warn("Current project remote sync unavailable:", error));
+  return value;
+};
+
 export const loadHostToolsSessionState = async (sessionId) => {
   const allState = await loadProfileValue(profileKeys.hostToolsBySession);
   return isPlainObject(allState?.[sessionId]) ? allState[sessionId] : {};
