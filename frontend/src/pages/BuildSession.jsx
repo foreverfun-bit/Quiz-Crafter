@@ -672,6 +672,27 @@ const BuildSession = () => {
   // hasn't added yet -- otherwise re-running generation just serves the same categories back
   // since selectedSessionCategories only tracks questions actually placed in a round.
   const categoriesInUseThisBuild = useMemo(() => uniqueCategories([...selectedSessionCategories, ...draftCandidateCategories]), [selectedSessionCategories, draftCandidateCategories]);
+  // Once every approved category has been used at least once, softExclusions alone can no longer
+  // steer generation away from repeats (there's nothing left to prefer). Track how many times each
+  // category has actually been used so the fallback can favor the least-used ones instead of any
+  // approved category at random -- otherwise a category used once looks the same as one used five times.
+  const categoryUsageCounts = useMemo(() => {
+    const counts = new Map();
+    const bump = (category) => {
+      const key = categoryKey(category);
+      if (!key) return;
+      counts.set(key, (counts.get(key) || 0) + 1);
+    };
+    safeRounds.forEach((round) => (round.questionIds || []).forEach((id) => bump(questionById.get(String(id))?.category)));
+    aiCandidates.forEach((candidate) => bump(candidate.category));
+    return counts;
+  }, [safeRounds, questionById, aiCandidates]);
+  const leastUsedCategories = (categories) => {
+    if (!categories.length) return categories;
+    const counted = categories.map((category) => ({ category, count: categoryUsageCounts.get(categoryKey(category)) || 0 }));
+    const minCount = Math.min(...counted.map((item) => item.count));
+    return counted.filter((item) => item.count === minCount).map((item) => item.category);
+  };
   const mediaQuestion = mediaQuestionId ? (questionById.get(String(mediaQuestionId)) || aiCandidates.find((candidate) => String(candidate.id) === String(mediaQuestionId))) : null;
   const settingsQuestion = settingsQuestionId ? (questionById.get(String(settingsQuestionId)) || aiCandidates.find((candidate) => String(candidate.id) === String(settingsQuestionId))) : null;
   const isCandidateId = (id) => aiCandidates.some((candidate) => String(candidate.id) === String(id));
@@ -751,7 +772,7 @@ const BuildSession = () => {
     if (!approvedCategories.length) return { excludedCategories: uniqueCategories([...hardExcluded, ...soft]), approvedPool: locked };
     const availableApproved = approvedCategories.filter((category) => !hardKeys.has(categoryKey(category)));
     const preferredApproved = availableApproved.filter((category) => !soft.some((excluded) => categoryKey(excluded) === categoryKey(category)));
-    const pool = locked.length ? locked : (preferredApproved.length ? preferredApproved : availableApproved);
+    const pool = locked.length ? locked : (preferredApproved.length ? preferredApproved : leastUsedCategories(availableApproved));
     const poolKeys = new Set(pool.map(categoryKey));
     const activeSoftExclusions = preferredApproved.length ? soft.filter((category) => !poolKeys.has(categoryKey(category))) : [];
     return { excludedCategories: uniqueCategories([...hardExcluded, ...activeSoftExclusions]), approvedPool: uniqueCategories(pool) };
