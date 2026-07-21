@@ -73,6 +73,34 @@ const sessionQuestionArrays = (session) => [
 ];
 const collectSessionQuestions = (session) => sessionQuestionArrays(session).flatMap(safeArray);
 const questionCount = (session) => collectSessionQuestions(session).length;
+const getSessionRoundOrder = (question, fallback = 1) => Number(question?.round_order || question?.round_number || question?.round || fallback) || fallback;
+const getSessionRoundMetadata = (session) => {
+  const raw = session?.round_descriptions || session?.rounds_metadata || session?.rounds || [];
+  if (Array.isArray(raw)) return raw;
+  if (raw && typeof raw === "object") return Object.values(raw);
+  return [];
+};
+// Saved sessions store per-question round_order/round_name rather than a rounds array, so the
+// real per-round question counts have to be reconstructed from the questions themselves. Falls
+// back to round_descriptions (saved at build time, covers empty rounds too) for round names/order.
+const getSessionRoundBreakdown = (session) => {
+  const metadata = getSessionRoundMetadata(session);
+  const counts = new Map();
+  collectSessionQuestions(session).forEach((question) => {
+    const order = getSessionRoundOrder(question, 1);
+    counts.set(order, (counts.get(order) || 0) + 1);
+  });
+  if (metadata.length) {
+    return metadata
+      .map((round, index) => {
+        const order = Number(round.order || round.round_order || index + 1) || index + 1;
+        return { name: round.name || round.round_name || `Round ${order}`, order, count: counts.get(order) || 0 };
+      })
+      .sort((a, b) => a.order - b.order);
+  }
+  return [...counts.entries()].sort((a, b) => a[0] - b[0]).map(([order, count]) => ({ name: `Round ${order}`, order, count }));
+};
+const sessionRoundsForProgress = (session) => getSessionRoundBreakdown(session).map((round) => ({ name: round.name, questionIds: Array.from({ length: round.count }) }));
 const compactDate = (value) => {
   if (!value) return "No date";
   const date = new Date(value);
@@ -296,7 +324,7 @@ const Dashboard = () => {
     sessionName: matchingSavedSession.name || matchingSavedSession.session_name || "",
     sessionDate: String(matchingSavedSession.session_date || matchingSavedSession.event_date || "").slice(0, 10),
     venueId: matchingSavedSession.venue_id || "",
-    rounds: [],
+    rounds: sessionRoundsForProgress(matchingSavedSession),
     questions: [],
     questionCount: questionCount(matchingSavedSession),
   } : null;
@@ -314,7 +342,7 @@ const Dashboard = () => {
     sessionName: currentProjectSession.name || currentProjectSession.session_name || "",
     sessionDate: String(currentProjectDateValue || "").slice(0, 10),
     venueId: currentProjectSession.venue_id || "",
-    rounds: [],
+    rounds: sessionRoundsForProgress(currentProjectSession),
     questions: [],
     questionCount: questionCount(currentProjectSession),
   } : null;
