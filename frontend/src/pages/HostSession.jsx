@@ -2,7 +2,7 @@
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { uploadQuestionMedia } from "../lib/mediaUpload";
-import { ensureLiveGame, fetchLivePlayers, subscribeLivePlayers, upsertLivePlayer, setLivePlayerScore, removeLivePlayer } from "../lib/liveGame";
+import { ensureLiveGame, fetchLivePlayers, subscribeLivePlayers, upsertLivePlayer, removeLivePlayer } from "../lib/liveGame";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent } from "../components/ui/card";
@@ -1126,14 +1126,28 @@ const HostSession = () => {
     releaseMode("leaderboard");
   };
 
+  // Teams are looked up by id and, if the roster's realtime sync hasn't
+  // caught up yet (e.g. a player answers the first question right after
+  // joining), added rather than silently dropped -- and the score is
+  // upserted, not just updated, so it lands even if the player's roster
+  // row hasn't been written yet.
   const adjustScore = (teamId, amount) => {
-    const nextScore = Number((leaderboard.find((team) => team.id === teamId)?.score) || 0) + amount;
-    setLeaderboard((teams) => teams.map((team) => team.id === teamId ? { ...team, score: nextScore } : team));
-    setLivePlayerScore(teamId, nextScore).catch((error) => console.warn("Live roster save unavailable:", error));
+    const existing = leaderboard.find((team) => team.id === teamId);
+    const nextScore = Number(existing?.score || 0) + amount;
+    const name = existing?.name || players.find((player) => player.id === teamId)?.name || "Team";
+    setLeaderboard((teams) => teams.some((team) => team.id === teamId)
+      ? teams.map((team) => team.id === teamId ? { ...team, score: nextScore } : team)
+      : [...teams, { id: teamId, name, score: nextScore }]);
+    upsertLivePlayer(liveGameId, { id: teamId, name, score: nextScore }).catch((error) => console.warn("Live roster save unavailable:", error));
   };
   const setScore = (teamId, score) => {
-    setLeaderboard((teams) => teams.map((team) => team.id === teamId ? { ...team, score: Number(score || 0) } : team));
-    setLivePlayerScore(teamId, score).catch((error) => console.warn("Live roster save unavailable:", error));
+    const existing = leaderboard.find((team) => team.id === teamId);
+    const name = existing?.name || players.find((player) => player.id === teamId)?.name || "Team";
+    const nextScore = Number(score || 0);
+    setLeaderboard((teams) => teams.some((team) => team.id === teamId)
+      ? teams.map((team) => team.id === teamId ? { ...team, score: nextScore } : team)
+      : [...teams, { id: teamId, name, score: nextScore }]);
+    upsertLivePlayer(liveGameId, { id: teamId, name, score: nextScore }).catch((error) => console.warn("Live roster save unavailable:", error));
   };
   const removeTeam = (teamId) => {
     setLeaderboard((teams) => teams.filter((team) => team.id !== teamId));
