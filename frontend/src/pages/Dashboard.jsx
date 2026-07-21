@@ -270,9 +270,24 @@ const Dashboard = () => {
   const upcomingSchedule = useMemo(() => buildVenueSchedule(venues), [venues]);
   const likedCategories = stats.liked_categories || [];
   const nextShow = upcomingSchedule[0] || null;
+  const findSessionForShow = (show) => {
+    if (!show?.venue?.id || !show?.date) return null;
+    const targetDate = showDateInput(show.date);
+    return recentSessions.find((session) => String(session.venue_id || "") === String(show.venue.id) && String(session.session_date || session.event_date || "").slice(0, 10) === targetDate) || null;
+  };
   const nextShowBuild = nextShow && savedBuildMatchesShow(savedBuild, nextShow) ? savedBuild : null;
-  const relevantBuild = nextShow ? nextShowBuild : savedBuild;
-  const buildProgress = getBuildProgress(relevantBuild, starterTemplate);
+  const matchingSavedSession = useMemo(() => findSessionForShow(nextShow), [recentSessions, nextShow]);
+  const matchingSessionBuild = !nextShowBuild && matchingSavedSession ? {
+    sessionName: matchingSavedSession.name || matchingSavedSession.session_name || "",
+    sessionDate: String(matchingSavedSession.session_date || matchingSavedSession.event_date || "").slice(0, 10),
+    venueId: matchingSavedSession.venue_id || "",
+    rounds: [],
+    questions: [],
+    questionCount: questionCount(matchingSavedSession),
+  } : null;
+  const relevantBuild = nextShow ? (nextShowBuild || matchingSessionBuild) : savedBuild;
+  const nextShowTemplateFallback = nextShow?.venue ? { questionsPerRound: nextShow.venue.questionsPerRound || 0, roundCount: nextShow.venue.roundCount || 0 } : null;
+  const buildProgress = getBuildProgress(relevantBuild, nextShowTemplateFallback || starterTemplate);
   const nextPrep = getNextPrep(buildProgress, starterTemplate, relevantBuild, unusedCount);
 
   const persistTodos = (nextTodos) => {
@@ -293,6 +308,8 @@ const Dashboard = () => {
 
   const buildUrlForShow = (show = nextShow) => {
     if (!show?.venue?.id || !show?.date) return "/build";
+    const matched = show === nextShow ? matchingSavedSession : findSessionForShow(show);
+    if (matched) return `/build/${matched.id}`;
     const params = new URLSearchParams();
     params.set("venueId", show.venue.id);
     params.set("date", showDateInput(show.date));
