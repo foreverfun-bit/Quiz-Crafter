@@ -7,6 +7,7 @@ const USER_SCOPED_TABLES = new Set([
   "disliked_categories",
   "rejected_categories",
   "category_preferences",
+  "venues",
 ]);
 
 const PUBLIC_SESSION_READ_TABLES = new Set(["sessions"]);
@@ -14,6 +15,9 @@ const ALLOWED_TABLES = new Set([
   ...USER_SCOPED_TABLES,
   "session_rounds",
   "session_questions",
+  "session_question_feedback",
+  "session_category_feedback",
+  "session_player_ideas",
 ]);
 
 const getBearerToken = (req, body = {}) => {
