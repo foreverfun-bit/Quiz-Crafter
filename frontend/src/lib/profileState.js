@@ -71,35 +71,9 @@ const parseSetupStatus = (value) => {
   }
 };
 
-const mergeSetupSettings = (primary, mirror) => {
-  const primaryTime = new Date(primary?.updatedAt || 0).getTime() || 0;
-  const mirrorTime = new Date(mirror?.updatedAt || 0).getTime() || 0;
-  const preferMirror = mirrorTime > primaryTime;
-  const next = { ...(isPlainObject(primary) ? primary : {}), ...(isPlainObject(mirror) ? mirror : {}) };
-  ["venues", "templates"].forEach((key) => {
-    const primaryList = Array.isArray(primary?.[key]) ? primary[key] : [];
-    const mirrorList = Array.isArray(mirror?.[key]) ? mirror[key] : [];
-    if (preferMirror && mirrorList.length) next[key] = mirrorList;
-    else if (primaryList.length) next[key] = primaryList;
-    else if (mirrorList.length) next[key] = mirrorList;
-  });
-  next.activeVenueId = preferMirror ? (mirror?.activeVenueId || primary?.activeVenueId || next.activeVenueId || "") : (primary?.activeVenueId || mirror?.activeVenueId || next.activeVenueId || "");
-  return next;
-};
-
 export const loadHostSetupSettings = async () => {
   const { data: sessionData } = await supabase.auth.getSession().catch(() => ({ data: null }));
-  const metadataSetup = parseSetupStatus(sessionData?.session?.user?.user_metadata?.[profileKeys.hostSetup]);
-  const { data, error } = await supabase
-    .from("category_preferences")
-    .select("*")
-    .eq("category", HOST_SETUP_CATEGORY);
-  if (error) return metadataSetup;
-  const rowSetup = (Array.isArray(data) ? data : [])
-    .map((row) => parseSetupStatus(row?.status || row?.preference || row?.value || row?.rating))
-    .filter((item) => Object.keys(item).length)
-    .sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime())[0] || {};
-  return mergeSetupSettings(metadataSetup, rowSetup);
+  return parseSetupStatus(sessionData?.session?.user?.user_metadata?.[profileKeys.hostSetup]);
 };
 
 export const saveHostSetupSettings = async (patch) => {
@@ -110,15 +84,7 @@ export const saveHostSetupSettings = async (patch) => {
   if (Array.isArray(next.templates)) metadataPatch[profileKeys.showTemplates] = next.templates;
   if (next.activeVenueId !== undefined) metadataPatch[profileKeys.activeVenueId] = next.activeVenueId;
   if (isPlainObject(next.branding)) metadataPatch[profileKeys.brandingDefaults] = next.branding;
-  await updateUserMetadata(metadataPatch).catch((error) => console.warn("Host setup metadata mirror unavailable:", error));
-  const payload = { category: HOST_SETUP_CATEGORY, status: JSON.stringify(next) };
-  const upsertResult = await supabase.from("category_preferences").upsert(payload).select("*");
-  if (!upsertResult.error) return next;
-
-  const updateResult = await supabase.from("category_preferences").update(payload).eq("category", HOST_SETUP_CATEGORY).select("*");
-  if (!updateResult.error && Array.isArray(updateResult.data) && updateResult.data.length) return next;
-
-  await supabase.from("category_preferences").insert(payload).select("*");
+  await updateUserMetadata(metadataPatch);
   return next;
 };
 
