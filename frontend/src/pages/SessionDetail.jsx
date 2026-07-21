@@ -178,6 +178,10 @@ const SessionDetail = () => {
     const venueName = venue?.name || venue?.nightName || "";
     setSavingVenue(true);
     try {
+      if (venueId && venueName && user?.id) {
+        const { error: venueError } = await supabase.from("venues").upsert({ id: venueId, user_id: user.id, name: venueName }, { onConflict: "id" });
+        if (venueError) throw venueError;
+      }
       const { error } = await supabase
         .from("sessions")
         .update({ venue_id: venueId || null, venue: venueName || null })
