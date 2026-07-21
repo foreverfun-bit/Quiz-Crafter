@@ -12,6 +12,7 @@ import {
   Eye,
   MapPin,
   Pencil,
+  Star,
   Trash2,
   FileText,
   Search,
@@ -20,7 +21,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { mergeProfileRecords, normalizeVenue, readLocalVenues } from "../lib/venues";
-import { loadProfileValue, profileKeys } from "../lib/profileState";
+import { loadProfileValue, profileKeys, saveProfileValue } from "../lib/profileState";
 
 const titleDatePatterns = [
   /\b(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})\b/,
@@ -75,6 +76,8 @@ const PastSessions = () => {
   const [dateFilter, setDateFilter] = useState("all");
   const [venues, setVenues] = useState([]);
   const [savingVenueId, setSavingVenueId] = useState(null);
+  const [currentProjectId, setCurrentProjectId] = useState(null);
+  const [savingCurrentProjectId, setSavingCurrentProjectId] = useState(null);
 
   useEffect(() => {
     const localVenues = readLocalVenues();
@@ -86,7 +89,26 @@ const PastSessions = () => {
         if (merged.length) setVenues(merged);
       })
       .catch((error) => console.warn("Venue list sync unavailable:", error));
+    loadProfileValue(profileKeys.currentProjectSessionId)
+      .then((current) => setCurrentProjectId(current || null))
+      .catch((error) => console.warn("Current project marker unavailable:", error));
   }, []);
+
+  const handleToggleCurrentProject = async (sessionId, event) => {
+    event.stopPropagation();
+    const nextValue = currentProjectId && String(currentProjectId) === String(sessionId) ? null : sessionId;
+    setSavingCurrentProjectId(sessionId);
+    try {
+      await saveProfileValue(profileKeys.currentProjectSessionId, nextValue);
+      setCurrentProjectId(nextValue);
+      toast.success(nextValue ? "Marked as current project" : "Removed as current project");
+    } catch (error) {
+      console.error("Current project update error:", error);
+      toast.error("Failed to update current project");
+    } finally {
+      setSavingCurrentProjectId(null);
+    }
+  };
 
   const handleVenueChange = async (sessionId, venueId, event) => {
     event.stopPropagation();
@@ -368,9 +390,21 @@ const PastSessions = () => {
               <CardContent className="p-6">
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex-1">
-                    <h3 className="text-white font-semibold mb-2 line-clamp-2">
-                      {getSessionTitle(session)}
-                    </h3>
+                    <div className="mb-2 flex items-start justify-between gap-2">
+                      <h3 className="text-white font-semibold line-clamp-2">
+                        {getSessionTitle(session)}
+                      </h3>
+                      <button
+                        type="button"
+                        onClick={(e) => handleToggleCurrentProject(session.id, e)}
+                        disabled={savingCurrentProjectId === session.id}
+                        title={currentProjectId && String(currentProjectId) === String(session.id) ? "Remove as current project" : "Mark as current project"}
+                        className={`flex-shrink-0 rounded-md p-1 ${currentProjectId && String(currentProjectId) === String(session.id) ? "text-amber-300" : "text-zinc-600 hover:text-amber-300"}`}
+                        data-testid={`current-project-toggle-${index}`}
+                      >
+                        <Star size={16} className={currentProjectId && String(currentProjectId) === String(session.id) ? "fill-amber-300" : ""} />
+                      </button>
+                    </div>
 
                     <div className="flex flex-wrap gap-2">
                       <Badge

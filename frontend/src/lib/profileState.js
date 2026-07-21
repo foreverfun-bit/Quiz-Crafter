@@ -18,6 +18,7 @@ export const profileKeys = {
   activeVenueId: "quiz_crafter_active_venue_id",
   brandingDefaults: "quiz_crafter_host_branding_defaults_v1",
   hostStyleProfile: "quiz_crafter_host_style_profile_v1",
+  currentProjectSessionId: "quiz_crafter_current_project_session_id",
 };
 
 export const HOST_SETUP_CATEGORY = "__quiz_crafter_host_setup_v1";
