@@ -65,11 +65,6 @@ export const setLivePlayerName = async (playerId, name) => {
   if (error) throw error;
 };
 
-export const setLivePlayerScore = async (playerId, score) => {
-  const { error } = await supabaseTable("live_game_players").update({ score: Number(score || 0) }).eq("id", playerId);
-  if (error) throw error;
-};
-
 export const removeLivePlayer = async (playerId) => {
   const { error } = await supabaseTable("live_game_players").delete().eq("id", playerId);
   if (error) throw error;
