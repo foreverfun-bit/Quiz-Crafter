@@ -29,7 +29,7 @@ import {
 import { toast } from "sonner";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 import { PROFILE_ACTIVE_VENUE_KEY, PROFILE_SHOW_TEMPLATES_KEY, PROFILE_VENUES_KEY, mergeProfileRecords, normalizeTemplate, normalizeVenue, readActiveVenueId, readLocalTemplates, readLocalVenues, recordsChanged, writeActiveVenueId, writeLocalTemplates, writeLocalVenues } from "../lib/venues";
-import { loadHostSetupSettings, loadProfileValue, profileKeys, saveHostSetupSettings, saveProfileValue, updateUserMetadata } from "../lib/profileState";
+import { loadHostSetupSettings, loadProfileValue, profileKeys, readCurrentProjectSessionId, saveHostSetupSettings, saveProfileValue, updateUserMetadata } from "../lib/profileState";
 
 const BUILD_STORAGE_KEYS = [
   "trivia-flex-round-builder-state-v5",
@@ -174,12 +174,14 @@ const Dashboard = () => {
       setVenues(localVenues);
       setTemplates(localTemplates);
       setActiveVenueId(readActiveVenueId());
+      const cachedCurrentProject = readCurrentProjectSessionId();
+      if (cachedCurrentProject !== undefined) setCurrentProjectSessionId(cachedCurrentProject || null);
 
       try {
         const { data, error } = await supabase.auth.getSession();
         if (error) throw error;
         const metadata = data?.session?.user?.user_metadata || {};
-        setCurrentProjectSessionId(metadata[profileKeys.currentProjectSessionId] || null);
+        if (cachedCurrentProject === undefined) setCurrentProjectSessionId(metadata[profileKeys.currentProjectSessionId] || null);
         const setupSettings = await loadHostSetupSettings().catch(() => ({}));
         const setupVenues = Array.isArray(setupSettings.venues) ? setupSettings.venues.map(normalizeVenue) : [];
         const setupTemplates = Array.isArray(setupSettings.templates) ? setupSettings.templates.map(normalizeTemplate) : [];
