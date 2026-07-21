@@ -399,6 +399,7 @@ const Dashboard = () => {
       </div>
 
       <NextShowHero
+        firstName={firstName}
         nextShow={nextShow}
         savedBuild={relevantBuild}
         progress={buildProgress}
@@ -410,23 +411,8 @@ const Dashboard = () => {
       />
 
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_0.8fr] gap-5 mb-5">
-        <AssistantBriefing
-          firstName={firstName}
-          nextShow={nextShow}
-          savedBuild={relevantBuild}
-          progress={buildProgress}
-          nextPrep={nextPrep}
-          onBuild={handleContinueBuild}
-          onImport={() => navigate("/import")}
-          onNewBuild={handleNewBlankBuild}
-          onHostSession={() => nextSession && navigate(`/host-session/${nextSession.id}`)}
-          canHost={Boolean(nextSession)}
-        />
+        <ScheduleCard schedule={upcomingSchedule} onVenues={() => navigate("/venues")} />
         <TodoCard todos={todos} todoText={todoText} setTodoText={setTodoText} onAdd={addTodo} onToggle={toggleTodo} onRemove={removeTodo} />
-      </div>
-
-      <div className="mb-5">
-        <ScheduleCard schedule={upcomingSchedule} nextSession={nextSession} savedBuild={relevantBuild} progress={buildProgress} onBuild={handleBuildShow} onVenues={() => navigate("/venues")} onHostSession={() => nextSession && navigate(`/host-session/${nextSession.id}`)} />
       </div>
 
       <div className="mb-5">
@@ -511,16 +497,19 @@ const Dashboard = () => {
   );
 };
 
-const NextShowHero = ({ nextShow, savedBuild, progress, nextPrep, nextSession, onBuild, onHostSession, onVenues }) => {
+const NextShowHero = ({ firstName, nextShow, savedBuild, progress, nextPrep, nextSession, onBuild, onHostSession, onVenues }) => {
   const venue = nextShow?.venue;
   const date = nextShow?.date;
   const ready = progress.complete && Boolean(savedBuild?.questionCount);
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
   return (
     <Card className="glass-card mb-5 border-[#71E0DC]/30 overflow-hidden">
       <CardContent className="p-5 md:p-6">
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_auto] gap-5 items-end">
           <div>
-            <div className="flex flex-wrap items-center gap-2 mb-3">
+            <p className="text-sm text-zinc-500">{greeting}, {firstName}.</p>
+            <div className="mt-2 flex flex-wrap items-center gap-2 mb-3">
               <Badge className="bg-[#71E0DC] text-zinc-950">Next show</Badge>
               <Badge className={ready ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-200"}>{nextPrep.status}</Badge>
             </div>
@@ -533,6 +522,15 @@ const NextShowHero = ({ nextShow, savedBuild, progress, nextPrep, nextSession, o
               <span className="flex items-center gap-2"><CheckCircle size={16} className="text-emerald-400" />{progress.current}/{progress.goal || "?"} questions</span>
             </div>
             <p className="mt-4 text-lg text-zinc-200">{nextPrep.message}</p>
+            {progress.rounds.length > 0 && (
+              <div className="mt-4 flex flex-wrap gap-2">
+                {progress.rounds.slice(0, 6).map((round) => (
+                  <span key={round.name} className={`rounded-full border px-3 py-1 text-xs font-semibold ${round.remaining <= 0 ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300" : "border-amber-500/25 bg-amber-500/10 text-amber-200"}`}>
+                    {round.name}: {round.remaining <= 0 ? "complete" : `needs ${round.remaining}`}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
           <div className="flex flex-wrap xl:flex-col gap-2 xl:min-w-48">
             <Button className="gradient-btn" onClick={onBuild}>{savedBuild ? "Continue Building" : "Start Building"}</Button>
@@ -545,48 +543,13 @@ const NextShowHero = ({ nextShow, savedBuild, progress, nextPrep, nextSession, o
   );
 };
 
-const AssistantBriefing = ({ firstName, nextShow, savedBuild, progress, nextPrep, onBuild, onImport, onNewBuild, onHostSession, canHost }) => {
-  const hour = new Date().getHours();
-  const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
-  const showName = nextShow?.venue?.nightName || nextShow?.venue?.name || savedBuild?.sessionName || "your next trivia night";
-  const showDay = nextShow?.date ? nextShow.date.toLocaleDateString([], { weekday: "long" }) : "soon";
-  return (
-    <Card className="glass-card border-[#AEB2EF]/20">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-white flex items-center gap-2"><Sparkles className="text-[#71E0DC]" size={20} />Quiz Crafter briefing</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="rounded-xl border border-white/10 bg-zinc-950/45 p-4">
-          <p className="text-white font-semibold">{greeting}, {firstName}.</p>
-          <p className="mt-2 text-zinc-300">You have {showName} on {showDay}.</p>
-          <div className="mt-4 space-y-2 text-sm text-zinc-400">
-            {progress.rounds.length ? progress.rounds.slice(0, 4).map((round) => (
-              <div key={round.name} className="flex items-center justify-between gap-3">
-                <span>{round.name}</span>
-                <span className={round.remaining <= 0 ? "text-emerald-300" : "text-amber-200"}>{round.remaining <= 0 ? "complete" : `needs ${round.remaining}`}</span>
-              </div>
-            )) : <p>No active build yet.</p>}
-          </div>
-          <p className="mt-4 text-zinc-200">{nextPrep.question}</p>
-        </div>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <Button className="gradient-btn" onClick={onBuild}>Continue Building</Button>
-          <Button variant="outline" onClick={onImport} className="border-white/20 text-white hover:bg-zinc-800">Import Questions</Button>
-          <Button variant="outline" onClick={onNewBuild} className="border-white/20 text-white hover:bg-zinc-800">Start New Session</Button>
-          {canHost && <Button variant="outline" onClick={onHostSession} className="border-[#71E0DC]/30 text-[#71E0DC] hover:bg-[#71E0DC]/10">Open Host Mode</Button>}
-        </div>
-      </CardContent>
-    </Card>
-  );
-};
-
-const ScheduleCard = ({ schedule, nextSession, savedBuild, progress, onBuild, onVenues, onHostSession }) => (
+const ScheduleCard = ({ schedule, onVenues }) => (
   <Card className="glass-card border-[#71E0DC]/25">
     <CardHeader className="pb-3">
       <div className="flex items-center justify-between gap-3">
         <div>
           <CardTitle className="text-white text-xl">Upcoming Shows</CardTitle>
-          <p className="text-zinc-500 text-sm mt-1">Each show shows the next prep action, not just the date.</p>
+          <p className="text-zinc-500 text-sm mt-1">The next show is above -- this is what's after it.</p>
         </div>
         <Button variant="outline" size="sm" onClick={onVenues} className="border-white/20 text-white hover:bg-zinc-800">
           Venues
@@ -597,33 +560,20 @@ const ScheduleCard = ({ schedule, nextSession, savedBuild, progress, onBuild, on
       {schedule.length === 0 ? (
         <EmptyPanel icon={Calendar} title="No venue schedule yet" text="Add your regular trivia venues and this becomes your weekly hosting calendar." action="Set Up Venues" onClick={onVenues} />
       ) : (
-        schedule.map(({ venue, date }, index) => {
-          const prep = index === 0 ? getNextPrep(progress, null, savedBuild, 0) : { status: "Upcoming", message: "Schedule set. Build when ready." };
-          return (
-          <div key={`${venue.id}-${date.toISOString()}`} className={`rounded-lg border p-4 ${index === 0 ? "border-[#71E0DC]/35 bg-[#71E0DC]/10" : "border-white/10 bg-zinc-950/45"}`}>
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <Badge className={index === 0 ? "bg-[#71E0DC] text-zinc-950" : "bg-white/10 text-zinc-300"}>{index === 0 ? "Next" : date.toLocaleDateString([], { weekday: "short" })}</Badge>
-                  <Badge className={prep.status === "Ready to host" ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-200"}>{prep.status}</Badge>
-                  <p className="text-white font-bold truncate">{venue.nightName || venue.name}</p>
-                </div>
-                <p className="text-zinc-400 text-sm mt-2">
-                  {date.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })} at {formatScheduleTime(venue.startTime, venue.timeZone)}
-                </p>
-                <p className="text-zinc-500 text-xs mt-1">{prep.message}</p>
-                {venue.address && <p className="text-zinc-600 text-xs mt-1 truncate">{venue.address}</p>}
-              </div>
-              {index === 0 && (
-                <div className="flex gap-2">
-                  <Button size="sm" className="gradient-btn" onClick={() => onBuild({ venue, date })}>{savedBuild ? "Continue Build" : "Build Set"}</Button>
-                  {nextSession && <Button size="sm" variant="outline" onClick={onHostSession} className="border-white/20 text-white hover:bg-zinc-800">Go Live</Button>}
-                </div>
-              )}
+        schedule.slice(1, 6).map(({ venue, date }) => (
+          <div key={`${venue.id}-${date.toISOString()}`} className="rounded-lg border border-white/10 bg-zinc-950/45 p-4">
+            <div className="flex items-center gap-2">
+              <Badge className="bg-white/10 text-zinc-300">{date.toLocaleDateString([], { weekday: "short" })}</Badge>
+              <p className="text-white font-bold truncate">{venue.nightName || venue.name}</p>
             </div>
+            <p className="text-zinc-400 text-sm mt-2">
+              {date.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })} at {formatScheduleTime(venue.startTime, venue.timeZone)}
+            </p>
+            {venue.address && <p className="text-zinc-600 text-xs mt-1 truncate">{venue.address}</p>}
           </div>
-        );})
+        ))
       )}
+      {schedule.length === 1 && <p className="text-zinc-500 text-sm">Nothing else scheduled yet -- add more venues to fill this out.</p>}
     </CardContent>
   </Card>
 );
