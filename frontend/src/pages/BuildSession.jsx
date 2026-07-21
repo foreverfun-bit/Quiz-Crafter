@@ -1322,17 +1322,23 @@ const BuildSession = () => {
       }
       const sessionMetaPayload = { session_date: sessionDate || null, event_date: sessionDate || null, venue: selectedVenueName || null, venue_id: selectedVenueId || null };
       const baseSessionPayload = { user_id: user.id, name: builtName, session_name: builtName, is_past: goLive ? false : editingSessionWasPast, ...grouped };
-      const fullSessionPayload = { ...baseSessionPayload, ...sessionMetaPayload };
+      const withMetaPayload = { ...baseSessionPayload, ...sessionMetaPayload };
+      const fullSessionPayload = { ...withMetaPayload, round_descriptions: roundDescriptions };
+      // Tiered fallback so a failure on one field (e.g. a column that doesn't exist yet)
+      // can't silently drop unrelated fields like venue_id/session_date along with it --
+      // that's exactly what happened before round_descriptions existed as a column.
       let saveResult = editingSessionId
-        ? await supabase.from("sessions").update({ ...fullSessionPayload, round_descriptions: roundDescriptions }).eq("id", editingSessionId).select("id").single()
-        : await supabase.from("sessions").insert({ ...fullSessionPayload, round_descriptions: roundDescriptions }).select("id").single();
+        ? await supabase.from("sessions").update(fullSessionPayload).eq("id", editingSessionId).select("id").single()
+        : await supabase.from("sessions").insert(fullSessionPayload).select("id").single();
 
       if (saveResult.error) {
+        console.warn("Full session save failed, retrying without round_descriptions:", saveResult.error);
         saveResult = editingSessionId
-          ? await supabase.from("sessions").update({ ...baseSessionPayload, round_descriptions: roundDescriptions }).eq("id", editingSessionId).select("id").single()
-          : await supabase.from("sessions").insert({ ...baseSessionPayload, round_descriptions: roundDescriptions }).select("id").single();
+          ? await supabase.from("sessions").update(withMetaPayload).eq("id", editingSessionId).select("id").single()
+          : await supabase.from("sessions").insert(withMetaPayload).select("id").single();
       }
       if (saveResult.error) {
+        console.warn("Session save with venue/date failed, retrying with base fields only:", saveResult.error);
         saveResult = editingSessionId
           ? await supabase.from("sessions").update(baseSessionPayload).eq("id", editingSessionId).select("id").single()
           : await supabase.from("sessions").insert(baseSessionPayload).select("id").single();
