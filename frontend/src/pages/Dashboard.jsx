@@ -29,7 +29,7 @@ import {
 import { toast } from "sonner";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 import { PROFILE_ACTIVE_VENUE_KEY, PROFILE_SHOW_TEMPLATES_KEY, PROFILE_VENUES_KEY, mergeProfileRecords, normalizeTemplate, normalizeVenue, readActiveVenueId, readLocalTemplates, readLocalVenues, recordsChanged, writeActiveVenueId, writeLocalTemplates, writeLocalVenues } from "../lib/venues";
-import { HOST_SETUP_CATEGORY, loadHostSetupSettings, loadProfileValue, saveHostSetupSettings, saveProfileValue, updateUserMetadata } from "../lib/profileState";
+import { loadHostSetupSettings, loadProfileValue, profileKeys, saveHostSetupSettings, saveProfileValue, updateUserMetadata } from "../lib/profileState";
 
 const BUILD_STORAGE_KEYS = [
   "trivia-flex-round-builder-state-v5",
@@ -710,19 +710,6 @@ const TodoCard = ({ todos, todoText, setTodoText, onAdd, onToggle, onRemove }) =
   </Card>
 );
 
-const PrepCard = ({ activeVenue, starterTemplate, savedBuild, unusedCount, rejectedCount, onVenue, onTemplate, onLibrary, onBuild, onCategories }) => {
-  const items = [
-    { label: "Create & build", value: "Generate, write, save, or select", ready: true, onClick: onBuild },
-    { label: "Default venue", value: activeVenue ? activeVenue.name : "Needs setup", ready: Boolean(activeVenue), onClick: onVenue },
-    { label: "Show template", value: starterTemplate ? starterTemplate.name : "Needs setup", ready: Boolean(starterTemplate), onClick: onTemplate },
-    { label: "Unused library", value: `${unusedCount} available`, ready: unusedCount > 0, onClick: onLibrary },
-    { label: "Saved build", value: savedBuild ? `${savedBuild.questionCount} selected` : "None", ready: Boolean(savedBuild), onClick: onBuild },
-    { label: "Rejected categories", value: `${rejectedCount} blocked`, ready: true, onClick: onCategories },
-  ];
-
-  return <Card className="glass-card"><CardHeader className="pb-3"><CardTitle className="text-white text-lg">Prep Checklist</CardTitle></CardHeader><CardContent className="space-y-3">{items.map((item) => <button key={item.label} type="button" onClick={item.onClick} className="w-full flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-zinc-950/45 px-3 py-3 text-left hover:bg-zinc-900"><div className="min-w-0"><p className="text-sm font-semibold text-white">{item.label}</p><p className="text-xs text-zinc-500 truncate">{item.value}</p></div><Badge className={item.ready ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-200"}>{item.ready ? "Ready" : "Set up"}</Badge></button>)}</CardContent></Card>;
-};
-
 const MetricCard = ({ label, value, sub, icon: Icon, tone, onClick }) => {
   const tones = {
     cyan: "text-[#71E0DC] bg-[#71E0DC]/15",
@@ -1022,38 +1009,29 @@ function buildStats(questions, sessions, categoryState) {
   };
 }
 
+const CATEGORY_PREFS_STORAGE_KEY = "quiz-crafter-category-preferences";
+
 async function fetchCategoryState() {
   const approved = new Set();
   const rejected = new Set();
 
-  const results = await Promise.allSettled([
-    supabase.from("categories").select("*"),
-    supabase.from("disliked_categories").select("*"),
-    supabase.from("rejected_categories").select("*"),
-    supabase.from("category_preferences").select("*"),
-  ]);
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CATEGORY_PREFS_STORAGE_KEY) || "{}");
+    (Array.isArray(parsed.approved) ? parsed.approved : []).forEach((category) => cleanCategory(category) && approved.add(cleanCategory(category)));
+    (Array.isArray(parsed.rejected) ? parsed.rejected : []).forEach((category) => cleanCategory(category) && rejected.add(cleanCategory(category)));
+  } catch {
+    // Local cache is best-effort; the profile sync below is the source of truth.
+  }
 
-  results.forEach((result) => {
-    if (result.status !== "fulfilled" || result.value.error || !Array.isArray(result.value.data)) return;
+  try {
+    const remote = await loadProfileValue(profileKeys.categoryPrefs);
+    (Array.isArray(remote?.approved) ? remote.approved : []).forEach((category) => cleanCategory(category) && approved.add(cleanCategory(category)));
+    (Array.isArray(remote?.rejected) ? remote.rejected : []).forEach((category) => cleanCategory(category) && rejected.add(cleanCategory(category)));
+  } catch (error) {
+    console.warn("Dashboard category preferences unavailable:", error);
+  }
 
-    result.value.data.forEach((row) => {
-      const category = cleanCategory(row.category || row.name || row.category_name || row.value);
-      if (!category) return;
-      if (category === HOST_SETUP_CATEGORY) return;
-
-      const status = normalizeStatus(row.status || row.state || row.approval_status || row.preference || row.rating);
-      const rejectedByFlag = isTruthy(row.rejected) || isTruthy(row.is_rejected) || isTruthy(row.hidden) || isTruthy(row.is_hidden) || isTruthy(row.disliked) || isTruthy(row.is_disliked);
-      const approvedByFlag = isTruthy(row.approved) || isTruthy(row.is_approved) || isTruthy(row.active) || isTruthy(row.is_active);
-
-      if (rejectedValues.has(status) || rejectedByFlag) {
-        rejected.add(category);
-        approved.delete(category);
-      } else if (approvedValues.has(status) || approvedByFlag || !status) {
-        if (!rejected.has(category)) approved.add(category);
-      }
-    });
-  });
-
+  rejected.forEach((category) => approved.delete(category));
   return { approved, rejected };
 }
 
