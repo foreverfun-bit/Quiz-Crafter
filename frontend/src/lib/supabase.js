@@ -18,20 +18,44 @@ const makeProxyError = (message, details = null) => ({
   details,
 });
 
-const getSessionContext = async () => {
+let cachedSessionContext = null;
+let sessionContextPromise = null;
+
+const resolveSessionContext = async () => {
   const { data: sessionData } = await supabaseClient.auth.getSession();
   if (sessionData?.session?.access_token) {
     return {
       accessToken: sessionData.session.access_token,
       clientUserId: sessionData.session.user?.id || "",
+      expiresAt: Number(sessionData.session.expires_at || 0) * 1000,
     };
   }
   const { data: refreshed } = await supabaseClient.auth.refreshSession();
   return {
     accessToken: refreshed?.session?.access_token || "",
     clientUserId: refreshed?.session?.user?.id || "",
+    expiresAt: Number(refreshed?.session?.expires_at || 0) * 1000,
   };
 };
+
+// Every proxy query used to call getSession() (and fall back to a network
+// refreshSession() call whenever the session looked momentarily empty) fresh --
+// with several queries firing concurrently on a single page load, each one
+// independently triggered its own refresh, multiplying auth traffic and eating
+// into the project's egress quota. Cache the resolved context in memory and
+// dedupe concurrent lookups instead of re-fetching on every single query.
+const getSessionContext = async (forceRefresh = false) => {
+  if (!forceRefresh && cachedSessionContext?.accessToken && cachedSessionContext.expiresAt - Date.now() > 10000) {
+    return cachedSessionContext;
+  }
+  if (!sessionContextPromise) {
+    sessionContextPromise = resolveSessionContext().finally(() => { sessionContextPromise = null; });
+  }
+  cachedSessionContext = await sessionContextPromise;
+  return cachedSessionContext;
+};
+
+supabaseClient.auth.onAuthStateChange(() => { cachedSessionContext = null; });
 
 class ProxyQueryBuilder {
   constructor(table) {
@@ -123,9 +147,9 @@ class ProxyQueryBuilder {
 
       let response = await runRequest(accessToken);
       if (response.status === 401) {
-        const { data: refreshed } = await supabaseClient.auth.refreshSession();
-        accessToken = refreshed?.session?.access_token || "";
-        clientUserId = refreshed?.session?.user?.id || clientUserId;
+        const refreshed = await getSessionContext(true);
+        accessToken = refreshed.accessToken;
+        clientUserId = refreshed.clientUserId || clientUserId;
         if (accessToken) response = await runRequest(accessToken);
       }
 
