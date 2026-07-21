@@ -105,7 +105,7 @@ const isBuildDraftRequest = (text) => {
   const lower = clean(text).toLowerCase();
   if (!lower) return false;
   if (/\bfull session|finish (?:the )?(?:session|game)|complete (?:the )?(?:session|game)\b/.test(lower)) return true;
-  if (/\bbuild\s+(?:this\s+|the\s+)?round|fill\s+(?:this\s+|the\s+)?round|finish\s+(?:this\s+|the\s+)?round\b/.test(lower)) return true;
+  if (/\b(?:build|fill|finish)\s+(?:\w+\s+){0,3}round\b/.test(lower)) return true;
   if (/\b(add|generate|give me|make|draft)\b/.test(lower) && /\b(question|questions|candidate|candidates)\b/.test(lower)) return true;
   if (/\b(replace|replacement|replacements)\b/.test(lower)) return true;
   if (/\b(write my own|manual|manually write|create my own)\b/.test(lower)) return true;

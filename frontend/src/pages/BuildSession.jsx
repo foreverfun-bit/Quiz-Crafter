@@ -71,6 +71,13 @@ const parseRoundNumber = (value) => {
   const match = lowerText(value).match(/\bround\s*(\d+)\b/);
   return match ? Math.max(1, Number(match[1]) || 1) : null;
 };
+const roundOrdinalWords = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7, eighth: 8 };
+const parseRoundOrdinal = (value) => {
+  const text = lowerText(value);
+  if (/\b(final|last)\s+round\b/.test(text)) return "last";
+  const match = Object.keys(roundOrdinalWords).find((word) => new RegExp(`\\b${word}\\s+round\\b`).test(text));
+  return match ? roundOrdinalWords[match] : null;
+};
 const parseRequestedCount = (value, fallback = 3) => {
   const match = lowerText(value).match(/\b(?:add|build|give|find|generate|make)\s+(\d{1,2})\b/) || lowerText(value).match(/\b(\d{1,2})\s+(?:questions|candidates|replacements)\b/);
   return Math.max(1, Math.min(20, match ? Number(match[1]) || fallback : fallback));
@@ -86,7 +93,7 @@ const classifyBuildIntent = (value) => {
   const text = lowerText(value);
   if (/\b(import|upload|pdf|csv)\b/.test(text)) return "import_file";
   if (/\bfull session|finish (?:the )?(?:session|game)|complete (?:the )?(?:session|game)\b/.test(text)) return "generate_full_session";
-  if (/\bbuild\s+(?:this\s+)?round|fill\s+(?:this\s+)?round|finish\s+(?:this\s+)?round\b/.test(text)) return "generate_round";
+  if (/\b(?:build|fill|finish)\s+(?:\w+\s+){0,3}round\b/.test(text)) return "generate_round";
   if (/\b(replace|replacement|replacements)\b/.test(text)) return "replace_question";
   if (/\b(search|find|library|saved question)\b/.test(text)) return "search_library";
   if (/\bfun fact|funfact\b/.test(text)) return "add_fun_fact";
@@ -1065,8 +1072,11 @@ const BuildSession = () => {
   };
   const findRoundFromPrompt = (request) => {
     const number = parseRoundNumber(request);
-    if (!number) return activeRound;
-    return safeRounds[number - 1] || activeRound;
+    if (number) return safeRounds[number - 1] || activeRound;
+    const ordinal = parseRoundOrdinal(request);
+    if (ordinal === "last") return safeRounds[safeRounds.length - 1] || activeRound;
+    if (typeof ordinal === "number") return safeRounds[ordinal - 1] || activeRound;
+    return activeRound;
   };
   const findQuestionFromPrompt = (request, round = activeRound) => {
     const number = parseQuestionNumber(request);
