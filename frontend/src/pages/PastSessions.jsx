@@ -10,6 +10,7 @@ import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 import {
   Calendar,
   Eye,
+  MapPin,
   Pencil,
   Trash2,
   FileText,
@@ -18,6 +19,8 @@ import {
   ArrowUpDown,
 } from "lucide-react";
 import { toast } from "sonner";
+import { mergeProfileRecords, normalizeVenue, readLocalVenues } from "../lib/venues";
+import { loadProfileValue, profileKeys } from "../lib/profileState";
 
 const titleDatePatterns = [
   /\b(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})\b/,
@@ -70,6 +73,41 @@ const PastSessions = () => {
   const [activeTab, setActiveTab] = useState("all");
   const [sortMode, setSortMode] = useState("host_desc");
   const [dateFilter, setDateFilter] = useState("all");
+  const [venues, setVenues] = useState([]);
+  const [savingVenueId, setSavingVenueId] = useState(null);
+
+  useEffect(() => {
+    const localVenues = readLocalVenues();
+    setVenues(localVenues);
+    loadProfileValue(profileKeys.venues)
+      .then((remote) => {
+        const remoteVenues = Array.isArray(remote) ? remote.map(normalizeVenue) : [];
+        const merged = mergeProfileRecords(remoteVenues, localVenues, normalizeVenue);
+        if (merged.length) setVenues(merged);
+      })
+      .catch((error) => console.warn("Venue list sync unavailable:", error));
+  }, []);
+
+  const handleVenueChange = async (sessionId, venueId, event) => {
+    event.stopPropagation();
+    const venue = venues.find((item) => item.id === venueId);
+    const venueName = venue?.name || venue?.nightName || "";
+    setSavingVenueId(sessionId);
+    try {
+      const { error } = await supabase
+        .from("sessions")
+        .update({ venue_id: venueId || null, venue: venueName || null })
+        .eq("id", sessionId);
+      if (error) throw error;
+      setAllSessions((prev) => prev.map((session) => session.id === sessionId ? { ...session, venue_id: venueId || null, venue: venueName || null } : session));
+      toast.success(venueId ? `Linked to ${venueName}` : "Venue link removed");
+    } catch (error) {
+      console.error("Session venue update error:", error);
+      toast.error("Failed to update venue");
+    } finally {
+      setSavingVenueId(null);
+    }
+  };
 
   const fetchSessions = useCallback(async (authUserId = user?.id) => {
     try {
@@ -347,6 +385,20 @@ const PastSessions = () => {
                       </Badge>
                     </div>
                   </div>
+                </div>
+
+                <div className="mb-3 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                  <MapPin size={13} className="text-zinc-500 flex-shrink-0" />
+                  <select
+                    value={session.venue_id || ""}
+                    onChange={(e) => handleVenueChange(session.id, e.target.value, e)}
+                    disabled={savingVenueId === session.id}
+                    className="h-8 flex-1 min-w-0 rounded-md border border-white/10 bg-zinc-950/50 px-2 text-xs text-zinc-300 outline-none focus:border-[#71E0DC]/60 disabled:opacity-60"
+                    data-testid={`session-venue-select-${index}`}
+                  >
+                    <option value="">No venue linked</option>
+                    {venues.map((venue) => <option key={venue.id} value={venue.id}>{venue.name || venue.nightName || "Untitled venue"}</option>)}
+                  </select>
                 </div>
 
                 <div className="space-y-2 text-sm">

@@ -12,6 +12,7 @@ import {
   Copy,
   Download,
   Loader2,
+  MapPin,
   MoreHorizontal,
   Pencil,
   Plus,
@@ -21,6 +22,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
+import { mergeProfileRecords, normalizeVenue, readLocalVenues } from "../lib/venues";
+import { loadProfileValue, profileKeys } from "../lib/profileState";
 
 const questionTypes = [
   { value: "true_false", label: "True/False" },
@@ -141,6 +144,8 @@ const SessionDetail = () => {
   const [questionsById, setQuestionsById] = useState({});
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(false);
+  const [venues, setVenues] = useState([]);
+  const [savingVenue, setSavingVenue] = useState(false);
   const [isEditingImported, setIsEditingImported] = useState(false);
   const [savingImported, setSavingImported] = useState(false);
   const [editableSessionName, setEditableSessionName] = useState("");
@@ -155,6 +160,39 @@ const SessionDetail = () => {
     fetchSessionData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  useEffect(() => {
+    const localVenues = readLocalVenues();
+    setVenues(localVenues);
+    loadProfileValue(profileKeys.venues)
+      .then((remote) => {
+        const remoteVenues = Array.isArray(remote) ? remote.map(normalizeVenue) : [];
+        const merged = mergeProfileRecords(remoteVenues, localVenues, normalizeVenue);
+        if (merged.length) setVenues(merged);
+      })
+      .catch((error) => console.warn("Venue list sync unavailable:", error));
+  }, []);
+
+  const handleVenueChange = async (venueId) => {
+    const venue = venues.find((item) => item.id === venueId);
+    const venueName = venue?.name || venue?.nightName || "";
+    setSavingVenue(true);
+    try {
+      const { error } = await supabase
+        .from("sessions")
+        .update({ venue_id: venueId || null, venue: venueName || null })
+        .eq("id", id)
+        .eq("user_id", user?.id);
+      if (error) throw error;
+      setSession((prev) => ({ ...prev, venue_id: venueId || null, venue: venueName || null }));
+      toast.success(venueId ? `Linked to ${venueName}` : "Venue link removed");
+    } catch (error) {
+      console.error("Session venue update error:", error);
+      toast.error(error.message || "Failed to update venue");
+    } finally {
+      setSavingVenue(false);
+    }
+  };
 
   const isImportedSession = !!session?.is_past;
   const hasArrayQuestions = Object.values(editableQuestions).some((items) => items.length > 0);
@@ -512,6 +550,19 @@ const SessionDetail = () => {
               <h1 className="text-2xl md:text-3xl font-bold text-white">{editableSessionName || session.name || session.session_name || "Untitled Session"}</h1>
             )}
             <p className="text-zinc-500 text-sm">{totalQuestions} questions · Created {safeDate(session.created_at)}</p>
+            <div className="mt-2 flex items-center gap-2">
+              <MapPin size={14} className="text-zinc-500 flex-shrink-0" />
+              <select
+                value={session.venue_id || ""}
+                onChange={(e) => handleVenueChange(e.target.value)}
+                disabled={savingVenue}
+                className="h-8 rounded-md border border-white/10 bg-zinc-950/60 px-2 text-sm text-zinc-300 outline-none focus:border-[#71E0DC]/60 disabled:opacity-60"
+              >
+                <option value="">No venue linked</option>
+                {venues.map((venue) => <option key={venue.id} value={venue.id}>{venue.name || venue.nightName || "Untitled venue"}</option>)}
+              </select>
+              {savingVenue && <Loader2 size={14} className="animate-spin text-zinc-500" />}
+            </div>
           </div>
         </div>
 
