@@ -381,6 +381,15 @@ function containsCategory(categories, category) {
   return categories.some((item) => categoryKey(item) === categoryKey(category));
 }
 
+function shuffleArray(values) {
+  const result = [...values];
+  for (let i = result.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
 function categoryKey(value) {
   return cleanText(value).toLowerCase().replace(/[’‘`]/g, "'").replace(/\band\b/g, "&").replace(/[^a-z0-9&]+/g, "");
 }
@@ -469,7 +478,7 @@ function buildSourceBackedPrompt({ config, safeCount, difficultyKey, difficultyP
   const approvedCategoryText = cleanLockedCategories.length
     ? `Use exactly one of these locked categories: ${cleanLockedCategories.join(", ")}.`
     : cleanApprovedCategories.length
-      ? `Use only these approved category names when possible, exact spelling: ${cleanApprovedCategories.join(", ")}.`
+      ? `Use only these approved category names when possible, exact spelling: ${shuffleArray(cleanApprovedCategories).join(", ")}. This list is not in priority order -- do not favor the earlier names.`
       : "Use a broad useful trivia category.";
   const excludedCategoryText = cleanExcludeCategories.length ? `Do not use these categories: ${cleanExcludeCategories.join(", ")}.` : "";
   const themeText = cleanTheme ? `Request/theme: ${cleanTheme}` : "Request/theme: general live trivia.";
@@ -562,14 +571,16 @@ ${rejectedText}
 function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, categoryExpansionMode, cleanRejectedQuestions = [], cleanRejectedAnswers = [], cleanSessionContext = null, existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt, fastMode = false, cleanHostStyleProfile = null, sessionStyleProfile = null, venueProfileText = "" }) {
   const overGenerateCount = fastMode ? Math.min(8, Math.max(safeCount + 1, Math.ceil(safeCount * 1.35))) : Math.min(18, Math.max(safeCount + 4, Math.ceil(safeCount * 1.7)));
   const lockedCategoryText = cleanLockedCategories.length ? `Locked categories are active. The category field must exactly match one of these locked categories: ${cleanLockedCategories.join(", ")}. Generate all candidates inside these locked categories until the host unlocks them.` : "";
+  const shuffledApprovedCategories = shuffleArray(cleanApprovedCategories);
   const approvedCategoryText = cleanLockedCategories.length
     ? lockedCategoryText
     : categoryExpansionMode
-      ? `Use only these approved category names. The category field must exactly match one of these names; do not invent adjacent, similar, or new category names: ${cleanApprovedCategories.join(", ")}.`
+      ? `Use only these approved category names. The category field must exactly match one of these names; do not invent adjacent, similar, or new category names: ${shuffledApprovedCategories.join(", ")}. This list is not in priority order -- do not favor the earlier names.`
       : cleanApprovedCategories.length
-      ? `Use only these approved category names. The category field must exactly match one of these names; do not invent adjacent, similar, or new category names: ${cleanApprovedCategories.join(", ")}.`
-      : `Use varied broad categories such as: ${BROAD_CATEGORIES.join(", ")}.`;
+      ? `Use only these approved category names. The category field must exactly match one of these names; do not invent adjacent, similar, or new category names: ${shuffledApprovedCategories.join(", ")}. This list is not in priority order -- do not favor the earlier names.`
+      : `Use varied broad categories such as: ${shuffleArray(BROAD_CATEGORIES).join(", ")}.`;
   const excludedCategoryText = cleanExcludeCategories.length ? `Do not use these rejected or avoided categories: ${cleanExcludeCategories.join(", ")}.` : "";
+  const categoryDiversityText = !cleanLockedCategories.length && safeCount > 1 ? "Spread candidates across as many different categories as the approved list allows. Do not use the same category for more than a couple of candidates unless the approved list is very short." : "";
   const themeText = cleanTheme ? `Theme/vibe/category guidance: ${cleanTheme}. Stay useful to that direction, but avoid repetitive question angles.` : "";
   const tasteProfileText = fastMode ? "" : buildTasteProfileText(styleExamples, cleanSessionContext);
   const hostStyleProfileText = buildHostStyleProfileText(cleanHostStyleProfile);
@@ -683,6 +694,7 @@ ${sessionContextText}
 ${styleText}
 ${themeText}
 ${excludedCategoryText}
+${categoryDiversityText}
 ${usedText}
 ${rejectedText}
 ${duplicateText}
