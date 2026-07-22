@@ -32,14 +32,32 @@ const verifyUrlIsReachable = async (url) => {
   }
 };
 
-const uploadOnce = async (file, userId) => {
-  const contentType = resolveUploadType(file);
+// Cloud-synced folders (OneDrive, Google Drive Files On-Demand, etc.) can
+// report accurate cached metadata -- a real, non-zero file.size -- for a
+// file that's still a cloud-only placeholder never actually downloaded.
+// The size check alone doesn't catch that; only actually reading the bytes
+// does. Reading also nudges Windows/OneDrive to hydrate the file, and gives
+// Storage a fully materialized Blob instead of a lazy File handle that
+// could read short mid-upload.
+const readFileBytes = async (file) => {
+  let buffer;
+  try {
+    buffer = await file.arrayBuffer();
+  } catch {
+    throw new Error("Could not read this image -- if it's from a cloud-synced folder (OneDrive, Google Drive, etc.), make sure it's fully downloaded (not just showing as available) before trying again");
+  }
+  if (!buffer.byteLength) throw new Error("That image looks empty once read -- if it's from a cloud-synced folder (OneDrive, Google Drive, etc.), make sure it's fully downloaded before trying again");
+  return buffer;
+};
+
+const uploadOnce = async (blob, fileName, userId) => {
+  const contentType = resolveUploadType(blob);
   const extension = EXTENSION_BY_MIME[contentType] || "jpg";
-  const baseName = sanitizeFileName(file.name).replace(/\.[a-zA-Z0-9]+$/, "") || "media";
+  const baseName = sanitizeFileName(fileName).replace(/\.[a-zA-Z0-9]+$/, "") || "media";
   const path = `${userId}/${crypto.randomUUID()}-${baseName}.${extension}`;
   const { error: uploadError } = await supabase.storage
     .from(QUESTION_MEDIA_BUCKET)
-    .upload(path, file, { cacheControl: "3600", upsert: false, contentType });
+    .upload(path, blob, { cacheControl: "3600", upsert: false, contentType });
   if (uploadError) throw uploadError;
 
   const { data: publicUrlData } = supabase.storage.from(QUESTION_MEDIA_BUCKET).getPublicUrl(path);
@@ -63,6 +81,8 @@ export const uploadQuestionMedia = async (file) => {
   if (!file) throw new Error("No file selected");
   if (file.size === 0) throw new Error("That image looks empty (0 bytes) -- if it's from a cloud-synced folder (OneDrive, Google Drive, etc.), make sure it's fully downloaded first, then try again");
   if (file.size > MAX_FILE_SIZE_BYTES) throw new Error(`That image is too large (${(file.size / (1024 * 1024)).toFixed(1)}MB) -- images must be 10MB or smaller`);
+  const bytes = await readFileBytes(file);
+  const blob = new Blob([bytes], { type: file.type || "" });
   const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
   const userId = sessionData?.session?.user?.id;
   if (sessionError || !userId) throw new Error("You must be signed in to upload media");
@@ -70,7 +90,7 @@ export const uploadQuestionMedia = async (file) => {
   let lastError = null;
   for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt += 1) {
     try {
-      const url = await uploadOnce(file, userId);
+      const url = await uploadOnce(blob, file.name, userId);
       if (await verifyUrlIsReachable(url)) return url;
       lastError = new Error("Upload finished but the image isn't reachable yet -- retrying");
     } catch (error) {
