@@ -9,6 +9,7 @@ import { Badge } from "../components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 import {
   Calendar,
+  Copy,
   Eye,
   MapPin,
   Pencil,
@@ -177,6 +178,32 @@ const PastSessions = () => {
     } catch (error) {
       console.error("Delete session error:", error);
       toast.error("Failed to delete session");
+    }
+  };
+
+  const handleDuplicate = async (session, e) => {
+    e.stopPropagation();
+    try {
+      const { id, created_at, updated_at, ...rest } = session;
+      const payload = {
+        ...rest,
+        user_id: user?.id,
+        name: `${session.name || session.session_name || "Untitled Session"} (Copy)`,
+        session_name: session.session_name ? `${session.session_name} (Copy)` : session.session_name,
+        // A duplicate is a fresh, unplayed session -- it shouldn't inherit
+        // the source session's hosting history.
+        is_past: false,
+        hosted_results: null,
+        hosted_at: null,
+      };
+      const { data, error } = await supabase.from("sessions").insert(payload).select("*").single();
+      if (error) throw error;
+
+      setAllSessions((prev) => [data, ...prev]);
+      toast.success("Session duplicated");
+    } catch (error) {
+      console.error("Duplicate session error:", error);
+      toast.error("Failed to duplicate session");
     }
   };
 
@@ -462,6 +489,17 @@ const PastSessions = () => {
                       title="Delete"
                     >
                       <Trash2 size={14} />
+                    </Button>
+
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-zinc-400 hover:text-white hover:bg-zinc-800 px-2"
+                      onClick={(e) => handleDuplicate(session, e)}
+                      data-testid={`duplicate-session-${index}`}
+                      title="Duplicate"
+                    >
+                      <Copy size={14} />
                     </Button>
 
                     <Button

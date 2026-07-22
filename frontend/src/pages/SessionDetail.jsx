@@ -10,6 +10,7 @@ import { Input } from "../components/ui/input";
 import {
   ArrowLeft,
   Copy,
+  CopyPlus,
   Download,
   Loader2,
   MapPin,
@@ -145,6 +146,7 @@ const SessionDetail = () => {
   const [questionsById, setQuestionsById] = useState({});
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
   const [venues, setVenues] = useState([]);
   const [savingVenue, setSavingVenue] = useState(false);
   const [currentProjectId, setCurrentProjectId] = useState(null);
@@ -476,6 +478,33 @@ const SessionDetail = () => {
     }
   };
 
+  const handleDuplicate = async () => {
+    if (!session) return;
+    setDuplicating(true);
+    try {
+      const { id: _id, created_at, updated_at, ...rest } = session;
+      const payload = {
+        ...rest,
+        user_id: user?.id,
+        name: `${session.name || session.session_name || "Untitled Session"} (Copy)`,
+        session_name: session.session_name ? `${session.session_name} (Copy)` : session.session_name,
+        // A duplicate is a fresh, unplayed session -- it shouldn't inherit
+        // the source session's hosting history.
+        is_past: false,
+        hosted_results: null,
+        hosted_at: null,
+      };
+      const { data, error } = await supabase.from("sessions").insert(payload).select("*").single();
+      if (error) throw error;
+      toast.success("Session duplicated");
+      navigate(`/session/${data.id}`);
+    } catch (error) {
+      toast.error(error.message || "Failed to duplicate session");
+    } finally {
+      setDuplicating(false);
+    }
+  };
+
   const getFlatEntries = () => roundGroups.flatMap((round) => round.entries.map((entry, index) => ({ ...entry, displayOrder: index + 1, roundName: round.name })));
 
   const copyToClipboard = async () => {
@@ -620,6 +649,7 @@ const SessionDetail = () => {
                   {canEditArrays && <DropdownMenuItem onClick={() => navigate(`/build/${id}`)} className="cursor-pointer focus:bg-zinc-800"><Pencil size={15} className="mr-2" />Open in Builder</DropdownMenuItem>}
                   <DropdownMenuItem onClick={handleExportCSV} className="cursor-pointer focus:bg-zinc-800" data-testid="export-csv-btn"><Download size={15} className="mr-2" />Export CSV</DropdownMenuItem>
                   <DropdownMenuItem onClick={copyToClipboard} className="cursor-pointer focus:bg-zinc-800" data-testid="copy-btn"><Copy size={15} className="mr-2" />Copy</DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleDuplicate} disabled={duplicating} className="cursor-pointer focus:bg-zinc-800" data-testid="duplicate-session-btn">{duplicating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CopyPlus size={15} className="mr-2" />}Duplicate Session</DropdownMenuItem>
                   <DropdownMenuItem onClick={handleDelete} disabled={deleting} className="cursor-pointer text-red-200 focus:bg-red-500/10 focus:text-red-200" data-testid="delete-session-btn">{deleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 size={15} className="mr-2" />}Delete</DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
