@@ -1315,8 +1315,21 @@ const HostSession = () => {
   const hasRevealExtra = Boolean(displayedQuestion.funFact || hasRevealMedia);
   const brandStyle = { "--host-primary": branding.primaryColor, "--host-accent": branding.accentColor };
   const flaggedTeamCount = [...fairPlayStats.values()].filter((stats) => stats.flags.length > 0).length;
+  // Union, not intersection: leaderboard is authoritative for "is this team
+  // still active" (removeTeam clears both lists together), but a team can
+  // legitimately exist in one list without the other yet -- a manually
+  // added team never got a player_join broadcast, and a just-joined player
+  // may not have synced to the leaderboard yet. Intersecting the two used
+  // to silently drop manually-added teams from the Manual Answer dropdown,
+  // the waiting-on list, and the submitted count.
   const activeTeamIds = new Set(leaderboard.map((team) => team.id));
-  const activePlayers = players.filter((player) => activeTeamIds.has(player.id));
+  const activePlayers = [
+    ...leaderboard.map((team) => {
+      const player = players.find((item) => item.id === team.id);
+      return player ? { ...player, name: team.name } : { id: team.id, name: team.name };
+    }),
+    ...players.filter((player) => !activeTeamIds.has(player.id)),
+  ];
   const activeCurrentAnswers = currentAnswers.filter((answer) => activeTeamIds.has(answer.playerId));
   const selectedIntroKey = introRoundKey || currentRound?.key || rounds[0]?.key || "";
   const chooseIntroRound = (roundKey) => {
