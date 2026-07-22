@@ -629,13 +629,30 @@ const HostSession = () => {
     return () => window.clearInterval(interval);
   }, [applyStoredLiveEvents, id]);
 
+  // A one-shot attempt here used to fail silently and permanently on any
+  // transient error (a console.warn nobody sees) -- with no live_games row,
+  // every downstream leaderboard/score write for the rest of the page's
+  // lifetime silently no-ops, with no user-facing sign anything is wrong.
+  // Retries with backoff, and surfaces a toast if it's still failing after
+  // a few attempts instead of staying silent forever.
   useEffect(() => {
-    if (!session) return;
+    if (!session) return undefined;
     let cancelled = false;
-    ensureLiveGame(id, { sessionName: session?.name || session?.session_name || "Trivia Night" })
-      .then((game) => { if (!cancelled) setLiveGameId(game.id); })
-      .catch((error) => console.warn("Live game setup unavailable:", error));
-    return () => { cancelled = true; };
+    let timeoutId = null;
+    let attempt = 0;
+    const tryEnsure = () => {
+      attempt += 1;
+      ensureLiveGame(id, { sessionName: session?.name || session?.session_name || "Trivia Night" })
+        .then((game) => { if (!cancelled) setLiveGameId(game.id); })
+        .catch((error) => {
+          console.warn("Live game setup unavailable:", error);
+          if (cancelled) return;
+          if (attempt >= 4) { toast.error("Couldn't set up live scoring for this session -- reload the page to try again."); return; }
+          timeoutId = window.setTimeout(tryEnsure, Math.min(2000 * 2 ** (attempt - 1), 15000));
+        });
+    };
+    tryEnsure();
+    return () => { cancelled = true; window.clearTimeout(timeoutId); };
   }, [id, session]);
 
   useEffect(() => {
