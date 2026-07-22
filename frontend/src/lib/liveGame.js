@@ -3,9 +3,13 @@ import { supabase, supabaseTable } from "./supabase";
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const makeGameCode = () => Array.from({ length: 6 }, () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]).join("");
 
+// Trimmed to the columns callers actually read (id, status) -- this is
+// polled by every player and presentation screen until a live game shows
+// up, so a full-row select was needlessly widening every one of those
+// requests' response payloads.
 const mostRecentLiveGame = async (sessionId) => {
   const { data, error } = await supabaseTable("live_games")
-    .select("*")
+    .select("id, status")
     .eq("session_id", sessionId)
     .order("created_at", { ascending: false })
     .limit(1);
@@ -43,7 +47,7 @@ export const ensureLiveGame = async (sessionId, { sessionName } = {}) => {
 
 export const fetchLivePlayers = async (gameId) => {
   const { data, error } = await supabaseTable("live_game_players")
-    .select("*")
+    .select("id, name, score, joined_at")
     .eq("game_id", gameId)
     .order("joined_at", { ascending: true });
   if (error) throw error;

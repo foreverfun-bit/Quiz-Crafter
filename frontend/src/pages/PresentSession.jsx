@@ -276,20 +276,29 @@ const PresentSession = () => {
     return () => window.clearInterval(interval);
   }, []);
 
+  // Backs off (2s, 4s, 8s ... capped at 20s) instead of polling a fixed
+  // 2s forever -- until a live game exists this loop never finds one to
+  // stop it, so a flat interval means every connected screen hammers the
+  // endpoint indefinitely for the whole lobby wait, worse still if the
+  // endpoint itself is erroring.
   useEffect(() => {
     if (liveGameId) return undefined;
     let cancelled = false;
+    let timeoutId = null;
+    let delay = 2000;
     const lookup = async () => {
       try {
         const game = await findLiveGame(id);
-        if (game && !cancelled) setLiveGameId(game.id);
+        if (game && !cancelled) { setLiveGameId(game.id); return; }
       } catch (error) {
         console.warn("Live game lookup unavailable:", error);
       }
+      if (cancelled) return;
+      delay = Math.min(delay * 2, 20000);
+      timeoutId = window.setTimeout(lookup, delay);
     };
     lookup();
-    const interval = window.setInterval(lookup, 2000);
-    return () => { cancelled = true; window.clearInterval(interval); };
+    return () => { cancelled = true; window.clearTimeout(timeoutId); };
   }, [id, liveGameId]);
 
   useEffect(() => {
@@ -364,12 +373,17 @@ const PresentSession = () => {
     };
   }, [id]);
 
+  // This is a fallback for the realtime broadcast channel above (catches
+  // state it might have missed, e.g. after a reconnect) -- not the primary
+  // sync path, so it doesn't need sub-2s polling. That was pulling
+  // hosted_results on every connected screen continuously for the whole
+  // game and was a major, needless contributor to Supabase egress.
   useEffect(() => {
     const loadDurableState = async () => {
       const { data } = await supabase.from("sessions").select("hosted_results").eq("id", id).single();
       applyNewerState(setPresentState, hasLiveStateRef, getSessionLiveState(data));
     };
-    const interval = window.setInterval(loadDurableState, 1500);
+    const interval = window.setInterval(loadDurableState, 8000);
     loadDurableState();
     return () => window.clearInterval(interval);
   }, [id]);
