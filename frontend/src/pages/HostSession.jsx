@@ -1120,6 +1120,14 @@ const HostSession = () => {
     if (!name) return;
     const nextTeam = { id: crypto.randomUUID(), name, score: Number(teamScore || 0) };
     setLeaderboard((teams) => [...teams, nextTeam]);
+    // Manually-added teams also need to land in the players roster --
+    // it's what drives the Manual Answer dropdown, waiting-on list, and
+    // submitted counts, none of which read from the leaderboard.
+    setPlayers((current) => {
+      const next = [...current, { id: nextTeam.id, name, updatePreference: "none", updateContact: "", joinedAt: new Date().toISOString() }];
+      saveHostToolsSessionState(id, { players: next }).catch((error) => console.warn("Players profile save unavailable:", error));
+      return next;
+    });
     if (liveGameId) upsertLivePlayer(liveGameId, nextTeam).catch((error) => console.warn("Live roster save unavailable:", error));
     setTeamName("");
     setTeamScore("");
