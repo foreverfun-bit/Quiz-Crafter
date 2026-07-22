@@ -83,6 +83,31 @@ const getSessionLiveState = (session) => {
   const results = session?.hosted_results;
   return results && typeof results === "object" && !Array.isArray(results) && results.liveState && typeof results.liveState === "object" ? results.liveState : null;
 };
+const makeLiveEventId = (event, payload = {}) => [
+  event,
+  payload.playerId || "player",
+  payload.questionIndex ?? payload.roundKey ?? payload.category ?? "session",
+  payload.questionId || "",
+  payload.submittedAt || payload.updatedAt || payload.joinedAt || Date.now(),
+].join(":");
+const saveDurablePlayerEvent = async (sessionId, event, payload) => {
+  const eventRecord = { id: payload.eventId || makeLiveEventId(event, payload), event, payload };
+  try {
+    const { data } = await supabase.from("sessions").select("hosted_results").eq("id", sessionId).single();
+    const currentResults = data?.hosted_results && typeof data.hosted_results === "object" && !Array.isArray(data.hosted_results) ? data.hosted_results : {};
+    const currentEvents = Array.isArray(currentResults.liveEvents) ? currentResults.liveEvents : [];
+    const nextEvents = [...currentEvents.filter((item) => item?.id !== eventRecord.id), eventRecord].slice(-1000);
+    await supabase.from("sessions").update({ hosted_results: { ...currentResults, liveEvents: nextEvents, liveEventsUpdatedAt: new Date().toISOString() } }).eq("id", sessionId);
+  } catch (error) {
+    console.warn("Durable player event save unavailable:", error);
+  }
+};
+const sendPlayerEvent = (channel, sessionId, event, payload) => {
+  const eventPayload = { ...payload, eventId: payload.eventId || makeLiveEventId(event, payload) };
+  channel?.send({ type: "broadcast", event, payload: eventPayload });
+  saveDurablePlayerEvent(sessionId, event, eventPayload);
+  return eventPayload;
+};
 
 const getRoundOrder = (question, fallbackOrder = 1) => Number(question?.round_order || question?.round_number || question?.round || fallbackOrder) || fallbackOrder;
 const getRoundName = (question, fallbackOrder = 1) => {
@@ -293,7 +318,7 @@ const PlayerSession = () => {
         const isConnected = status === "SUBSCRIBED";
         setConnected(isConnected);
         if (isConnected) {
-          channel.send({ type: "broadcast", event: "player_join", payload: { playerId: player.id, playerName: player.name, updatePreference: player.updatePreference || "none", updateContact: player.updateContact || "", joinedAt: new Date().toISOString() } });
+          sendPlayerEvent(channel, id, "player_join", { playerId: player.id, playerName: player.name, updatePreference: player.updatePreference || "none", updateContact: player.updateContact || "", joinedAt: new Date().toISOString() });
         }
       });
     return () => {
@@ -344,7 +369,7 @@ const PlayerSession = () => {
   useEffect(() => {
     if (!player || !hostState || !currentQuestion || hostState.mode !== "question") return undefined;
     const sendActivity = (eventType) => {
-      channelRef.current?.send({ type: "broadcast", event: "player_activity", payload: { playerId: player.id, playerName: player.name, eventType, questionIndex: hostState.currentIndex, questionId: currentQuestion.id, questionText: currentQuestion.questionText, submittedAt: new Date().toISOString() } });
+      sendPlayerEvent(channelRef.current, id, "player_activity", { playerId: player.id, playerName: player.name, eventType, questionIndex: hostState.currentIndex, questionId: currentQuestion.id, questionText: currentQuestion.questionText, submittedAt: new Date().toISOString() });
     };
     const handleVisibility = () => {
       if (document.hidden) sendActivity("left_screen");
@@ -357,7 +382,7 @@ const PlayerSession = () => {
       document.removeEventListener("visibilitychange", handleVisibility);
       window.removeEventListener("pagehide", handlePageHide);
     };
-  }, [currentQuestion, hostState, player]);
+  }, [currentQuestion, hostState, id, player]);
 
   useEffect(() => {
     setWagerAmount("0");
@@ -380,7 +405,7 @@ const PlayerSession = () => {
     saveStoredPlayer(id, nextPlayer);
     setPlayer(nextPlayer);
     setEditingName(false);
-    channelRef.current?.send({ type: "broadcast", event: "player_rename", payload: { playerId: nextPlayer.id, playerName: nextPlayer.name, updatedAt: new Date().toISOString() } });
+    sendPlayerEvent(channelRef.current, id, "player_rename", { playerId: nextPlayer.id, playerName: nextPlayer.name, updatedAt: new Date().toISOString() });
     toast.success("Team name updated");
   };
 
@@ -392,7 +417,7 @@ const PlayerSession = () => {
       writeStoredFeedback(id, "question-feedback", next);
       return next;
     });
-    channelRef.current?.send({ type: "broadcast", event: "feedback_submit", payload: { playerId: player.id, playerName: player.name, sentiment, questionIndex: hostState.currentIndex, questionId: currentQuestion.id, questionText: currentQuestion.questionText, category: currentQuestion.category || "Uncategorized", roundName: currentQuestion.roundName || "Round", submittedAt: new Date().toISOString() } });
+    sendPlayerEvent(channelRef.current, id, "feedback_submit", { playerId: player.id, playerName: player.name, sentiment, questionIndex: hostState.currentIndex, questionId: currentQuestion.id, questionText: currentQuestion.questionText, category: currentQuestion.category || "Uncategorized", roundName: currentQuestion.roundName || "Round", submittedAt: new Date().toISOString() });
     toast.success("Feedback saved");
   };
 
@@ -404,7 +429,7 @@ const PlayerSession = () => {
       writeStoredFeedback(id, "category-feedback", next);
       return next;
     });
-    channelRef.current?.send({ type: "broadcast", event: "category_feedback_submit", payload: { playerId: player.id, playerName: player.name, sentiment, category, questionIndex: hostState.currentIndex, roundKey: categoryFeedbackKey, roundName: activeRoundName, submittedAt: new Date().toISOString() } });
+    sendPlayerEvent(channelRef.current, id, "category_feedback_submit", { playerId: player.id, playerName: player.name, sentiment, category, questionIndex: hostState.currentIndex, roundKey: categoryFeedbackKey, roundName: activeRoundName, submittedAt: new Date().toISOString() });
     toast.success("Feedback saved");
   };
 
@@ -422,9 +447,9 @@ const PlayerSession = () => {
     const wager = shouldWagerBefore ? requestedWager : 0;
     const awardedPoints = wagerMode ? wager : pointsPerQuestion;
     const payload = { playerId: player.id, playerName: player.name, answer: finalAnswer, points: awardedPoints, questionPoints: pointsPerQuestion, pointsPerQuestion, wagerAmount: wager, wagerSubmitted: !wagerMode || wagerTiming !== "after_answer", wagerMode, wagerLimit, wagerCap: effectiveWagerLimit, scoreAtWager: Number(myScore || 0), wagerTiming, questionIndex: hostState.currentIndex, questionId: currentQuestion.id, questionText: currentQuestion.questionText, ...submissionTiming(), submittedAt: new Date().toISOString() };
-    channelRef.current?.send({ type: "broadcast", event: "answer_submit", payload });
-    saveStoredSubmission(id, player.id, payload);
-    setSubmitted(payload);
+    const sentPayload = sendPlayerEvent(channelRef.current, id, "answer_submit", payload);
+    saveStoredSubmission(id, player.id, sentPayload);
+    setSubmitted(sentPayload);
     setAnswer("");
     toast.success("Answer submitted");
   };
@@ -435,16 +460,16 @@ const PlayerSession = () => {
     if (!Number.isFinite(wager) || wager < 0) return toast.error("Enter a wager of 0 or more");
     if (wager > effectiveWagerLimit) return toast.error(`Wager up to ${effectiveWagerLimit}`);
     const payload = { ...submitted, points: wager, wagerAmount: wager, wagerSubmitted: true, wagerLimit, wagerCap: effectiveWagerLimit, scoreAtWager: Number(myScore || 0), wagerTiming, ...submissionTiming(), submittedAt: new Date().toISOString() };
-    channelRef.current?.send({ type: "broadcast", event: "answer_submit", payload });
-    saveStoredSubmission(id, player.id, payload);
-    setSubmitted(payload);
+    const sentPayload = sendPlayerEvent(channelRef.current, id, "answer_submit", payload);
+    saveStoredSubmission(id, player.id, sentPayload);
+    setSubmitted(sentPayload);
     toast.success("Wager submitted");
   };
   const submitIdeas = () => {
     const category = ideaForm.category.trim();
     const question = ideaForm.question.trim();
     if (!category && !question) return toast.error("Add a category or question idea");
-    channelRef.current?.send({ type: "broadcast", event: "idea_submit", payload: { playerId: player.id, playerName: player.name, category, question, submittedAt: new Date().toISOString() } });
+    sendPlayerEvent(channelRef.current, id, "idea_submit", { playerId: player.id, playerName: player.name, category, question, submittedAt: new Date().toISOString() });
     setIdeaForm({ category: "", question: "" });
     toast.success("Idea sent");
   };

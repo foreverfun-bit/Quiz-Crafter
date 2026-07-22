@@ -3,6 +3,8 @@ import { supabase } from "./supabase";
 const QUESTION_MEDIA_BUCKET = "question-media";
 const MAX_UPLOAD_ATTEMPTS = 3;
 const RETRY_DELAY_MS = [500, 1500];
+const FALLBACK_MAX_DIMENSION = 1600;
+const FALLBACK_JPEG_QUALITY = 0.82;
 // Must match the question-media bucket's file_size_limit, or Storage rejects the
 // upload with an HTTP 400 that gives the host no indication the file was too big.
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
@@ -49,6 +51,35 @@ const readFileBytes = async (file) => {
   if (!buffer.byteLength) throw new Error("That image looks empty once read -- if it's from a cloud-synced folder (OneDrive, Google Drive, etc.), make sure it's fully downloaded before trying again");
   return buffer;
 };
+
+const imageBlobToDataUrl = async (blob) => new Promise((resolve, reject) => {
+  const objectUrl = URL.createObjectURL(blob);
+  const image = new Image();
+  image.onload = () => {
+    try {
+      const scale = Math.min(1, FALLBACK_MAX_DIMENSION / Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height, 1));
+      const width = Math.max(1, Math.round((image.naturalWidth || image.width) * scale));
+      const height = Math.max(1, Math.round((image.naturalHeight || image.height) * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d");
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, width, height);
+      context.drawImage(image, 0, 0, width, height);
+      URL.revokeObjectURL(objectUrl);
+      resolve(canvas.toDataURL("image/jpeg", FALLBACK_JPEG_QUALITY));
+    } catch (error) {
+      URL.revokeObjectURL(objectUrl);
+      reject(error);
+    }
+  };
+  image.onerror = () => {
+    URL.revokeObjectURL(objectUrl);
+    reject(new Error("Could not read this image. Try saving it as a PNG or JPG, then upload again."));
+  };
+  image.src = objectUrl;
+});
 
 const uploadOnce = async (blob, fileName, userId) => {
   const contentType = resolveUploadType(blob);
@@ -98,5 +129,6 @@ export const uploadQuestionMedia = async (file) => {
     }
     if (attempt < MAX_UPLOAD_ATTEMPTS) await sleep(RETRY_DELAY_MS[attempt - 1] || 1500);
   }
-  throw lastError || new Error("Failed to upload image");
+  console.warn("Question media storage upload failed; using compressed browser fallback:", lastError);
+  return imageBlobToDataUrl(blob);
 };

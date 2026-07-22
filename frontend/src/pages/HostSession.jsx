@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { uploadQuestionMedia } from "../lib/mediaUpload";
@@ -358,6 +358,13 @@ const persistLiveIdea = (sessionId, payload) => {
   saveHostToolsSessionState(sessionId, { ideas: next }).catch((error) => console.warn("Host tools profile save unavailable:", error));
   return next;
 };
+const liveEventKey = (event, payload = {}) => payload.eventId || payload.id || [
+  event,
+  payload.playerId || "player",
+  payload.questionIndex ?? payload.roundKey ?? payload.category ?? "session",
+  payload.questionId || "",
+  payload.submittedAt || payload.updatedAt || payload.joinedAt || "",
+].join(":");
 
 const getDefaultPoints = (question) => POINTS_BY_TYPE[question?.type] || 100;
 const getQuestionPoints = (question) => Number(question?.points ?? 0) > 0 ? Number(question.points) : getDefaultPoints(question);
@@ -422,6 +429,7 @@ const HostSession = () => {
   const liveChannelRef = useRef(null);
   const liveStateRef = useRef(null);
   const liveStateSequenceRef = useRef(0);
+  const processedLiveEventsRef = useRef(new Set());
   const hostedResultsRef = useRef({});
   const liveStateSaveRef = useRef(0);
   const liveStateSaveKeyRef = useRef("");
@@ -466,6 +474,117 @@ const HostSession = () => {
   const [topbarCollapsed, setTopbarCollapsed] = useState(false);
   const [activeDrawer, setActiveDrawer] = useState(null);
 
+  const applyLivePlayerEvent = useCallback((event, payload) => {
+    if (!payload || typeof payload !== "object") return;
+    const key = liveEventKey(event, payload);
+    if (processedLiveEventsRef.current.has(key)) return;
+    processedLiveEventsRef.current.add(key);
+    if (processedLiveEventsRef.current.size > 1600) processedLiveEventsRef.current = new Set([...processedLiveEventsRef.current].slice(-1000));
+
+    if (event === "player_join") {
+      if (!payload.playerId) return;
+      setPlayers((current) => {
+        const nextPlayer = { id: payload.playerId, name: payload.playerName || "Team", updatePreference: payload.updatePreference || "none", updateContact: payload.updateContact || "", joinedAt: payload.joinedAt };
+        const next = current.some((player) => player.id === payload.playerId) ? current.map((player) => player.id === payload.playerId ? { ...player, ...nextPlayer } : player) : [...current, nextPlayer];
+        saveHostToolsSessionState(id, { players: next }).catch((error) => console.warn("Players profile save unavailable:", error));
+        return next;
+      });
+      setLeaderboard((teams) => teams.some((team) => team.id === payload.playerId) ? teams.map((team) => team.id === payload.playerId ? { ...team, name: payload.playerName || team.name || "Team" } : team) : [...teams, { id: payload.playerId, name: payload.playerName || "Team", score: 0 }]);
+      return;
+    }
+
+    if (event === "player_rename") {
+      if (!payload.playerId || !payload.playerName) return;
+      setPlayers((current) => {
+        const next = current.map((player) => player.id === payload.playerId ? { ...player, name: payload.playerName } : player);
+        saveHostToolsSessionState(id, { players: next }).catch((error) => console.warn("Players profile save unavailable:", error));
+        return next;
+      });
+      setLeaderboard((teams) => teams.map((team) => team.id === payload.playerId ? { ...team, name: payload.playerName } : team));
+      setAnswers((current) => {
+        const next = current.map((answer) => answer.playerId === payload.playerId ? { ...answer, playerName: payload.playerName } : answer);
+        writeStoredList(hostToolsStorageKey(id, "answers"), next);
+        saveHostToolsSessionState(id, { answers: next }).catch((error) => console.warn("Answers profile save unavailable:", error));
+        return next;
+      });
+      return;
+    }
+
+    if (event === "answer_submit") {
+      if (!payload.playerId) return;
+      setAnswers((current) => {
+        const filtered = current.filter((answer) => !(answer.playerId === payload.playerId && answer.questionIndex === payload.questionIndex));
+        const next = [...filtered, payload].slice(-800);
+        writeStoredList(hostToolsStorageKey(id, "answers"), next);
+        saveHostToolsSessionState(id, { answers: next }).catch((error) => console.warn("Answers profile save unavailable:", error));
+        return next;
+      });
+      return;
+    }
+
+    if (event === "player_activity") {
+      if (!payload.playerId || payload.questionIndex === undefined) return;
+      setPlayerActivity((current) => {
+        const next = [...current, payload].slice(-800);
+        writeStoredList(hostToolsStorageKey(id, "activity"), next);
+        saveHostToolsSessionState(id, { activity: next }).catch((error) => console.warn("Activity profile save unavailable:", error));
+        return next;
+      });
+      return;
+    }
+
+    if (event === "feedback_submit") {
+      if (!payload.playerId || payload.questionIndex === undefined) return;
+      setFeedback(() => persistLiveVote(id, "feedback", payload, (item) => `${item.playerId}-${item.questionIndex}`));
+      supabase.from("session_question_feedback").upsert({
+        session_id: id,
+        player_id: payload.playerId,
+        player_name: payload.playerName || "",
+        sentiment: payload.sentiment,
+        question_index: payload.questionIndex,
+        question_id: payload.questionId || null,
+        question_text: payload.questionText || "",
+        category: payload.category || "",
+        round_name: payload.roundName || "",
+        submitted_at: payload.submittedAt || new Date().toISOString(),
+      }, { onConflict: "session_id,player_id,question_index" }).then(({ error }) => { if (error) console.warn("Question feedback save unavailable:", error); });
+      return;
+    }
+
+    if (event === "category_feedback_submit") {
+      if (!payload.playerId || !payload.category) return;
+      setCategoryFeedback(() => persistLiveVote(id, "category-feedback", payload, (item) => `${item.playerId}-${item.roundKey || item.roundName}-${item.category}`));
+      supabase.from("session_category_feedback").upsert({
+        session_id: id,
+        player_id: payload.playerId,
+        player_name: payload.playerName || "",
+        sentiment: payload.sentiment,
+        category: payload.category,
+        round_key: payload.roundKey || payload.roundName || "",
+        round_name: payload.roundName || "",
+        submitted_at: payload.submittedAt || new Date().toISOString(),
+      }, { onConflict: "session_id,player_id,round_key,category" }).then(({ error }) => { if (error) console.warn("Category feedback save unavailable:", error); });
+      return;
+    }
+
+    if (event === "idea_submit") {
+      if (!payload.playerId) return;
+      setPlayerIdeas(() => persistLiveIdea(id, payload));
+      supabase.from("session_player_ideas").insert({
+        session_id: id,
+        player_id: payload.playerId,
+        player_name: payload.playerName || "",
+        category: payload.category || "",
+        question: payload.question || "",
+        submitted_at: payload.submittedAt || new Date().toISOString(),
+      }).then(({ error }) => { if (error) console.warn("Player idea save unavailable:", error); });
+    }
+  }, [id]);
+  const applyStoredLiveEvents = useCallback((results) => {
+    const events = Array.isArray(results?.liveEvents) ? results.liveEvents : [];
+    events.forEach((record) => applyLivePlayerEvent(record?.event, record?.payload));
+  }, [applyLivePlayerEvent]);
+
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 500);
     return () => window.clearInterval(interval);
@@ -480,6 +599,7 @@ const HostSession = () => {
         setSession(data);
         hostedResultsRef.current = data?.hosted_results && typeof data.hosted_results === "object" && !Array.isArray(data.hosted_results) ? data.hosted_results : {};
         liveStateSequenceRef.current = Math.max(liveStateSequenceRef.current, Number(hostedResultsRef.current?.liveState?.liveSequence || 0));
+        applyStoredLiveEvents(hostedResultsRef.current);
         setBranding(readStoredBranding(id, data));
       } catch (error) {
         console.error("Host session load error:", error);
@@ -490,7 +610,24 @@ const HostSession = () => {
       }
     };
     loadSession();
-  }, [id, navigate]);
+  }, [applyStoredLiveEvents, id, navigate]);
+
+  useEffect(() => {
+    const loadDurablePlayerEvents = async () => {
+      try {
+        const { data, error } = await supabase.from("sessions").select("hosted_results").eq("id", id).single();
+        if (error) throw error;
+        const results = data?.hosted_results && typeof data.hosted_results === "object" && !Array.isArray(data.hosted_results) ? data.hosted_results : {};
+        hostedResultsRef.current = { ...hostedResultsRef.current, ...results };
+        applyStoredLiveEvents(results);
+      } catch (error) {
+        console.warn("Live player event recovery unavailable:", error);
+      }
+    };
+    loadDurablePlayerEvents();
+    const interval = window.setInterval(loadDurablePlayerEvents, 2500);
+    return () => window.clearInterval(interval);
+  }, [applyStoredLiveEvents, id]);
 
   useEffect(() => {
     if (!session) return;
@@ -571,88 +708,25 @@ const HostSession = () => {
     liveChannelRef.current = channel;
     channel
       .on("broadcast", { event: "player_join" }, ({ payload }) => {
-        if (!payload?.playerId) return;
-        setPlayers((current) => {
-          const nextPlayer = { id: payload.playerId, name: payload.playerName || "Team", updatePreference: payload.updatePreference || "none", updateContact: payload.updateContact || "", joinedAt: payload.joinedAt };
-          const next = current.some((player) => player.id === payload.playerId) ? current.map((player) => player.id === payload.playerId ? { ...player, ...nextPlayer } : player) : [...current, nextPlayer];
-          saveHostToolsSessionState(id, { players: next }).catch((error) => console.warn("Players profile save unavailable:", error));
-          return next;
-        });
+        applyLivePlayerEvent("player_join", payload);
       })
       .on("broadcast", { event: "player_rename" }, ({ payload }) => {
-        if (!payload?.playerId || !payload.playerName) return;
-        setPlayers((current) => {
-          const next = current.map((player) => player.id === payload.playerId ? { ...player, name: payload.playerName } : player);
-          saveHostToolsSessionState(id, { players: next }).catch((error) => console.warn("Players profile save unavailable:", error));
-          return next;
-        });
-        setAnswers((current) => {
-          const next = current.map((answer) => answer.playerId === payload.playerId ? { ...answer, playerName: payload.playerName } : answer);
-          writeStoredList(hostToolsStorageKey(id, "answers"), next);
-          saveHostToolsSessionState(id, { answers: next }).catch((error) => console.warn("Answers profile save unavailable:", error));
-          return next;
-        });
+        applyLivePlayerEvent("player_rename", payload);
       })
       .on("broadcast", { event: "answer_submit" }, ({ payload }) => {
-        if (!payload?.playerId) return;
-        setAnswers((current) => {
-          const filtered = current.filter((answer) => !(answer.playerId === payload.playerId && answer.questionIndex === payload.questionIndex));
-          const next = [...filtered, payload].slice(-800);
-          writeStoredList(hostToolsStorageKey(id, "answers"), next);
-          saveHostToolsSessionState(id, { answers: next }).catch((error) => console.warn("Answers profile save unavailable:", error));
-          return next;
-        });
+        applyLivePlayerEvent("answer_submit", payload);
       })
       .on("broadcast", { event: "player_activity" }, ({ payload }) => {
-        if (!payload?.playerId || payload.questionIndex === undefined) return;
-        setPlayerActivity((current) => {
-          const next = [...current, payload].slice(-800);
-          writeStoredList(hostToolsStorageKey(id, "activity"), next);
-          saveHostToolsSessionState(id, { activity: next }).catch((error) => console.warn("Activity profile save unavailable:", error));
-          return next;
-        });
+        applyLivePlayerEvent("player_activity", payload);
       })
       .on("broadcast", { event: "feedback_submit" }, ({ payload }) => {
-        if (!payload?.playerId || payload.questionIndex === undefined) return;
-        setFeedback(() => persistLiveVote(id, "feedback", payload, (item) => `${item.playerId}-${item.questionIndex}`));
-        supabase.from("session_question_feedback").upsert({
-          session_id: id,
-          player_id: payload.playerId,
-          player_name: payload.playerName || "",
-          sentiment: payload.sentiment,
-          question_index: payload.questionIndex,
-          question_id: payload.questionId || null,
-          question_text: payload.questionText || "",
-          category: payload.category || "",
-          round_name: payload.roundName || "",
-          submitted_at: payload.submittedAt || new Date().toISOString(),
-        }, { onConflict: "session_id,player_id,question_index" }).then(({ error }) => { if (error) console.warn("Question feedback save unavailable:", error); });
+        applyLivePlayerEvent("feedback_submit", payload);
       })
       .on("broadcast", { event: "category_feedback_submit" }, ({ payload }) => {
-        if (!payload?.playerId || !payload.category) return;
-        setCategoryFeedback(() => persistLiveVote(id, "category-feedback", payload, (item) => `${item.playerId}-${item.roundKey || item.roundName}-${item.category}`));
-        supabase.from("session_category_feedback").upsert({
-          session_id: id,
-          player_id: payload.playerId,
-          player_name: payload.playerName || "",
-          sentiment: payload.sentiment,
-          category: payload.category,
-          round_key: payload.roundKey || payload.roundName || "",
-          round_name: payload.roundName || "",
-          submitted_at: payload.submittedAt || new Date().toISOString(),
-        }, { onConflict: "session_id,player_id,round_key,category" }).then(({ error }) => { if (error) console.warn("Category feedback save unavailable:", error); });
+        applyLivePlayerEvent("category_feedback_submit", payload);
       })
       .on("broadcast", { event: "idea_submit" }, ({ payload }) => {
-        if (!payload?.playerId) return;
-        setPlayerIdeas(() => persistLiveIdea(id, payload));
-        supabase.from("session_player_ideas").insert({
-          session_id: id,
-          player_id: payload.playerId,
-          player_name: payload.playerName || "",
-          category: payload.category || "",
-          question: payload.question || "",
-          submitted_at: payload.submittedAt || new Date().toISOString(),
-        }).then(({ error }) => { if (error) console.warn("Player idea save unavailable:", error); });
+        applyLivePlayerEvent("idea_submit", payload);
       })
       .on("broadcast", { event: "present_ready" }, () => {
         const state = liveStateRef.current;
@@ -668,7 +742,7 @@ const HostSession = () => {
       supabase.removeChannel(channel);
       liveChannelRef.current = null;
     };
-  }, [id]);
+  }, [applyLivePlayerEvent, id]);
 
   const questions = useMemo(() => flattenSession(session), [session]);
   const rounds = useMemo(() => makeRounds(questions), [questions]);
@@ -1845,6 +1919,4 @@ const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusM
 };
 
 export default HostSession;
-
-
 

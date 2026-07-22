@@ -1629,7 +1629,9 @@ const SelectedRoundList = ({ questions, rounds, activeRoundId, mediaQuestionId, 
       question_text: editForm.question_text,
       correct_answer: type === "true_false" ? (String(editForm.correct_answer).toLowerCase() === "false" ? "False" : "True") : editForm.correct_answer,
       incorrect_answers: type === "multiple_choice" ? cleanList(editForm.incorrect_answers).join("; ") : type === "true_false" ? (String(editForm.correct_answer).toLowerCase() === "false" ? "True" : "False") : null,
-      fun_fact: editForm.fun_fact
+      fun_fact: editForm.fun_fact,
+      image_url: question.image_url || "",
+      image_timing: normalizeImageTiming(question.image_timing)
     }, type);
   };
   const convertEdit = async (question, targetType) => {
@@ -1649,13 +1651,16 @@ const SelectedRoundList = ({ questions, rounds, activeRoundId, mediaQuestionId, 
   const saveEdit = () => {
     if (!editingId || !editForm) return;
     const type = normalizeType(editForm);
+    const questionByEdit = questions.find((item) => String(item.id) === String(editingId)) || {};
     onUpdate(editingId, {
       question_type: type,
       category: editForm.category,
       question_text: editForm.question_text,
       correct_answer: type === "true_false" ? (String(editForm.correct_answer).toLowerCase() === "false" ? "False" : "True") : editForm.correct_answer,
       incorrect_answers: type === "multiple_choice" ? cleanList(editForm.incorrect_answers).join("; ") : type === "true_false" ? (String(editForm.correct_answer).toLowerCase() === "false" ? "True" : "False") : null,
-      fun_fact: editForm.fun_fact
+      fun_fact: editForm.fun_fact,
+      image_url: questionByEdit.image_url || "",
+      image_timing: normalizeImageTiming(questionByEdit.image_timing)
     });
     setEditingId(null);
     setEditForm(null);
