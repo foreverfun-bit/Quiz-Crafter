@@ -370,6 +370,29 @@ const getDefaultPoints = (question) => POINTS_BY_TYPE[question?.type] || 100;
 const getQuestionPoints = (question) => Number(question?.points ?? 0) > 0 ? Number(question.points) : getDefaultPoints(question);
 const isBonusQuestion = (question) => String(question?.category || "").trim().toUpperCase() === "BONUS";
 const answerKey = (answer) => `${answer.playerId}-${answer.questionIndex}`;
+const normalizeLivePlayerRow = (row) => ({ id: row.id, name: row.name || "Team", score: Number(row.score || 0), joinedAt: row.joined_at || row.joinedAt });
+// live_game_players rows load/arrive asynchronously and independently of the
+// local players/leaderboard state -- overwriting wholesale on every fetch or
+// realtime tick would erase host-only fields (updatePreference, etc.) and
+// race with a host's just-made edit. Merge by id instead.
+const mergeLeaderboardTeams = (current, incoming) => {
+  if (!incoming.length) return current;
+  const byId = new Map(current.map((team) => [team.id, team]));
+  incoming.forEach((team) => {
+    const existing = byId.get(team.id);
+    byId.set(team.id, { ...existing, ...team, score: Number(team.score ?? existing?.score ?? 0) });
+  });
+  return [...byId.values()];
+};
+const mergePlayerProfiles = (current, incoming) => {
+  if (!incoming.length) return current;
+  const byId = new Map(current.map((player) => [player.id, player]));
+  incoming.forEach((player) => {
+    const existing = byId.get(player.id);
+    byId.set(player.id, { ...existing, ...player, updatePreference: existing?.updatePreference || "none", updateContact: existing?.updateContact || "" });
+  });
+  return [...byId.values()];
+};
 const normalizeAnswerText = (value) => String(value || "").trim().toLowerCase().replace(/[’']/g, "'").replace(/[^a-z0-9]+/g, " ").trim();
 const isCorrectSubmission = (answer, question) => Boolean(question?.answer) && normalizeAnswerText(answer?.answer) === normalizeAnswerText(question.answer);
 const serializeRoundIntro = (round) => round ? { key: round.key, name: round.name, description: round.description || "", categories: [...new Set((round.questions || []).map((question) => question.category).filter(Boolean))], questionCount: round.questions?.length || 0, startIndex: round.startIndex } : null;
@@ -433,6 +456,7 @@ const HostSession = () => {
   const hostedResultsRef = useRef({});
   const liveStateSaveRef = useRef(0);
   const liveStateSaveKeyRef = useRef("");
+  const liveRosterSyncKeyRef = useRef("");
   const [session, setSession] = useState(null);
   const [liveGameId, setLiveGameId] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -474,6 +498,37 @@ const HostSession = () => {
   const [topbarCollapsed, setTopbarCollapsed] = useState(false);
   const [activeDrawer, setActiveDrawer] = useState(null);
 
+  // player_join/answer_submit broadcasts are the only place a brand-new
+  // team's local state gets created -- previously they only touched
+  // players/leaderboard, so if the live_games row wasn't ready yet (or the
+  // roster's own realtime sync lagged), that team's live_game_players row
+  // never got created and the leaderboard/player device never saw them.
+  // Route both events through this so the server-side roster gets the same
+  // upsert the local state does.
+  const ensureTeamFromPayload = useCallback((payload) => {
+    if (!payload?.playerId) return;
+    const name = payload.playerName || "Team";
+    const joinedAt = payload.joinedAt || payload.submittedAt || new Date().toISOString();
+    setPlayers((current) => {
+      const nextPlayer = {
+        id: payload.playerId,
+        name,
+        updatePreference: payload.updatePreference || current.find((player) => player.id === payload.playerId)?.updatePreference || "none",
+        updateContact: payload.updateContact || current.find((player) => player.id === payload.playerId)?.updateContact || "",
+        joinedAt,
+      };
+      const next = current.some((player) => player.id === payload.playerId)
+        ? current.map((player) => player.id === payload.playerId ? { ...player, ...nextPlayer } : player)
+        : [...current, nextPlayer];
+      saveHostToolsSessionState(id, { players: next }).catch((error) => console.warn("Players profile save unavailable:", error));
+      return next;
+    });
+    setLeaderboard((teams) => teams.some((team) => team.id === payload.playerId)
+      ? teams.map((team) => team.id === payload.playerId ? { ...team, name: name || team.name || "Team" } : team)
+      : [...teams, { id: payload.playerId, name, score: 0 }]);
+    if (liveGameId) upsertLivePlayer(liveGameId, { id: payload.playerId, name }).catch((error) => console.warn("Live roster save unavailable:", error));
+  }, [id, liveGameId]);
+
   const applyLivePlayerEvent = useCallback((event, payload) => {
     if (!payload || typeof payload !== "object") return;
     const key = liveEventKey(event, payload);
@@ -483,13 +538,7 @@ const HostSession = () => {
 
     if (event === "player_join") {
       if (!payload.playerId) return;
-      setPlayers((current) => {
-        const nextPlayer = { id: payload.playerId, name: payload.playerName || "Team", updatePreference: payload.updatePreference || "none", updateContact: payload.updateContact || "", joinedAt: payload.joinedAt };
-        const next = current.some((player) => player.id === payload.playerId) ? current.map((player) => player.id === payload.playerId ? { ...player, ...nextPlayer } : player) : [...current, nextPlayer];
-        saveHostToolsSessionState(id, { players: next }).catch((error) => console.warn("Players profile save unavailable:", error));
-        return next;
-      });
-      setLeaderboard((teams) => teams.some((team) => team.id === payload.playerId) ? teams.map((team) => team.id === payload.playerId ? { ...team, name: payload.playerName || team.name || "Team" } : team) : [...teams, { id: payload.playerId, name: payload.playerName || "Team", score: 0 }]);
+      ensureTeamFromPayload(payload);
       return;
     }
 
@@ -512,6 +561,7 @@ const HostSession = () => {
 
     if (event === "answer_submit") {
       if (!payload.playerId) return;
+      ensureTeamFromPayload(payload);
       setAnswers((current) => {
         const filtered = current.filter((answer) => !(answer.playerId === payload.playerId && answer.questionIndex === payload.questionIndex));
         const next = [...filtered, payload].slice(-800);
@@ -579,7 +629,7 @@ const HostSession = () => {
         submitted_at: payload.submittedAt || new Date().toISOString(),
       }).then(({ error }) => { if (error) console.warn("Player idea save unavailable:", error); });
     }
-  }, [id]);
+  }, [ensureTeamFromPayload, id]);
   const applyStoredLiveEvents = useCallback((results) => {
     const events = Array.isArray(results?.liveEvents) ? results.liveEvents : [];
     events.forEach((record) => applyLivePlayerEvent(record?.event, record?.payload));
@@ -659,18 +709,46 @@ const HostSession = () => {
     if (!liveGameId) return undefined;
     let cancelled = false;
     fetchLivePlayers(liveGameId)
-      .then((rows) => { if (!cancelled) setLeaderboard(rows.map((row) => ({ id: row.id, name: row.name, score: Number(row.score || 0) }))); })
+      .then((rows) => {
+        if (cancelled) return;
+        const teams = rows.map(normalizeLivePlayerRow);
+        setLeaderboard((current) => mergeLeaderboardTeams(current, teams));
+        setPlayers((current) => mergePlayerProfiles(current, teams));
+      })
       .catch((error) => console.warn("Live roster load unavailable:", error));
     const unsubscribe = subscribeLivePlayers(liveGameId, ({ eventType, new: newRow, old: oldRow }) => {
       setLeaderboard((current) => {
         if (eventType === "DELETE") return current.filter((team) => team.id !== oldRow.id);
-        const nextTeam = { id: newRow.id, name: newRow.name, score: Number(newRow.score || 0) };
+        const nextTeam = normalizeLivePlayerRow(newRow);
         const exists = current.some((team) => team.id === nextTeam.id);
         return exists ? current.map((team) => (team.id === nextTeam.id ? nextTeam : team)) : [...current, nextTeam];
       });
+      if (eventType !== "DELETE") setPlayers((current) => mergePlayerProfiles(current, [normalizeLivePlayerRow(newRow)]));
     });
     return () => { cancelled = true; unsubscribe(); };
   }, [liveGameId]);
+
+  // Bulk grading (mark-all-correct, undo, etc.) changes scores in local
+  // leaderboard state without going through adjustScore/setScore, so it
+  // never reached live_game_players -- the host screen showed the right
+  // score but players' devices and the presentation leaderboard didn't.
+  // Keyed by a content hash so this doesn't refire (and re-upsert every
+  // row) on every unrelated render, only when a name or score actually
+  // changes.
+  useEffect(() => {
+    if (!liveGameId || !leaderboard.length) return;
+    const syncKey = leaderboard
+      .map((team) => `${team.id}:${team.name || ""}:${Number(team.score || 0)}`)
+      .sort()
+      .join("|");
+    if (syncKey === liveRosterSyncKeyRef.current) return;
+    liveRosterSyncKeyRef.current = syncKey;
+    leaderboard.forEach((team) => {
+      const name = team.name || players.find((player) => player.id === team.id)?.name || "Team";
+      upsertLivePlayer(liveGameId, { id: team.id, name, score: Number(team.score || 0) })
+        .catch((error) => console.warn("Live roster score sync unavailable:", error));
+    });
+  }, [leaderboard, liveGameId, players]);
 
   useEffect(() => {
     const loadProfileHostState = async () => {
@@ -864,6 +942,13 @@ const HostSession = () => {
       timerSeconds: activeTimer,
       timerEndAt: timerEndAtValue,
       acceptingAnswers: timerEndAtValue === null || timerEndAtValue > Date.now(),
+      // Carried in the broadcast snapshot itself so player devices and the
+      // presentation screen have a roster/score fallback that rides the
+      // realtime WebSocket channel -- the same channel that kept working
+      // throughout the live_game_players REST-path incidents -- instead of
+      // depending solely on the live_game_players table being reachable.
+      players,
+      leaderboard: leaderboard.map((team) => ({ id: team.id, name: team.name || players.find((player) => player.id === team.id)?.name || "Team", score: Number(team.score || 0) })),
       branding,
       updatedAt: new Date().toISOString(),
     };
@@ -906,7 +991,7 @@ const HostSession = () => {
     if (state) persistLiveState(state);
   // The live snapshot helpers intentionally read the latest host state in this render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, session, sessionName, questions.length, liveDisplayedQuestion, currentIndex, pendingBonusIndex, rounds, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerSeconds, timerEndAt, acceptingAnswers, branding]);
+  }, [id, session, sessionName, questions.length, liveDisplayedQuestion, currentIndex, pendingBonusIndex, rounds, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerSeconds, timerEndAt, acceptingAnswers, branding, players, leaderboard]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -1237,7 +1322,7 @@ const HostSession = () => {
     setLeaderboard((teams) => teams.some((team) => team.id === teamId)
       ? teams.map((team) => team.id === teamId ? { ...team, score: nextScore } : team)
       : [...teams, { id: teamId, name, score: nextScore }]);
-    upsertLivePlayer(liveGameId, { id: teamId, name, score: nextScore }).catch((error) => console.warn("Live roster save unavailable:", error));
+    if (liveGameId) upsertLivePlayer(liveGameId, { id: teamId, name, score: nextScore }).catch((error) => console.warn("Live roster save unavailable:", error));
   };
   const setScore = (teamId, score) => {
     const existing = leaderboard.find((team) => team.id === teamId);
@@ -1246,7 +1331,7 @@ const HostSession = () => {
     setLeaderboard((teams) => teams.some((team) => team.id === teamId)
       ? teams.map((team) => team.id === teamId ? { ...team, score: nextScore } : team)
       : [...teams, { id: teamId, name, score: nextScore }]);
-    upsertLivePlayer(liveGameId, { id: teamId, name, score: nextScore }).catch((error) => console.warn("Live roster save unavailable:", error));
+    if (liveGameId) upsertLivePlayer(liveGameId, { id: teamId, name, score: nextScore }).catch((error) => console.warn("Live roster save unavailable:", error));
   };
   const removeTeam = (teamId) => {
     setLeaderboard((teams) => teams.filter((team) => team.id !== teamId));
@@ -1413,7 +1498,7 @@ const HostSession = () => {
   // may not have synced to the leaderboard yet. Intersecting the two used
   // to silently drop manually-added teams from the Manual Answer dropdown,
   // the waiting-on list, and the submitted count.
-  const activeTeamIds = new Set(leaderboard.map((team) => team.id));
+  const activeTeamIds = new Set([...leaderboard.map((team) => team.id), ...players.map((player) => player.id)]);
   const activePlayers = [
     ...leaderboard.map((team) => {
       const player = players.find((item) => item.id === team.id);
