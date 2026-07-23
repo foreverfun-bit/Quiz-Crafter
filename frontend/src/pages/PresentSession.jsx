@@ -400,8 +400,19 @@ const PresentSession = () => {
   const displayRound = mode === "categories" ? introRound : currentRound;
   const sessionName = presentState.sessionName || session?.name || session?.session_name || "Trivia Session";
   const joinUrl = presentState.joinUrl || `${getPublicOrigin()}/join?session=${id}`;
-  const playerCount = livePlayers.length;
-  const sortedLeaderboard = useMemo(() => [...livePlayers].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)), [livePlayers]);
+  // live_game_players (livePlayers) is the primary roster/score source, but
+  // when that REST path or the live_games row isn't available yet, the
+  // host's own broadcast snapshot (presentState) carries the same
+  // roster/scores over the realtime WebSocket channel as a fallback so the
+  // presentation screen isn't stuck showing 0 teams.
+  const hostStatePlayers = useMemo(() => {
+    if (Array.isArray(presentState?.leaderboard) && presentState.leaderboard.length) return presentState.leaderboard;
+    if (Array.isArray(presentState?.players)) return presentState.players.map((team) => ({ ...team, score: Number(team.score || 0) }));
+    return [];
+  }, [presentState]);
+  const rosterPlayers = livePlayers.length ? livePlayers : hostStatePlayers;
+  const playerCount = rosterPlayers.length;
+  const sortedLeaderboard = useMemo(() => [...rosterPlayers].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)), [rosterPlayers]);
   const presentedLeaderboard = sortedLeaderboard.slice(0, mode === "winners" ? 3 : 12);
   const showLobby = mode === "qr" || !hasPresentationStarted(presentState, currentIndex);
   const branding = normalizeBranding(presentState.branding);
@@ -418,7 +429,7 @@ const PresentSession = () => {
   if (showLobby && session) {
     return (
       <Stage branding={branding}>
-        <LobbyView branding={branding} sessionName={sessionName} joinUrl={joinUrl} playerCount={playerCount} teams={livePlayers} />
+        <LobbyView branding={branding} sessionName={sessionName} joinUrl={joinUrl} playerCount={playerCount} teams={rosterPlayers} />
       </Stage>
     );
   }
@@ -458,7 +469,7 @@ const PresentSession = () => {
           {mode === "winners" && <WinnersView branding={branding} leaderboard={presentedLeaderboard} sessionName={sessionName} />}
           {mode === "feedback" && <FeedbackView branding={branding} />}
           {mode === "bonus_pause" && <BonusPauseView branding={branding} round={presentState.pendingBonusRound || currentRound} leaderboard={presentedLeaderboard} />}
-          {mode === "qr" && <LobbyView branding={branding} sessionName={sessionName} joinUrl={joinUrl} playerCount={playerCount} teams={livePlayers} compact />}
+          {mode === "qr" && <LobbyView branding={branding} sessionName={sessionName} joinUrl={joinUrl} playerCount={playerCount} teams={rosterPlayers} compact />}
           {mode !== "qr" && mode !== "categories" && mode !== "leaderboard" && mode !== "winners" && mode !== "feedback" && mode !== "bonus_pause" && (
             <QuestionView branding={branding} correctColor={correctColor} question={currentQuestion} index={currentIndex} total={questions.length} showAnswer={presentState.showAnswer} showFunFact={presentState.showFunFact} />
           )}

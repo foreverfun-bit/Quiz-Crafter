@@ -328,7 +328,18 @@ const PlayerSession = () => {
   }, [id, player]);
 
   const currentQuestion = useMemo(() => (hostState?.currentQuestion ? { ...hostState.currentQuestion, answer: hostState.showAnswer ? (hostState.revealedAnswer || hostState.currentQuestion.answer || "") : "" } : null), [hostState]);
-  const sortedPlayers = useMemo(() => [...livePlayers].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)), [livePlayers]);
+  // live_game_players (livePlayers) is the primary roster/score source, but
+  // when that REST path or the live_games row isn't available yet, the host's
+  // own broadcast snapshot (hostState) carries the same roster/scores over
+  // the realtime WebSocket channel as a fallback so this device isn't stuck
+  // showing nobody/no points.
+  const hostStatePlayers = useMemo(() => {
+    if (Array.isArray(hostState?.leaderboard) && hostState.leaderboard.length) return hostState.leaderboard;
+    if (Array.isArray(hostState?.players)) return hostState.players.map((team) => ({ ...team, score: Number(team.score || 0) }));
+    return [];
+  }, [hostState]);
+  const rosterPlayers = livePlayers.length ? livePlayers : hostStatePlayers;
+  const sortedPlayers = useMemo(() => [...rosterPlayers].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)), [rosterPlayers]);
   const leaderboard = sortedPlayers;
   const roundCategories = useMemo(() => buildRoundCategories(session), [session]);
   const branding = useMemo(() => mergeBranding(session, hostState), [session, hostState]);
