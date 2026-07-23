@@ -1,77 +1,54 @@
-import { supabase, supabaseTable } from "./supabase";
+import { supabase } from "./supabase";
 
-const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-const makeGameCode = () => Array.from({ length: 6 }, () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]).join("");
+// live_games / live_game_players used to be read and written directly from
+// the browser to Supabase (via supabaseTable, bypassing /api/supabase-data)
+// because anonymous players joining via QR code aren't signed-in Supabase
+// users. That direct browser-to-Supabase path proved unreliable in
+// production (CORS/connectivity failures that had nothing to do with auth
+// or RLS -- both were verified correct server-side). Routed through this
+// same-origin endpoint instead, which sidesteps that path entirely.
+// Realtime (broadcast, postgres_changes) stays on the direct WebSocket
+// connection below -- only the REST/fetch path was affected.
+const LIVE_GAME_ENDPOINT = "/api/live-game";
 
-// Trimmed to the columns callers actually read (id, status) -- this is
-// polled by every player and presentation screen until a live game shows
-// up, so a full-row select was needlessly widening every one of those
-// requests' response payloads.
-const mostRecentLiveGame = async (sessionId) => {
-  const { data, error } = await supabaseTable("live_games")
-    .select("id, status")
-    .eq("session_id", sessionId)
-    .order("created_at", { ascending: false })
-    .limit(1);
-  if (error) throw error;
-  return data?.[0] || null;
+const callLiveGame = async (action, params = {}) => {
+  const response = await fetch(LIVE_GAME_ENDPOINT, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action, ...params }),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result?.error || `Live game request failed (${response.status})`);
+  return result.data;
+};
+
+const getAuthToken = async () => {
+  const { data } = await supabase.auth.getSession();
+  return data?.session?.access_token || "";
 };
 
 // Read-only lookup for players/presentation screens: they can't create a
-// live_games row (RLS only allows the host to insert), so they wait for one
-// to exist.
-export const findLiveGame = async (sessionId) => {
-  const existing = await mostRecentLiveGame(sessionId);
-  return existing && existing.status !== "finished" ? existing : null;
-};
+// live_games row (host-only), so they wait for one to exist.
+export const findLiveGame = (sessionId) => callLiveGame("findLiveGame", { sessionId });
 
 // Host-only: reuses the session's current live game if one exists, so a
 // host reload doesn't orphan the roster from a fresh row.
 export const ensureLiveGame = async (sessionId, { sessionName } = {}) => {
-  const existing = await mostRecentLiveGame(sessionId);
-  if (existing && existing.status !== "finished") return existing;
-
-  const { data: sessionData } = await supabase.auth.getSession();
-  const { data: created, error: createError } = await supabaseTable("live_games")
-    .insert({
-      session_id: sessionId,
-      host_user_id: sessionData?.session?.user?.id,
-      session_name: sessionName || "Trivia Night",
-      code: makeGameCode(),
-    })
-    .select("*")
-    .single();
-  if (createError) throw createError;
-  return created;
+  const authToken = await getAuthToken();
+  return callLiveGame("ensureLiveGame", { sessionId, sessionName, authToken });
 };
 
-export const fetchLivePlayers = async (gameId) => {
-  const { data, error } = await supabaseTable("live_game_players")
-    .select("id, name, score, joined_at")
-    .eq("game_id", gameId)
-    .order("joined_at", { ascending: true });
-  if (error) throw error;
-  return data || [];
-};
+export const fetchLivePlayers = (gameId) => callLiveGame("fetchLivePlayers", { gameId });
 
 // Omits `score` unless explicitly passed, so joining/renaming never resets
-// a player's existing score back to 0 on conflict (PostgREST upsert only
-// overwrites columns present in the payload).
-export const upsertLivePlayer = async (gameId, player) => {
-  const payload = { id: player.id, game_id: gameId, name: player.name };
-  if (player.score !== undefined) payload.score = Number(player.score || 0);
-  const { error } = await supabaseTable("live_game_players").upsert(payload);
-  if (error) throw error;
-};
+// a player's existing score back to 0 on conflict.
+export const upsertLivePlayer = (gameId, player) => callLiveGame("upsertPlayer", { gameId, player });
 
-export const setLivePlayerName = async (playerId, name) => {
-  const { error } = await supabaseTable("live_game_players").update({ name }).eq("id", playerId);
-  if (error) throw error;
-};
+export const setLivePlayerName = (playerId, name) => callLiveGame("setPlayerName", { playerId, name });
 
 export const removeLivePlayer = async (playerId) => {
-  const { error } = await supabaseTable("live_game_players").delete().eq("id", playerId);
-  if (error) throw error;
+  const authToken = await getAuthToken();
+  return callLiveGame("removeLivePlayer", { playerId, authToken });
 };
 
 // Roster/leaderboard changes ride their own realtime subscription on
