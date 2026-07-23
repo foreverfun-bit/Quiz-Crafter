@@ -1,4 +1,4 @@
-import { supabase } from "./supabase";
+import { supabase, getAccessToken } from "./supabase";
 
 // live_games / live_game_players used to be read and written directly from
 // the browser to Supabase (via supabaseTable, bypassing /api/supabase-data)
@@ -11,20 +11,35 @@ import { supabase } from "./supabase";
 // connection below -- only the REST/fetch path was affected.
 const LIVE_GAME_ENDPOINT = "/api/live-game";
 
-const callLiveGame = async (action, params = {}) => {
+const postLiveGame = async (action, params) => {
   const response = await fetch(LIVE_GAME_ENDPOINT, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ action, ...params }),
   });
   const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result?.error || `Live game request failed (${response.status})`);
-  return result.data;
+  return { ok: response.ok, status: response.status, data: result?.data, error: result?.error };
 };
 
-const getAuthToken = async () => {
-  const { data } = await supabase.auth.getSession();
-  return data?.session?.access_token || "";
+const callLiveGame = async (action, params = {}) => {
+  const result = await postLiveGame(action, params);
+  if (result.ok) return result.data;
+  throw new Error(result.error || `Live game request failed (${result.status})`);
+};
+
+// Host-only actions authenticate with the same cached, auto-refreshing
+// session lookup the data proxy uses. A first attempt with a stale cached
+// token that the server rejects (401) retries once with a forced refresh,
+// instead of surfacing "not signed in" for a token that's just stale.
+const callAuthedLiveGame = async (action, params = {}) => {
+  const authToken = await getAccessToken();
+  let result = await postLiveGame(action, { ...params, authToken });
+  if (!result.ok && result.status === 401) {
+    const refreshedToken = await getAccessToken(true);
+    if (refreshedToken && refreshedToken !== authToken) result = await postLiveGame(action, { ...params, authToken: refreshedToken });
+  }
+  if (result.ok) return result.data;
+  throw new Error(result.error || `Live game request failed (${result.status})`);
 };
 
 // Read-only lookup for players/presentation screens: they can't create a
@@ -33,10 +48,7 @@ export const findLiveGame = (sessionId) => callLiveGame("findLiveGame", { sessio
 
 // Host-only: reuses the session's current live game if one exists, so a
 // host reload doesn't orphan the roster from a fresh row.
-export const ensureLiveGame = async (sessionId, { sessionName } = {}) => {
-  const authToken = await getAuthToken();
-  return callLiveGame("ensureLiveGame", { sessionId, sessionName, authToken });
-};
+export const ensureLiveGame = (sessionId, { sessionName } = {}) => callAuthedLiveGame("ensureLiveGame", { sessionId, sessionName });
 
 export const fetchLivePlayers = (gameId) => callLiveGame("fetchLivePlayers", { gameId });
 
@@ -46,10 +58,7 @@ export const upsertLivePlayer = (gameId, player) => callLiveGame("upsertPlayer",
 
 export const setLivePlayerName = (playerId, name) => callLiveGame("setPlayerName", { playerId, name });
 
-export const removeLivePlayer = async (playerId) => {
-  const authToken = await getAuthToken();
-  return callLiveGame("removeLivePlayer", { playerId, authToken });
-};
+export const removeLivePlayer = (playerId) => callAuthedLiveGame("removeLivePlayer", { playerId });
 
 // Roster/leaderboard changes ride their own realtime subscription on
 // live_game_players instead of the host_state broadcast, so a player
