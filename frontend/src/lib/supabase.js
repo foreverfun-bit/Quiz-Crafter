@@ -21,14 +21,22 @@ const makeProxyError = (message, details = null) => ({
 let cachedSessionContext = null;
 let sessionContextPromise = null;
 
-const resolveSessionContext = async () => {
-  const { data: sessionData } = await supabaseClient.auth.getSession();
-  if (sessionData?.session?.access_token) {
-    return {
-      accessToken: sessionData.session.access_token,
-      clientUserId: sessionData.session.user?.id || "",
-      expiresAt: Number(sessionData.session.expires_at || 0) * 1000,
-    };
+// forceRefresh used to be ignored here -- this always tried getSession()
+// first and only fell through to a real refreshSession() call when the
+// local session had no access_token at all. That meant callers retrying a
+// 401 with forceRefresh=true (the data proxy, live-game endpoint) just got
+// the exact same already-rejected cached token back, so the "retry with a
+// forced refresh" never actually forced anything and the 401 recurred.
+const resolveSessionContext = async (forceRefresh = false) => {
+  if (!forceRefresh) {
+    const { data: sessionData } = await supabaseClient.auth.getSession();
+    if (sessionData?.session?.access_token) {
+      return {
+        accessToken: sessionData.session.access_token,
+        clientUserId: sessionData.session.user?.id || "",
+        expiresAt: Number(sessionData.session.expires_at || 0) * 1000,
+      };
+    }
   }
   const { data: refreshed } = await supabaseClient.auth.refreshSession();
   return {
@@ -49,7 +57,7 @@ const getSessionContext = async (forceRefresh = false) => {
     return cachedSessionContext;
   }
   if (!sessionContextPromise) {
-    sessionContextPromise = resolveSessionContext().finally(() => { sessionContextPromise = null; });
+    sessionContextPromise = resolveSessionContext(forceRefresh).finally(() => { sessionContextPromise = null; });
   }
   cachedSessionContext = await sessionContextPromise;
   return cachedSessionContext;
