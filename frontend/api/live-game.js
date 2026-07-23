@@ -71,11 +71,12 @@ module.exports = async function handler(req, res) {
     if (action === "ensureLiveGame") {
       const sessionId = String(body.sessionId || "");
       const sessionName = String(body.sessionName || "Trivia Night");
+      const isTest = Boolean(body.isTest);
       if (!sessionId) return res.status(400).json({ error: "Missing sessionId" });
       const user = await verifyUser(supabaseUrl, anonKey, getBearerToken(req, body));
       if (!user?.id) return res.status(401).json({ error: "You must be signed in to host" });
 
-      const { data: existingRows, error: lookupError } = await supabase.from("live_games").select("id, status").eq("session_id", sessionId).order("created_at", { ascending: false }).limit(1);
+      const { data: existingRows, error: lookupError } = await supabase.from("live_games").select("id, status").eq("session_id", sessionId).eq("is_test", isTest).order("created_at", { ascending: false }).limit(1);
       if (lookupError) throw lookupError;
       const existing = existingRows?.[0];
       if (existing && existing.status !== "finished") {
@@ -83,11 +84,24 @@ module.exports = async function handler(req, res) {
         return;
       }
 
+      // Starting a fresh real game: clear out any leftover, unfinished test
+      // run for this session so practice teams/scores/answers (they cascade
+      // off live_games.id) never carry into the real event.
+      if (!isTest) {
+        const { data: staleTestRows, error: staleError } = await supabase.from("live_games").select("id").eq("session_id", sessionId).eq("is_test", true);
+        if (staleError) throw staleError;
+        if (staleTestRows?.length) {
+          const { error: cleanupError } = await supabase.from("live_games").delete().in("id", staleTestRows.map((row) => row.id));
+          if (cleanupError) throw cleanupError;
+        }
+      }
+
       const { data: created, error: createError } = await supabase.from("live_games").insert({
         session_id: sessionId,
         host_user_id: user.id,
         session_name: sessionName,
         code: makeGameCode(),
+        is_test: isTest,
       }).select("id, status").single();
       if (createError) throw createError;
       res.status(200).json({ data: created });

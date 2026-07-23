@@ -1,5 +1,5 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { uploadQuestionMedia } from "../lib/mediaUpload";
 import { ensureLiveGame, fetchLivePlayers, subscribeLivePlayers, upsertLivePlayer, removeLivePlayer } from "../lib/liveGame";
@@ -449,6 +449,8 @@ const buildFairPlayStats = (players, answers, gradedAnswers, playerActivity) => 
 const HostSession = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const isTestRun = searchParams.get("mode") === "test";
   const liveChannelRef = useRef(null);
   const liveStateRef = useRef(null);
   const liveStateSequenceRef = useRef(0);
@@ -692,7 +694,7 @@ const HostSession = () => {
     let attempt = 0;
     const tryEnsure = () => {
       attempt += 1;
-      ensureLiveGame(id, { sessionName: session?.name || session?.session_name || "Trivia Night" })
+      ensureLiveGame(id, { sessionName: session?.name || session?.session_name || "Trivia Night", isTest: isTestRun })
         .then((game) => { if (!cancelled) setLiveGameId(game.id); })
         .catch((error) => {
           console.warn("Live game setup unavailable:", error);
@@ -703,7 +705,7 @@ const HostSession = () => {
     };
     tryEnsure();
     return () => { cancelled = true; window.clearTimeout(timeoutId); };
-  }, [id, session]);
+  }, [id, session, isTestRun]);
 
   useEffect(() => {
     if (!liveGameId) return undefined;
@@ -1513,6 +1515,10 @@ const HostSession = () => {
     if (presentMode === "categories") releaseMode("categories", roundKey);
   };
   return <div className="min-h-screen bg-[#09090B] text-white" data-testid="host-session-page" style={brandStyle}>
+    {isTestRun && !focusMode && <div className="bg-amber-400/15 border-b border-amber-400/30 text-amber-200 text-sm px-4 py-2 flex items-center justify-center gap-2" data-testid="test-mode-banner">
+      <AlertTriangle size={14} />
+      Test Run -- teams and scores here won't count. Starting the real event clears this out automatically.
+    </div>}
     {!focusMode && <TopBar navigate={navigate} id={id} sessionName={sessionName} venueName={session?.venue_name || session?.venueName || session?.venue || ""} questions={questions} players={players} currentIndex={currentIndex} liveStatus={liveStatus} openPresentation={openPresentation} setFocusMode={setFocusMode} progress={progress} branding={branding} customizeOpen={customizeOpen} setCustomizeOpen={setCustomizeOpen} endSession={endSession} collapsed={topbarCollapsed} onToggleCollapse={() => setTopbarCollapsed((value) => !value)} />}
     <div className={`max-w-[1680px] mx-auto p-4 lg:p-8 ${focusMode ? "min-h-screen flex flex-col" : ""}`}>
       {focusMode && <div className="flex justify-between items-center mb-4"><Badge className="bg-zinc-800 text-zinc-300">{currentRound?.name || "Round"} - {currentIndex + 1} / {questions.length}</Badge><Button variant="outline" onClick={() => setFocusMode(false)} className="border-white/10 text-zinc-300 hover:text-white">Exit Focus</Button></div>}

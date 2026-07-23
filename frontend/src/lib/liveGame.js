@@ -47,8 +47,11 @@ const callAuthedLiveGame = async (action, params = {}) => {
 export const findLiveGame = (sessionId) => callLiveGame("findLiveGame", { sessionId });
 
 // Host-only: reuses the session's current live game if one exists, so a
-// host reload doesn't orphan the roster from a fresh row.
-export const ensureLiveGame = (sessionId, { sessionName } = {}) => callAuthedLiveGame("ensureLiveGame", { sessionId, sessionName });
+// host reload doesn't orphan the roster from a fresh row. Test runs
+// (isTest: true) get their own row scoped separately from the real game --
+// see ensureLiveGame in frontend/api/live-game.js for how going live for
+// real clears out a leftover test row.
+export const ensureLiveGame = (sessionId, { sessionName, isTest } = {}) => callAuthedLiveGame("ensureLiveGame", { sessionId, sessionName, isTest });
 
 export const fetchLivePlayers = (gameId) => callLiveGame("fetchLivePlayers", { gameId });
 

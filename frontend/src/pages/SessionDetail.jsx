@@ -21,6 +21,7 @@ import {
   Save,
   Star,
   Trash2,
+  FlaskConical,
 } from "lucide-react";
 import { toast } from "sonner";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
@@ -565,9 +566,8 @@ const SessionDetail = () => {
     URL.revokeObjectURL(url);
   };
 
-  const handleGoLive = () => {
-    toast.info("Live hosting will be wired next.");
-  };
+  const handleGoLive = () => navigate(`/host-session/${id}`);
+  const handleTestRun = () => navigate(`/host-session/${id}?mode=test`);
 
   if (loading) {
     return (
@@ -634,6 +634,9 @@ const SessionDetail = () => {
               >
                 <Star size={16} className={`mr-2 ${isCurrentProject ? "fill-amber-300" : ""}`} />
                 {isCurrentProject ? "Current Project" : "Mark as Current Project"}
+              </Button>
+              <Button variant="outline" onClick={handleTestRun} className="border-amber-400/30 text-amber-300 hover:bg-amber-400/10 hover:text-amber-200" data-testid="test-run-btn">
+                <FlaskConical size={16} className="mr-2" />Test Run
               </Button>
               <Button onClick={handleGoLive} className="bg-gradient-to-r from-[#71E0DC] to-[#AEB2EF] text-zinc-900 font-bold hover:opacity-90" data-testid="go-live-btn">
                 <Radio size={16} className="mr-2" />Go Live
