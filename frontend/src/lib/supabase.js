@@ -178,3 +178,13 @@ export const supabase = supabaseClient;
 // model (e.g. live_game_* tables, which anonymous players read/write under
 // row-level policies). Shares the same auth session as `supabase`.
 export const supabaseTable = (table) => nativeFrom(table);
+
+// Exposes the same cached, auto-refreshing session lookup the data proxy
+// uses (falls back to a real refreshSession() call when the local session
+// looks empty, instead of just reading whatever's cached and giving up) so
+// other same-origin proxy callers (e.g. the live-game endpoint) get the
+// same reliability instead of a plain, non-refreshing auth.getSession().
+export const getAccessToken = async (forceRefresh = false) => {
+  const context = await getSessionContext(forceRefresh);
+  return context?.accessToken || "";
+};
