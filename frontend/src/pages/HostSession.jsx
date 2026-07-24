@@ -21,6 +21,7 @@ import {
   Image,
   List,
   Loader2,
+  Lock,
   Maximize2,
   MessageSquare,
   MonitorPlay,
@@ -40,6 +41,7 @@ import {
   Timer,
   Trash2,
   Trophy,
+  Unlock,
   Upload,
   Users,
   Wifi,
@@ -470,6 +472,11 @@ const HostSession = () => {
   const [disputeNotes, setDisputeNotes] = useState(() => readStoredList(hostToolsStorageKey(id, "disputes")));
   const [showAnswer, setShowAnswer] = useState(false);
   const [showFunFact, setShowFunFact] = useState(false);
+  // Manual pause on top of the per-question timer -- lets the host stretch
+  // out the pace between/during questions (e.g. more banter, slower rounds)
+  // without touching join, feedback, or idea submission, which don't gate
+  // on this at all.
+  const [answersPaused, setAnswersPaused] = useState(false);
   const [presentMode, setPresentMode] = useState("categories");
   const [introRoundKey, setIntroRoundKey] = useState(null);
   const [pendingBonusIndex, setPendingBonusIndex] = useState(null);
@@ -860,7 +867,7 @@ const HostSession = () => {
   const sessionName = session?.name || session?.session_name || "Trivia Session";
   const joinUrl = `${getPublicOrigin()}/join?session=${id}`;
   const timeRemaining = timerEndAt ? Math.max(0, Math.ceil((timerEndAt - now) / 1000)) : null;
-  const acceptingAnswers = timeRemaining === null || timeRemaining > 0;
+  const acceptingAnswers = !answersPaused && (timeRemaining === null || timeRemaining > 0);
 
   const persistLiveState = (state, force = false) => {
     liveStateSequenceRef.current = Math.max(liveStateSequenceRef.current + 1, Number(state.liveSequence || 0));
@@ -881,6 +888,7 @@ const HostSession = () => {
       orderedState.timerEndAt || "",
       orderedState.showAnswer ? "answer" : "",
       orderedState.showFunFact ? "fact" : "",
+      orderedState.answersPaused ? "paused" : "",
     ].join("|");
     if (force || durableKey !== liveStateSaveKeyRef.current || nowMs - liveStateSaveRef.current > 1200) {
       liveStateSaveKeyRef.current = durableKey;
@@ -907,6 +915,7 @@ const HostSession = () => {
     wagerLimitValue = wagerLimit,
     wagerModeValue = wagerMode,
     wagerTimingValue = wagerTiming,
+    answersPausedValue = answersPaused,
   }) => {
     if (!question) return null;
     const activePoints = Number(pointsValue) || getQuestionPoints(question);
@@ -943,7 +952,8 @@ const HostSession = () => {
       wagerTiming: wagerTimingValue,
       timerSeconds: activeTimer,
       timerEndAt: timerEndAtValue,
-      acceptingAnswers: timerEndAtValue === null || timerEndAtValue > Date.now(),
+      answersPaused: answersPausedValue,
+      acceptingAnswers: !answersPausedValue && (timerEndAtValue === null || timerEndAtValue > Date.now()),
       // Carried in the broadcast snapshot itself so player devices and the
       // presentation screen have a roster/score fallback that rides the
       // realtime WebSocket channel -- the same channel that kept working
@@ -993,7 +1003,7 @@ const HostSession = () => {
     if (state) persistLiveState(state);
   // The live snapshot helpers intentionally read the latest host state in this render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, session, sessionName, questions.length, liveDisplayedQuestion, currentIndex, pendingBonusIndex, rounds, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerSeconds, timerEndAt, acceptingAnswers, branding, players, leaderboard]);
+  }, [id, session, sessionName, questions.length, liveDisplayedQuestion, currentIndex, pendingBonusIndex, rounds, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerSeconds, timerEndAt, acceptingAnswers, answersPaused, branding, players, leaderboard]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -1102,6 +1112,8 @@ const HostSession = () => {
     setGameStarted(true);
     releaseMode("question");
   };
+
+  const toggleAnswersPaused = () => setAnswersPaused((value) => !value);
 
   const startTimer = () => {
     if (isReviewing) return;
@@ -1528,7 +1540,7 @@ const HostSession = () => {
           {!focusMode && customizeOpen && <HostCustomizePanel branding={branding} defaultBranding={readDefaultBranding()} onSave={saveBranding} onSaveDefault={saveBrandingAsDefault} onUseDefault={useDefaultBranding} onClose={() => setCustomizeOpen(false)} />}
           {!gameStarted && !isReviewing ? <LobbyStage playerCount={players.length} onStartTrivia={startTriviaIntro} /> : presentMode === "categories" && !isReviewing ? <RoundIntroStage round={introRound} gameStarted={gameStarted} onStartIntro={startTriviaIntro} onStartQuestion={startIntroQuestion} /> : presentMode === "bonus_pause" && !isReviewing ? <BonusPauseStage round={rounds.find((round) => pendingBonusIndex >= round.startIndex && pendingBonusIndex < round.startIndex + round.questions.length)} leaderboard={leaderboard} /> : presentMode === "winners" && !isReviewing ? <WinnersStage leaderboard={leaderboard} /> : presentMode === "feedback" && !isReviewing ? <FeedbackStage ideas={playerIdeas} /> : <QuestionStage question={displayedQuestion} index={hostIndex} total={questions.length} showAnswer={isReviewing ? true : showAnswer} showFunFact={isReviewing ? false : showFunFact} focusMode={focusMode} pointsPerQuestion={viewPointsPerQuestion} timerSeconds={viewTimerSeconds} timeRemaining={isReviewing ? null : timeRemaining} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} wagerTiming={viewWagerTiming} onUpdateSettings={isReviewing ? () => {} : updateQuestionSettings} branding={branding} players={activePlayers} answers={activeCurrentAnswers} activity={currentActivity} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} setMode={releaseMode} isReviewing={isReviewing} />}
         </main>
-        {!focusMode && <PlaybackRail mode={presentMode} setMode={releaseMode} rounds={rounds} introRoundKey={selectedIntroKey} chooseIntroRound={chooseIntroRound} isReviewing={isReviewing} showAnswer={isReviewing ? true : showAnswer} onRevealAnswer={toggleAnswer} showFunFact={isReviewing ? false : showFunFact} onShowFunFact={toggleFunFact} hasRevealExtra={hasRevealExtra} hasFunFact={Boolean(displayedQuestion.funFact)} timeRemaining={isReviewing ? null : timeRemaining} timerSeconds={viewTimerSeconds} startTimer={startTimer} resetTimer={isReviewing ? () => {} : resetTimer} currentIndex={currentIndex} total={questions.length} onPrev={() => goToQuestion(currentIndex - 1, { startTimer: false })} onNext={() => {
+        {!focusMode && <PlaybackRail mode={presentMode} setMode={releaseMode} rounds={rounds} introRoundKey={selectedIntroKey} chooseIntroRound={chooseIntroRound} isReviewing={isReviewing} showAnswer={isReviewing ? true : showAnswer} onRevealAnswer={toggleAnswer} showFunFact={isReviewing ? false : showFunFact} onShowFunFact={toggleFunFact} answersPaused={answersPaused} onToggleAnswersPaused={toggleAnswersPaused} hasRevealExtra={hasRevealExtra} hasFunFact={Boolean(displayedQuestion.funFact)} timeRemaining={isReviewing ? null : timeRemaining} timerSeconds={viewTimerSeconds} startTimer={startTimer} resetTimer={isReviewing ? () => {} : resetTimer} currentIndex={currentIndex} total={questions.length} onPrev={() => goToQuestion(currentIndex - 1, { startTimer: false })} onNext={() => {
           if (!gameStarted) return startTriviaIntro();
           if (presentMode === "categories") return startIntroQuestion();
           if (presentMode === "bonus_pause" && pendingBonusIndex !== null) return goToQuestion(pendingBonusIndex, { startTimer: true, pauseBeforeBonus: false });
@@ -1602,7 +1614,7 @@ const PLAYBACK_TOOLS = [
   { key: "feedback", label: "Feedback", icon: ThumbsUp },
 ];
 
-const PlaybackRail = ({ mode, setMode, rounds, introRoundKey, chooseIntroRound, isReviewing, showAnswer, onRevealAnswer, showFunFact, onShowFunFact, hasRevealExtra, hasFunFact, timeRemaining, timerSeconds, startTimer, resetTimer, currentIndex, total, onPrev, onNext, onOpenDrawer, flaggedTeamCount, currentQuestionLabel }) => {
+const PlaybackRail = ({ mode, setMode, rounds, introRoundKey, chooseIntroRound, isReviewing, showAnswer, onRevealAnswer, showFunFact, onShowFunFact, answersPaused, onToggleAnswersPaused, hasRevealExtra, hasFunFact, timeRemaining, timerSeconds, startTimer, resetTimer, currentIndex, total, onPrev, onNext, onOpenDrawer, flaggedTeamCount, currentQuestionLabel }) => {
   const nonQuestionMode = mode === "bonus_pause" || mode === "winners" || mode === "feedback";
   const liveRound = rounds.find((round) => currentIndex >= round.startIndex && currentIndex < round.startIndex + round.questions.length);
   const liveRoundListIndex = rounds.findIndex((round) => round.key === liveRound?.key);
@@ -1641,6 +1653,7 @@ const PlaybackRail = ({ mode, setMode, rounds, introRoundKey, chooseIntroRound, 
             <Button size="sm" onClick={startTimer} disabled={isReviewing} className="h-10 gradient-btn disabled:opacity-40"><Play size={15} className="mr-1.5" />Start Timer</Button>
             <Button size="sm" variant="outline" onClick={resetTimer} disabled={isReviewing} className="h-10 border-white/10 text-zinc-300 hover:text-white disabled:opacity-40"><RotateCcw size={15} className="mr-1.5" />Clear</Button>
           </div>
+          <Button onClick={onToggleAnswersPaused} disabled={isReviewing} title="Phones can still join, give feedback, and submit ideas while paused -- only answer submission stops." className={`w-full h-10 disabled:opacity-40 ${answersPaused ? "bg-amber-400/15 text-amber-300 border border-amber-400/30 hover:bg-amber-400/20" : "border border-white/10 text-zinc-300 hover:bg-white/5 hover:text-white"}`}>{answersPaused ? <Unlock size={16} className="mr-2" /> : <Lock size={16} className="mr-2" />}{answersPaused ? "Resume Answers" : "Pause Answers"}</Button>
           <Button onClick={onRevealAnswer} disabled={isReviewing || nonQuestionMode} className={`w-full h-10 ${showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-40" : "gradient-btn disabled:opacity-40"}`}>{showAnswer ? <EyeOff size={16} className="mr-2" /> : <Eye size={16} className="mr-2" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button>
           <Button onClick={onShowFunFact} disabled={isReviewing || nonQuestionMode || !hasRevealExtra} className="w-full h-10 bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-40"><Sparkles size={16} className="mr-2" />{showFunFact ? "Hide" : hasFunFact ? "Reveal Fun Fact" : "Reveal Media"}</Button>
         </div>

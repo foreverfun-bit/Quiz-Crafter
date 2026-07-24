@@ -346,7 +346,10 @@ const PlayerSession = () => {
   const myScore = sortedPlayers.find((team) => team.id === player?.id)?.score || 0;
   const sessionName = hostState?.sessionName || session?.name || session?.session_name || "Trivia Session";
   const timeRemaining = hostState?.timerEndAt ? Math.max(0, Math.ceil((new Date(hostState.timerEndAt).getTime() - now) / 1000)) : null;
-  const acceptingAnswers = timeRemaining === null || timeRemaining > 0;
+  // The host can pause answer submission independent of the timer (to slow
+  // the pace without a countdown pressuring players) -- everything else on
+  // this device (join, feedback, ideas) never checks this flag.
+  const acceptingAnswers = !hostState?.answersPaused && (timeRemaining === null || timeRemaining > 0);
   const submissionTiming = () => ({ secondsRemainingAtSubmit: timeRemaining, timerEndAt: hostState?.timerEndAt || null, timerSeconds: hostState?.timerSeconds || null });
   const pointsPerQuestion = getCurrentQuestionPoints(hostState, currentQuestion);
   const wagerMode = Boolean(hostState?.wagerMode);
@@ -445,7 +448,7 @@ const PlayerSession = () => {
   };
 
   const submitAnswer = (value) => {
-    if (!acceptingAnswers) return toast.error("Time is up");
+    if (!acceptingAnswers) return toast.error(hostState?.answersPaused ? "Answers are paused right now" : "Time is up");
     if (submitted?.questionIndex === hostState?.currentIndex && submitted?.questionId === currentQuestion?.id) {
       return toast.info("Answer already submitted");
     }
@@ -550,6 +553,8 @@ const PlayerQuestionView = ({ currentQuestion, hostState, pointsPerQuestion, wag
 
       {!hostState.showAnswer && !hostState.showFunFact && (submitted?.questionIndex === hostState.currentIndex ? (
         <Card className="glass-card"><CardContent className="p-6 text-center"><CheckCircle className="mx-auto text-emerald-300 mb-3" size={42} /><h3 className="text-2xl font-black mb-1">Answer Locked</h3><p className="text-zinc-400">You answered: <span className="text-white font-bold">{submitted.answer}</span></p>{submitted.wagerMode && wagerTiming === "after_answer" && !submitted.wagerSubmitted ? <div className="mt-4"><WagerInput wagerMode wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={effectiveWagerLimit} /><Button onClick={submitWager} className="w-full gradient-btn">Submit Wager</Button></div> : submitted.wagerMode && <p className="text-purple-300 font-bold mt-2">Wager: {submitted.wagerAmount}</p>}</CardContent></Card>
+      ) : hostState.answersPaused ? (
+        <Card className="border-amber-500/30 bg-amber-500/10"><CardContent className="p-6 text-center"><Timer className="mx-auto text-amber-300 mb-3" size={42} /><h3 className="text-2xl font-black">Hold Tight</h3><p className="text-zinc-400 mt-1">The host has paused answers for a moment.</p></CardContent></Card>
       ) : !acceptingAnswers ? (
         <Card className="border-red-500/30 bg-red-500/10"><CardContent className="p-6 text-center"><Timer className="mx-auto text-red-300 mb-3" size={42} /><h3 className="text-2xl font-black">Time&apos;s Up</h3><p className="text-zinc-400 mt-1">Waiting for the answer reveal.</p></CardContent></Card>
       ) : (
