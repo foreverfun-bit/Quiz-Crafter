@@ -6,7 +6,7 @@ import { findLiveGame, fetchLivePlayers, subscribeLivePlayers, upsertLivePlayer 
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent } from "../components/ui/card";
-import { CheckCircle, Pencil, Send, Sparkles, Tags, ThumbsDown, ThumbsUp, Timer, Trophy, X } from "lucide-react";
+import { CheckCircle, Lock, Pencil, Send, Sparkles, Tags, ThumbsDown, ThumbsUp, Timer, Trophy, X } from "lucide-react";
 import { toast } from "sonner";
 
 const makePlayerId = () => crypto.randomUUID();
@@ -121,12 +121,16 @@ const getSessionBranding = (session) => ({
   name: session?.host_brand_name || session?.brand_name || session?.company_name || session?.venue_name || "Forever Fun Events",
   logoUrl: session?.host_logo_url || session?.brand_logo_url || session?.logo_url || DEFAULT_HOST_LOGO_SRC,
 });
+// Falls back to this if the host never customizes it -- keep in sync with
+// DEFAULT_BRANDING.pausedMessage in HostSession.jsx.
+const DEFAULT_PAUSED_MESSAGE = "Going old-school tonight — hold onto your answer, the host's on the way!";
 const mergeBranding = (session, hostState) => {
   const sessionBranding = getSessionBranding(session);
   const liveBranding = hostState?.branding && typeof hostState.branding === "object" ? hostState.branding : {};
   return {
     name: liveBranding.name || sessionBranding.name,
     logoUrl: liveBranding.logoUrl || sessionBranding.logoUrl,
+    pausedMessage: liveBranding.pausedMessage || DEFAULT_PAUSED_MESSAGE,
   };
 };
 
@@ -504,13 +508,13 @@ const PlayerSession = () => {
         {gameStarted && hostState?.mode === "bonus_pause" && <LeaderboardView leaderboard={leaderboard} playerId={player.id} title="Bonus Question Next" />}
         {gameStarted && hostState?.mode === "categories" && <RoundIntroFeedback roundName={activeRoundName} description={activeRoundDescription} categories={activeRoundCategories} selectedByCategory={feedbackByCategory} currentIndex={categoryFeedbackKey} onSelect={submitCategoryFeedback} />}
         {gameStarted && hostState && hostState.mode !== "leaderboard" && hostState.mode !== "winners" && hostState.mode !== "feedback" && hostState.mode !== "categories" && hostState.mode !== "bonus_pause" && !currentQuestion && <div className="text-center"><p className="text-zinc-400">Waiting for the next question.</p></div>}
-        {gameStarted && hostState && hostState.mode !== "leaderboard" && hostState.mode !== "winners" && hostState.mode !== "feedback" && hostState.mode !== "categories" && hostState.mode !== "bonus_pause" && currentQuestion && <PlayerQuestionView currentQuestion={currentQuestion} hostState={hostState} pointsPerQuestion={pointsPerQuestion} wagerMode={wagerMode} effectiveWagerLimit={effectiveWagerLimit} timeRemaining={timeRemaining} selectedFeedback={feedbackByQuestion[String(hostState.currentIndex)]} onFeedback={submitFeedback} submitted={submitted} wagerTiming={wagerTiming} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} submitWager={submitWager} acceptingAnswers={acceptingAnswers} answer={answer} setAnswer={setAnswer} submitAnswer={submitAnswer} />}
+        {gameStarted && hostState && hostState.mode !== "leaderboard" && hostState.mode !== "winners" && hostState.mode !== "feedback" && hostState.mode !== "categories" && hostState.mode !== "bonus_pause" && currentQuestion && <PlayerQuestionView currentQuestion={currentQuestion} hostState={hostState} branding={branding} pointsPerQuestion={pointsPerQuestion} wagerMode={wagerMode} effectiveWagerLimit={effectiveWagerLimit} timeRemaining={timeRemaining} selectedFeedback={feedbackByQuestion[String(hostState.currentIndex)]} onFeedback={submitFeedback} submitted={submitted} wagerTiming={wagerTiming} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} submitWager={submitWager} acceptingAnswers={acceptingAnswers} answer={answer} setAnswer={setAnswer} submitAnswer={submitAnswer} />}
       </main>
     </div>
   );
 };
 
-const PlayerQuestionView = ({ currentQuestion, hostState, pointsPerQuestion, wagerMode, effectiveWagerLimit, timeRemaining, selectedFeedback, onFeedback, submitted, wagerTiming, wagerAmount, setWagerAmount, submitWager, acceptingAnswers, answer, setAnswer, submitAnswer }) => {
+const PlayerQuestionView = ({ currentQuestion, hostState, branding, pointsPerQuestion, wagerMode, effectiveWagerLimit, timeRemaining, selectedFeedback, onFeedback, submitted, wagerTiming, wagerAmount, setWagerAmount, submitWager, acceptingAnswers, answer, setAnswer, submitAnswer }) => {
   const imageUrl = currentQuestion.imageUrl || currentQuestion.image_url || "";
   const imageTiming = currentQuestion.imageTiming || currentQuestion.image_timing || "initial";
   const showQuestionMedia = Boolean(imageUrl) && imageTiming !== "after_answer" && !hostState.showFunFact;
@@ -528,7 +532,10 @@ const PlayerQuestionView = ({ currentQuestion, hostState, pointsPerQuestion, wag
           </div>
           {showQuestionMedia && <img src={imageUrl} alt="Question media" className="mx-auto mb-4 max-h-56 max-w-full rounded-xl border border-white/10 object-contain" />}
           <h2 className="text-2xl font-black leading-tight">{currentQuestion.questionText}</h2>
-          <FeedbackButtons selected={selectedFeedback} onSelect={onFeedback} />
+          {/* While paused, voting moves inline below the (now-locked) answer
+              options, so this corner control would just be a second control
+              doing the same job -- it comes back the moment answers resume. */}
+          {!hostState.answersPaused && <FeedbackButtons selected={selectedFeedback} onSelect={onFeedback} />}
         </div>
       )}
 
@@ -554,7 +561,17 @@ const PlayerQuestionView = ({ currentQuestion, hostState, pointsPerQuestion, wag
       {!hostState.showAnswer && !hostState.showFunFact && (submitted?.questionIndex === hostState.currentIndex ? (
         <Card className="glass-card"><CardContent className="p-6 text-center"><CheckCircle className="mx-auto text-emerald-300 mb-3" size={42} /><h3 className="text-2xl font-black mb-1">Answer Locked</h3><p className="text-zinc-400">You answered: <span className="text-white font-bold">{submitted.answer}</span></p>{submitted.wagerMode && wagerTiming === "after_answer" && !submitted.wagerSubmitted ? <div className="mt-4"><WagerInput wagerMode wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={effectiveWagerLimit} /><Button onClick={submitWager} className="w-full gradient-btn">Submit Wager</Button></div> : submitted.wagerMode && <p className="text-purple-300 font-bold mt-2">Wager: {submitted.wagerAmount}</p>}</CardContent></Card>
       ) : hostState.answersPaused ? (
-        <Card className="border-amber-500/30 bg-amber-500/10"><CardContent className="p-6 text-center"><Timer className="mx-auto text-amber-300 mb-3" size={42} /><h3 className="text-2xl font-black">Answers Are Paused</h3><p className="text-zinc-400 mt-1">The host will be by to collect your answer shortly.</p><p className="text-amber-200 text-sm font-bold mt-3">While you wait, use Rate in the corner to vote on this question!</p></CardContent></Card>
+        <div>
+          <div className="mb-3 flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-2.5 text-left">
+            <Lock size={15} className="mt-0.5 shrink-0 text-amber-300" />
+            <p className="text-[13px] font-bold leading-snug text-amber-100">{branding.pausedMessage}</p>
+          </div>
+          <AnswerForm question={currentQuestion} answer={answer} setAnswer={setAnswer} submitAnswer={submitAnswer} wagerMode={wagerMode && wagerTiming !== "after_answer"} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={effectiveWagerLimit} disabled />
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <VoteButton tone="like" icon={ThumbsUp} label="Great question" selected={selectedFeedback === "like"} onClick={() => onFeedback("like")} />
+            <VoteButton tone="dislike" icon={ThumbsDown} label="Not for me" selected={selectedFeedback === "dislike"} onClick={() => onFeedback("dislike")} />
+          </div>
+        </div>
       ) : !acceptingAnswers ? (
         <Card className="border-red-500/30 bg-red-500/10"><CardContent className="p-6 text-center"><Timer className="mx-auto text-red-300 mb-3" size={42} /><h3 className="text-2xl font-black">Time&apos;s Up</h3><p className="text-zinc-400 mt-1">Waiting for the answer reveal.</p></CardContent></Card>
       ) : (
@@ -680,16 +697,39 @@ const FeedbackButtons = ({ selected, onSelect }) => (
   </div>
 );
 
+// Bigger, thumb-sized version of FeedbackIconButton for the paused-answers
+// moment, when Rate's corner widget is hidden and this is the only voting
+// control on screen.
+const VoteButton = ({ tone, icon: Icon, label, selected, onClick }) => {
+  const selectedClass = tone === "like"
+    ? "border-amber-400/40 bg-amber-400/15 text-amber-200"
+    : "border-white/15 bg-white/5 text-zinc-200";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={selected}
+      className={`flex flex-col items-center gap-1.5 rounded-xl border px-3 py-3 transition ${selected ? selectedClass : "border-white/10 bg-zinc-950/50 text-zinc-400 hover:border-white/20 hover:text-zinc-200"}`}
+    >
+      <Icon size={22} strokeWidth={1.8} />
+      <span className="text-[11px] font-bold uppercase tracking-wide">{label}</span>
+    </button>
+  );
+};
+
 const LeaderboardView = ({ leaderboard, playerId, title = "Leaderboard" }) => <div className="w-full max-w-md"><div className="text-center mb-5"><Trophy className="mx-auto text-amber-300 mb-2" size={38} /><h2 className="text-3xl font-black">{title}</h2>{title !== "Leaderboard" && <p className="text-zinc-500 mt-1">Get ready.</p>}</div><div className="space-y-2">{leaderboard.map((team, index) => <div key={team.id || team.name} className={`flex items-center justify-between gap-3 rounded-lg border px-4 py-3 ${team.id === playerId ? "border-[#71E0DC]/50 bg-[#71E0DC]/10" : "border-white/10 bg-zinc-950/70"}`}><div className="flex items-center gap-3 min-w-0"><span className="font-black text-zinc-500">#{index + 1}</span><span className="font-bold truncate">{team.name}</span></div><span className="font-black text-[#71E0DC]">{Number(team.score || 0)}</span></div>)}</div></div>;
 
 const IdeasView = ({ form, setForm, onSubmit }) => <div className="w-full max-w-md"><div className="text-center mb-5"><Sparkles className="mx-auto text-[#71E0DC] mb-2" size={40} /><h2 className="text-3xl font-black">Send Ideas</h2><p className="text-zinc-500 mt-1">Help shape a future trivia night.</p></div><Card className="glass-card"><CardContent className="p-5 space-y-4"><label className="block text-sm text-zinc-400">Category idea<input value={form.category} onChange={(event) => setForm((current) => ({ ...current, category: event.target.value }))} placeholder="e.g. Movie soundtracks" className="mt-1 h-12 w-full rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><label className="block text-sm text-zinc-400">Question idea<textarea value={form.question} onChange={(event) => setForm((current) => ({ ...current, question: event.target.value }))} placeholder="A question, clue idea, or topic you want to see" className="mt-1 min-h-28 w-full rounded-lg bg-zinc-950 border border-white/10 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><Button onClick={onSubmit} className="w-full h-12 gradient-btn font-bold">Send Idea</Button></CardContent></Card></div>;
 
 const WagerInput = ({ wagerMode, wagerAmount, setWagerAmount, wagerLimit }) => wagerMode ? <div className="mb-3"><label className="text-zinc-400 text-sm block mb-1.5">Wager from 0{wagerLimit ? ` to ${wagerLimit}` : ""}</label><input value={wagerAmount} onChange={(event) => setWagerAmount(event.target.value)} type="number" min="0" max={wagerLimit || 0} inputMode="numeric" placeholder="0" className="w-full h-12 rounded-lg bg-zinc-950 border border-purple-500/30 px-3 text-white text-lg outline-none focus:border-purple-400" /></div> : null;
 
-const AnswerForm = ({ question, answer, setAnswer, submitAnswer, wagerMode, wagerAmount, setWagerAmount, wagerLimit }) => {
-  if (question.type === "true_false") return <><WagerInput wagerMode={wagerMode} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={wagerLimit} /><div className="grid grid-cols-2 gap-3"><Button onClick={() => submitAnswer("True")} className="h-16 text-xl font-black bg-emerald-500/20 border-2 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30">True</Button><Button onClick={() => submitAnswer("False")} className="h-16 text-xl font-black bg-red-500/20 border-2 border-red-500/40 text-red-300 hover:bg-red-500/30">False</Button></div></>;
-  if (question.type === "multiple_choice" && question.options?.length) return <><WagerInput wagerMode={wagerMode} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={wagerLimit} /><div className="space-y-3">{question.options.map((option, index) => <Button key={index} onClick={() => submitAnswer(option)} className="w-full min-h-14 whitespace-normal text-left justify-start bg-zinc-900 border border-white/10 text-white hover:bg-zinc-800 px-4 py-3">{option}</Button>)}</div></>;
-  return <><WagerInput wagerMode={wagerMode} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={wagerLimit} /><div className="flex gap-2"><input value={answer} onChange={(event) => setAnswer(event.target.value)} onKeyDown={(event) => event.key === "Enter" && submitAnswer()} placeholder="Type your answer" className="min-w-0 flex-1 h-14 rounded-lg bg-zinc-950 border border-white/10 px-3 text-white text-lg outline-none focus:border-[#71E0DC]/60" autoFocus /><Button onClick={() => submitAnswer()} disabled={!answer.trim()} className="h-14 px-5 gradient-btn"><Send size={20} /></Button></div></>;
+// disabled: options/inputs stay visible (so players still see what they're
+// choosing between) but don't accept taps -- used while the host has
+// answersPaused on, in place of swapping the whole form out.
+const AnswerForm = ({ question, answer, setAnswer, submitAnswer, wagerMode, wagerAmount, setWagerAmount, wagerLimit, disabled = false }) => {
+  if (question.type === "true_false") return <><WagerInput wagerMode={wagerMode} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={wagerLimit} /><div className="grid grid-cols-2 gap-3"><Button onClick={() => submitAnswer("True")} disabled={disabled} className="h-16 text-xl font-black bg-emerald-500/20 border-2 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30">True{disabled && <Lock size={15} />}</Button><Button onClick={() => submitAnswer("False")} disabled={disabled} className="h-16 text-xl font-black bg-red-500/20 border-2 border-red-500/40 text-red-300 hover:bg-red-500/30">False{disabled && <Lock size={15} />}</Button></div></>;
+  if (question.type === "multiple_choice" && question.options?.length) return <><WagerInput wagerMode={wagerMode} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={wagerLimit} /><div className="space-y-3">{question.options.map((option, index) => <Button key={index} onClick={() => submitAnswer(option)} disabled={disabled} className="w-full min-h-14 whitespace-normal text-left justify-between bg-zinc-900 border border-white/10 text-white hover:bg-zinc-800 px-4 py-3">{option}{disabled && <Lock size={15} className="shrink-0" />}</Button>)}</div></>;
+  return <><WagerInput wagerMode={wagerMode} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={wagerLimit} /><div className="flex gap-2"><input value={answer} onChange={(event) => setAnswer(event.target.value)} onKeyDown={(event) => event.key === "Enter" && submitAnswer()} placeholder="Type your answer" disabled={disabled} className="min-w-0 flex-1 h-14 rounded-lg bg-zinc-950 border border-white/10 px-3 text-white text-lg outline-none focus:border-[#71E0DC]/60 disabled:opacity-50" autoFocus={!disabled} /><Button onClick={() => submitAnswer()} disabled={disabled || !answer.trim()} className="h-14 px-5 gradient-btn">{disabled ? <Lock size={18} /> : <Send size={20} />}</Button></div></>;
 };
 
 export default PlayerSession;
