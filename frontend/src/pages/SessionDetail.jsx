@@ -27,7 +27,7 @@ import { toast } from "sonner";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 import { mergeProfileRecords, normalizeVenue, readLocalVenues } from "../lib/venues";
 import { resetTestGame } from "../lib/liveGame";
-import { loadProfileValue, profileKeys, readCurrentProjectSessionId, writeCurrentProjectSessionId } from "../lib/profileState";
+import { loadProfileValue, profileKeys, readCurrentProjectSessionId, resetHostToolsSessionState, writeCurrentProjectSessionId } from "../lib/profileState";
 
 const questionTypes = [
   { value: "true_false", label: "True/False" },
@@ -568,14 +568,24 @@ const SessionDetail = () => {
   };
 
   const handleGoLive = () => navigate(`/host-session/${id}`);
-  // Wipes any leftover test teams/scores before navigating in, so a Test
-  // Run always opens on a clean slate instead of showing whoever joined
-  // last time you rehearsed. Awaited so the wipe finishes before
-  // HostSession's own ensureLiveGame call runs and might otherwise reuse
-  // the row we're about to delete.
+  // Wipes any leftover test data before navigating in, so a Test Run always
+  // opens on a clean slate instead of showing whoever joined last time you
+  // rehearsed. Three layers hold "who joined": the live_games/live_game_players
+  // DB rows (resetTestGame), the host's own reload-resilience cache of
+  // players/leaderboard/etc. (resetHostToolsSessionState), and durable
+  // player_join events replayed from sessions.hosted_results on load -- the
+  // last one only gets cleared when this session hasn't hosted a real event
+  // yet, since once is_past is true that field holds the permanent archived
+  // record of that real night and must not be touched. Awaited so all of
+  // this finishes before HostSession's own load/ensureLiveGame calls run.
   const handleTestRun = async () => {
     try {
       await resetTestGame(id);
+      await resetHostToolsSessionState(id);
+      if (!session?.is_past) {
+        const { error } = await supabase.from("sessions").update({ hosted_results: null }).eq("id", id);
+        if (error) throw error;
+      }
     } catch (error) {
       console.warn("Test data reset unavailable:", error);
     }

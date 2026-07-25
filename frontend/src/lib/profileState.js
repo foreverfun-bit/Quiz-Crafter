@@ -159,3 +159,28 @@ export const saveHostToolsSessionState = (sessionId, patch) => {
   hostToolsSessionSaveQueue = task;
   return task;
 };
+
+// Shared with HostSession.jsx's localStorage reads/writes -- keep the key
+// shape in sync there.
+export const hostToolsStorageKey = (sessionId, name) => `quiz-crafter-host-tools-${sessionId}-${name}`;
+const HOST_TOOLS_FIELD_NAMES = ["players", "answers", "activity", "feedback", "category-feedback", "ideas", "graded-answers", "disputes", "results"];
+
+// Clears a session's cached roster/progress (players, leaderboard, answers,
+// feedback, etc.) -- both the profile-backed copy (loadHostToolsSessionState,
+// survives reloads/devices) and this browser's localStorage mirror. Used
+// when a host explicitly starts a fresh Test Run so a team that joined
+// during an earlier rehearsal doesn't reappear -- this cache is purely a
+// live-hosting reload-resilience layer, never read by past-session review,
+// so clearing it is always safe.
+export const resetHostToolsSessionState = async (sessionId) => {
+  HOST_TOOLS_FIELD_NAMES.forEach((name) => {
+    try { localStorage.removeItem(hostToolsStorageKey(sessionId, name)); } catch { /* Local cache is best-effort. */ }
+  });
+  try { localStorage.removeItem(`quiz-crafter-leaderboard-${sessionId}`); } catch { /* Local cache is best-effort. */ }
+  const allState = await loadProfileValue(profileKeys.hostToolsBySession).catch(() => null);
+  if (isPlainObject(allState) && allState[sessionId]) {
+    const next = { ...allState };
+    delete next[sessionId];
+    await saveProfileValue(profileKeys.hostToolsBySession, next);
+  }
+};

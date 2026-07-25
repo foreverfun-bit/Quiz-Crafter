@@ -49,7 +49,7 @@ import {
   Zap,
 } from "lucide-react";
 import { toast } from "sonner";
-import { loadHostSetupSettings, loadHostToolsSessionState, loadProfileValue, profileKeys, readCurrentProjectSessionId, saveHostSetupSettings, saveHostToolsSessionState, updateUserMetadata, writeCurrentProjectSessionId } from "../lib/profileState";
+import { hostToolsStorageKey, loadHostSetupSettings, loadHostToolsSessionState, loadProfileValue, profileKeys, readCurrentProjectSessionId, saveHostSetupSettings, saveHostToolsSessionState, updateUserMetadata, writeCurrentProjectSessionId } from "../lib/profileState";
 
 const STORAGE_BASE = process.env.REACT_APP_SUPABASE_URL ? `${process.env.REACT_APP_SUPABASE_URL}/storage/v1/object/public/` : "";
 const DEFAULT_PUBLIC_SITE = "https://quizcrafter.com";
@@ -314,7 +314,6 @@ const readStoredLeaderboard = (sessionId) => {
     return [];
   }
 };
-const hostToolsStorageKey = (sessionId, name) => `quiz-crafter-host-tools-${sessionId}-${name}`;
 const readStoredList = (key) => {
   try {
     const parsed = JSON.parse(localStorage.getItem(key) || "[]");
