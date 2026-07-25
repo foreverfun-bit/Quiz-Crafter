@@ -29,14 +29,27 @@ const getBearerToken = (req, body = {}) => {
   return match ? match[1] : "";
 };
 
+// Returns { user, error } instead of just null on failure -- a bare null
+// gave no way to tell "no token sent" apart from "token rejected by
+// Supabase" apart from "Supabase itself unreachable", which made a
+// recurring 401 impossible to diagnose from the client side alone.
 const verifyUser = async (supabaseUrl, anonKey, token) => {
-  if (!token) return null;
-  const response = await fetch(`${supabaseUrl}/auth/v1/user`, {
-    headers: { apikey: anonKey, authorization: `Bearer ${token}` },
-  });
-  if (!response.ok) return null;
-  const user = await response.json();
-  return user?.id ? user : null;
+  if (!token) return { user: null, error: "No auth token was sent with the request" };
+  let response;
+  try {
+    response = await fetch(`${supabaseUrl}/auth/v1/user`, {
+      headers: { apikey: anonKey, authorization: `Bearer ${token}` },
+    });
+  } catch (fetchError) {
+    return { user: null, error: `Auth check request failed: ${fetchError.message}` };
+  }
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    return { user: null, error: `Supabase auth check returned ${response.status}${detail ? `: ${detail.slice(0, 200)}` : ""}` };
+  }
+  const user = await response.json().catch(() => null);
+  if (!user?.id) return { user: null, error: "Auth check succeeded but returned no user" };
+  return { user, error: null };
 };
 
 module.exports = async function handler(req, res) {
@@ -73,8 +86,11 @@ module.exports = async function handler(req, res) {
       const sessionName = String(body.sessionName || "Trivia Night");
       const isTest = Boolean(body.isTest);
       if (!sessionId) return res.status(400).json({ error: "Missing sessionId" });
-      const user = await verifyUser(supabaseUrl, anonKey, getBearerToken(req, body));
-      if (!user?.id) return res.status(401).json({ error: "You must be signed in to host" });
+      const { user, error: authError } = await verifyUser(supabaseUrl, anonKey, getBearerToken(req, body));
+      if (!user?.id) {
+        console.error("ensureLiveGame auth failed:", authError);
+        return res.status(401).json({ error: authError || "You must be signed in to host" });
+      }
 
       const { data: existingRows, error: lookupError } = await supabase.from("live_games").select("id, status").eq("session_id", sessionId).eq("is_test", isTest).order("created_at", { ascending: false }).limit(1);
       if (lookupError) throw lookupError;
@@ -116,8 +132,11 @@ module.exports = async function handler(req, res) {
       // host mid-rehearsal.
       const sessionId = String(body.sessionId || "");
       if (!sessionId) return res.status(400).json({ error: "Missing sessionId" });
-      const user = await verifyUser(supabaseUrl, anonKey, getBearerToken(req, body));
-      if (!user?.id) return res.status(401).json({ error: "You must be signed in to host" });
+      const { user, error: authError } = await verifyUser(supabaseUrl, anonKey, getBearerToken(req, body));
+      if (!user?.id) {
+        console.error("resetTestGame auth failed:", authError);
+        return res.status(401).json({ error: authError || "You must be signed in to host" });
+      }
 
       const { data: testRows, error: lookupError } = await supabase.from("live_games").select("id").eq("session_id", sessionId).eq("is_test", true);
       if (lookupError) throw lookupError;
@@ -167,8 +186,11 @@ module.exports = async function handler(req, res) {
     if (action === "removeLivePlayer") {
       const playerId = String(body.playerId || "");
       if (!playerId) return res.status(400).json({ error: "Missing playerId" });
-      const user = await verifyUser(supabaseUrl, anonKey, getBearerToken(req, body));
-      if (!user?.id) return res.status(401).json({ error: "You must be signed in" });
+      const { user, error: authError } = await verifyUser(supabaseUrl, anonKey, getBearerToken(req, body));
+      if (!user?.id) {
+        console.error("removeLivePlayer auth failed:", authError);
+        return res.status(401).json({ error: authError || "You must be signed in" });
+      }
 
       const { data: playerRows, error: playerError } = await supabase.from("live_game_players").select("game_id").eq("id", playerId).limit(1);
       if (playerError) throw playerError;
