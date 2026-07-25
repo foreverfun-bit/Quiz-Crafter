@@ -53,6 +53,12 @@ export const findLiveGame = (sessionId) => callLiveGame("findLiveGame", { sessio
 // real clears out a leftover test row.
 export const ensureLiveGame = (sessionId, { sessionName, isTest } = {}) => callAuthedLiveGame("ensureLiveGame", { sessionId, sessionName, isTest });
 
+// Host-only: wipes any prior test game (and its teams/scores/answers, via
+// cascade) for this session. Call once when the host explicitly starts a
+// Test Run, before ensureLiveGame -- not on every host-page load, which
+// would erase an in-progress test roster on unrelated re-renders.
+export const resetTestGame = (sessionId) => callAuthedLiveGame("resetTestGame", { sessionId });
+
 export const fetchLivePlayers = (gameId) => callLiveGame("fetchLivePlayers", { gameId });
 
 // Omits `score` unless explicitly passed, so joining/renaming never resets

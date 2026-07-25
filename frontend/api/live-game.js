@@ -108,6 +108,27 @@ module.exports = async function handler(req, res) {
       return;
     }
 
+    if (action === "resetTestGame") {
+      // Called once, explicitly, when the host clicks "Test Run" -- not
+      // folded into ensureLiveGame's automatic reuse-or-create, because
+      // that runs on every host-page render where session/id change and
+      // would otherwise wipe an in-progress test roster out from under the
+      // host mid-rehearsal.
+      const sessionId = String(body.sessionId || "");
+      if (!sessionId) return res.status(400).json({ error: "Missing sessionId" });
+      const user = await verifyUser(supabaseUrl, anonKey, getBearerToken(req, body));
+      if (!user?.id) return res.status(401).json({ error: "You must be signed in to host" });
+
+      const { data: testRows, error: lookupError } = await supabase.from("live_games").select("id").eq("session_id", sessionId).eq("is_test", true);
+      if (lookupError) throw lookupError;
+      if (testRows?.length) {
+        const { error: deleteError } = await supabase.from("live_games").delete().in("id", testRows.map((row) => row.id));
+        if (deleteError) throw deleteError;
+      }
+      res.status(200).json({ data: true });
+      return;
+    }
+
     if (action === "fetchLivePlayers") {
       const gameId = String(body.gameId || "");
       if (!gameId) return res.status(400).json({ error: "Missing gameId" });

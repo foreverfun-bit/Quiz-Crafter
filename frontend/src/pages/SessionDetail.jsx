@@ -26,6 +26,7 @@ import {
 import { toast } from "sonner";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 import { mergeProfileRecords, normalizeVenue, readLocalVenues } from "../lib/venues";
+import { resetTestGame } from "../lib/liveGame";
 import { loadProfileValue, profileKeys, readCurrentProjectSessionId, writeCurrentProjectSessionId } from "../lib/profileState";
 
 const questionTypes = [
@@ -567,7 +568,19 @@ const SessionDetail = () => {
   };
 
   const handleGoLive = () => navigate(`/host-session/${id}`);
-  const handleTestRun = () => navigate(`/host-session/${id}?mode=test`);
+  // Wipes any leftover test teams/scores before navigating in, so a Test
+  // Run always opens on a clean slate instead of showing whoever joined
+  // last time you rehearsed. Awaited so the wipe finishes before
+  // HostSession's own ensureLiveGame call runs and might otherwise reuse
+  // the row we're about to delete.
+  const handleTestRun = async () => {
+    try {
+      await resetTestGame(id);
+    } catch (error) {
+      console.warn("Test data reset unavailable:", error);
+    }
+    navigate(`/host-session/${id}?mode=test`);
+  };
 
   if (loading) {
     return (
