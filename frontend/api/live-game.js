@@ -23,10 +23,14 @@ const { createClient } = require("@supabase/supabase-js");
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const makeGameCode = () => Array.from({ length: 6 }, () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]).join("");
 const AUTH_RETRY_DELAYS_MS = [250, 500, 900, 1400, 2200, 3200];
+const JWKS_TTL_MS = 10 * 60 * 1000;
+const ASYMMETRIC_ALGS = new Set(["ES256", "RS256"]);
+let jwksCache = { url: "", expiresAt: 0, keys: [] };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const jitter = (ms) => ms + Math.floor(Math.random() * 120);
 const getJwtSecret = () => process.env.SUPABASE_JWT_SECRET || process.env.SUPABASE_AUTH_JWT_SECRET || process.env.JWT_SECRET || "";
+const normalizeSupabaseUrl = (supabaseUrl) => String(supabaseUrl || "").replace(/\/$/, "");
 
 const base64UrlDecode = (value) => Buffer.from(String(value || "").replace(/-/g, "+").replace(/_/g, "/"), "base64");
 const base64UrlEncode = (buffer) => Buffer.from(buffer).toString("base64").replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
@@ -46,17 +50,84 @@ const getBearerToken = (req, body = {}) => {
   return match ? match[1] : "";
 };
 
-const verifyJwtLocally = (token) => {
-  const jwtSecret = getJwtSecret();
-  if (!jwtSecret) return { user: null, error: "No JWT secret configured for local verification", skipped: true };
+const userFromJwtPayload = (payload) => ({
+  id: payload.sub,
+  email: payload.email || null,
+  role: payload.role || null,
+  aud: payload.aud || null,
+  app_metadata: payload.app_metadata || {},
+  user_metadata: payload.user_metadata || {},
+});
 
+const validateJwtPayload = (payload, supabaseUrl) => {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  if (Number(payload.exp || 0) <= nowSeconds) return "Auth token expired";
+  if (!payload.sub) return "Auth token is missing a user id";
+  const expectedIssuer = `${normalizeSupabaseUrl(supabaseUrl)}/auth/v1`;
+  if (payload.iss && payload.iss !== expectedIssuer) return "Auth token issuer does not match this Supabase project";
+  const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud].filter(Boolean);
+  if (aud.length && !aud.includes("authenticated")) return "Auth token audience is not authenticated";
+  return null;
+};
+
+const fetchJwks = async (supabaseUrl, force = false) => {
+  const jwksUrl = `${normalizeSupabaseUrl(supabaseUrl)}/auth/v1/.well-known/jwks.json`;
+  if (!force && jwksCache.url === jwksUrl && jwksCache.expiresAt > Date.now() && jwksCache.keys.length) return jwksCache.keys;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5500);
+  try {
+    const response = await fetch(jwksUrl, { signal: controller.signal });
+    if (!response.ok) throw new Error(`JWKS endpoint returned ${response.status}`);
+    const jwks = await response.json();
+    const keys = Array.isArray(jwks?.keys) ? jwks.keys : [];
+    jwksCache = { url: jwksUrl, expiresAt: Date.now() + JWKS_TTL_MS, keys };
+    return keys;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const verifyJwtWithJwks = async (supabaseUrl, token, header, payload, parts) => {
+  if (!ASYMMETRIC_ALGS.has(header.alg)) return { user: null, error: `Local verification skipped for ${header.alg || "unknown"} auth token`, skipped: true };
+
+  const payloadError = validateJwtPayload(payload, supabaseUrl);
+  if (payloadError) return { user: null, error: payloadError };
+
+  const findKey = (keys) => keys.find((key) => (!header.kid || key.kid === header.kid) && (!key.alg || key.alg === header.alg));
+  let keys = await fetchJwks(supabaseUrl).catch(() => []);
+  let jwk = findKey(keys);
+  if (!jwk) {
+    keys = await fetchJwks(supabaseUrl, true).catch(() => []);
+    jwk = findKey(keys);
+  }
+  if (!jwk) return { user: null, error: "No matching Supabase JWT signing key was found", skipped: true };
+
+  try {
+    const publicKey = crypto.createPublicKey({ key: jwk, format: "jwk" });
+    const signedData = Buffer.from(`${parts[0]}.${parts[1]}`);
+    const signature = base64UrlDecode(parts[2]);
+    const verified = header.alg === "ES256"
+      ? crypto.verify("sha256", signedData, { key: publicKey, dsaEncoding: "ieee-p1363" }, signature)
+      : crypto.verify("RSA-SHA256", signedData, publicKey, signature);
+    if (!verified) return { user: null, error: "Invalid auth token signature" };
+    return { user: userFromJwtPayload(payload), error: null, source: "jwks" };
+  } catch (error) {
+    return { user: null, error: `JWT verification failed: ${error.message}`, skipped: true };
+  }
+};
+
+const verifyJwtLocally = async (supabaseUrl, token) => {
   const parts = String(token || "").split(".");
   if (parts.length !== 3) return { user: null, error: "Malformed auth token" };
 
   const header = safeJsonParse(base64UrlDecode(parts[0]).toString("utf8"));
   const payload = safeJsonParse(base64UrlDecode(parts[1]).toString("utf8"));
   if (!header || !payload) return { user: null, error: "Malformed auth token payload" };
-  if (header.alg !== "HS256") return { user: null, error: `Local verification skipped for ${header.alg || "unknown"} auth token`, skipped: true };
+
+  if (header.alg !== "HS256") return verifyJwtWithJwks(supabaseUrl, token, header, payload, parts);
+
+  const jwtSecret = getJwtSecret();
+  if (!jwtSecret) return { user: null, error: "No JWT secret configured for local verification", skipped: true };
 
   const expected = base64UrlEncode(crypto.createHmac("sha256", jwtSecret).update(`${parts[0]}.${parts[1]}`).digest());
   const expectedBuffer = Buffer.from(expected);
@@ -65,28 +136,17 @@ const verifyJwtLocally = (token) => {
     return { user: null, error: "Invalid auth token signature" };
   }
 
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  if (Number(payload.exp || 0) <= nowSeconds) return { user: null, error: "Auth token expired" };
-  if (!payload.sub) return { user: null, error: "Auth token is missing a user id" };
+  const payloadError = validateJwtPayload(payload, supabaseUrl);
+  if (payloadError) return { user: null, error: payloadError };
 
-  return {
-    user: {
-      id: payload.sub,
-      email: payload.email || null,
-      role: payload.role || null,
-      aud: payload.aud || null,
-      app_metadata: payload.app_metadata || {},
-      user_metadata: payload.user_metadata || {},
-    },
-    error: null,
-  };
+  return { user: userFromJwtPayload(payload), error: null, source: "local-jwt" };
 };
 
 const fetchAuthUser = async (supabaseUrl, anonKey, token) => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5500);
   try {
-    return await fetch(`${supabaseUrl}/auth/v1/user`, {
+    return await fetch(`${normalizeSupabaseUrl(supabaseUrl)}/auth/v1/user`, {
       signal: controller.signal,
       headers: { apikey: anonKey, authorization: `Bearer ${token}` },
     });
@@ -102,8 +162,8 @@ const fetchAuthUser = async (supabaseUrl, anonKey, token) => {
 const verifyUser = async (supabaseUrl, anonKey, token) => {
   if (!token) return { user: null, error: "No auth token was sent with the request", status: 401 };
 
-  const localResult = verifyJwtLocally(token);
-  if (localResult.user?.id) return { user: localResult.user, error: null, status: 200, source: "local-jwt" };
+  const localResult = await verifyJwtLocally(supabaseUrl, token);
+  if (localResult.user?.id) return { user: localResult.user, error: null, status: 200, source: localResult.source || "local-jwt" };
   if (!localResult.skipped) return { user: null, error: localResult.error || "Invalid auth token", status: 401 };
 
   let lastError = "Auth check failed for an unknown reason";
@@ -155,7 +215,7 @@ module.exports = async function handler(req, res) {
   // whether a given deployment has it versus guessing from timestamps.
   // Remove once local JWT verification is confirmed working end to end.
   if (req.method === "GET" && req.query?.action === "debugJwt") {
-    res.status(200).json({ hasJwtSecret: Boolean(getJwtSecret()) });
+    res.status(200).json({ hasJwtSecret: Boolean(getJwtSecret()), supportsJwks: true });
     return;
   }
 
