@@ -10,6 +10,11 @@ import { supabase, getAccessToken } from "./supabase";
 // Realtime (broadcast, postgres_changes) stays on the direct WebSocket
 // connection below -- only the REST/fetch path was affected.
 const LIVE_GAME_ENDPOINT = "/api/live-game";
+const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+const LIVE_GAME_RETRY_DELAYS_MS = [600, 1200, 2400];
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const retryDelay = (attempt) => LIVE_GAME_RETRY_DELAYS_MS[Math.min(attempt, LIVE_GAME_RETRY_DELAYS_MS.length - 1)] + Math.floor(Math.random() * 180);
 
 const postLiveGame = async (action, params) => {
   const response = await fetch(LIVE_GAME_ENDPOINT, {
@@ -18,7 +23,7 @@ const postLiveGame = async (action, params) => {
     body: JSON.stringify({ action, ...params }),
   });
   const result = await response.json().catch(() => ({}));
-  return { ok: response.ok, status: response.status, data: result?.data, error: result?.error };
+  return { ok: response.ok, status: response.status, data: result?.data, error: result?.error, retryable: Boolean(result?.retryable) };
 };
 
 const callLiveGame = async (action, params = {}) => {
@@ -29,15 +34,26 @@ const callLiveGame = async (action, params = {}) => {
 
 // Host-only actions authenticate with the same cached, auto-refreshing
 // session lookup the data proxy uses. A first attempt with a stale cached
-// token that the server rejects (401) retries once with a forced refresh,
-// instead of surfacing "not signed in" for a token that's just stale.
+// token that the server rejects (401) retries once with a forced refresh.
+// Transient proxy/Supabase auth failures (503/5xx) retry with backoff because
+// they are not sign-in failures and should not interrupt a live show.
 const callAuthedLiveGame = async (action, params = {}) => {
-  const authToken = await getAccessToken();
+  let authToken = await getAccessToken();
   let result = await postLiveGame(action, { ...params, authToken });
+
   if (!result.ok && result.status === 401) {
     const refreshedToken = await getAccessToken(true);
-    if (refreshedToken && refreshedToken !== authToken) result = await postLiveGame(action, { ...params, authToken: refreshedToken });
+    if (refreshedToken && refreshedToken !== authToken) {
+      authToken = refreshedToken;
+      result = await postLiveGame(action, { ...params, authToken });
+    }
   }
+
+  for (let attempt = 0; !result.ok && (result.retryable || RETRYABLE_STATUSES.has(result.status)) && attempt < LIVE_GAME_RETRY_DELAYS_MS.length; attempt++) {
+    await sleep(retryDelay(attempt));
+    result = await postLiveGame(action, { ...params, authToken });
+  }
+
   if (result.ok) return result.data;
   throw new Error(result.error || `Live game request failed (${result.status})`);
 };
