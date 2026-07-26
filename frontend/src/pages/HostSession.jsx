@@ -87,6 +87,18 @@ const getPublicOrigin = () => {
   return window.location.origin;
 };
 
+// Preview deployments sit behind Vercel's Deployment Protection login wall,
+// which blocks anonymous players scanning a QR code cold. Vercel's
+// "Protection Bypass for Automation" secret, appended as a query param, lets
+// a first request through and (with x-vercel-set-bypass-cookie) sets a
+// cookie so the rest of the SPA session stays unlocked. Only relevant on a
+// protected preview -- never applied on production, which isn't walled off.
+const getProtectionBypassQuery = () => {
+  const secret = process.env.REACT_APP_VERCEL_PROTECTION_BYPASS;
+  if (!secret || typeof window === "undefined" || PRODUCTION_HOSTNAMES.has(window.location.hostname)) return "";
+  return `&x-vercel-protection-bypass=${encodeURIComponent(secret)}&x-vercel-set-bypass-cookie=true`;
+};
+
 const MEDIA_PLACEHOLDERS = new Set(["question", "image", "picture", "photo", "media", "n/a", "na", "none", "null", "undefined"]);
 
 const cleanMediaValue = (value) => {
@@ -881,7 +893,7 @@ const HostSession = () => {
   const fairPlayStats = useMemo(() => buildFairPlayStats(players, answers, gradedAnswers, playerActivity), [players, answers, gradedAnswers, playerActivity]);
   const progress = questions.length ? Math.round(((currentIndex + 1) / questions.length) * 100) : 0;
   const sessionName = session?.name || session?.session_name || "Trivia Session";
-  const joinUrl = `${getPublicOrigin()}/join?session=${id}`;
+  const joinUrl = `${getPublicOrigin()}/join?session=${id}${getProtectionBypassQuery()}`;
   const timeRemaining = timerEndAt ? Math.max(0, Math.ceil((timerEndAt - now) / 1000)) : null;
   const acceptingAnswers = !answersPaused && (timeRemaining === null || timeRemaining > 0);
 

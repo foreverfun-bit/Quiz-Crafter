@@ -71,6 +71,14 @@ const getPublicOrigin = () => {
   return window.location.origin;
 };
 
+// See the matching comment in HostSession.jsx: lets players scanning a QR
+// code get past Vercel's Deployment Protection wall on a preview build.
+const getProtectionBypassQuery = () => {
+  const secret = process.env.REACT_APP_VERCEL_PROTECTION_BYPASS;
+  if (!secret || typeof window === "undefined" || PRODUCTION_HOSTNAMES.has(window.location.hostname)) return "";
+  return `&x-vercel-protection-bypass=${encodeURIComponent(secret)}&x-vercel-set-bypass-cookie=true`;
+};
+
 const MEDIA_PLACEHOLDERS = new Set(["question", "image", "picture", "photo", "media", "n/a", "na", "none", "null", "undefined"]);
 
 const cleanMediaValue = (value) => {
@@ -405,7 +413,7 @@ const PresentSession = () => {
   const introRound = mode === "categories" && presentState.introRound?.key ? (rounds.find((round) => round.key === presentState.introRound.key) || presentState.introRound) : currentRound;
   const displayRound = mode === "categories" ? introRound : currentRound;
   const sessionName = presentState.sessionName || session?.name || session?.session_name || "Trivia Session";
-  const joinUrl = presentState.joinUrl || `${getPublicOrigin()}/join?session=${id}`;
+  const joinUrl = presentState.joinUrl || `${getPublicOrigin()}/join?session=${id}${getProtectionBypassQuery()}`;
   // live_game_players (livePlayers) is the primary roster/score source, but
   // when that REST path or the live_games row isn't available yet, the
   // host's own broadcast snapshot (presentState) carries the same
