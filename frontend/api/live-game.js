@@ -71,14 +71,37 @@ const verifyUser = async (supabaseUrl, anonKey, token) => {
 };
 
 module.exports = async function handler(req, res) {
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.REACT_APP_SUPABASE_URL || "";
+  const anonKey = process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.REACT_APP_SUPABASE_ANON_KEY || "";
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+
+  // Temporary read-only diagnostic (GET, no auth needed) for chasing the
+  // recurring 520 on /auth/v1/user from this function -- reports which env
+  // var supplied the URL and what a direct, unauthenticated probe of that
+  // same endpoint gets back, so we can tell a bad/mismatched URL apart from
+  // Supabase's auth service actually erroring for this server. Returns no
+  // secrets (host only, no keys). Remove once that's root-caused.
+  if (req.method === "GET" && req.query?.action === "debugConfig") {
+    let urlHost = "";
+    try { urlHost = supabaseUrl ? new URL(supabaseUrl).host : ""; } catch { /* leave blank if unparsable */ }
+    const urlSource = process.env.SUPABASE_URL ? "SUPABASE_URL" : process.env.NEXT_PUBLIC_SUPABASE_URL ? "NEXT_PUBLIC_SUPABASE_URL" : process.env.REACT_APP_SUPABASE_URL ? "REACT_APP_SUPABASE_URL" : "none set";
+    let probe;
+    try {
+      const probeResponse = await fetch(`${supabaseUrl}/auth/v1/user`, { headers: { apikey: anonKey } });
+      const bodyPreview = await probeResponse.text().catch(() => "");
+      probe = { status: probeResponse.status, bodyPreview: bodyPreview.slice(0, 300) };
+    } catch (probeError) {
+      probe = { fetchError: probeError.message };
+    }
+    res.status(200).json({ urlHost, urlSource, hasAnonKey: Boolean(anonKey), hasServiceRoleKey: Boolean(serviceRoleKey), probe });
+    return;
+  }
+
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
 
-  const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.REACT_APP_SUPABASE_URL || "";
-  const anonKey = process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.REACT_APP_SUPABASE_ANON_KEY || "";
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
   if (!supabaseUrl || !anonKey || !serviceRoleKey) {
     res.status(500).json({ error: "Missing Supabase server configuration" });
     return;
