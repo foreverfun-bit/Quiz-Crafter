@@ -56,7 +56,7 @@ const verifyJwtLocally = (token) => {
   const header = safeJsonParse(base64UrlDecode(parts[0]).toString("utf8"));
   const payload = safeJsonParse(base64UrlDecode(parts[1]).toString("utf8"));
   if (!header || !payload) return { user: null, error: "Malformed auth token payload" };
-  if (header.alg !== "HS256") return { user: null, error: `Unsupported auth token algorithm: ${header.alg || "unknown"}` };
+  if (header.alg !== "HS256") return { user: null, error: `Local verification skipped for ${header.alg || "unknown"} auth token`, skipped: true };
 
   const expected = base64UrlEncode(crypto.createHmac("sha256", jwtSecret).update(`${parts[0]}.${parts[1]}`).digest());
   const expectedBuffer = Buffer.from(expected);
