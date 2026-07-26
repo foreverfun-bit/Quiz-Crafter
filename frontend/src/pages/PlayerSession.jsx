@@ -21,7 +21,13 @@ const arrayConfig = [
 ];
 
 const playerStorageKey = (sessionId) => `quiz-crafter-player-${sessionId}`;
-const playerSubmissionStorageKey = (sessionId, playerId) => `quiz-crafter-player-answers-${sessionId}-${playerId}`;
+// Scoped by liveGameId, not just sessionId -- Test Run gets a fresh
+// live_games row (a new id) every time the host restarts it, while the
+// session id itself stays constant across every rehearsal. Keying by
+// session id alone meant a "submitted" answer from a rehearsal days ago
+// kept getting restored as if it were the current test's answer the
+// moment a player reached that same question index again.
+const playerSubmissionStorageKey = (sessionId, gameId, playerId) => `quiz-crafter-player-answers-${sessionId}-${gameId || "nogame"}-${playerId}`;
 const questionSubmissionKey = (questionIndex, questionId) => `${questionIndex}:${questionId || ""}`;
 const readJsonStorage = (storage, key) => {
   try {
@@ -40,20 +46,21 @@ const saveStoredPlayer = (sessionId, player) => {
   try { sessionStorage.setItem(playerStorageKey(sessionId), value); } catch { /* Ignore storage failures. */ }
   try { localStorage.setItem(playerStorageKey(sessionId), value); } catch { /* Ignore storage failures. */ }
 };
-const getStoredSubmissions = (sessionId, playerId) => {
-  if (typeof window === "undefined" || !playerId) return {};
-  return readJsonStorage(sessionStorage, playerSubmissionStorageKey(sessionId, playerId)) || readJsonStorage(localStorage, playerSubmissionStorageKey(sessionId, playerId)) || {};
+const getStoredSubmissions = (sessionId, gameId, playerId) => {
+  if (typeof window === "undefined" || !playerId || !gameId) return {};
+  const key = playerSubmissionStorageKey(sessionId, gameId, playerId);
+  return readJsonStorage(sessionStorage, key) || readJsonStorage(localStorage, key) || {};
 };
-const getStoredSubmission = (sessionId, playerId, questionIndex, questionId) => {
-  const submissions = getStoredSubmissions(sessionId, playerId);
+const getStoredSubmission = (sessionId, gameId, playerId, questionIndex, questionId) => {
+  const submissions = getStoredSubmissions(sessionId, gameId, playerId);
   const key = questionSubmissionKey(questionIndex, questionId);
   return submissions[key] || null;
 };
-const saveStoredSubmission = (sessionId, playerId, payload) => {
-  if (!playerId || payload?.questionIndex === undefined) return;
-  const key = playerSubmissionStorageKey(sessionId, playerId);
+const saveStoredSubmission = (sessionId, gameId, playerId, payload) => {
+  if (!playerId || !gameId || payload?.questionIndex === undefined) return;
+  const key = playerSubmissionStorageKey(sessionId, gameId, playerId);
   const next = {
-    ...getStoredSubmissions(sessionId, playerId),
+    ...getStoredSubmissions(sessionId, gameId, playerId),
     [questionSubmissionKey(payload.questionIndex, payload.questionId)]: payload,
   };
   const value = JSON.stringify(next);
@@ -392,13 +399,13 @@ const PlayerSession = () => {
   const currentQuestionId = currentQuestion?.id;
 
   useEffect(() => {
-    if (!player || !currentQuestionId || currentQuestionIndex === undefined) {
+    if (!player || !liveGameId || !currentQuestionId || currentQuestionIndex === undefined) {
       setSubmitted(null);
       return;
     }
-    const stored = getStoredSubmission(id, player.id, currentQuestionIndex, currentQuestionId);
+    const stored = getStoredSubmission(id, liveGameId, player.id, currentQuestionIndex, currentQuestionId);
     setSubmitted(stored);
-  }, [id, player, currentQuestionIndex, currentQuestionId]);
+  }, [id, liveGameId, player, currentQuestionIndex, currentQuestionId]);
 
   useEffect(() => {
     if (!player || !hostState || !currentQuestion || hostState.mode !== "question") return undefined;
@@ -482,7 +489,7 @@ const PlayerSession = () => {
     const awardedPoints = wagerMode ? wager : pointsPerQuestion;
     const payload = { playerId: player.id, playerName: player.name, answer: finalAnswer, points: awardedPoints, questionPoints: pointsPerQuestion, pointsPerQuestion, wagerAmount: wager, wagerSubmitted: !wagerMode || wagerTiming !== "after_answer", wagerMode, wagerLimit, wagerCap: effectiveWagerLimit, scoreAtWager: Number(myScore || 0), wagerTiming, questionIndex: hostState.currentIndex, questionId: currentQuestion.id, questionText: currentQuestion.questionText, ...submissionTiming(), submittedAt: new Date().toISOString() };
     const sentPayload = sendPlayerEvent(channelRef.current, id, "answer_submit", payload);
-    saveStoredSubmission(id, player.id, sentPayload);
+    saveStoredSubmission(id, liveGameId, player.id, sentPayload);
     setSubmitted(sentPayload);
     setAnswer("");
     toast.success("Answer submitted");
@@ -495,7 +502,7 @@ const PlayerSession = () => {
     if (wager > effectiveWagerLimit) return toast.error(`Wager up to ${effectiveWagerLimit}`);
     const payload = { ...submitted, points: wager, wagerAmount: wager, wagerSubmitted: true, wagerLimit, wagerCap: effectiveWagerLimit, scoreAtWager: Number(myScore || 0), wagerTiming, ...submissionTiming(), submittedAt: new Date().toISOString() };
     const sentPayload = sendPlayerEvent(channelRef.current, id, "answer_submit", payload);
-    saveStoredSubmission(id, player.id, sentPayload);
+    saveStoredSubmission(id, liveGameId, player.id, sentPayload);
     setSubmitted(sentPayload);
     toast.success("Wager submitted");
   };
