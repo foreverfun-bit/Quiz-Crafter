@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const { createClient } = require("@supabase/supabase-js");
 
 // live_games / live_game_players are read and written directly from the
@@ -21,6 +22,22 @@ const { createClient } = require("@supabase/supabase-js");
 
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const makeGameCode = () => Array.from({ length: 6 }, () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]).join("");
+const AUTH_RETRY_DELAYS_MS = [250, 500, 900, 1400, 2200, 3200];
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const jitter = (ms) => ms + Math.floor(Math.random() * 120);
+const getJwtSecret = () => process.env.SUPABASE_JWT_SECRET || process.env.SUPABASE_AUTH_JWT_SECRET || process.env.JWT_SECRET || "";
+
+const base64UrlDecode = (value) => Buffer.from(String(value || "").replace(/-/g, "+").replace(/_/g, "/"), "base64");
+const base64UrlEncode = (buffer) => Buffer.from(buffer).toString("base64").replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+
+const safeJsonParse = (value) => {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+};
 
 const getBearerToken = (req, body = {}) => {
   if (body.authToken) return String(body.authToken);
@@ -29,73 +46,107 @@ const getBearerToken = (req, body = {}) => {
   return match ? match[1] : "";
 };
 
-// Returns { user, error } instead of just null on failure -- a bare null
-// gave no way to tell "no token sent" apart from "token rejected by
-// Supabase" apart from "Supabase itself unreachable", which made a
-// recurring 401 impossible to diagnose from the client side alone.
-//
-// Confirmed live: this call intermittently comes back as a Cloudflare 520
-// (an HTML error page, not JSON) in front of Supabase's auth service --
-// happening on this server-to-server call specifically while the same
-// project's browser-direct logins/refreshes succeed fine, so it's not a
-// bad token. A 4xx means Supabase itself actively rejected the token (no
-// point retrying, it won't change); a 5xx/network failure means the auth
-// service glitched, which is usually transient, so it gets a couple of
-// quick retries before giving up.
+const verifyJwtLocally = (token) => {
+  const jwtSecret = getJwtSecret();
+  if (!jwtSecret) return { user: null, error: "No JWT secret configured for local verification", skipped: true };
+
+  const parts = String(token || "").split(".");
+  if (parts.length !== 3) return { user: null, error: "Malformed auth token" };
+
+  const header = safeJsonParse(base64UrlDecode(parts[0]).toString("utf8"));
+  const payload = safeJsonParse(base64UrlDecode(parts[1]).toString("utf8"));
+  if (!header || !payload) return { user: null, error: "Malformed auth token payload" };
+  if (header.alg !== "HS256") return { user: null, error: `Unsupported auth token algorithm: ${header.alg || "unknown"}` };
+
+  const expected = base64UrlEncode(crypto.createHmac("sha256", jwtSecret).update(`${parts[0]}.${parts[1]}`).digest());
+  const expectedBuffer = Buffer.from(expected);
+  const actualBuffer = Buffer.from(parts[2]);
+  if (expectedBuffer.length !== actualBuffer.length || !crypto.timingSafeEqual(expectedBuffer, actualBuffer)) {
+    return { user: null, error: "Invalid auth token signature" };
+  }
+
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  if (Number(payload.exp || 0) <= nowSeconds) return { user: null, error: "Auth token expired" };
+  if (!payload.sub) return { user: null, error: "Auth token is missing a user id" };
+
+  return {
+    user: {
+      id: payload.sub,
+      email: payload.email || null,
+      role: payload.role || null,
+      aud: payload.aud || null,
+      app_metadata: payload.app_metadata || {},
+      user_metadata: payload.user_metadata || {},
+    },
+    error: null,
+  };
+};
+
+const fetchAuthUser = async (supabaseUrl, anonKey, token) => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5500);
+  try {
+    return await fetch(`${supabaseUrl}/auth/v1/user`, {
+      signal: controller.signal,
+      headers: { apikey: anonKey, authorization: `Bearer ${token}` },
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+// Returns { user, error, status } instead of just null on failure. Host-only
+// actions should return status 401 when the caller is actually unauthenticated
+// and 503 when Supabase's auth endpoint is temporarily unavailable. The latter
+// should be retried by the browser instead of telling the host to sign in again.
 const verifyUser = async (supabaseUrl, anonKey, token) => {
-  if (!token) return { user: null, error: "No auth token was sent with the request" };
+  if (!token) return { user: null, error: "No auth token was sent with the request", status: 401 };
+
+  const localResult = verifyJwtLocally(token);
+  if (localResult.user?.id) return { user: localResult.user, error: null, status: 200, source: "local-jwt" };
+  if (!localResult.skipped) return { user: null, error: localResult.error || "Invalid auth token", status: 401 };
+
   let lastError = "Auth check failed for an unknown reason";
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt <= AUTH_RETRY_DELAYS_MS.length; attempt++) {
     let response;
     try {
-      response = await fetch(`${supabaseUrl}/auth/v1/user`, {
-        headers: { apikey: anonKey, authorization: `Bearer ${token}` },
-      });
+      response = await fetchAuthUser(supabaseUrl, anonKey, token);
     } catch (fetchError) {
-      lastError = `Auth check request failed: ${fetchError.message}`;
-      await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+      lastError = `Auth check request failed: ${fetchError.name === "AbortError" ? "timed out" : fetchError.message}`;
+      if (attempt < AUTH_RETRY_DELAYS_MS.length) await sleep(jitter(AUTH_RETRY_DELAYS_MS[attempt]));
       continue;
     }
+
     if (response.ok) {
       const user = await response.json().catch(() => null);
-      return user?.id ? { user, error: null } : { user: null, error: "Auth check succeeded but returned no user" };
+      return user?.id
+        ? { user, error: null, status: 200, source: "supabase-auth" }
+        : { user: null, error: "Auth check succeeded but returned no user", status: 401 };
     }
+
+    const detail = await response.text().catch(() => "");
     if (response.status < 500) {
-      const detail = await response.text().catch(() => "");
-      return { user: null, error: `Supabase auth check returned ${response.status}${detail ? `: ${detail.slice(0, 200)}` : ""}` };
+      return { user: null, error: `Supabase auth check returned ${response.status}${detail ? `: ${detail.slice(0, 200)}` : ""}`, status: 401 };
     }
+
     lastError = `Supabase auth check returned ${response.status} (their auth service, not your sign-in)`;
-    await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+    if (attempt < AUTH_RETRY_DELAYS_MS.length) await sleep(jitter(AUTH_RETRY_DELAYS_MS[attempt]));
   }
-  return { user: null, error: lastError };
+
+  return { user: null, error: lastError, status: 503, transient: true };
+};
+
+const rejectAuthFailure = (res, action, authError, authStatus) => {
+  console.error(`${action} auth failed:`, authError);
+  const status = authStatus === 503 ? 503 : 401;
+  const fallback = status === 503 ? "Supabase auth is temporarily unavailable. Please try again." : "You must be signed in to host";
+  return res.status(status).json({ error: authError || fallback, retryable: status === 503 });
 };
 
 module.exports = async function handler(req, res) {
   const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.REACT_APP_SUPABASE_URL || "";
   const anonKey = process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.REACT_APP_SUPABASE_ANON_KEY || "";
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-
-  // Temporary read-only diagnostic (GET, no auth needed) for chasing the
-  // recurring 520 on /auth/v1/user from this function -- reports which env
-  // var supplied the URL and what a direct, unauthenticated probe of that
-  // same endpoint gets back, so we can tell a bad/mismatched URL apart from
-  // Supabase's auth service actually erroring for this server. Returns no
-  // secrets (host only, no keys). Remove once that's root-caused.
-  if (req.method === "GET" && req.query?.action === "debugConfig") {
-    let urlHost = "";
-    try { urlHost = supabaseUrl ? new URL(supabaseUrl).host : ""; } catch { /* leave blank if unparsable */ }
-    const urlSource = process.env.SUPABASE_URL ? "SUPABASE_URL" : process.env.NEXT_PUBLIC_SUPABASE_URL ? "NEXT_PUBLIC_SUPABASE_URL" : process.env.REACT_APP_SUPABASE_URL ? "REACT_APP_SUPABASE_URL" : "none set";
-    let probe;
-    try {
-      const probeResponse = await fetch(`${supabaseUrl}/auth/v1/user`, { headers: { apikey: anonKey } });
-      const bodyPreview = await probeResponse.text().catch(() => "");
-      probe = { status: probeResponse.status, bodyPreview: bodyPreview.slice(0, 300) };
-    } catch (probeError) {
-      probe = { fetchError: probeError.message };
-    }
-    res.status(200).json({ urlHost, urlSource, hasAnonKey: Boolean(anonKey), hasServiceRoleKey: Boolean(serviceRoleKey), probe });
-    return;
-  }
 
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
@@ -127,11 +178,8 @@ module.exports = async function handler(req, res) {
       const sessionName = String(body.sessionName || "Trivia Night");
       const isTest = Boolean(body.isTest);
       if (!sessionId) return res.status(400).json({ error: "Missing sessionId" });
-      const { user, error: authError } = await verifyUser(supabaseUrl, anonKey, getBearerToken(req, body));
-      if (!user?.id) {
-        console.error("ensureLiveGame auth failed:", authError);
-        return res.status(401).json({ error: authError || "You must be signed in to host" });
-      }
+      const { user, error: authError, status: authStatus } = await verifyUser(supabaseUrl, anonKey, getBearerToken(req, body));
+      if (!user?.id) return rejectAuthFailure(res, "ensureLiveGame", authError, authStatus);
 
       const { data: existingRows, error: lookupError } = await supabase.from("live_games").select("id, status").eq("session_id", sessionId).eq("is_test", isTest).order("created_at", { ascending: false }).limit(1);
       if (lookupError) throw lookupError;
@@ -173,11 +221,8 @@ module.exports = async function handler(req, res) {
       // host mid-rehearsal.
       const sessionId = String(body.sessionId || "");
       if (!sessionId) return res.status(400).json({ error: "Missing sessionId" });
-      const { user, error: authError } = await verifyUser(supabaseUrl, anonKey, getBearerToken(req, body));
-      if (!user?.id) {
-        console.error("resetTestGame auth failed:", authError);
-        return res.status(401).json({ error: authError || "You must be signed in to host" });
-      }
+      const { user, error: authError, status: authStatus } = await verifyUser(supabaseUrl, anonKey, getBearerToken(req, body));
+      if (!user?.id) return rejectAuthFailure(res, "resetTestGame", authError, authStatus);
 
       const { data: testRows, error: lookupError } = await supabase.from("live_games").select("id").eq("session_id", sessionId).eq("is_test", true);
       if (lookupError) throw lookupError;
@@ -227,11 +272,8 @@ module.exports = async function handler(req, res) {
     if (action === "removeLivePlayer") {
       const playerId = String(body.playerId || "");
       if (!playerId) return res.status(400).json({ error: "Missing playerId" });
-      const { user, error: authError } = await verifyUser(supabaseUrl, anonKey, getBearerToken(req, body));
-      if (!user?.id) {
-        console.error("removeLivePlayer auth failed:", authError);
-        return res.status(401).json({ error: authError || "You must be signed in" });
-      }
+      const { user, error: authError, status: authStatus } = await verifyUser(supabaseUrl, anonKey, getBearerToken(req, body));
+      if (!user?.id) return rejectAuthFailure(res, "removeLivePlayer", authError, authStatus);
 
       const { data: playerRows, error: playerError } = await supabase.from("live_game_players").select("game_id").eq("id", playerId).limit(1);
       if (playerError) throw playerError;
