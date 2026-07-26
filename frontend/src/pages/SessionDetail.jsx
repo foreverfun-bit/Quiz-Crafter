@@ -590,11 +590,11 @@ const SessionDetail = () => {
       console.warn("Test data reset unavailable:", error);
       // Failing silently here used to still open the host screen with
       // whatever stale test data was already there, which looked like the
-      // reset "didn't work" -- if the wipe couldn't run (almost always a
-      // stale/expired sign-in, since it's the same auth path host-only live
-      // scoring uses), say so and stop instead of walking into a host
-      // screen that's about to hit the same failure.
-      toast.error("Couldn't reset test data -- your sign-in may have expired. Try signing out and back in, then try again.");
+      // reset "didn't work" -- say specifically what broke instead of
+      // walking into a host screen that's about to hit the same failure.
+      // error.message now carries the real reason from the server (see
+      // verifyUser in frontend/api/live-game.js), not a guessed cause.
+      toast.error(error?.message ? `Couldn't reset test data: ${error.message}` : "Couldn't reset test data. Try again.");
       return;
     }
     navigate(`/host-session/${id}?mode=test`);
