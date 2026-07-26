@@ -227,6 +227,15 @@ const PlayerSession = () => {
   // so it doesn't need sub-2s polling. That was pulling hosted_results on
   // every player's phone continuously for the whole game and was a major,
   // needless contributor to Supabase egress.
+  //
+  // Also re-runs on visibilitychange: mobile browsers throttle/suspend both
+  // setInterval and the realtime WebSocket while a tab is backgrounded
+  // (screen lock, app switch), so a state change broadcast while a player's
+  // phone was backgrounded -- e.g. the host pausing answers -- could be
+  // missed entirely and never caught up on return, since neither the socket
+  // nor this interval reliably fire while hidden. Forcing a fetch the moment
+  // the tab becomes visible again closes that gap instead of leaving the
+  // player stuck on stale state until their next lucky poll tick.
   useEffect(() => {
     const loadDurableState = async () => {
       const { data } = await supabase.from("sessions").select("hosted_results").eq("id", id).single();
@@ -234,7 +243,14 @@ const PlayerSession = () => {
     };
     const interval = window.setInterval(loadDurableState, 8000);
     loadDurableState();
-    return () => window.clearInterval(interval);
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") loadDurableState();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, [id]);
 
   // Backs off (2s, 4s, 8s ... capped at 20s) instead of polling a fixed
