@@ -33,23 +33,41 @@ const getBearerToken = (req, body = {}) => {
 // gave no way to tell "no token sent" apart from "token rejected by
 // Supabase" apart from "Supabase itself unreachable", which made a
 // recurring 401 impossible to diagnose from the client side alone.
+//
+// Confirmed live: this call intermittently comes back as a Cloudflare 520
+// (an HTML error page, not JSON) in front of Supabase's auth service --
+// happening on this server-to-server call specifically while the same
+// project's browser-direct logins/refreshes succeed fine, so it's not a
+// bad token. A 4xx means Supabase itself actively rejected the token (no
+// point retrying, it won't change); a 5xx/network failure means the auth
+// service glitched, which is usually transient, so it gets a couple of
+// quick retries before giving up.
 const verifyUser = async (supabaseUrl, anonKey, token) => {
   if (!token) return { user: null, error: "No auth token was sent with the request" };
-  let response;
-  try {
-    response = await fetch(`${supabaseUrl}/auth/v1/user`, {
-      headers: { apikey: anonKey, authorization: `Bearer ${token}` },
-    });
-  } catch (fetchError) {
-    return { user: null, error: `Auth check request failed: ${fetchError.message}` };
+  let lastError = "Auth check failed for an unknown reason";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let response;
+    try {
+      response = await fetch(`${supabaseUrl}/auth/v1/user`, {
+        headers: { apikey: anonKey, authorization: `Bearer ${token}` },
+      });
+    } catch (fetchError) {
+      lastError = `Auth check request failed: ${fetchError.message}`;
+      await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+      continue;
+    }
+    if (response.ok) {
+      const user = await response.json().catch(() => null);
+      return user?.id ? { user, error: null } : { user: null, error: "Auth check succeeded but returned no user" };
+    }
+    if (response.status < 500) {
+      const detail = await response.text().catch(() => "");
+      return { user: null, error: `Supabase auth check returned ${response.status}${detail ? `: ${detail.slice(0, 200)}` : ""}` };
+    }
+    lastError = `Supabase auth check returned ${response.status} (their auth service, not your sign-in)`;
+    await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
   }
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    return { user: null, error: `Supabase auth check returned ${response.status}${detail ? `: ${detail.slice(0, 200)}` : ""}` };
-  }
-  const user = await response.json().catch(() => null);
-  if (!user?.id) return { user: null, error: "Auth check succeeded but returned no user" };
-  return { user, error: null };
+  return { user: null, error: lastError };
 };
 
 module.exports = async function handler(req, res) {
