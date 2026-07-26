@@ -148,6 +148,17 @@ module.exports = async function handler(req, res) {
   const anonKey = process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.REACT_APP_SUPABASE_ANON_KEY || "";
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
+  // Temporary read-only diagnostic (GET, no auth needed, no secrets
+  // returned) for confirming SUPABASE_JWT_SECRET is actually visible to
+  // THIS deployment -- env vars added/rescoped in Vercel only apply to
+  // deployments built after the change, so this is the fast way to check
+  // whether a given deployment has it versus guessing from timestamps.
+  // Remove once local JWT verification is confirmed working end to end.
+  if (req.method === "GET" && req.query?.action === "debugJwt") {
+    res.status(200).json({ hasJwtSecret: Boolean(getJwtSecret()) });
+    return;
+  }
+
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
     return;
