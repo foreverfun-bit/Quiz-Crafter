@@ -21,12 +21,9 @@ const arrayConfig = [
 ];
 
 const playerStorageKey = (sessionId) => `quiz-crafter-player-${sessionId}`;
-// Scoped by liveGameId, not just sessionId -- Test Run gets a fresh
-// live_games row (a new id) every time the host restarts it, while the
-// session id itself stays constant across every rehearsal. Keying by
-// session id alone meant a "submitted" answer from a rehearsal days ago
-// kept getting restored as if it were the current test's answer the
-// moment a player reached that same question index again.
+// Answer locks are intentionally sessionStorage-only. The team identity can
+// persist between visits, but submitted answers should not survive old test
+// runs in localStorage and come back on the phone during a new rehearsal.
 const playerSubmissionStorageKey = (sessionId, gameId, playerId) => `quiz-crafter-player-answers-${sessionId}-${gameId || "nogame"}-${playerId}`;
 const questionSubmissionKey = (questionIndex, questionId) => `${questionIndex}:${questionId || ""}`;
 const readJsonStorage = (storage, key) => {
@@ -49,7 +46,7 @@ const saveStoredPlayer = (sessionId, player) => {
 const getStoredSubmissions = (sessionId, gameId, playerId) => {
   if (typeof window === "undefined" || !playerId || !gameId) return {};
   const key = playerSubmissionStorageKey(sessionId, gameId, playerId);
-  return readJsonStorage(sessionStorage, key) || readJsonStorage(localStorage, key) || {};
+  return readJsonStorage(sessionStorage, key) || {};
 };
 const getStoredSubmission = (sessionId, gameId, playerId, questionIndex, questionId) => {
   const submissions = getStoredSubmissions(sessionId, gameId, playerId);
@@ -65,7 +62,6 @@ const saveStoredSubmission = (sessionId, gameId, playerId, payload) => {
   };
   const value = JSON.stringify(next);
   try { sessionStorage.setItem(key, value); } catch { /* Ignore storage failures. */ }
-  try { localStorage.setItem(key, value); } catch { /* Ignore storage failures. */ }
 };
 const getStoredFeedback = (sessionId, name) => {
   try {
@@ -214,6 +210,7 @@ const PlayerSession = () => {
   const [connected, setConnected] = useState(false);
   const [now, setNow] = useState(Date.now());
   const channelRef = useRef(null);
+  const submitInFlightRef = useRef(false);
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 500);
@@ -377,6 +374,7 @@ const PlayerSession = () => {
   // the pace without a countdown pressuring players) -- everything else on
   // this device (join, feedback, ideas) never checks this flag.
   const acceptingAnswers = !hostState?.answersPaused && (timeRemaining === null || timeRemaining > 0);
+  const answersOpen = hostState?.mode === "question" && !hostState?.showAnswer && !hostState?.showFunFact && acceptingAnswers;
   const submissionTiming = () => ({ secondsRemainingAtSubmit: timeRemaining, timerEndAt: hostState?.timerEndAt || null, timerSeconds: hostState?.timerSeconds || null });
   const pointsPerQuestion = getCurrentQuestionPoints(hostState, currentQuestion);
   const wagerMode = Boolean(hostState?.wagerMode);
@@ -475,7 +473,11 @@ const PlayerSession = () => {
   };
 
   const submitAnswer = (value) => {
+    if (!hostState || hostState.mode !== "question" || !currentQuestion) return toast.error("Waiting for the host to open answers");
+    if (hostState.showAnswer || hostState.showFunFact) return toast.error("Answer is locked");
     if (!acceptingAnswers) return toast.error(hostState?.answersPaused ? "Answers are paused right now" : "Time is up");
+    if (!liveGameId) return toast.error("Connecting to this live game. Try again.");
+    if (submitInFlightRef.current) return toast.info("Answer already submitting");
     if (submitted?.questionIndex === hostState?.currentIndex && submitted?.questionId === currentQuestion?.id) {
       return toast.info("Answer already submitted");
     }
@@ -485,22 +487,28 @@ const PlayerSession = () => {
     const requestedWager = Number(wagerAmount || 0);
     if (shouldWagerBefore && (!Number.isFinite(requestedWager) || requestedWager < 0)) return toast.error("Enter a wager of 0 or more");
     if (shouldWagerBefore && requestedWager > effectiveWagerLimit) return toast.error(`Wager up to ${effectiveWagerLimit}`);
-    const wager = shouldWagerBefore ? requestedWager : 0;
-    const awardedPoints = wagerMode ? wager : pointsPerQuestion;
-    const payload = { playerId: player.id, playerName: player.name, answer: finalAnswer, points: awardedPoints, questionPoints: pointsPerQuestion, pointsPerQuestion, wagerAmount: wager, wagerSubmitted: !wagerMode || wagerTiming !== "after_answer", wagerMode, wagerLimit, wagerCap: effectiveWagerLimit, scoreAtWager: Number(myScore || 0), wagerTiming, questionIndex: hostState.currentIndex, questionId: currentQuestion.id, questionText: currentQuestion.questionText, ...submissionTiming(), submittedAt: new Date().toISOString() };
-    const sentPayload = sendPlayerEvent(channelRef.current, id, "answer_submit", payload);
-    saveStoredSubmission(id, liveGameId, player.id, sentPayload);
-    setSubmitted(sentPayload);
-    setAnswer("");
-    toast.success("Answer submitted");
+    submitInFlightRef.current = true;
+    try {
+      const wager = shouldWagerBefore ? requestedWager : 0;
+      const awardedPoints = wagerMode ? wager : pointsPerQuestion;
+      const payload = { playerId: player.id, playerName: player.name, answer: finalAnswer, points: awardedPoints, questionPoints: pointsPerQuestion, pointsPerQuestion, wagerAmount: wager, wagerSubmitted: !wagerMode || wagerTiming !== "after_answer", wagerMode, wagerLimit, wagerCap: effectiveWagerLimit, scoreAtWager: Number(myScore || 0), wagerTiming, questionIndex: hostState.currentIndex, questionId: currentQuestion.id, questionText: currentQuestion.questionText, liveGameId, ...submissionTiming(), submittedAt: new Date().toISOString() };
+      const sentPayload = sendPlayerEvent(channelRef.current, id, "answer_submit", payload);
+      saveStoredSubmission(id, liveGameId, player.id, sentPayload);
+      setSubmitted(sentPayload);
+      setAnswer("");
+      toast.success("Answer submitted");
+    } finally {
+      window.setTimeout(() => { submitInFlightRef.current = false; }, 500);
+    }
   };
 
   const submitWager = () => {
     if (!submitted || !wagerMode || wagerTiming !== "after_answer") return;
+    if (!liveGameId) return toast.error("Connecting to this live game. Try again.");
     const wager = Number(wagerAmount || 0);
     if (!Number.isFinite(wager) || wager < 0) return toast.error("Enter a wager of 0 or more");
     if (wager > effectiveWagerLimit) return toast.error(`Wager up to ${effectiveWagerLimit}`);
-    const payload = { ...submitted, points: wager, wagerAmount: wager, wagerSubmitted: true, wagerLimit, wagerCap: effectiveWagerLimit, scoreAtWager: Number(myScore || 0), wagerTiming, ...submissionTiming(), submittedAt: new Date().toISOString() };
+    const payload = { ...submitted, points: wager, wagerAmount: wager, wagerSubmitted: true, wagerLimit, wagerCap: effectiveWagerLimit, scoreAtWager: Number(myScore || 0), wagerTiming, liveGameId, ...submissionTiming(), submittedAt: new Date().toISOString() };
     const sentPayload = sendPlayerEvent(channelRef.current, id, "answer_submit", payload);
     saveStoredSubmission(id, liveGameId, player.id, sentPayload);
     setSubmitted(sentPayload);
@@ -531,7 +539,7 @@ const PlayerSession = () => {
         {gameStarted && hostState?.mode === "bonus_pause" && <LeaderboardView leaderboard={leaderboard} playerId={player.id} title="Bonus Question Next" />}
         {gameStarted && hostState?.mode === "categories" && <RoundIntroFeedback roundName={activeRoundName} description={activeRoundDescription} categories={activeRoundCategories} selectedByCategory={feedbackByCategory} currentIndex={categoryFeedbackKey} onSelect={submitCategoryFeedback} />}
         {gameStarted && hostState && hostState.mode !== "leaderboard" && hostState.mode !== "winners" && hostState.mode !== "feedback" && hostState.mode !== "categories" && hostState.mode !== "bonus_pause" && !currentQuestion && <div className="text-center"><p className="text-zinc-400">Waiting for the next question.</p></div>}
-        {gameStarted && hostState && hostState.mode !== "leaderboard" && hostState.mode !== "winners" && hostState.mode !== "feedback" && hostState.mode !== "categories" && hostState.mode !== "bonus_pause" && currentQuestion && <PlayerQuestionView currentQuestion={currentQuestion} hostState={hostState} branding={branding} pointsPerQuestion={pointsPerQuestion} wagerMode={wagerMode} effectiveWagerLimit={effectiveWagerLimit} timeRemaining={timeRemaining} selectedFeedback={feedbackByQuestion[String(hostState.currentIndex)]} onFeedback={submitFeedback} submitted={submitted} wagerTiming={wagerTiming} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} submitWager={submitWager} acceptingAnswers={acceptingAnswers} answer={answer} setAnswer={setAnswer} submitAnswer={submitAnswer} />}
+        {gameStarted && hostState && hostState.mode !== "leaderboard" && hostState.mode !== "winners" && hostState.mode !== "feedback" && hostState.mode !== "categories" && hostState.mode !== "bonus_pause" && currentQuestion && <PlayerQuestionView currentQuestion={currentQuestion} hostState={hostState} branding={branding} pointsPerQuestion={pointsPerQuestion} wagerMode={wagerMode} effectiveWagerLimit={effectiveWagerLimit} timeRemaining={timeRemaining} selectedFeedback={feedbackByQuestion[String(hostState.currentIndex)]} onFeedback={submitFeedback} submitted={submitted} wagerTiming={wagerTiming} wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} submitWager={submitWager} acceptingAnswers={answersOpen} answer={answer} setAnswer={setAnswer} submitAnswer={submitAnswer} />}
       </main>
     </div>
   );
@@ -542,6 +550,7 @@ const PlayerQuestionView = ({ currentQuestion, hostState, branding, pointsPerQue
   const imageTiming = currentQuestion.imageTiming || currentQuestion.image_timing || "initial";
   const showQuestionMedia = Boolean(imageUrl) && imageTiming !== "after_answer" && !hostState.showFunFact;
   const showFunFactMedia = Boolean(imageUrl) && imageTiming === "after_answer" && hostState.showFunFact;
+  const submittedForCurrentQuestion = submitted?.questionIndex === hostState.currentIndex && submitted?.questionId === currentQuestion.id;
 
   return (
     <div className="w-full max-w-md">
@@ -581,7 +590,7 @@ const PlayerQuestionView = ({ currentQuestion, hostState, branding, pointsPerQue
         </Card>
       )}
 
-      {!hostState.showAnswer && !hostState.showFunFact && (submitted?.questionIndex === hostState.currentIndex ? (
+      {!hostState.showAnswer && !hostState.showFunFact && (submittedForCurrentQuestion ? (
         <Card className="glass-card"><CardContent className="p-6 text-center"><CheckCircle className="mx-auto text-emerald-300 mb-3" size={42} /><h3 className="text-2xl font-black mb-1">Answer Locked</h3><p className="text-zinc-400">You answered: <span className="text-white font-bold">{submitted.answer}</span></p>{submitted.wagerMode && wagerTiming === "after_answer" && !submitted.wagerSubmitted ? <div className="mt-4"><WagerInput wagerMode wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={effectiveWagerLimit} /><Button onClick={submitWager} className="w-full gradient-btn">Submit Wager</Button></div> : submitted.wagerMode && <p className="text-purple-300 font-bold mt-2">Wager: {submitted.wagerAmount}</p>}</CardContent></Card>
       ) : hostState.answersPaused ? (
         <div>
@@ -756,6 +765,5 @@ const AnswerForm = ({ question, answer, setAnswer, submitAnswer, wagerMode, wage
 };
 
 export default PlayerSession;
-
 
 
