@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 
 const STORAGE_BASE = process.env.REACT_APP_SUPABASE_URL ? `${process.env.REACT_APP_SUPABASE_URL}/storage/v1/object/public/` : "";
-const DEFAULT_PUBLIC_SITE = "https://quizcrafter.fun";
+const PRODUCTION_HOSTNAMES = new Set(["quizcrafter.fun", "www.quizcrafter.fun", "quiz-crafter-foreverfun-bits-projects.vercel.app"]);
 
 const typeMeta = {
   true_false: { label: "True/False", short: "T/F", icon: CheckCircle },
@@ -58,10 +58,16 @@ const arrayConfig = [
   { key: "picture_questions", type: "written" },
 ];
 
+// See the matching comment in HostSession.jsx: REACT_APP_PUBLIC_SITE_URL is
+// baked in at build time and set for every production-mode build (which is
+// every Vercel build, preview included), so it must not be preferred
+// unconditionally -- only when actually served from production, so a
+// preview deployment's join links/QR codes stay on that same preview.
 const getPublicOrigin = () => {
-  if (process.env.REACT_APP_PUBLIC_SITE_URL) return process.env.REACT_APP_PUBLIC_SITE_URL.replace(/\/$/, "");
-  if (typeof window === "undefined") return "";
-  if (window.location.hostname.endsWith("vercel.app")) return DEFAULT_PUBLIC_SITE;
+  if (typeof window === "undefined") return process.env.REACT_APP_PUBLIC_SITE_URL ? process.env.REACT_APP_PUBLIC_SITE_URL.replace(/\/$/, "") : "";
+  if (PRODUCTION_HOSTNAMES.has(window.location.hostname) && process.env.REACT_APP_PUBLIC_SITE_URL) {
+    return process.env.REACT_APP_PUBLIC_SITE_URL.replace(/\/$/, "");
+  }
   return window.location.origin;
 };
 

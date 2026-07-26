@@ -52,7 +52,7 @@ import { toast } from "sonner";
 import { hostToolsStorageKey, loadHostSetupSettings, loadHostToolsSessionState, loadProfileValue, profileKeys, readCurrentProjectSessionId, saveHostSetupSettings, saveHostToolsSessionState, updateUserMetadata, writeCurrentProjectSessionId } from "../lib/profileState";
 
 const STORAGE_BASE = process.env.REACT_APP_SUPABASE_URL ? `${process.env.REACT_APP_SUPABASE_URL}/storage/v1/object/public/` : "";
-const DEFAULT_PUBLIC_SITE = "https://quizcrafter.com";
+const PRODUCTION_HOSTNAMES = new Set(["quizcrafter.fun", "www.quizcrafter.fun", "quiz-crafter-foreverfun-bits-projects.vercel.app"]);
 const POINTS_BY_TYPE = { true_false: 25, multiple_choice: 50, written: 100 };
 const DEFAULT_BRANDING = { name: "Forever Fun Events", logoUrl: "/quiz-crafter-logo.svg", primaryColor: "#71E0DC", accentColor: "#AEB2EF", correctColor: "", optionColor: "#7C8496", lobbyTagline: "Let's get quizzical.", pausedMessage: "Going old-school tonight — hold onto your answer, the host's on the way!" };
 
@@ -69,10 +69,21 @@ const arrayConfig = [
   { key: "picture_questions", type: "written" },
 ];
 
+// CRA bakes REACT_APP_PUBLIC_SITE_URL in at build time from .env.production,
+// which loads for every production-mode build -- and Vercel always builds in
+// production mode, preview deployments included. So blindly preferring that
+// env var here meant every join link/QR code ever generated, even from a
+// branch preview, pointed players at the real quizcrafter.fun production
+// site instead of back to wherever the host was actually running -- players
+// were silently testing whatever code was live on production, never the
+// preview build the host was on. Only use the canonical public URL when
+// we're actually being served from production; otherwise stay on the
+// current origin so a preview's players land back on that same preview.
 const getPublicOrigin = () => {
-  if (process.env.REACT_APP_PUBLIC_SITE_URL) return process.env.REACT_APP_PUBLIC_SITE_URL.replace(/\/$/, "");
-  if (typeof window === "undefined") return "";
-  if (window.location.hostname.endsWith("vercel.app")) return DEFAULT_PUBLIC_SITE;
+  if (typeof window === "undefined") return process.env.REACT_APP_PUBLIC_SITE_URL ? process.env.REACT_APP_PUBLIC_SITE_URL.replace(/\/$/, "") : "";
+  if (PRODUCTION_HOSTNAMES.has(window.location.hostname) && process.env.REACT_APP_PUBLIC_SITE_URL) {
+    return process.env.REACT_APP_PUBLIC_SITE_URL.replace(/\/$/, "");
+  }
   return window.location.origin;
 };
 
