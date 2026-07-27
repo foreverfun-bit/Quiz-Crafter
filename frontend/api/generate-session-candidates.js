@@ -75,6 +75,11 @@ export default async function handler(req, res) {
       return res.status(200).json(result);
     }
 
+    if (req.body?.mode === "categorize") {
+      const category = await categorizeQuestion(req.body || {});
+      return res.status(200).json({ category });
+    }
+
     const {
       sessionId,
       questionType,
@@ -1311,6 +1316,54 @@ async function importFromOpenTrivia({ questionType, count, difficulty, theme, ca
   });
 
   return { candidates, source_notice: sourceNotice || undefined };
+}
+
+// Re-categorizes a question in place without touching its wording or
+// answer -- used to fix Open Trivia DB's own category labels (which are
+// often just "General Knowledge" for a lot of its inventory) without
+// reintroducing the AI-rewrite risk this import was built to avoid. The
+// model only ever sees the question/answer as read-only context for
+// picking a label; it has no path to change either one.
+async function categorizeQuestion({ questionText, correctAnswer, currentCategory, approvedCategories }) {
+  const cleanQuestion = cleanText(questionText);
+  const cleanAnswer = cleanText(correctAnswer);
+  const cleanApproved = dedupeCategoryStrings(normalizeStringArray(approvedCategories));
+  if (!cleanQuestion) return cleanText(currentCategory) || "General";
+
+  if (!process.env.OPENAI_API_KEY) return inferCategoryFromText(`${cleanQuestion} ${cleanAnswer}`);
+
+  const prompt = `Pick the single best trivia category for this question. Do not answer the question or change it in any way -- only classify it.
+${cleanApproved.length ? `Prefer one of these exact categories if it genuinely fits (use the exact spelling): ${cleanApproved.join(", ")}. Only pick something else if none of them fit.` : "Pick a broad, useful trivia category, e.g. Movies, Music, Science, History, Geography, Sports, Television, Video Games, Art, Food & Drink, Animals, Technology, Mythology, Literature."}
+
+Question: ${cleanQuestion}
+Correct answer: ${cleanAnswer}
+Current category: ${cleanText(currentCategory) || "none"}
+
+Return strict JSON: {"category": "..."}`;
+
+  try {
+    const response = await fetchWithTimeout("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4.1-mini",
+        temperature: 0,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: "You classify trivia questions into a category. You never write, answer, or alter the question in any way. Return strict JSON only." },
+          { role: "user", content: prompt },
+        ],
+      }),
+    }, 12000);
+    if (!response.ok) throw new Error(await response.text());
+    const json = await response.json();
+    const parsed = JSON.parse(json.choices?.[0]?.message?.content || "{}");
+    const category = cleanText(parsed.category);
+    return category || cleanText(currentCategory) || "General";
+  } catch (error) {
+    console.warn("Categorize question error:", error.message || error);
+    return inferCategoryFromText(`${cleanQuestion} ${cleanAnswer}`);
+  }
 }
 
 async function fetchOpenTriviaSeeds({ cleanTheme, preferredCategories, safeCount }) {
