@@ -70,6 +70,16 @@ export default async function handler(req, res) {
       return res.status(200).json(image);
     }
 
+    if (req.body?.mode === "opentdb_import") {
+      const result = await importFromOpenTrivia(req.body || {});
+      return res.status(200).json(result);
+    }
+
+    if (req.body?.mode === "categorize") {
+      const category = await categorizeQuestion(req.body || {});
+      return res.status(200).json({ category });
+    }
+
     const {
       sessionId,
       questionType,
@@ -1243,6 +1253,118 @@ function scoreSourceMatch(question, { normalizedQuestionType, preferredKeys, the
   score += overlap * 3;
   if (!themeTerms.length && !preferredKeys.size) score += 1;
   return score;
+}
+
+// Direct import: unlike fetchOpenTriviaSeeds() below (which only pulls a
+// fact/answer pair to hand to the AI rewrite prompt), this keeps Open Trivia
+// DB's own question wording and wrong answers intact and never touches the
+// LLM -- the whole point is a source of questions that's already correct,
+// instead of adding another AI-rewrite pass that can introduce new errors.
+const OPENTDB_DIFFICULTY = new Set(["easy", "medium", "hard"]);
+async function importFromOpenTrivia({ questionType, count, difficulty, theme, categoryId: explicitCategoryId }) {
+  const requestedType = questionType === "true_false" ? "true_false" : "multiple_choice";
+  const opentdbType = requestedType === "true_false" ? "boolean" : "multiple";
+  const opentdbDifficulty = OPENTDB_DIFFICULTY.has(difficulty) ? difficulty : "";
+  const amount = Math.max(1, Math.min(50, Number(count) || 10));
+  // An explicit category from the host's own picker always wins; falling
+  // back to guessing one from free-text theme only covers older callers.
+  const parsedExplicitCategoryId = Number(explicitCategoryId);
+  const categoryId = Number.isInteger(parsedExplicitCategoryId) && parsedExplicitCategoryId > 0
+    ? parsedExplicitCategoryId
+    : chooseOpenTriviaCategory(typeof theme === "string" ? theme.trim() : "", []);
+
+  const fetchBatch = async (withCategory) => {
+    const params = new URLSearchParams({ amount: String(amount), type: opentdbType });
+    if (opentdbDifficulty) params.set("difficulty", opentdbDifficulty);
+    if (withCategory && categoryId) params.set("category", String(categoryId));
+    const response = await fetchWithTimeout(`https://opentdb.com/api.php?${params.toString()}`, {}, 8000);
+    if (!response.ok) throw new Error(`Open Trivia DB request failed (${response.status})`);
+    return response.json();
+  };
+
+  let data = await fetchBatch(true);
+  let sourceNotice = "";
+  if (data?.response_code === 1 && categoryId) {
+    // Not enough questions in that category/difficulty/type combo -- broaden
+    // to any category rather than failing outright.
+    data = await fetchBatch(false);
+    sourceNotice = "Not enough matching questions in that category, so results are pulled from all Open Trivia DB categories.";
+  }
+  if (data?.response_code !== 0 || !Array.isArray(data?.results) || !data.results.length) {
+    throw new Error("Open Trivia DB didn't have enough questions for that combination. Try a different type, difficulty, or fewer questions.");
+  }
+
+  if (questionType === "written") {
+    sourceNotice = [sourceNotice, "Open Trivia DB has no written-answer questions, so multiple choice questions were imported instead."].filter(Boolean).join(" ");
+  }
+
+  const candidates = data.results.map((item) => {
+    const isBoolean = item.type === "boolean";
+    return {
+      category: mapOpenTriviaCategory(decodeHtml(item.category)),
+      question_text: decodeHtml(item.question),
+      question_type: isBoolean ? "true_false" : "multiple_choice",
+      correct_answer: isBoolean ? (decodeHtml(item.correct_answer) === "True" ? "True" : "False") : decodeHtml(item.correct_answer),
+      incorrect_answers: isBoolean ? null : (Array.isArray(item.incorrect_answers) ? item.incorrect_answers.map(decodeHtml).join("; ") : null),
+      fun_fact: "",
+      difficulty: item.difficulty || opentdbDifficulty || "medium",
+      source_type: "external_source",
+      source_label: "Open Trivia DB",
+      source_url: "https://opentdb.com/",
+      needsReview: false,
+      confidence: 0.9,
+    };
+  });
+
+  return { candidates, source_notice: sourceNotice || undefined };
+}
+
+// Re-categorizes a question in place without touching its wording or
+// answer -- used to fix Open Trivia DB's own category labels (which are
+// often just "General Knowledge" for a lot of its inventory) without
+// reintroducing the AI-rewrite risk this import was built to avoid. The
+// model only ever sees the question/answer as read-only context for
+// picking a label; it has no path to change either one.
+async function categorizeQuestion({ questionText, correctAnswer, currentCategory, approvedCategories }) {
+  const cleanQuestion = cleanText(questionText);
+  const cleanAnswer = cleanText(correctAnswer);
+  const cleanApproved = dedupeCategoryStrings(normalizeStringArray(approvedCategories));
+  if (!cleanQuestion) return cleanText(currentCategory) || "General";
+
+  if (!process.env.OPENAI_API_KEY) return inferCategoryFromText(`${cleanQuestion} ${cleanAnswer}`);
+
+  const prompt = `Pick the single best trivia category for this question. Do not answer the question or change it in any way -- only classify it.
+${cleanApproved.length ? `Prefer one of these exact categories if it genuinely fits (use the exact spelling): ${cleanApproved.join(", ")}. Only pick something else if none of them fit.` : "Pick a broad, useful trivia category, e.g. Movies, Music, Science, History, Geography, Sports, Television, Video Games, Art, Food & Drink, Animals, Technology, Mythology, Literature."}
+
+Question: ${cleanQuestion}
+Correct answer: ${cleanAnswer}
+Current category: ${cleanText(currentCategory) || "none"}
+
+Return strict JSON: {"category": "..."}`;
+
+  try {
+    const response = await fetchWithTimeout("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4.1-mini",
+        temperature: 0,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: "You classify trivia questions into a category. You never write, answer, or alter the question in any way. Return strict JSON only." },
+          { role: "user", content: prompt },
+        ],
+      }),
+    }, 12000);
+    if (!response.ok) throw new Error(await response.text());
+    const json = await response.json();
+    const parsed = JSON.parse(json.choices?.[0]?.message?.content || "{}");
+    const category = cleanText(parsed.category);
+    return category || cleanText(currentCategory) || "General";
+  } catch (error) {
+    console.warn("Categorize question error:", error.message || error);
+    return inferCategoryFromText(`${cleanQuestion} ${cleanAnswer}`);
+  }
 }
 
 async function fetchOpenTriviaSeeds({ cleanTheme, preferredCategories, safeCount }) {
