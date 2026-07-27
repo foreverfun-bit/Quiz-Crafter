@@ -1255,12 +1255,17 @@ function scoreSourceMatch(question, { normalizedQuestionType, preferredKeys, the
 // LLM -- the whole point is a source of questions that's already correct,
 // instead of adding another AI-rewrite pass that can introduce new errors.
 const OPENTDB_DIFFICULTY = new Set(["easy", "medium", "hard"]);
-async function importFromOpenTrivia({ questionType, count, difficulty, theme }) {
+async function importFromOpenTrivia({ questionType, count, difficulty, theme, categoryId: explicitCategoryId }) {
   const requestedType = questionType === "true_false" ? "true_false" : "multiple_choice";
   const opentdbType = requestedType === "true_false" ? "boolean" : "multiple";
   const opentdbDifficulty = OPENTDB_DIFFICULTY.has(difficulty) ? difficulty : "";
   const amount = Math.max(1, Math.min(50, Number(count) || 10));
-  const categoryId = chooseOpenTriviaCategory(typeof theme === "string" ? theme.trim() : "", []);
+  // An explicit category from the host's own picker always wins; falling
+  // back to guessing one from free-text theme only covers older callers.
+  const parsedExplicitCategoryId = Number(explicitCategoryId);
+  const categoryId = Number.isInteger(parsedExplicitCategoryId) && parsedExplicitCategoryId > 0
+    ? parsedExplicitCategoryId
+    : chooseOpenTriviaCategory(typeof theme === "string" ? theme.trim() : "", []);
 
   const fetchBatch = async (withCategory) => {
     const params = new URLSearchParams({ amount: String(amount), type: opentdbType });
