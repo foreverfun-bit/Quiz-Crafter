@@ -557,7 +557,8 @@ Return valid JSON only:
 Rules:
 - Every candidate must be grounded in one source seed and include its source_index.
 - Preserve the source seed's source_type, source_label, and source_url.
-- You may rewrite wording, adjust difficulty, generate plausible wrong answers, and format a fun fact.
+- You may rewrite wording, adjust difficulty, and generate plausible wrong answers.
+- fun_fact must be one short sentence of genuinely true additional context about THIS SAME candidate's specific subject or answer -- not a generic or unrelated trivia tidbit about a different topic, even a true one. If you do not have a real, directly relevant fact for this exact answer, leave fun_fact as an empty string rather than filling it with something unrelated.
 - If this is a regeneration, choose a materially different source seed and answer angle from the rejected candidate. Same category is okay; same fact is not.
 - Do not add facts that are not supported by the seed unless you mark needsReview true and lower confidence below 0.65.
 - ${config.roundGuidance}
@@ -689,7 +690,7 @@ Trivia host style:
 - If more than one locked category is active, balance the candidates across those locked categories.
 - Write concise, host-friendly question text that sounds natural when read aloud.
 - Avoid ambiguous answers, disputed facts, and answer wording that would cause scoring arguments.
-- fun_fact must be one short sentence that adds color without spoiling another question.
+- fun_fact must be one short sentence of genuinely true additional context about THIS SAME question's specific subject or answer -- not a generic or unrelated trivia tidbit about a different topic, even a true one. It must not spoil another question. If you do not have a real, directly relevant fact for this exact answer, leave fun_fact as an empty string rather than filling it with something unrelated.
 - ${config.answerRule}
 - question_type must be "${config.outputType}".
 - image_url must be "".
