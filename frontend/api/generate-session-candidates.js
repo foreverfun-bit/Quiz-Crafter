@@ -70,6 +70,11 @@ export default async function handler(req, res) {
       return res.status(200).json(image);
     }
 
+    if (req.body?.mode === "opentdb_import") {
+      const result = await importFromOpenTrivia(req.body || {});
+      return res.status(200).json(result);
+    }
+
     const {
       sessionId,
       questionType,
@@ -1242,6 +1247,65 @@ function scoreSourceMatch(question, { normalizedQuestionType, preferredKeys, the
   score += overlap * 3;
   if (!themeTerms.length && !preferredKeys.size) score += 1;
   return score;
+}
+
+// Direct import: unlike fetchOpenTriviaSeeds() below (which only pulls a
+// fact/answer pair to hand to the AI rewrite prompt), this keeps Open Trivia
+// DB's own question wording and wrong answers intact and never touches the
+// LLM -- the whole point is a source of questions that's already correct,
+// instead of adding another AI-rewrite pass that can introduce new errors.
+const OPENTDB_DIFFICULTY = new Set(["easy", "medium", "hard"]);
+async function importFromOpenTrivia({ questionType, count, difficulty, theme }) {
+  const requestedType = questionType === "true_false" ? "true_false" : "multiple_choice";
+  const opentdbType = requestedType === "true_false" ? "boolean" : "multiple";
+  const opentdbDifficulty = OPENTDB_DIFFICULTY.has(difficulty) ? difficulty : "";
+  const amount = Math.max(1, Math.min(50, Number(count) || 10));
+  const categoryId = chooseOpenTriviaCategory(typeof theme === "string" ? theme.trim() : "", []);
+
+  const fetchBatch = async (withCategory) => {
+    const params = new URLSearchParams({ amount: String(amount), type: opentdbType });
+    if (opentdbDifficulty) params.set("difficulty", opentdbDifficulty);
+    if (withCategory && categoryId) params.set("category", String(categoryId));
+    const response = await fetchWithTimeout(`https://opentdb.com/api.php?${params.toString()}`, {}, 8000);
+    if (!response.ok) throw new Error(`Open Trivia DB request failed (${response.status})`);
+    return response.json();
+  };
+
+  let data = await fetchBatch(true);
+  let sourceNotice = "";
+  if (data?.response_code === 1 && categoryId) {
+    // Not enough questions in that category/difficulty/type combo -- broaden
+    // to any category rather than failing outright.
+    data = await fetchBatch(false);
+    sourceNotice = "Not enough matching questions in that category, so results are pulled from all Open Trivia DB categories.";
+  }
+  if (data?.response_code !== 0 || !Array.isArray(data?.results) || !data.results.length) {
+    throw new Error("Open Trivia DB didn't have enough questions for that combination. Try a different type, difficulty, or fewer questions.");
+  }
+
+  if (questionType === "written") {
+    sourceNotice = [sourceNotice, "Open Trivia DB has no written-answer questions, so multiple choice questions were imported instead."].filter(Boolean).join(" ");
+  }
+
+  const candidates = data.results.map((item) => {
+    const isBoolean = item.type === "boolean";
+    return {
+      category: mapOpenTriviaCategory(decodeHtml(item.category)),
+      question_text: decodeHtml(item.question),
+      question_type: isBoolean ? "true_false" : "multiple_choice",
+      correct_answer: isBoolean ? (decodeHtml(item.correct_answer) === "True" ? "True" : "False") : decodeHtml(item.correct_answer),
+      incorrect_answers: isBoolean ? null : (Array.isArray(item.incorrect_answers) ? item.incorrect_answers.map(decodeHtml).join("; ") : null),
+      fun_fact: "",
+      difficulty: item.difficulty || opentdbDifficulty || "medium",
+      source_type: "external_source",
+      source_label: "Open Trivia DB",
+      source_url: "https://opentdb.com/",
+      needsReview: false,
+      confidence: 0.9,
+    };
+  });
+
+  return { candidates, source_notice: sourceNotice || undefined };
 }
 
 async function fetchOpenTriviaSeeds({ cleanTheme, preferredCategories, safeCount }) {
