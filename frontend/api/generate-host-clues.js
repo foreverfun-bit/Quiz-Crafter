@@ -2,6 +2,13 @@ function clean(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+const GENERIC_STYLE_EXAMPLES = [
+  "If you want your score to really shine, just apply a little highlighter. While you're at it, pay attention to what's holding the story together, leave no unique patterns behind, and watch out for anything that might flag your visit. See you soon for high stakes and higher scores!",
+  "Grab your Bluetooth headsets and call Drew Barrymore's ex-husband, because it's going to get unreal in here tonight!",
+  "Hey Trivia Fans! Want a head start? You might want to brush up on the fluffy layers that make a quilt cozy, rare birds that only the best golfers ever score, fun nicknames, and why a doctor's needle might already make you smarter than you think. See you this week!",
+  "Ready for another round of trivia? This week is going to be a blast, literally. If you want to stay ahead, look into a snack with an explosive history, keep your Tax Day crunch under control, and remember you do not want to B stuck in last place.",
+];
+
 function safeQuestions(value) {
   return Array.isArray(value)
     ? value
@@ -36,6 +43,8 @@ async function handler(req, res) {
     const sessionName = clean(body.sessionName) || "Trivia Night";
     const direction = clean(body.direction) || "Make it playful and useful without giving away answers.";
     const questions = safeQuestions(body.questions);
+    const pastPosts = Array.isArray(body.pastPosts) ? body.pastPosts.map(clean).filter(Boolean).slice(0, 6) : [];
+    const hasOwnStyle = pastPosts.length >= 2;
 
     if (!questions.length) {
       return res.status(400).json({ error: "No usable session questions found for clue drafting" });
@@ -58,8 +67,9 @@ async function handler(req, res) {
         messages: [
           {
             role: "system",
-            content:
-              "You write Facebook-style teaser clues for Forever Fun trivia nights. Match Julie's host voice: warm, playful, lightly punny, conversational, and a little mischievous. The teaser should hint at several question topics through sideways clues, wordplay, and everyday references without naming answers or making questions solvable. Return strict JSON only.",
+            content: hasOwnStyle
+              ? "You write Facebook-style teaser clues for this trivia host's own show. The style_examples are this host's own real past posts -- study their voice, structure, and tone and match it as closely as possible instead of writing generic trivia-host copy. The teaser should hint at several question topics through sideways clues, wordplay, and everyday references without naming answers or making questions solvable. Return strict JSON only."
+              : "You write Facebook-style teaser clues for a trivia host's show. Aim for a warm, playful, lightly punny, conversational, and a little mischievous voice. The teaser should hint at several question topics through sideways clues, wordplay, and everyday references without naming answers or making questions solvable. Return strict JSON only.",
           },
           {
             role: "user",
@@ -82,12 +92,7 @@ async function handler(req, res) {
                 "A few emojis are okay if they fit, but do not overload them.",
                 "End the social post with a friendly invite such as 'See you tonight!' or similar when natural.",
               ],
-              style_examples: [
-                "If you want your score to really shine, just apply a little highlighter. While you're at it, pay attention to what's holding the story together, leave no unique patterns behind, and watch out for anything that might flag your visit. See you soon for high stakes and higher scores!",
-                "Grab your Bluetooth headsets and call Drew Barrymore's ex-husband, because it's going to get unreal in here tonight!",
-                "Hey Trivia Fans! Want a head start? You might want to brush up on the fluffy layers that make a quilt cozy, rare birds that only the best golfers ever score, fun nicknames, and why a doctor's needle might already make you smarter than you think. See you this week!",
-                "Ready for another round of trivia? This week is going to be a blast, literally. If you want to stay ahead, look into a snack with an explosive history, keep your Tax Day crunch under control, and remember you do not want to B stuck in last place.",
-              ],
+              style_examples: hasOwnStyle ? pastPosts : GENERIC_STYLE_EXAMPLES,
               avoid: [
                 "Generic phrases like 'test your knowledge' or 'join us for fun trivia'.",
                 "Obvious category list posts.",
