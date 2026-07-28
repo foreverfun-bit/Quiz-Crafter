@@ -2,7 +2,7 @@
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { uploadQuestionMedia } from "../lib/mediaUpload";
-import { ensureLiveGame, fetchLivePlayers, subscribeLivePlayers, upsertLivePlayer, removeLivePlayer } from "../lib/liveGame";
+import { ensureLiveGame, fetchLivePlayers, subscribeLivePlayers, upsertLivePlayer, removeLivePlayer, resetTestGame } from "../lib/liveGame";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent } from "../components/ui/card";
@@ -49,7 +49,7 @@ import {
   Zap,
 } from "lucide-react";
 import { toast } from "sonner";
-import { hostToolsStorageKey, loadHostSetupSettings, loadHostToolsSessionState, loadProfileValue, profileKeys, readCurrentProjectSessionId, saveHostSetupSettings, saveHostToolsSessionState, updateUserMetadata, writeCurrentProjectSessionId } from "../lib/profileState";
+import { hostToolsStorageKey, loadHostSetupSettings, loadHostToolsSessionState, loadProfileValue, profileKeys, readCurrentProjectSessionId, resetHostToolsSessionState, saveHostSetupSettings, saveHostToolsSessionState, updateUserMetadata, writeCurrentProjectSessionId } from "../lib/profileState";
 
 const STORAGE_BASE = process.env.REACT_APP_SUPABASE_URL ? `${process.env.REACT_APP_SUPABASE_URL}/storage/v1/object/public/` : "";
 const PRODUCTION_HOSTNAMES = new Set(["quizcrafter.fun", "www.quizcrafter.fun", "quiz-crafter-foreverfun-bits-projects.vercel.app"]);
@@ -367,20 +367,20 @@ const writeStoredObject = (key, value) => {
     // Live hosting should keep running even if browser storage is unavailable.
   }
 };
-const persistLiveVote = (sessionId, name, payload, makeKey) => {
+const persistLiveVote = (sessionId, name, payload, makeKey, isTestRun) => {
   const key = hostToolsStorageKey(sessionId, name);
   const current = readStoredList(key);
   const next = [...current.filter((item) => makeKey(item) !== makeKey(payload)), payload];
   writeStoredList(key, next);
-  saveHostToolsSessionState(sessionId, { [name === "category-feedback" ? "categoryFeedback" : name]: next }).catch((error) => console.warn("Host tools profile save unavailable:", error));
+  if (!isTestRun) saveHostToolsSessionState(sessionId, { [name === "category-feedback" ? "categoryFeedback" : name]: next }).catch((error) => console.warn("Host tools profile save unavailable:", error));
   return next;
 };
-const persistLiveIdea = (sessionId, payload) => {
+const persistLiveIdea = (sessionId, payload, isTestRun) => {
   const key = hostToolsStorageKey(sessionId, "ideas");
   const current = readStoredList(key);
   const next = [payload, ...current.filter((item) => !(item.playerId === payload.playerId && item.submittedAt === payload.submittedAt))].slice(0, 200);
   writeStoredList(key, next);
-  saveHostToolsSessionState(sessionId, { ideas: next }).catch((error) => console.warn("Host tools profile save unavailable:", error));
+  if (!isTestRun) saveHostToolsSessionState(sessionId, { ideas: next }).catch((error) => console.warn("Host tools profile save unavailable:", error));
   return next;
 };
 const liveEventKey = (event, payload = {}) => payload.eventId || payload.id || [
@@ -476,6 +476,15 @@ const HostSession = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const isTestRun = searchParams.get("mode") === "test";
+  // Test Run promises "teams and scores here won't count," so none of a
+  // rehearsal's players/answers/feedback/etc. may reach the account-wide
+  // profile cache (read by Host Hub from any device/session) or the
+  // sessions row itself -- only this browser's own reload-resilience
+  // localStorage mirror still updates, exactly as before.
+  const persistHostToolsPatch = (patch, label) => {
+    if (isTestRun) return;
+    saveHostToolsSessionState(id, patch).catch((error) => console.warn(`${label} profile save unavailable:`, error));
+  };
   const liveChannelRef = useRef(null);
   const liveStateRef = useRef(null);
   const liveStateSequenceRef = useRef(0);
@@ -553,7 +562,7 @@ const HostSession = () => {
       const next = current.some((player) => player.id === payload.playerId)
         ? current.map((player) => player.id === payload.playerId ? { ...player, ...nextPlayer } : player)
         : [...current, nextPlayer];
-      saveHostToolsSessionState(id, { players: next }).catch((error) => console.warn("Players profile save unavailable:", error));
+      persistHostToolsPatch({ players: next }, "Players");
       return next;
     });
     setLeaderboard((teams) => teams.some((team) => team.id === payload.playerId)
@@ -579,14 +588,14 @@ const HostSession = () => {
       if (!payload.playerId || !payload.playerName) return;
       setPlayers((current) => {
         const next = current.map((player) => player.id === payload.playerId ? { ...player, name: payload.playerName } : player);
-        saveHostToolsSessionState(id, { players: next }).catch((error) => console.warn("Players profile save unavailable:", error));
+        persistHostToolsPatch({ players: next }, "Players");
         return next;
       });
       setLeaderboard((teams) => teams.map((team) => team.id === payload.playerId ? { ...team, name: payload.playerName } : team));
       setAnswers((current) => {
         const next = current.map((answer) => answer.playerId === payload.playerId ? { ...answer, playerName: payload.playerName } : answer);
         writeStoredList(hostToolsStorageKey(id, "answers"), next);
-        saveHostToolsSessionState(id, { answers: next }).catch((error) => console.warn("Answers profile save unavailable:", error));
+        persistHostToolsPatch({ answers: next }, "Answers");
         return next;
       });
       return;
@@ -599,7 +608,7 @@ const HostSession = () => {
         const filtered = current.filter((answer) => !(answer.playerId === payload.playerId && answer.questionIndex === payload.questionIndex));
         const next = [...filtered, payload].slice(-800);
         writeStoredList(hostToolsStorageKey(id, "answers"), next);
-        saveHostToolsSessionState(id, { answers: next }).catch((error) => console.warn("Answers profile save unavailable:", error));
+        persistHostToolsPatch({ answers: next }, "Answers");
         return next;
       });
       return;
@@ -610,7 +619,7 @@ const HostSession = () => {
       setPlayerActivity((current) => {
         const next = [...current, payload].slice(-800);
         writeStoredList(hostToolsStorageKey(id, "activity"), next);
-        saveHostToolsSessionState(id, { activity: next }).catch((error) => console.warn("Activity profile save unavailable:", error));
+        persistHostToolsPatch({ activity: next }, "Activity");
         return next;
       });
       return;
@@ -618,7 +627,7 @@ const HostSession = () => {
 
     if (event === "feedback_submit") {
       if (!payload.playerId || payload.questionIndex === undefined) return;
-      setFeedback(() => persistLiveVote(id, "feedback", payload, (item) => `${item.playerId}-${item.questionIndex}`));
+      setFeedback(() => persistLiveVote(id, "feedback", payload, (item) => `${item.playerId}-${item.questionIndex}`, isTestRun));
       supabase.from("session_question_feedback").upsert({
         session_id: id,
         player_id: payload.playerId,
@@ -636,7 +645,7 @@ const HostSession = () => {
 
     if (event === "category_feedback_submit") {
       if (!payload.playerId || !payload.category) return;
-      setCategoryFeedback(() => persistLiveVote(id, "category-feedback", payload, (item) => `${item.playerId}-${item.roundKey || item.roundName}-${item.category}`));
+      setCategoryFeedback(() => persistLiveVote(id, "category-feedback", payload, (item) => `${item.playerId}-${item.roundKey || item.roundName}-${item.category}`, isTestRun));
       supabase.from("session_category_feedback").upsert({
         session_id: id,
         player_id: payload.playerId,
@@ -652,7 +661,7 @@ const HostSession = () => {
 
     if (event === "idea_submit") {
       if (!payload.playerId) return;
-      setPlayerIdeas(() => persistLiveIdea(id, payload));
+      setPlayerIdeas(() => persistLiveIdea(id, payload, isTestRun));
       supabase.from("session_player_ideas").insert({
         session_id: id,
         player_id: payload.playerId,
@@ -923,9 +932,11 @@ const HostSession = () => {
       liveStateSaveRef.current = nowMs;
       const hostedResults = { ...hostedResultsRef.current, liveState: orderedState, liveStateUpdatedAt: orderedState.updatedAt };
       hostedResultsRef.current = hostedResults;
-      supabase.from("sessions").update({ hosted_results: hostedResults }).eq("id", id).then(({ error }) => {
-        if (error) console.warn("Live presentation state save unavailable:", error);
-      }).catch((error) => console.warn("Live presentation state save unavailable:", error));
+      if (!isTestRun) {
+        supabase.from("sessions").update({ hosted_results: hostedResults }).eq("id", id).then(({ error }) => {
+          if (error) console.warn("Live presentation state save unavailable:", error);
+        }).catch((error) => console.warn("Live presentation state save unavailable:", error));
+      }
     }
   };
 
@@ -1006,19 +1017,19 @@ const HostSession = () => {
   useEffect(() => {
     if (!hostStateLoaded) return;
     localStorage.setItem(`quiz-crafter-leaderboard-${id}`, JSON.stringify(leaderboard));
-    saveHostToolsSessionState(id, { leaderboard }).catch((error) => console.warn("Leaderboard profile save unavailable:", error));
+    persistHostToolsPatch({ leaderboard }, "Leaderboard");
   }, [id, leaderboard, hostStateLoaded]);
 
   useEffect(() => {
     if (!hostStateLoaded) return;
     writeStoredList(hostToolsStorageKey(id, "players"), players);
-    saveHostToolsSessionState(id, { players }).catch((error) => console.warn("Players profile save unavailable:", error));
+    persistHostToolsPatch({ players }, "Players");
   }, [id, players, hostStateLoaded]);
 
   useEffect(() => {
     if (!hostStateLoaded) return;
     writeStoredObject(hostToolsStorageKey(id, "graded-answers"), gradedAnswers);
-    saveHostToolsSessionState(id, { gradedAnswers }).catch((error) => console.warn("Graded answers profile save unavailable:", error));
+    persistHostToolsPatch({ gradedAnswers }, "Graded answers");
   }, [id, gradedAnswers, hostStateLoaded]);
 
   useEffect(() => {
@@ -1239,10 +1250,28 @@ const HostSession = () => {
     const next = [{ id: `dispute-${Date.now()}`, questionIndex: currentIndex, questionText: displayedQuestion?.questionText || "", note: body, createdAt: new Date().toISOString() }, ...disputeNotes].slice(0, 100);
     setDisputeNotes(next);
     writeStoredList(hostToolsStorageKey(id, "disputes"), next);
-    saveHostToolsSessionState(id, { disputes: next }).catch((error) => console.warn("Disputes profile save unavailable:", error));
+    persistHostToolsPatch({ disputes: next }, "Disputes");
     toast.success("Dispute note saved");
   };
   const endSession = async () => {
+    // A Test Run promises nothing here counts -- ending one must not commit
+    // rehearsal players/scores to this session's permanent hosted_results,
+    // or mark it is_past, the way the real End Session below does. Reset it
+    // the same way starting a fresh Test Run already does (see
+    // SessionDetail.jsx's handleTestRun) and bail before any of that runs.
+    if (isTestRun) {
+      if (!window.confirm("End this test run? Nothing from it will be saved.")) return;
+      try {
+        await resetTestGame(id);
+        await resetHostToolsSessionState(id);
+        if (!session?.is_past) await supabase.from("sessions").update({ hosted_results: null }).eq("id", id);
+      } catch (error) {
+        console.warn("Test run cleanup unavailable:", error);
+      }
+      toast.success("Test run ended. Nothing was saved.");
+      navigate(`/session/${id}`);
+      return;
+    }
     if (!window.confirm("End this hosted session and save the live results?")) return;
     const endedAt = new Date().toISOString();
     const results = {
@@ -1273,7 +1302,7 @@ const HostSession = () => {
     writeStoredList(hostToolsStorageKey(id, "disputes"), disputeNotes);
     setGameStarted(true);
     setPresentMode("winners");
-    saveHostToolsSessionState(id, { endedAt, currentIndex, presentMode: "winners" }).catch((error) => console.warn("End session profile marker unavailable:", error));
+    persistHostToolsPatch({ endedAt, currentIndex, presentMode: "winners" }, "End session marker");
     hostedResultsRef.current = { ...results, liveState: liveStateRef.current, liveStateUpdatedAt: new Date().toISOString() };
     const { error } = await supabase.from("sessions").update({ hosted_at: endedAt, hosted_results: hostedResultsRef.current, is_past: true }).eq("id", id);
     if (error) {
@@ -1343,7 +1372,7 @@ const HostSession = () => {
     // submitted counts, none of which read from the leaderboard.
     setPlayers((current) => {
       const next = [...current, { id: nextTeam.id, name, updatePreference: "none", updateContact: "", joinedAt: new Date().toISOString() }];
-      saveHostToolsSessionState(id, { players: next }).catch((error) => console.warn("Players profile save unavailable:", error));
+      persistHostToolsPatch({ players: next }, "Players");
       return next;
     });
     if (liveGameId) upsertLivePlayer(liveGameId, nextTeam).catch((error) => console.warn("Live roster save unavailable:", error));
@@ -1416,7 +1445,7 @@ const HostSession = () => {
       const filtered = current.filter((item) => !(item.playerId === payload.playerId && Number(item.questionIndex) === Number(payload.questionIndex)));
       const next = [...filtered, payload].slice(-800);
       writeStoredList(hostToolsStorageKey(id, "answers"), next);
-      saveHostToolsSessionState(id, { answers: next }).catch((error) => console.warn("Manual answer profile save unavailable:", error));
+      persistHostToolsPatch({ answers: next }, "Manual answer");
       return next;
     });
     if (showAnswer || isReviewing) markAnswer(payload, isCorrectSubmission(payload, displayedQuestion) ? "correct" : "incorrect", { applyScore: !isReviewing });
