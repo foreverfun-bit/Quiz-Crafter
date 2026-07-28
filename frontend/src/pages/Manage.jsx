@@ -29,7 +29,7 @@ const setupTools = [
   {
     title: "Branding",
     description: "Set the default logo and colors used by host, presentation, and player screens.",
-    path: "/host-tools?tab=branding",
+    path: "/branding",
     icon: Palette,
     badge: "Host profile",
   },

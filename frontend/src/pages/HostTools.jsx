@@ -4,54 +4,21 @@ import { supabase } from "../lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
-import { BarChart3, CheckCircle, Copy, ExternalLink, Image, Lightbulb, Mail, MessageSquare, Palette, Save, Send, Sparkles, ThumbsDown, ThumbsUp, TrendingUp, Upload, Users, XCircle } from "lucide-react";
+import { BarChart3, CheckCircle, Copy, ExternalLink, Lightbulb, Mail, MessageSquare, Send, Sparkles, ThumbsDown, ThumbsUp, TrendingUp, Users, XCircle } from "lucide-react";
 import { toast } from "sonner";
-import { loadHostSetupSettings, loadHostToolsSessionState, profileKeys, saveHostSetupSettings, saveHostToolsSessionState, saveProfileValue, syncProfileJson, updateUserMetadata } from "../lib/profileState";
+import { loadHostToolsSessionState, profileKeys, saveHostToolsSessionState, saveProfileValue, syncProfileJson } from "../lib/profileState";
 
 const SOCIAL_STORAGE_KEY = "quiz-crafter-social-links";
 const OUTREACH_CONTACTS_STORAGE_KEY = "quiz-crafter-outreach-contacts-v1";
-const HOST_DEFAULT_BRANDING_KEY = "quiz-crafter-host-branding-defaults";
-const metadataBrandingKey = "quiz_crafter_host_branding_defaults_v1";
-const DEFAULT_BRANDING = { name: "Forever Fun Events", logoUrl: "/quiz-crafter-logo.svg", primaryColor: "#71E0DC", accentColor: "#AEB2EF", correctColor: "", optionColor: "#7C8496", lobbyTagline: "Let's get quizzical." };
 const readJson = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); } catch { return fallback; } };
 const writeJson = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* Keep tools usable if browser storage is full. */ } };
-const sanitizeHexColor = (value, fallback) => /^#[0-9a-f]{6}$/i.test(String(value || "")) ? value : fallback;
-const normalizeBranding = (branding = {}) => {
-  const source = branding && typeof branding === "object" ? branding : {};
-  const logoUrl = String(source.logoUrl || "").trim();
-  // correctColor/optionColor/lobbyTagline are edited from the per-session Customize
-  // panel, not here -- this just has to round-trip them so saving default branding
-  // from Host Tools doesn't wipe out what a host set on the present screen.
-  return {
-    name: String(source.name || "").trim() || DEFAULT_BRANDING.name,
-    logoUrl: logoUrl === "/forever-fun-logo.png" ? DEFAULT_BRANDING.logoUrl : logoUrl,
-    primaryColor: sanitizeHexColor(source.primaryColor, DEFAULT_BRANDING.primaryColor),
-    accentColor: sanitizeHexColor(source.accentColor, DEFAULT_BRANDING.accentColor),
-    correctColor: /^#[0-9a-f]{6}$/i.test(String(source.correctColor || "")) ? source.correctColor : "",
-    optionColor: sanitizeHexColor(source.optionColor, DEFAULT_BRANDING.optionColor),
-    lobbyTagline: String(source.lobbyTagline || "").trim() || DEFAULT_BRANDING.lobbyTagline,
-  };
-};
-const readSavedDefaultBranding = () => {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(HOST_DEFAULT_BRANDING_KEY) || "null");
-    return parsed && typeof parsed === "object" ? normalizeBranding(parsed) : null;
-  } catch {
-    return null;
-  }
-};
-const readDefaultBranding = () => normalizeBranding({ ...DEFAULT_BRANDING, ...readJson(HOST_DEFAULT_BRANDING_KEY, {}) });
-const writeDefaultBranding = (branding) => writeJson(HOST_DEFAULT_BRANDING_KEY, normalizeBranding(branding));
-const brandingChanged = (left, right) => JSON.stringify(normalizeBranding(left || {})) !== JSON.stringify(normalizeBranding(right || {}));
 const sessionStorageKey = (sessionId, name) => `quiz-crafter-host-tools-${sessionId}-${name}`;
 const sessionQuestions = (session) => [session?.true_false_questions, session?.multiple_choice_questions, session?.written_questions, session?.picture_questions].flatMap((value) => Array.isArray(value) ? value : []);
-const fileToDataUrl = (file) => new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file); });
 const hostToolTabs = [
-  { key: "feedback", label: "Feedback", icon: ThumbsUp },
-  { key: "game", label: "Game Data", icon: BarChart3 },
-  { key: "outreach", label: "Outreach", icon: Mail },
+  { key: "feedback", label: "Session Review", icon: BarChart3 },
+  { key: "game", label: "Game Data", icon: TrendingUp },
+  { key: "communications", label: "Communications", icon: Mail },
   { key: "clues", label: "Clues", icon: Sparkles },
-  { key: "branding", label: "Branding", icon: Palette },
 ];
 
 const HostTools = () => {
@@ -73,7 +40,6 @@ const HostTools = () => {
   const [selectedClueKeys, setSelectedClueKeys] = useState([]);
   const [socialLinks, setSocialLinks] = useState(() => readJson(SOCIAL_STORAGE_KEY, { facebook: "", instagram: "", x: "" }));
   const [outreachContacts, setOutreachContacts] = useState(() => readJson(OUTREACH_CONTACTS_STORAGE_KEY, []));
-  const [branding, setBranding] = useState(readDefaultBranding);
   const [generating, setGenerating] = useState(false);
   const [connected, setConnected] = useState(false);
   const channelRef = useRef(null);
@@ -98,32 +64,6 @@ const HostTools = () => {
     const tab = searchParams.get("tab");
     if (hostToolTabs.some((item) => item.key === tab)) setActiveTab(tab);
   }, [searchParams]);
-
-  useEffect(() => {
-    const loadHostBranding = async () => {
-      const savedLocalBranding = readSavedDefaultBranding();
-      const localBranding = savedLocalBranding || readDefaultBranding();
-      try {
-        const { data, error } = await supabase.auth.getSession();
-        if (error) throw error;
-        const setupSettings = await loadHostSetupSettings().catch(() => ({}));
-        const setupBranding = setupSettings.branding && typeof setupSettings.branding === "object" ? normalizeBranding(setupSettings.branding) : null;
-        const remoteBranding = data?.session?.user?.user_metadata?.[metadataBrandingKey];
-        if (setupBranding || (remoteBranding && typeof remoteBranding === "object")) {
-          const cleanBranding = normalizeBranding(setupBranding || remoteBranding);
-          setBranding(cleanBranding);
-          writeDefaultBranding(cleanBranding);
-          if (!setupBranding) await saveHostSetupSettings({ branding: cleanBranding });
-        } else if (savedLocalBranding && brandingChanged(savedLocalBranding, DEFAULT_BRANDING)) {
-          await updateUserMetadata({ [metadataBrandingKey]: localBranding });
-          await saveHostSetupSettings({ branding: localBranding });
-        }
-      } catch (error) {
-        console.warn("Host branding profile sync unavailable:", error);
-      }
-    };
-    loadHostBranding();
-  }, []);
 
   useEffect(() => {
     const syncSocialLinks = async () => {
@@ -295,20 +235,6 @@ const HostTools = () => {
     writeJson(SOCIAL_STORAGE_KEY, next);
     saveProfileValue(profileKeys.socialLinks, next).catch((error) => console.warn("Social links profile save unavailable:", error));
   };
-  const saveDefaultBranding = async (nextBranding) => {
-    const cleanBranding = normalizeBranding(nextBranding);
-    setBranding(cleanBranding);
-    writeDefaultBranding(cleanBranding);
-    try {
-      await updateUserMetadata({ [metadataBrandingKey]: cleanBranding });
-      await saveHostSetupSettings({ branding: cleanBranding });
-      toast.success("Default host branding saved to your profile");
-    } catch (error) {
-      console.warn("Host branding profile save unavailable:", error);
-      toast.success("Default host branding saved on this device");
-    }
-  };
-
   const sendUpdate = () => {
     const body = message.trim();
     if (!selectedSessionId) return toast.error("Choose a session first");
@@ -406,14 +332,19 @@ const HostTools = () => {
 
       <Card className="glass-card mb-6"><CardContent className="p-4 grid grid-cols-1 lg:grid-cols-[1fr_auto_auto] gap-3 items-end"><label className="text-sm text-zinc-400">Session<select value={selectedSessionId} onChange={(event) => setSelectedSessionId(event.target.value)} className="mt-1 w-full h-11 rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60">{sessions.map((session) => <option key={session.id} value={session.id}>{session.name || session.session_name || "Untitled Session"}</option>)}</select></label><Badge className="h-10 justify-center bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20"><Users size={15} className="mr-1" />{emailPlayers.length} this session</Badge><Badge className="h-10 justify-center bg-[#AEB2EF]/15 text-[#AEB2EF] border border-[#AEB2EF]/20"><Mail size={15} className="mr-1" />{allEmailContacts.length} total opt-ins</Badge></CardContent></Card>
 
-      <HostReviewWorkspace selectedSession={selectedSession} analytics={analytics} questionFeedback={questionFeedback} categoryRows={categoryRows} playerIdeas={playerIdeas} message={message} setMessage={setMessage} sendUpdate={sendUpdate} openEmailDraft={openEmailDraft} copyEmails={copyEmails} contacts={allEmailContacts} exportResults={exportResults} scheduleNextShow={scheduleNextShow} buildNextSession={buildNextSession} />
+      <div className="mb-6 flex flex-wrap gap-2">{hostToolTabs.map((tab) => { const TabIcon = tab.icon; return <button key={tab.key} type="button" onClick={() => setActiveTab(tab.key)} className={`inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-semibold transition ${activeTab === tab.key ? "border-[#71E0DC]/50 bg-[#71E0DC]/10 text-white" : "border-white/10 text-zinc-400 hover:text-white hover:border-white/20"}`}><TabIcon size={15} />{tab.label}</button>; })}</div>
+
+      {activeTab === "feedback" && <HostReviewWorkspace selectedSession={selectedSession} analytics={analytics} questionFeedback={questionFeedback} categoryRows={categoryRows} playerIdeas={playerIdeas} exportResults={exportResults} />}
+      {activeTab === "game" && <GameDataPanel analytics={analytics} />}
+      {activeTab === "communications" && <div className="space-y-6 max-w-6xl"><FollowUpPanel message={message} setMessage={setMessage} sendUpdate={sendUpdate} openEmailDraft={openEmailDraft} copyEmails={copyEmails} contactsCount={allEmailContacts.length} scheduleNextShow={scheduleNextShow} buildNextSession={buildNextSession} /><OutreachPanel message={message} setMessage={setMessage} sendUpdate={sendUpdate} openEmailDraft={openEmailDraft} copyEmails={copyEmails} contacts={allEmailContacts} sessionEmailCount={emailPlayers.length} socialLinks={socialLinks} updateSocialLink={updateSocialLink} /></div>}
+      {activeTab === "clues" && <CluesPanel aiDirection={aiDirection} setAiDirection={setAiDirection} generateClues={generateClues} generating={generating} selectedSession={selectedSession} clueQuestionRows={clueQuestionRows} selectedClueKeys={selectedClueKeys} setSelectedClueKeys={setSelectedClueKeys} message={message} setMessage={setMessage} socialPost={socialPost} setSocialPost={setSocialPost} copySocialPost={copySocialPost} openSocialComposer={openSocialComposer} socialLinks={socialLinks} />}
     </div>
   );
 };
 
 const Panel = ({ title, icon: Icon, children }) => <Card className="glass-card"><CardHeader><CardTitle className="text-white flex items-center gap-2"><Icon className="text-[#71E0DC]" />{title}</CardTitle></CardHeader><CardContent className="space-y-4">{children}</CardContent></Card>;
 
-const HostReviewWorkspace = ({ selectedSession, analytics, questionFeedback, categoryRows, playerIdeas, message, setMessage, sendUpdate, openEmailDraft, copyEmails, contacts, exportResults, scheduleNextShow, buildNextSession }) => {
+const HostReviewWorkspace = ({ selectedSession, analytics, questionFeedback, categoryRows, playerIdeas, exportResults }) => {
   const [selectedTeamId, setSelectedTeamId] = useState("");
   const [selectedQuestionKey, setSelectedQuestionKey] = useState("");
   const [teamFilter, setTeamFilter] = useState("all");
@@ -434,8 +365,10 @@ const HostReviewWorkspace = ({ selectedSession, analytics, questionFeedback, cat
   const difficultRound = mostDifficultRound(questions);
   const wrongPatterns = commonWrongAnswers(questions);
 
-  return <section className="space-y-6"><Panel title="Session Overview" icon={BarChart3}><div className="rounded-xl border border-white/10 bg-zinc-950/50 p-4"><div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.25em] text-[#71E0DC]">{venue}</p><h2 className="mt-1 text-2xl font-black text-white">{sessionName}</h2><p className="mt-1 text-sm text-zinc-500">{sessionDate}</p></div><Badge className="w-fit bg-zinc-800 text-zinc-300">{analytics.totals.sessionDuration || "Duration not tracked"}</Badge></div></div><div className="grid grid-cols-2 lg:grid-cols-4 gap-3"><ReviewMetric label="Teams" value={analytics.totals.players} sub="participated" /><ReviewMetric label="Questions" value={analytics.totals.questions} sub="in session" /><ReviewMetric label="Average Score" value={analytics.totals.averageScore} sub="per team" /><ReviewMetric label="Session Accuracy" value={`${analytics.totals.overallAccuracy || 0}%`} sub="graded answers" /><ReviewMetric label="Highest Score" value={teams[0]?.name || "-"} sub={teams[0] ? `${teams[0].score} points` : "No scores"} /><ReviewMetric label="Hardest" value={summary.hardestQuestion ? `${summary.hardestQuestion.correctPercent}%` : "-"} sub={summary.hardestQuestion?.category || "No answers"} /><ReviewMetric label="Easiest" value={summary.easiestQuestion ? `${summary.easiestQuestion.correctPercent}%` : "-"} sub={summary.easiestQuestion?.category || "No answers"} /><ReviewMetric label="Most Accurate" value={strongestTeam?.name || "-"} sub={strongestTeam ? `${strongestTeam.accuracy}% correct` : "No graded answers"} /></div></Panel><ResultsExportPanel selectedSession={selectedSession} analytics={analytics} exportResults={exportResults} /><Panel title="Teams" icon={Users}><TeamResultsTable teams={teams} selectedTeamId={selectedTeam?.id} onSelect={setSelectedTeamId} /><TeamDetail team={selectedTeam} answers={filteredTeamAnswers} filter={teamFilter} setFilter={setTeamFilter} roundFilter={teamRoundFilter} setRoundFilter={setTeamRoundFilter} categoryFilter={teamCategoryFilter} setCategoryFilter={setTeamCategoryFilter} roundOptions={roundOptions} categoryOptions={categoryOptions} /></Panel><Panel title="Questions" icon={MessageSquare}><QuestionResultsTable questions={questions} selectedQuestionKey={selectedQuestion?.key} onSelect={setSelectedQuestionKey} /><QuestionDetail question={selectedQuestion} /></Panel><Panel title="Answer Matrix" icon={CheckCircle}><AnswerMatrix teams={teams} questions={questions} /></Panel><Panel title="Accuracy and Insights" icon={TrendingUp}><div className="grid grid-cols-1 lg:grid-cols-2 gap-4"><InsightCard title="Most accurate team" value={strongestTeam?.name || "-"} detail={strongestTeam ? `${strongestTeam.accuracy}% across ${strongestTeam.answered} answers` : "No graded answers yet"} /><InsightCard title="Most difficult round" value={difficultRound?.label || "-"} detail={difficultRound ? `${difficultRound.accuracy}% accuracy` : "No round data"} /><InsightCard title="Low accuracy questions" value={(analytics.performance?.tooDifficult || []).length} detail={(analytics.performance?.tooDifficult || []).map((row) => row.category).join(", ") || "None flagged"} /><InsightCard title="Common wrong answers" value={wrongPatterns.length} detail={wrongPatterns.slice(0, 3).map((row) => `${row.answer} (${row.total})`).join(", ") || "No repeated wrong answers"} /></div><div className="mt-4 rounded-xl border border-white/10 bg-zinc-950/50 p-4"><p className="mb-3 text-sm font-black text-white">Secondary AI review</p><div className="grid grid-cols-1 lg:grid-cols-2 gap-3">{analytics.reviewNotes.map((note) => <div key={note.title} className="rounded-lg border border-white/10 bg-zinc-950/60 p-3"><p className="font-bold text-white">{note.title}</p><p className="mt-1 text-sm text-zinc-400">{note.body}</p></div>)}</div></div></Panel><Panel title="Player Feedback" icon={ThumbsUp}><div className="grid grid-cols-1 xl:grid-cols-3 gap-4"><FeedbackCard title="Question Likes & Dislikes" rows={questionFeedback} empty="Question thumbs will appear here after players rate live questions." /><FeedbackCard title="Category Likes & Dislikes" rows={categoryRows} empty="Category reactions appear after players rate round intros." /><IdeasFeedbackCard ideas={playerIdeas} /></div></Panel><Panel title="Follow-Up" icon={CheckCircle}><div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-5"><div><p className="text-sm text-zinc-400">Turn tonight into the next prep move.</p><textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Thank-you note, schedule reminder, or next-show teaser..." className="mt-4 min-h-32 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><p className="mt-2 text-xs text-zinc-500">{contacts.length} total email opt-ins saved.</p></div><div className="grid gap-2"><Button onClick={scheduleNextShow} variant="outline" className="border-white/10 text-zinc-300 hover:text-white">Schedule Next Show</Button><Button onClick={openEmailDraft} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Mail size={16} className="mr-2" />Thank Players</Button><Button onClick={sendUpdate} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Send size={16} className="mr-2" />Send In-App Update</Button><Button onClick={copyEmails} variant="outline" className="border-white/10 text-zinc-300 hover:text-white">Copy Email List</Button><Button onClick={buildNextSession} className="gradient-btn">Build Next Session</Button></div></div></Panel></section>;
+  return <section className="space-y-6"><Panel title="Session Overview" icon={BarChart3}><div className="rounded-xl border border-white/10 bg-zinc-950/50 p-4"><div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.25em] text-[#71E0DC]">{venue}</p><h2 className="mt-1 text-2xl font-black text-white">{sessionName}</h2><p className="mt-1 text-sm text-zinc-500">{sessionDate}</p></div><Badge className="w-fit bg-zinc-800 text-zinc-300">{analytics.totals.sessionDuration || "Duration not tracked"}</Badge></div></div><div className="grid grid-cols-2 lg:grid-cols-4 gap-3"><ReviewMetric label="Teams" value={analytics.totals.players} sub="participated" /><ReviewMetric label="Questions" value={analytics.totals.questions} sub="in session" /><ReviewMetric label="Average Score" value={analytics.totals.averageScore} sub="per team" /><ReviewMetric label="Session Accuracy" value={`${analytics.totals.overallAccuracy || 0}%`} sub="graded answers" /><ReviewMetric label="Highest Score" value={teams[0]?.name || "-"} sub={teams[0] ? `${teams[0].score} points` : "No scores"} /><ReviewMetric label="Hardest" value={summary.hardestQuestion ? `${summary.hardestQuestion.correctPercent}%` : "-"} sub={summary.hardestQuestion?.category || "No answers"} /><ReviewMetric label="Easiest" value={summary.easiestQuestion ? `${summary.easiestQuestion.correctPercent}%` : "-"} sub={summary.easiestQuestion?.category || "No answers"} /><ReviewMetric label="Most Accurate" value={strongestTeam?.name || "-"} sub={strongestTeam ? `${strongestTeam.accuracy}% correct` : "No graded answers"} /></div></Panel><ResultsExportPanel selectedSession={selectedSession} analytics={analytics} exportResults={exportResults} /><Panel title="Teams" icon={Users}><TeamResultsTable teams={teams} selectedTeamId={selectedTeam?.id} onSelect={setSelectedTeamId} /><TeamDetail team={selectedTeam} answers={filteredTeamAnswers} filter={teamFilter} setFilter={setTeamFilter} roundFilter={teamRoundFilter} setRoundFilter={setTeamRoundFilter} categoryFilter={teamCategoryFilter} setCategoryFilter={setTeamCategoryFilter} roundOptions={roundOptions} categoryOptions={categoryOptions} /></Panel><Panel title="Questions" icon={MessageSquare}><QuestionResultsTable questions={questions} selectedQuestionKey={selectedQuestion?.key} onSelect={setSelectedQuestionKey} /><QuestionDetail question={selectedQuestion} /></Panel><Panel title="Answer Matrix" icon={CheckCircle}><AnswerMatrix teams={teams} questions={questions} /></Panel><Panel title="Accuracy and Insights" icon={TrendingUp}><div className="grid grid-cols-1 lg:grid-cols-2 gap-4"><InsightCard title="Most accurate team" value={strongestTeam?.name || "-"} detail={strongestTeam ? `${strongestTeam.accuracy}% across ${strongestTeam.answered} answers` : "No graded answers yet"} /><InsightCard title="Most difficult round" value={difficultRound?.label || "-"} detail={difficultRound ? `${difficultRound.accuracy}% accuracy` : "No round data"} /><InsightCard title="Low accuracy questions" value={(analytics.performance?.tooDifficult || []).length} detail={(analytics.performance?.tooDifficult || []).map((row) => row.category).join(", ") || "None flagged"} /><InsightCard title="Common wrong answers" value={wrongPatterns.length} detail={wrongPatterns.slice(0, 3).map((row) => `${row.answer} (${row.total})`).join(", ") || "No repeated wrong answers"} /></div><div className="mt-4 rounded-xl border border-white/10 bg-zinc-950/50 p-4"><p className="mb-3 text-sm font-black text-white">Secondary AI review</p><div className="grid grid-cols-1 lg:grid-cols-2 gap-3">{analytics.reviewNotes.map((note) => <div key={note.title} className="rounded-lg border border-white/10 bg-zinc-950/60 p-3"><p className="font-bold text-white">{note.title}</p><p className="mt-1 text-sm text-zinc-400">{note.body}</p></div>)}</div></div></Panel><Panel title="Player Feedback" icon={ThumbsUp}><div className="grid grid-cols-1 xl:grid-cols-3 gap-4"><FeedbackCard title="Question Likes & Dislikes" rows={questionFeedback} empty="Question thumbs will appear here after players rate live questions." /><FeedbackCard title="Category Likes & Dislikes" rows={categoryRows} empty="Category reactions appear after players rate round intros." /><IdeasFeedbackCard ideas={playerIdeas} /></div></Panel></section>;
 };
+
+const FollowUpPanel = ({ message, setMessage, sendUpdate, openEmailDraft, copyEmails, contactsCount, scheduleNextShow, buildNextSession }) => <Panel title="Follow-Up" icon={CheckCircle}><div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-5"><div><p className="text-sm text-zinc-400">Turn tonight into the next prep move.</p><textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Thank-you note, schedule reminder, or next-show teaser..." className="mt-4 min-h-32 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><p className="mt-2 text-xs text-zinc-500">{contactsCount} total email opt-ins saved.</p></div><div className="grid gap-2"><Button onClick={scheduleNextShow} variant="outline" className="border-white/10 text-zinc-300 hover:text-white">Schedule Next Show</Button><Button onClick={openEmailDraft} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Mail size={16} className="mr-2" />Thank Players</Button><Button onClick={sendUpdate} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Send size={16} className="mr-2" />Send In-App Update</Button><Button onClick={copyEmails} variant="outline" className="border-white/10 text-zinc-300 hover:text-white">Copy Email List</Button><Button onClick={buildNextSession} className="gradient-btn">Build Next Session</Button></div></div></Panel>;
 
 const ReviewMetric = ({ label, value, sub }) => <div className="rounded-xl border border-white/10 bg-zinc-950/60 p-4"><p className="text-xs font-bold uppercase tracking-wide text-zinc-500">{label}</p><p className="mt-2 truncate text-2xl font-black text-white">{value}</p><p className="mt-1 truncate text-xs text-zinc-500">{sub}</p></div>;
 
@@ -490,19 +423,6 @@ const CluesPanel = ({ aiDirection, setAiDirection, generateClues, generating, se
 
 const OutreachPanel = ({ message, setMessage, sendUpdate, openEmailDraft, copyEmails, contacts, sessionEmailCount, socialLinks, updateSocialLink }) => <section className="space-y-6 max-w-6xl"><Panel title="Opt-In Email List" icon={Mail}><div className="grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-4"><div className="rounded-xl border border-[#71E0DC]/25 bg-[#71E0DC]/10 p-4"><p className="text-xs font-bold uppercase tracking-wide text-[#71E0DC]">Stored Contacts</p><p className="mt-2 text-4xl font-black text-white">{contacts.length}</p><p className="mt-1 text-sm text-zinc-400">{sessionEmailCount} from this selected session</p><div className="mt-4 grid gap-2"><Button onClick={copyEmails} className="gradient-btn"><Copy size={16} className="mr-2" />Copy All Emails</Button><Button onClick={openEmailDraft} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Mail size={16} className="mr-2" />Email All</Button></div></div><div className="rounded-xl border border-white/10 bg-zinc-950/60 overflow-hidden"><div className="grid grid-cols-[1fr_1fr_140px] gap-3 border-b border-white/10 px-3 py-2 text-xs font-bold uppercase tracking-wide text-zinc-500"><span>Team</span><span>Email</span><span>Source</span></div><div className="max-h-72 overflow-y-auto">{contacts.map((contact) => <div key={contact.email} className="grid grid-cols-[1fr_1fr_140px] gap-3 border-b border-white/5 px-3 py-3 text-sm"><span className="font-semibold text-white truncate">{contact.name || "Team"}</span><span className="text-[#71E0DC] truncate">{contact.email}</span><span className="text-zinc-500 truncate">{contact.sessionName || "Trivia"}</span></div>)}{!contacts.length && <p className="p-6 text-center text-sm text-zinc-500">When players choose Email me on the join screen, they will be stored here across sessions.</p>}</div></div></div></Panel><Panel title="Email and Player Updates" icon={MessageSquare}><textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Type a clue, cancellation, schedule change, or player update..." className="min-h-32 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><div className="grid grid-cols-1 md:grid-cols-3 gap-2"><Button onClick={sendUpdate} className="gradient-btn"><Send size={16} className="mr-2" />Send In-App</Button><Button onClick={openEmailDraft} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Mail size={16} className="mr-2" />Email Draft</Button><Button onClick={copyEmails} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Copy size={16} className="mr-2" />Copy Emails</Button></div></Panel><Panel title="Connected Pages" icon={ExternalLink}><div className="grid grid-cols-1 md:grid-cols-3 gap-3"><input value={socialLinks.facebook} onChange={(event) => updateSocialLink("facebook", event.target.value)} placeholder="Facebook page URL" className="h-10 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none" /><input value={socialLinks.instagram} onChange={(event) => updateSocialLink("instagram", event.target.value)} placeholder="Instagram profile URL" className="h-10 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none" /><input value={socialLinks.x} onChange={(event) => updateSocialLink("x", event.target.value)} placeholder="X/Twitter profile URL" className="h-10 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none" /></div><p className="text-xs text-zinc-500">Facebook posts can be copied and opened from the Clues tab. One-click publishing will require a Meta account connection.</p></Panel></section>;
 
-const BrandingPanel = ({ branding, setBranding, onSave }) => {
-  const safeBranding = normalizeBranding(branding);
-  const update = (key, value) => setBranding((current) => ({ ...normalizeBranding(current), [key]: value }));
-  const uploadLogo = async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    if (!file.type.startsWith("image/")) return toast.error("Choose an image file for the logo");
-    update("logoUrl", await fileToDataUrl(file));
-  };
-  return <Panel title="Host Branding" icon={Palette}><div className="grid grid-cols-1 lg:grid-cols-[160px_1fr] gap-4"><div className="rounded-lg border border-white/10 bg-zinc-950/60 p-3 flex flex-col items-center justify-center min-h-36">{safeBranding.logoUrl ? <img src={safeBranding.logoUrl} alt="Host logo preview" className="max-h-24 max-w-full rounded-md bg-white object-contain p-2" /> : <div className="h-24 w-24 rounded-md border border-white/10 bg-zinc-900 flex items-center justify-center text-zinc-500"><Image size={28} /></div>}<p className="mt-3 text-sm font-bold text-white text-center">{safeBranding.name || "Host Name"}</p></div><div className="space-y-3"><div className="grid grid-cols-1 md:grid-cols-2 gap-3"><label className="text-xs text-zinc-400">Default host name<input value={safeBranding.name || ""} onChange={(event) => update("name", event.target.value)} className="mt-1 h-10 w-full rounded-md bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><label className="text-xs text-zinc-400">Default logo URL<input value={safeBranding.logoUrl || ""} onChange={(event) => update("logoUrl", event.target.value)} placeholder="https://..." className="mt-1 h-10 w-full rounded-md bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label></div><div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end"><label className="text-xs text-zinc-400">Upload logo<span className="mt-1 h-10 rounded-md border border-white/10 bg-zinc-950 px-3 text-zinc-200 flex items-center gap-2 cursor-pointer hover:border-[#71E0DC]/50"><Upload size={15} />Choose file<input type="file" accept="image/*" onChange={uploadLogo} className="hidden" /></span></label><ColorField label="Primary color" value={safeBranding.primaryColor} onChange={(value) => update("primaryColor", value)} /><ColorField label="Accent color" value={safeBranding.accentColor} onChange={(value) => update("accentColor", value)} /></div><div className="flex justify-end gap-2 flex-wrap"><Button variant="outline" onClick={() => setBranding(DEFAULT_BRANDING)} className="border-white/10 text-zinc-300 hover:text-white">Reset</Button><Button onClick={() => onSave(safeBranding)} className="text-zinc-950 font-semibold hover:opacity-90" style={{ background: `linear-gradient(90deg, ${safeBranding.primaryColor}, ${safeBranding.accentColor})` }}><Save size={16} className="mr-2" />Save Default Branding</Button></div><p className="text-xs text-zinc-500">This becomes the default for future live host screens. You can still override branding inside a specific session.</p></div></div></Panel>;
-};
-
-const ColorField = ({ label, value, onChange }) => { const safeValue = sanitizeHexColor(value, DEFAULT_BRANDING.primaryColor); return <label className="text-xs text-zinc-400">{label}<div className="mt-1 flex h-10 rounded-md border border-white/10 bg-zinc-950 overflow-hidden focus-within:border-[#71E0DC]/60"><input type="color" value={safeValue} onChange={(event) => onChange(event.target.value)} className="h-10 w-12 border-0 bg-transparent p-1" /><input value={value || ""} onChange={(event) => onChange(event.target.value)} className="min-w-0 flex-1 bg-transparent px-2 text-white outline-none" /></div></label>; };
 
 const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
 const normalizeContacts = (contacts) => mergeContacts([], contacts);
