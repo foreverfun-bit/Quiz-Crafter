@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  @apply bg-stone-950 text-stone-200 antialiased;
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+::selection {
+  @apply bg-amber-500/30 text-amber-100;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #57534e transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: #57534e;
+  border-radius: 999px;
+}
