@@ -9,8 +9,6 @@ import { Badge } from "../components/ui/badge";
 import { ScrollArea } from "../components/ui/scroll-area";
 import {
   CheckCircle,
-  AlertTriangle,
-  Ban,
   Image,
   Library as LibraryIcon,
   List,
@@ -18,11 +16,12 @@ import {
   MessageSquare,
   Pencil,
   Plus,
+  RotateCcw,
   Save,
   Search,
+  Star,
   Upload,
   MoreHorizontal,
-  RotateCcw,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -36,10 +35,18 @@ const typeConfig = {
   multiple_choice: { label: "Multiple Choice", icon: List, color: "text-[#AEB2EF]" },
   written: { label: "Written", icon: MessageSquare, color: "text-emerald-400" },
   picture: { label: "Picture", icon: Image, color: "text-amber-400" },
+  // Not a real question_type -- filters by category (see isBonusCategory)
+  // the same way bonus questions are already recognized during live
+  // hosting, so this tab doesn't require a schema change or a second,
+  // conflicting definition of "bonus".
+  bonus: { label: "Bonus", icon: Star, color: "text-amber-300" },
 };
 
-const typeOrder = ["all", "true_false", "multiple_choice", "written", "picture"];
+// Drives the tab list (bonus replaces picture as the 4th tab, though
+// picture questions are untouched and still filterable via All/search).
+const typeOrder = ["all", "true_false", "multiple_choice", "written", "bonus"];
 const editableTypes = ["true_false", "multiple_choice", "written", "picture"];
+const isBonusCategory = (question) => String(question?.category || "").trim().toUpperCase() === "BONUS";
 const memoryFilters = [
   { value: "all", label: "All Memory" },
   { value: "available", label: "Available" },
@@ -191,6 +198,7 @@ export default function Library() {
         acc.all += 1;
         const type = question.question_type || "written";
         acc[type] = (acc[type] || 0) + 1;
+        if (isBonusCategory(question)) acc.bonus = (acc.bonus || 0) + 1;
         return acc;
       },
       { all: 0 }
@@ -210,7 +218,11 @@ export default function Library() {
 
     return questions.filter((question) => {
       const type = question.question_type || "written";
-      if (activeType !== "all" && type !== activeType) return false;
+      if (activeType === "bonus") {
+        if (!isBonusCategory(question)) return false;
+      } else if (activeType !== "all" && type !== activeType) {
+        return false;
+      }
       const memory = getQuestionMemory(question, questionMemory);
       if (memoryFilter === "available" && (isUsed(question) || isMemoryBlocked(question, questionMemory))) return false;
       if (memoryFilter !== "all" && memoryFilter !== "available" && memory.status !== memoryFilter) return false;
@@ -269,22 +281,6 @@ export default function Library() {
     }
 
     toast.success(willBeUsed ? "Marked used" : "Marked unused");
-  };
-
-  const updateMemory = async (question, status) => {
-    const nextMemory = upsertQuestionMemory(question, { status }, readQuestionMemory());
-    setQuestionMemory(nextMemory);
-    saveQuestionMemoryToProfile(supabase, nextMemory).catch((error) => console.warn("Question memory profile save unavailable:", error));
-    const possiblePayloads = [
-      { memory_status: status === "available" ? null : status, memory_updated_at: status === "available" ? null : new Date().toISOString() },
-      { memory_status: status === "available" ? null : status },
-    ];
-    for (const payload of possiblePayloads) {
-      const { error } = await supabase.from("questions").update(payload).eq("id", question.id).eq("user_id", user?.id);
-      if (!error) break;
-      if (!/schema cache|column|could not find/i.test(error.message || "")) break;
-    }
-    toast.success(status === "available" ? "Question memory cleared" : `Marked ${memoryStatuses[status]?.label || status}`);
   };
 
   const startEditing = (question) => {
@@ -458,7 +454,7 @@ export default function Library() {
                   onCancel={cancelEditing}
                 />
               ) : (
-                <QuestionCard key={question.id} question={question} used={isUsed(question)} memory={getQuestionMemory(question, questionMemory)} onEdit={() => startEditing(question)} onToggleUsed={() => toggleUsed(question)} onMemory={(status) => updateMemory(question, status)} onAddToBuild={() => navigate(`/build?addQuestionId=${question.id}`)} />
+                <QuestionCard key={question.id} question={question} used={isUsed(question)} memory={getQuestionMemory(question, questionMemory)} onEdit={() => startEditing(question)} onToggleUsed={() => toggleUsed(question)} onAddToBuild={() => navigate(`/build?addQuestionId=${question.id}`)} />
               );
             })}
           </div>
@@ -468,7 +464,7 @@ export default function Library() {
   );
 }
 
-const QuestionCard = ({ question, used, memory, onEdit, onToggleUsed, onMemory, onAddToBuild }) => {
+const QuestionCard = ({ question, used, memory, onEdit, onToggleUsed, onAddToBuild }) => {
   const type = question.question_type || "written";
   const config = typeConfig[type] || typeConfig.written;
   const Icon = config.icon;
@@ -486,6 +482,7 @@ const QuestionCard = ({ question, used, memory, onEdit, onToggleUsed, onMemory, 
             {used && <Badge className="bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">Used</Badge>}
             {memory?.status && memory.status !== "available" && <Badge className={memory.status === "retired" || memory.status === "too_common" ? "bg-red-500/10 text-red-300 border border-red-500/20" : memory.status === "needs_rewrite" ? "bg-amber-500/10 text-amber-300 border border-amber-500/20" : "bg-[#AEB2EF]/10 text-[#AEB2EF] border border-[#AEB2EF]/20"}>{memoryStatuses[memory.status]?.label || memory.status}</Badge>}
             {question.image_url && <Badge className="bg-amber-500/10 text-amber-300 border border-amber-500/20">Image</Badge>}
+            {isBonusCategory(question) && <Badge className="bg-amber-500/10 text-amber-300 border border-amber-500/20"><Star size={12} className="mr-1" />Bonus</Badge>}
           </div>
           <div className="flex gap-2 flex-wrap justify-end">
             <Button size="sm" onClick={onAddToBuild} className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/25 hover:bg-[#71E0DC]/20">
@@ -498,13 +495,6 @@ const QuestionCard = ({ question, used, memory, onEdit, onToggleUsed, onMemory, 
               <Pencil size={14} className="mr-2" />Edit
             </Button>
           </div>
-        </div>
-
-        <div className="flex flex-wrap gap-2 rounded-lg border border-white/10 bg-zinc-950/40 p-2">
-          <Button size="sm" variant="ghost" onClick={() => onMemory("needs_rewrite")} className="h-8 text-amber-300 hover:text-amber-200 hover:bg-amber-500/10"><AlertTriangle size={13} className="mr-1" />Rewrite</Button>
-          <Button size="sm" variant="ghost" onClick={() => onMemory("too_common")} className="h-8 text-red-300 hover:text-red-200 hover:bg-red-500/10"><Ban size={13} className="mr-1" />Too Common</Button>
-          <Button size="sm" variant="ghost" onClick={() => onMemory("retired")} className="h-8 text-zinc-300 hover:text-white hover:bg-zinc-800"><X size={13} className="mr-1" />Retire</Button>
-          <Button size="sm" variant="ghost" onClick={() => onMemory("available")} className="h-8 text-[#71E0DC] hover:text-[#AEEBFF] hover:bg-[#71E0DC]/10"><RotateCcw size={13} className="mr-1" />Reusable</Button>
         </div>
 
         <div>
