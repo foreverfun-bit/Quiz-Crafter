@@ -43,6 +43,13 @@ const parseDateParts = (month, day, year) => {
 
 const getSessionTitle = (session) => session.name || session.session_name || "Untitled Session";
 
+// is_past only means "this session has already been hosted" -- it flips to
+// true for a session someone built and ran live in Quiz Crafter, same as a
+// genuinely CSV/PDF-imported one, so it can't be used to tell them apart.
+// source_type is set at creation time (import-questions.js vs BuildSession.jsx)
+// and is the actual origin.
+const isImportedSession = (session) => session?.source_type === "imported";
+
 const getHostDate = (session) => {
   const explicitDate = session.hosted_at || session.session_date || session.event_date || session.host_date || session.date;
   if (explicitDate) {
@@ -219,12 +226,12 @@ const PastSessions = () => {
   };
 
   const builtCount = useMemo(
-    () => allSessions.filter((s) => !s.is_past).length,
+    () => allSessions.filter((s) => !isImportedSession(s)).length,
     [allSessions]
   );
 
   const importedCount = useMemo(
-    () => allSessions.filter((s) => !!s.is_past).length,
+    () => allSessions.filter((s) => isImportedSession(s)).length,
     [allSessions]
   );
 
@@ -235,8 +242,8 @@ const PastSessions = () => {
     const lastYearEnd = new Date(now.getFullYear(), 0, 1);
 
     const filtered = allSessions.filter((session) => {
-      if (activeTab === "built" && session.is_past) return false;
-      if (activeTab === "imported" && !session.is_past) return false;
+      if (activeTab === "built" && isImportedSession(session)) return false;
+      if (activeTab === "imported" && !isImportedSession(session)) return false;
 
       const hostDate = getHostDate(session);
       if (dateFilter === "with_date" && !hostDate) return false;
@@ -428,12 +435,12 @@ const PastSessions = () => {
                     <div className="flex flex-wrap gap-2">
                       <Badge
                         className={
-                          session.is_past
+                          isImportedSession(session)
                             ? "bg-[#AEB2EF]/20 text-[#AEB2EF] border-[#AEB2EF]/30"
                             : "bg-[#71E0DC]/20 text-[#71E0DC] border-[#71E0DC]/30"
                         }
                       >
-                        {session.is_past ? "Imported" : "Built"}
+                        {isImportedSession(session) ? "Imported" : "Built"}
                       </Badge>
 
                       <Badge className="bg-zinc-800 text-zinc-300">

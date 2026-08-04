@@ -1297,7 +1297,7 @@ async function importQuestions({ questions, userId, filename }) {
     const builtSessionName = buildSessionName(filename);
     const { data, error } = await supabase
       .from("sessions")
-      .insert({ user_id: userId, name: builtSessionName, session_name: builtSessionName, is_past: true, ...grouped })
+      .insert({ user_id: userId, name: builtSessionName, session_name: builtSessionName, is_past: true, source_type: "imported", ...grouped })
       .select()
       .single();
 
