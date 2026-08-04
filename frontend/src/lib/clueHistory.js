@@ -5,13 +5,22 @@ const MAX_HISTORY = 30;
 
 const cleanText = (value) => String(value || "").replace(/\s+/g, " ").trim();
 
+// Guards against a malformed date (e.g. a bad AI-guessed timestamp from a
+// screenshot) silently producing an "Invalid Date" entry that then sorts
+// unpredictably in history.
+const safeIsoDate = (value) => {
+  if (!value) return "";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString();
+};
+
 const normalizeEntry = (entry = {}) => ({
   id: entry.id || `clue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   sessionName: cleanText(entry.sessionName),
   message: cleanText(entry.message),
   socialPost: cleanText(entry.socialPost),
   categories: Array.isArray(entry.categories) ? entry.categories.map(cleanText).filter(Boolean).slice(0, 8) : [],
-  createdAt: entry.createdAt || new Date().toISOString(),
+  createdAt: safeIsoDate(entry.createdAt) || new Date().toISOString(),
 });
 
 // Newest wins on an id collision (e.g. the same draft edited and re-logged).
@@ -43,8 +52,8 @@ export const syncClueHistory = async () => {
 // AI first drafts it -- that way the history (and the style it teaches
 // future drafts) reflects posts the host chose to use, edits included,
 // rather than every rough first draft.
-export const logCluePost = async ({ sessionName, message, socialPost, categories }) => {
-  const entry = normalizeEntry({ sessionName, message, socialPost, categories });
+export const logCluePost = async ({ sessionName, message, socialPost, categories, createdAt }) => {
+  const entry = normalizeEntry({ sessionName, message, socialPost, categories, createdAt });
   if (!entry.message && !entry.socialPost) return readClueHistory();
   const next = writeClueHistory([entry, ...readClueHistory()]);
   try {
@@ -71,7 +80,7 @@ export const extractCluePostFromImage = async (imageDataUrl) => {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data?.error || "Could not read that screenshot");
-  return { text: cleanText(data.text), postedAt: cleanText(data.postedAt) };
+  return { text: cleanText(data.text), postedAt: cleanText(data.postedAt), postedAtIso: safeIsoDate(data.postedAtIso) };
 };
 
 export const updateCluePostText = async (entryId, socialPost) => {
