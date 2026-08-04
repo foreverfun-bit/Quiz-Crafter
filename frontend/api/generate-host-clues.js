@@ -30,8 +30,7 @@ function fallbackClues(sessionName, questions, direction) {
   const tone = direction ? ` ${direction}` : "";
 
   return {
-    update: `Ready for another round? Tonight's clues are feeling sneaky in all the right ways.${categoryText}${tone}`,
-    social_post: `Grab your sharpest teammates and maybe one wildly specific fact you did not think you needed. ${name} is coming in with clue paths, curveballs, and a few "wait, I know this" moments. See you soon!`,
+    social_post: `Grab your sharpest teammates and maybe one wildly specific fact you did not think you needed. ${name} is coming in with clue paths, curveballs, and a few "wait, I know this" moments. See you soon!${tone}${categoryText}`,
   };
 }
 
@@ -74,9 +73,8 @@ async function handler(req, res) {
           {
             role: "user",
             content: JSON.stringify({
-              task: "Draft one in-app player update and one social post teaser for this trivia session.",
+              task: "Draft one social post teaser for this trivia session.",
               output_shape: {
-                update: "1-2 short sentences for players who already joined the game",
                 social_post: "1 short social post for promoting the session",
               },
               rules: [
@@ -88,7 +86,7 @@ async function handler(req, res) {
                 "Use 3-6 indirect clue nods from the actual session questions.",
                 "Prefer playful setups like 'you might want to...', 'brush up on...', 'grab your...', 'if you have ever...', 'ready for...'.",
                 "Use puns and connective tissue, but keep it readable and natural.",
-                "The social_post can be 2-5 sentences. The update should be shorter, 1-2 sentences.",
+                "The social_post should be 2-5 sentences.",
                 "A few emojis are okay if they fit, but do not overload them.",
                 "End the social post with a friendly invite such as 'See you tonight!' or similar when natural.",
               ],
@@ -115,14 +113,13 @@ async function handler(req, res) {
 
     const content = data.choices?.[0]?.message?.content || "{}";
     const parsed = JSON.parse(content);
-    const update = clean(parsed.update);
     const socialPost = clean(parsed.social_post || parsed.socialPost);
 
-    if (!update || !socialPost) {
+    if (!socialPost) {
       throw new Error("AI returned an incomplete clue draft");
     }
 
-    return res.status(200).json({ update, social_post: socialPost });
+    return res.status(200).json({ social_post: socialPost });
   } catch (error) {
     console.error("generate-host-clues error:", error);
     return res.status(500).json({ error: error?.message || "Could not generate clues" });
