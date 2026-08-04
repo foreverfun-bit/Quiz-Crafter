@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { loadHostToolsSessionState, profileKeys, saveHostToolsSessionState, saveProfileValue, syncProfileJson } from "../lib/profileState";
 import { buildClueStyleExamples, logCluePost, readClueHistory, syncClueHistory } from "../lib/clueHistory";
 import { dedupeCategories } from "../lib/categories";
+import { useCopilot } from "../context/CopilotContext";
 
 const SOCIAL_STORAGE_KEY = "quiz-crafter-social-links";
 const OUTREACH_CONTACTS_STORAGE_KEY = "quiz-crafter-outreach-contacts-v1";
@@ -31,6 +32,7 @@ const hostToolTabs = [
 ];
 
 const HostTools = () => {
+  const { updatePageContext } = useCopilot();
   const [searchParams] = useSearchParams();
   const [sessions, setSessions] = useState([]);
   const [selectedSessionId, setSelectedSessionId] = useState("");
@@ -71,6 +73,26 @@ const HostTools = () => {
     answer: getQuestionAnswer(question),
     fun_fact: question.fun_fact || question.funFact || "",
   })).filter((question) => question.question && question.answer), [selectedSession]);
+
+  // The FloatingCopilot chat had no idea what clue it had just drafted or
+  // which questions it was based on -- it only ever saw a coarse, page-agnostic
+  // build summary, never what's actually on screen. Push the live Clue Builder
+  // state so a follow-up like "this is missing the Oktoberfest question" is
+  // grounded in the real selection and draft instead of starting from nothing.
+  useEffect(() => {
+    const selectedClueQuestions = clueQuestionRows.filter((question) => selectedClueKeys.includes(question.key));
+    updatePageContext({
+      goal: "Help draft and refine the in-game update and social post teaser for this trivia session",
+      hostHub: {
+        activeTab,
+        sessionName: selectedSession?.name || selectedSession?.session_name || "",
+        clueDirection: aiDirection,
+        selectedClueQuestions: selectedClueQuestions.map((question) => ({ category: question.category, question: question.question, answer: question.answer })),
+        draftedInGameUpdate: message,
+        draftedSocialPost: socialPost,
+      },
+    });
+  }, [activeTab, aiDirection, clueQuestionRows, message, selectedClueKeys, selectedSession, socialPost, updatePageContext]);
 
   useEffect(() => {
     const tab = searchParams.get("tab");
