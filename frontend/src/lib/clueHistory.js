@@ -58,6 +58,22 @@ export const logCluePost = async ({ sessionName, message, socialPost, categories
 export const buildClueStyleExamples = (history = readClueHistory(), limit = 6) =>
   [...new Set(history.map((entry) => entry.socialPost).filter(Boolean))].slice(0, limit);
 
+// Reads a screenshot of an already-posted clue (a compressed data URL, see
+// imageBlobToDataUrl in mediaUpload.js) and transcribes its post text via a
+// vision model, so a clue posted before this feature existed -- or edited by
+// hand after drafting -- can still be archived and used to teach future
+// drafts the host's real voice.
+export const extractCluePostFromImage = async (imageDataUrl) => {
+  const response = await fetch("/api/extract-clue-screenshot", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ image: imageDataUrl }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data?.error || "Could not read that screenshot");
+  return { text: cleanText(data.text), postedAt: cleanText(data.postedAt) };
+};
+
 // A clue is often drafted/logged under the wrong session (picked before
 // switching sessions, or the session got renamed/duplicated afterward) --
 // history only stores a sessionName snapshot, not a session id, so this
