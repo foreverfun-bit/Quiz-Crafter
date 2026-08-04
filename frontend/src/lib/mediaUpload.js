@@ -52,7 +52,10 @@ const readFileBytes = async (file) => {
   return buffer;
 };
 
-const imageBlobToDataUrl = async (blob) => new Promise((resolve, reject) => {
+// Also used directly (not just as the storage-upload fallback) anywhere a
+// compressed data URL is enough on its own, e.g. sending a screenshot to a
+// vision model instead of persisting it anywhere.
+export const imageBlobToDataUrl = async (blob) => new Promise((resolve, reject) => {
   const objectUrl = URL.createObjectURL(blob);
   const image = new Image();
   image.onload = () => {
