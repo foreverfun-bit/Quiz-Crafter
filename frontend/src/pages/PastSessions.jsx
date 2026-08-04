@@ -214,6 +214,25 @@ const PastSessions = () => {
     }
   };
 
+  // Whether a session was actually imported can't always be inferred
+  // perfectly (e.g. historical sessions created before source_type existed,
+  // or a filename that happened to match the auto-generated import name) --
+  // this lets a host correct the label directly instead of being stuck with
+  // a wrong classification.
+  const handleToggleSourceType = async (session, e) => {
+    e.stopPropagation();
+    const nextSourceType = isImportedSession(session) ? "built" : "imported";
+    try {
+      const { error } = await supabase.from("sessions").update({ source_type: nextSourceType }).eq("id", session.id);
+      if (error) throw error;
+      setAllSessions((prev) => prev.map((item) => (item.id === session.id ? { ...item, source_type: nextSourceType } : item)));
+      toast.success(`Marked as ${nextSourceType === "imported" ? "Imported" : "Built"}`);
+    } catch (error) {
+      console.error("Toggle session source error:", error);
+      toast.error("Failed to update session");
+    }
+  };
+
   const safeArray = (value) => (Array.isArray(value) ? value : []);
 
   const getTotalQuestions = (session) => {
@@ -433,15 +452,22 @@ const PastSessions = () => {
                     </div>
 
                     <div className="flex flex-wrap gap-2">
-                      <Badge
-                        className={
-                          isImportedSession(session)
-                            ? "bg-[#AEB2EF]/20 text-[#AEB2EF] border-[#AEB2EF]/30"
-                            : "bg-[#71E0DC]/20 text-[#71E0DC] border-[#71E0DC]/30"
-                        }
+                      <button
+                        type="button"
+                        onClick={(e) => handleToggleSourceType(session, e)}
+                        title="Click to switch between Built and Imported"
+                        data-testid={`source-type-toggle-${index}`}
                       >
-                        {isImportedSession(session) ? "Imported" : "Built"}
-                      </Badge>
+                        <Badge
+                          className={
+                            isImportedSession(session)
+                              ? "bg-[#AEB2EF]/20 text-[#AEB2EF] border-[#AEB2EF]/30 hover:bg-[#AEB2EF]/30 cursor-pointer"
+                              : "bg-[#71E0DC]/20 text-[#71E0DC] border-[#71E0DC]/30 hover:bg-[#71E0DC]/30 cursor-pointer"
+                          }
+                        >
+                          {isImportedSession(session) ? "Imported" : "Built"}
+                        </Badge>
+                      </button>
 
                       <Badge className="bg-zinc-800 text-zinc-300">
                         <FileText size={12} className="mr-1" />
