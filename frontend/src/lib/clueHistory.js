@@ -74,6 +74,26 @@ export const extractCluePostFromImage = async (imageDataUrl) => {
   return { text: cleanText(data.text), postedAt: cleanText(data.postedAt) };
 };
 
+export const updateCluePostText = async (entryId, socialPost) => {
+  const next = writeClueHistory(readClueHistory().map((entry) => entry.id === entryId ? { ...entry, socialPost: cleanText(socialPost) } : entry));
+  try {
+    await saveProfileValue(profileKeys.clueHistory, next);
+  } catch (error) {
+    console.warn("Clue history profile save unavailable:", error);
+  }
+  return next;
+};
+
+export const deleteCluePost = async (entryId) => {
+  const next = writeClueHistory(readClueHistory().filter((entry) => entry.id !== entryId));
+  try {
+    await saveProfileValue(profileKeys.clueHistory, next);
+  } catch (error) {
+    console.warn("Clue history profile save unavailable:", error);
+  }
+  return next;
+};
+
 // A clue is often drafted/logged under the wrong session (picked before
 // switching sessions, or the session got renamed/duplicated afterward) --
 // history only stores a sessionName snapshot, not a session id, so this
