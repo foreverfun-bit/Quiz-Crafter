@@ -231,7 +231,15 @@ const HostTools = () => {
       channelRef.current = null;
       setConnected(false);
     };
-  }, [selectedSessionId, selectedSession]);
+  // Same feedback-loop hazard as the attendance effect below: this reloads
+  // (and overwrites) message/socialPost/aiDirection and the players/feedback
+  // state from storage, so it must only run when the host actually switches
+  // sessions -- not on every incidental `selectedSession` reference change
+  // (e.g. the attendance autosave writing back into `sessions`), or it can
+  // clobber an AI-drafted clue that hasn't been persisted yet with the
+  // previous (often empty) saved draft.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSessionId]);
 
   useEffect(() => {
     if (!selectedSessionId || loadedDraftSessionRef.current !== selectedSessionId) return undefined;
@@ -256,7 +264,18 @@ const HostTools = () => {
       teamHeadcounts: Object.fromEntries(Object.entries(savedTeamHeadcounts).map(([teamId, value]) => [teamId, normalizeHeadcount(value)])),
     });
     loadedAttendanceSessionRef.current = selectedSessionId;
-  }, [selectedSessionId, selectedSession]);
+  // Depending on `selectedSession` itself (instead of just the id) used to
+  // create a feedback loop: saving attendance below writes the result back
+  // into `sessions` via setSessions, which gives `selectedSession` (derived
+  // from `sessions`) a new object reference every time even though nothing
+  // a host did changed -- which re-ran this effect, which reset `attendance`
+  // to a new object, which re-triggered the save effect below, forever.
+  // Every trip around that loop also re-ran the drafts/players/feedback load
+  // effect above (same dependency mistake), silently overwriting a freshly
+  // AI-drafted clue with whatever was last durably saved before it finished
+  // saving. Keying this on the session id only breaks the loop.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSessionId]);
 
   useEffect(() => {
     if (!selectedSessionId || loadedAttendanceSessionRef.current !== selectedSessionId) return undefined;
