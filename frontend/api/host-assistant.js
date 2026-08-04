@@ -168,6 +168,14 @@ async function handler(req, res) {
                 template: context.template || null,
                 session: context.session || null,
                 build: context.build || null,
+                // What's actually on the host's screen right now (e.g. the
+                // Clue Builder's selected questions and drafted post, or a
+                // Build page's active round) -- pushed live by the current
+                // page via updatePageContext(). This used to be captured on
+                // the frontend and then silently dropped here, so the chat
+                // assistant never knew what the host was looking at or had
+                // just been given, even when the host referred to "this".
+                page_live_context: context.pageLiveContext && typeof context.pageLiveContext === "object" ? context.pageLiveContext : null,
                 approved_categories: safeList(context.approvedCategories, 80),
                 rejected_categories: safeList(context.rejectedCategories, 80),
                 recent_categories: safeList(context.recentSessionCategories, 80),
@@ -222,6 +230,8 @@ async function handler(req, res) {
                     "If rewriting or replacing a question, provide the usable question, answer, and brief host note.",
                     "Use the host's venue/template/session memory when relevant.",
                     "Do not claim to have changed the database unless explicitly asked and tool support exists.",
+                    "host_context.page_live_context is exactly what the host is currently looking at on screen -- e.g. on the Clues tab it holds the questions they selected and the in-game update / social post already drafted for them; on a Build page it holds the active round's real questions. When the host says 'this', 'that clue', 'the post', or asks to add/change something in it, ground your answer in page_live_context first instead of asking what they mean or drafting from scratch.",
+                    "When revising a drafted update or social post from page_live_context, return the full replacement text for the field(s) that changed (labeled In-game update / Social post) so the host can copy it back in, not just a description of the change.",
                   ],
             }),
           },
