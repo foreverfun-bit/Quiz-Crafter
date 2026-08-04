@@ -42,10 +42,13 @@ async function handler(req, res) {
                   rules: [
                     "Return the post text verbatim, including its original line breaks and emojis.",
                     "If multiple posts are visible, transcribe only the main/largest one.",
-                    "If a posted date or time is visible in the screenshot (e.g. '3h', 'July 21 at 6:00 PM', 'Yesterday'), include it as posted_at exactly as shown; otherwise return an empty string.",
+                    "If a posted date or time is visible in the screenshot (e.g. '3h', 'July 21 at 6:00 PM', 'Yesterday'), include it as posted_at exactly as shown; otherwise return an empty string for both posted_at and posted_at_iso.",
+                    "If posted_at is present, also resolve it to an actual timestamp in posted_at_iso, using current_datetime as 'now' for relative labels ('3h' = 3 hours before current_datetime, 'Yesterday' = the day before current_datetime) and assuming the current year for a date with no year shown, unless that would place it in the future, in which case use the previous year.",
+                    "posted_at_iso must be a full ISO 8601 timestamp (e.g. 2026-07-21T18:00:00). If you cannot confidently resolve a real timestamp, return an empty string for posted_at_iso rather than guessing.",
                     "If no readable post text is visible at all, return an empty string for text.",
                   ],
-                  output_shape: { text: "the exact post text, verbatim", posted_at: "the visible date/time label, or empty string" },
+                  current_datetime: new Date().toISOString(),
+                  output_shape: { text: "the exact post text, verbatim", posted_at: "the visible date/time label, or empty string", posted_at_iso: "resolved ISO 8601 timestamp for posted_at, or empty string" },
                 }),
               },
               { type: "image_url", image_url: { url: image } },
@@ -65,7 +68,7 @@ async function handler(req, res) {
     const text = clean(parsed.text);
     if (!text) throw new Error("Could not find any post text in that screenshot");
 
-    return res.status(200).json({ text, postedAt: clean(parsed.posted_at) });
+    return res.status(200).json({ text, postedAt: clean(parsed.posted_at), postedAtIso: clean(parsed.posted_at_iso) });
   } catch (error) {
     console.error("extract-clue-screenshot error:", error);
     return res.status(500).json({ error: error?.message || "Could not read that screenshot" });

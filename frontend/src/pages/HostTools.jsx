@@ -441,8 +441,8 @@ const HostTools = () => {
   // existed) straight into history from a screenshot, instead of only
   // logging clues drafted in-app -- so style-matching for future drafts can
   // learn from everything the host has actually published.
-  const addManualCluePost = async ({ sessionName, text }) => {
-    const next = await logCluePost({ sessionName, message: text, socialPost: text, categories: [] });
+  const addManualCluePost = async ({ sessionName, text, postedAtIso }) => {
+    const next = await logCluePost({ sessionName, message: text, socialPost: text, categories: [], createdAt: postedAtIso });
     setClueHistory(next);
   };
 
@@ -615,6 +615,7 @@ const AddClueModal = ({ sessionNameOptions, defaultSessionName, onClose, onSaved
   const [read, setRead] = useState(false);
   const [extractedText, setExtractedText] = useState("");
   const [postedAt, setPostedAt] = useState("");
+  const [postedAtIso, setPostedAtIso] = useState("");
   const [reading, setReading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -627,12 +628,14 @@ const AddClueModal = ({ sessionNameOptions, defaultSessionName, onClose, onSaved
     setRead(false);
     setExtractedText("");
     setPostedAt("");
+    setPostedAtIso("");
     try {
       const compressed = await imageBlobToDataUrl(file);
       setPreview(compressed);
       const result = await extractCluePostFromImage(compressed);
       setExtractedText(result.text);
       setPostedAt(result.postedAt);
+      setPostedAtIso(result.postedAtIso);
       setRead(true);
     } catch (error) {
       toast.error(error.message || "Could not read that screenshot");
@@ -652,7 +655,7 @@ const AddClueModal = ({ sessionNameOptions, defaultSessionName, onClose, onSaved
     if (!text) return toast.error("Nothing to save yet");
     setSaving(true);
     try {
-      await onSaved({ sessionName, text });
+      await onSaved({ sessionName, text, postedAtIso });
       toast.success("Clue added to history");
       onClose();
     } catch (error) {
@@ -693,7 +696,12 @@ const AddClueModal = ({ sessionNameOptions, defaultSessionName, onClose, onSaved
               Extracted post text
               <textarea value={extractedText} onChange={(event) => setExtractedText(event.target.value)} placeholder="Nothing extracted -- type it in manually" className="mt-2 min-h-28 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
             </label>
-            {postedAt && <p className="text-xs text-zinc-500">Posted label detected in screenshot: {postedAt}</p>}
+            {postedAt && (
+              <p className="text-xs text-zinc-500">
+                Posted label detected in screenshot: {postedAt}
+                {postedAtIso ? ` -- will be saved as ${formatDateTime(postedAtIso)}` : " -- couldn't resolve an exact date, will be saved with today's date"}
+              </p>
+            )}
           </div>
         )}
         <div className="mt-5 flex justify-end gap-2">
