@@ -1502,7 +1502,7 @@ const BuildSession = () => {
         if (venueError) console.warn("Venue upsert unavailable:", venueError);
       }
       const sessionMetaPayload = { session_date: sessionDate || null, event_date: sessionDate || null, venue: selectedVenueName || null, venue_id: selectedVenueId || null };
-      const baseSessionPayload = { user_id: user.id, name: builtName, session_name: builtName, is_past: goLive ? false : editingSessionWasPast, ...grouped };
+      const baseSessionPayload = { user_id: user.id, name: builtName, session_name: builtName, source_type: "built", is_past: goLive ? false : editingSessionWasPast, ...grouped };
       const withMetaPayload = { ...baseSessionPayload, ...sessionMetaPayload };
       const fullSessionPayload = { ...withMetaPayload, round_descriptions: roundDescriptions };
       // Tiered fallback so a failure on one field (e.g. a column that doesn't exist yet)
