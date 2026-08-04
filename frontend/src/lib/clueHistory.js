@@ -57,3 +57,18 @@ export const logCluePost = async ({ sessionName, message, socialPost, categories
 
 export const buildClueStyleExamples = (history = readClueHistory(), limit = 6) =>
   [...new Set(history.map((entry) => entry.socialPost).filter(Boolean))].slice(0, limit);
+
+// A clue is often drafted/logged under the wrong session (picked before
+// switching sessions, or the session got renamed/duplicated afterward) --
+// history only stores a sessionName snapshot, not a session id, so this
+// just repoints that label at a different name rather than the row itself.
+export const updateCluePostSession = async (entryId, sessionName) => {
+  const nextName = cleanText(sessionName);
+  const next = writeClueHistory(readClueHistory().map((entry) => entry.id === entryId ? { ...entry, sessionName: nextName } : entry));
+  try {
+    await saveProfileValue(profileKeys.clueHistory, next);
+  } catch (error) {
+    console.warn("Clue history profile save unavailable:", error);
+  }
+  return next;
+};
