@@ -479,6 +479,21 @@ const buildFairPlayStats = (players, answers, gradedAnswers, playerActivity) => 
   return byTeam;
 };
 
+// Realtime broadcast.send() resolves "ok"/"timed out"/"error" -- previously
+// nothing checked that, so a transient Supabase realtime blip (seen live:
+// a ~30s window of broadcast 400s during an event) silently dropped a
+// question/reveal/timer update with no retry. The presentation screen and
+// phones would then sit on stale state until the 8s REST fallback poll
+// caught up, surfacing as a jarring jump/flash rather than a smooth update.
+const sendLiveBroadcast = (channel, message, attempt = 0) => {
+  if (!channel) return;
+  channel.send(message).then((status) => {
+    if (status !== "ok" && attempt < 2) {
+      window.setTimeout(() => sendLiveBroadcast(channel, message, attempt + 1), 300 * (attempt + 1));
+    }
+  });
+};
+
 const HostSession = () => {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -496,6 +511,7 @@ const HostSession = () => {
   const liveChannelRef = useRef(null);
   const liveStateRef = useRef(null);
   const liveStateSequenceRef = useRef(0);
+  const presentReadyDebounceRef = useRef(null);
   const processedLiveEventsRef = useRef(new Set());
   const hostedResultsRef = useRef({});
   const liveStateSaveRef = useRef(0);
@@ -886,16 +902,25 @@ const HostSession = () => {
         applyLivePlayerEvent("idea_submit", payload);
       })
       .on("broadcast", { event: "present_ready" }, () => {
-        const state = liveStateRef.current;
-        if (state) liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: state });
+        // Every open presentation screen pings this on mount/reconnect with
+        // no coalescing -- two screens open (or one screen reconnect-looping
+        // from a throttled background tab) used to mean two-plus independent
+        // full-state broadcasts fired back to back, right when the channel
+        // was already unstable. Debounce so a burst of pings gets one reply.
+        window.clearTimeout(presentReadyDebounceRef.current);
+        presentReadyDebounceRef.current = window.setTimeout(() => {
+          const state = liveStateRef.current;
+          if (state) sendLiveBroadcast(liveChannelRef.current, { type: "broadcast", event: "host_state", payload: state });
+        }, 400);
       })
       .subscribe((status) => {
         setLiveStatus(status === "SUBSCRIBED" ? "live" : "connecting");
         if (status === "SUBSCRIBED" && liveStateRef.current) {
-          liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: liveStateRef.current });
+          sendLiveBroadcast(liveChannelRef.current, { type: "broadcast", event: "host_state", payload: liveStateRef.current });
         }
       });
     return () => {
+      window.clearTimeout(presentReadyDebounceRef.current);
       supabase.removeChannel(channel);
       liveChannelRef.current = null;
     };
@@ -927,7 +952,7 @@ const HostSession = () => {
     const orderedState = { ...state, liveSequence: liveStateSequenceRef.current };
     liveStateRef.current = orderedState;
     localStorage.setItem(`quiz-crafter-present-state-${id}`, JSON.stringify(orderedState));
-    liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: orderedState });
+    sendLiveBroadcast(liveChannelRef.current, { type: "broadcast", event: "host_state", payload: orderedState });
     const nowMs = Date.now();
     const durableKey = [
       orderedState.liveSequence,
@@ -1075,7 +1100,7 @@ const HostSession = () => {
   useEffect(() => {
     const interval = window.setInterval(() => {
       const state = liveStateRef.current;
-      if (state) liveChannelRef.current?.send({ type: "broadcast", event: "host_state", payload: state });
+      if (state) sendLiveBroadcast(liveChannelRef.current, { type: "broadcast", event: "host_state", payload: state });
     }, 2500);
     return () => window.clearInterval(interval);
   }, [id]);
@@ -1159,7 +1184,7 @@ const HostSession = () => {
     setPresentMode(mode);
     const nextGameStarted = mode === "qr" ? gameStarted : true;
     if (mode !== "qr") setGameStarted(true);
-    liveChannelRef.current?.send({
+    sendLiveBroadcast(liveChannelRef.current, {
       type: "broadcast",
       event: "host_mode",
       payload: { mode, gameStarted: nextGameStarted, introRoundKey: roundKey || null, updatedAt: new Date().toISOString() },
