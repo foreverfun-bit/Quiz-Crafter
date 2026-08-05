@@ -51,9 +51,6 @@ const memoryFilters = [
   { value: "all", label: "All Memory" },
   { value: "available", label: "Available" },
   { value: "used_recently", label: "Used Recently" },
-  { value: "needs_rewrite", label: "Needs Rewrite" },
-  { value: "too_common", label: "Too Common" },
-  { value: "retired", label: "Retired" },
 ];
 const USED_QUESTIONS_KEY = "quiz-crafter-used-question-ids";
 const UNUSED_QUESTIONS_KEY = "quiz-crafter-unused-question-ids";
