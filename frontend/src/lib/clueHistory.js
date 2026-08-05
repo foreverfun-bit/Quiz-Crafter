@@ -5,13 +5,22 @@ const MAX_HISTORY = 30;
 
 const cleanText = (value) => String(value || "").replace(/\s+/g, " ").trim();
 
+// Guards against a malformed date (e.g. a bad AI-guessed timestamp from a
+// screenshot) silently producing an "Invalid Date" entry that then sorts
+// unpredictably in history.
+const safeIsoDate = (value) => {
+  if (!value) return "";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString();
+};
+
 const normalizeEntry = (entry = {}) => ({
   id: entry.id || `clue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   sessionName: cleanText(entry.sessionName),
   message: cleanText(entry.message),
   socialPost: cleanText(entry.socialPost),
   categories: Array.isArray(entry.categories) ? entry.categories.map(cleanText).filter(Boolean).slice(0, 8) : [],
-  createdAt: entry.createdAt || new Date().toISOString(),
+  createdAt: safeIsoDate(entry.createdAt) || new Date().toISOString(),
 });
 
 // Newest wins on an id collision (e.g. the same draft edited and re-logged).
@@ -43,8 +52,8 @@ export const syncClueHistory = async () => {
 // AI first drafts it -- that way the history (and the style it teaches
 // future drafts) reflects posts the host chose to use, edits included,
 // rather than every rough first draft.
-export const logCluePost = async ({ sessionName, message, socialPost, categories }) => {
-  const entry = normalizeEntry({ sessionName, message, socialPost, categories });
+export const logCluePost = async ({ sessionName, message, socialPost, categories, createdAt }) => {
+  const entry = normalizeEntry({ sessionName, message, socialPost, categories, createdAt });
   if (!entry.message && !entry.socialPost) return readClueHistory();
   const next = writeClueHistory([entry, ...readClueHistory()]);
   try {
@@ -57,3 +66,54 @@ export const logCluePost = async ({ sessionName, message, socialPost, categories
 
 export const buildClueStyleExamples = (history = readClueHistory(), limit = 6) =>
   [...new Set(history.map((entry) => entry.socialPost).filter(Boolean))].slice(0, limit);
+
+// Reads a screenshot of an already-posted clue (a compressed data URL, see
+// imageBlobToDataUrl in mediaUpload.js) and transcribes its post text via a
+// vision model, so a clue posted before this feature existed -- or edited by
+// hand after drafting -- can still be archived and used to teach future
+// drafts the host's real voice.
+export const extractCluePostFromImage = async (imageDataUrl) => {
+  const response = await fetch("/api/extract-clue-screenshot", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ image: imageDataUrl }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data?.error || "Could not read that screenshot");
+  return { text: cleanText(data.text), postedAt: cleanText(data.postedAt), postedAtIso: safeIsoDate(data.postedAtIso) };
+};
+
+export const updateCluePostText = async (entryId, socialPost) => {
+  const next = writeClueHistory(readClueHistory().map((entry) => entry.id === entryId ? { ...entry, socialPost: cleanText(socialPost) } : entry));
+  try {
+    await saveProfileValue(profileKeys.clueHistory, next);
+  } catch (error) {
+    console.warn("Clue history profile save unavailable:", error);
+  }
+  return next;
+};
+
+export const deleteCluePost = async (entryId) => {
+  const next = writeClueHistory(readClueHistory().filter((entry) => entry.id !== entryId));
+  try {
+    await saveProfileValue(profileKeys.clueHistory, next);
+  } catch (error) {
+    console.warn("Clue history profile save unavailable:", error);
+  }
+  return next;
+};
+
+// A clue is often drafted/logged under the wrong session (picked before
+// switching sessions, or the session got renamed/duplicated afterward) --
+// history only stores a sessionName snapshot, not a session id, so this
+// just repoints that label at a different name rather than the row itself.
+export const updateCluePostSession = async (entryId, sessionName) => {
+  const nextName = cleanText(sessionName);
+  const next = writeClueHistory(readClueHistory().map((entry) => entry.id === entryId ? { ...entry, sessionName: nextName } : entry));
+  try {
+    await saveProfileValue(profileKeys.clueHistory, next);
+  } catch (error) {
+    console.warn("Clue history profile save unavailable:", error);
+  }
+  return next;
+};

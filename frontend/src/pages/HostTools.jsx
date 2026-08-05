@@ -4,11 +4,13 @@ import { supabase } from "../lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
-import { BarChart3, CheckCircle, Clock, Copy, ExternalLink, Mail, MessageSquare, Send, Sparkles, ThumbsDown, ThumbsUp, TrendingUp, Users, XCircle } from "lucide-react";
+import { BarChart3, CheckCircle, Clock, Copy, ExternalLink, Loader2, Mail, MessageSquare, Pencil, Send, Sparkles, ThumbsDown, ThumbsUp, Trash2, TrendingUp, Upload, Users, X, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { loadHostToolsSessionState, profileKeys, saveHostToolsSessionState, saveProfileValue, syncProfileJson } from "../lib/profileState";
-import { buildClueStyleExamples, logCluePost, readClueHistory, syncClueHistory } from "../lib/clueHistory";
+import { buildClueStyleExamples, deleteCluePost, extractCluePostFromImage, logCluePost, readClueHistory, syncClueHistory, updateCluePostSession, updateCluePostText } from "../lib/clueHistory";
+import { imageBlobToDataUrl } from "../lib/mediaUpload";
 import { dedupeCategories } from "../lib/categories";
+import { useCopilot } from "../context/CopilotContext";
 
 const SOCIAL_STORAGE_KEY = "quiz-crafter-social-links";
 const OUTREACH_CONTACTS_STORAGE_KEY = "quiz-crafter-outreach-contacts-v1";
@@ -31,6 +33,7 @@ const hostToolTabs = [
 ];
 
 const HostTools = () => {
+  const { updatePageContext } = useCopilot();
   const [searchParams] = useSearchParams();
   const [sessions, setSessions] = useState([]);
   const [selectedSessionId, setSelectedSessionId] = useState("");
@@ -71,6 +74,25 @@ const HostTools = () => {
     answer: getQuestionAnswer(question),
     fun_fact: question.fun_fact || question.funFact || "",
   })).filter((question) => question.question && question.answer), [selectedSession]);
+
+  // The FloatingCopilot chat had no idea what clue it had just drafted or
+  // which questions it was based on -- it only ever saw a coarse, page-agnostic
+  // build summary, never what's actually on screen. Push the live Clue Builder
+  // state so a follow-up like "this is missing the Oktoberfest question" is
+  // grounded in the real selection and draft instead of starting from nothing.
+  useEffect(() => {
+    const selectedClueQuestions = clueQuestionRows.filter((question) => selectedClueKeys.includes(question.key));
+    updatePageContext({
+      goal: "Help draft and refine the social post teaser for this trivia session",
+      hostHub: {
+        activeTab,
+        sessionName: selectedSession?.name || selectedSession?.session_name || "",
+        clueDirection: aiDirection,
+        selectedClueQuestions: selectedClueQuestions.map((question) => ({ category: question.category, question: question.question, answer: question.answer })),
+        draftedSocialPost: socialPost,
+      },
+    });
+  }, [activeTab, aiDirection, clueQuestionRows, selectedClueKeys, selectedSession, socialPost, updatePageContext]);
 
   useEffect(() => {
     const tab = searchParams.get("tab");
@@ -231,7 +253,15 @@ const HostTools = () => {
       channelRef.current = null;
       setConnected(false);
     };
-  }, [selectedSessionId, selectedSession]);
+  // Same feedback-loop hazard as the attendance effect below: this reloads
+  // (and overwrites) message/socialPost/aiDirection and the players/feedback
+  // state from storage, so it must only run when the host actually switches
+  // sessions -- not on every incidental `selectedSession` reference change
+  // (e.g. the attendance autosave writing back into `sessions`), or it can
+  // clobber an AI-drafted clue that hasn't been persisted yet with the
+  // previous (often empty) saved draft.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSessionId]);
 
   useEffect(() => {
     if (!selectedSessionId || loadedDraftSessionRef.current !== selectedSessionId) return undefined;
@@ -256,7 +286,18 @@ const HostTools = () => {
       teamHeadcounts: Object.fromEntries(Object.entries(savedTeamHeadcounts).map(([teamId, value]) => [teamId, normalizeHeadcount(value)])),
     });
     loadedAttendanceSessionRef.current = selectedSessionId;
-  }, [selectedSessionId, selectedSession]);
+  // Depending on `selectedSession` itself (instead of just the id) used to
+  // create a feedback loop: saving attendance below writes the result back
+  // into `sessions` via setSessions, which gives `selectedSession` (derived
+  // from `sessions`) a new object reference every time even though nothing
+  // a host did changed -- which re-ran this effect, which reset `attendance`
+  // to a new object, which re-triggered the save effect below, forever.
+  // Every trip around that loop also re-ran the drafts/players/feedback load
+  // effect above (same dependency mistake), silently overwriting a freshly
+  // AI-drafted clue with whatever was last durably saved before it finished
+  // saving. Keying this on the session id only breaks the loop.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSessionId]);
 
   useEffect(() => {
     if (!selectedSessionId || loadedAttendanceSessionRef.current !== selectedSessionId) return undefined;
@@ -314,14 +355,13 @@ const HostTools = () => {
     const selectedQuestions = clueQuestionRows.filter((question) => selectedClueKeys.includes(question.key));
     logCluePost({
       sessionName: selectedSession?.name || selectedSession?.session_name || "",
-      message,
       socialPost,
       categories: dedupeCategories(selectedQuestions.map((question) => question.category)),
     }).then(setClueHistory).catch((error) => console.warn("Clue history log unavailable:", error));
   };
 
   const copySocialPost = async () => {
-    const text = socialPost.trim() || message.trim();
+    const text = socialPost.trim();
     if (!text) return toast.error("Write or generate a post first");
     await navigator.clipboard.writeText(text);
     toast.success("Social post copied");
@@ -329,7 +369,7 @@ const HostTools = () => {
   };
 
   const openSocialComposer = async (network) => {
-    const rawText = socialPost.trim() || message.trim() || "Trivia update";
+    const rawText = socialPost.trim() || "Trivia update";
     const text = encodeURIComponent(rawText);
     const url = encodeURIComponent(window.location.origin);
     if (network === "facebook") {
@@ -375,14 +415,35 @@ const HostTools = () => {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data?.error || "Could not generate clues");
-      setMessage(data.update || "");
       setSocialPost(data.social_post || "");
-      toast.success("AI drafted a clue and social post");
+      toast.success("AI drafted a social post");
     } catch (error) {
       toast.error(error.message || "Could not generate clues");
     } finally {
       setGenerating(false);
     }
+  };
+
+  const reassignCluePost = async (entryId, sessionName) => {
+    setClueHistory(await updateCluePostSession(entryId, sessionName));
+  };
+
+  const editCluePost = async (entryId, socialPost) => {
+    setClueHistory(await updateCluePostText(entryId, socialPost));
+  };
+
+  const removeCluePost = async (entryId) => {
+    if (!window.confirm("Delete this past clue? This can't be undone.")) return;
+    setClueHistory(await deleteCluePost(entryId));
+  };
+
+  // Archives a clue that was already posted (or posted before this feature
+  // existed) straight into history from a screenshot, instead of only
+  // logging clues drafted in-app -- so style-matching for future drafts can
+  // learn from everything the host has actually published.
+  const addManualCluePost = async ({ sessionName, text, postedAtIso }) => {
+    const next = await logCluePost({ sessionName, message: text, socialPost: text, categories: [], createdAt: postedAtIso });
+    setClueHistory(next);
   };
 
   return (
@@ -402,7 +463,7 @@ const HostTools = () => {
       {activeTab === "feedback" && <HostReviewWorkspace selectedSession={selectedSession} analytics={analytics} questionFeedback={questionFeedback} categoryRows={categoryRows} playerIdeas={playerIdeas} exportResults={exportResults} attendance={attendance} setAttendance={setAttendance} />}
       {activeTab === "game" && <GameDataPanel analytics={analytics} />}
       {activeTab === "communications" && <div className="space-y-6 max-w-6xl"><FollowUpPanel message={message} setMessage={setMessage} sendUpdate={sendUpdate} openEmailDraft={openEmailDraft} copyEmails={copyEmails} contactsCount={allEmailContacts.length} scheduleNextShow={scheduleNextShow} buildNextSession={buildNextSession} /><OutreachPanel message={message} setMessage={setMessage} sendUpdate={sendUpdate} openEmailDraft={openEmailDraft} copyEmails={copyEmails} contacts={allEmailContacts} sessionEmailCount={emailPlayers.length} socialLinks={socialLinks} updateSocialLink={updateSocialLink} /></div>}
-      {activeTab === "clues" && <CluesPanel aiDirection={aiDirection} setAiDirection={setAiDirection} generateClues={generateClues} generating={generating} selectedSession={selectedSession} clueQuestionRows={clueQuestionRows} selectedClueKeys={selectedClueKeys} setSelectedClueKeys={setSelectedClueKeys} message={message} setMessage={setMessage} socialPost={socialPost} setSocialPost={setSocialPost} copySocialPost={copySocialPost} openSocialComposer={openSocialComposer} socialLinks={socialLinks} clueHistory={clueHistory} />}
+      {activeTab === "clues" && <CluesPanel aiDirection={aiDirection} setAiDirection={setAiDirection} generateClues={generateClues} generating={generating} selectedSession={selectedSession} clueQuestionRows={clueQuestionRows} selectedClueKeys={selectedClueKeys} setSelectedClueKeys={setSelectedClueKeys} socialPost={socialPost} setSocialPost={setSocialPost} copySocialPost={copySocialPost} openSocialComposer={openSocialComposer} socialLinks={socialLinks} clueHistory={clueHistory} sessions={sessions} reassignCluePost={reassignCluePost} addManualCluePost={addManualCluePost} editCluePost={editCluePost} removeCluePost={removeCluePost} />}
     </div>
   );
 };
@@ -494,14 +555,162 @@ const CrowdActivityCard = ({ rows }) => <Card className="glass-card"><CardHeader
 
 const CorrectBadge = ({ status }) => status === "correct" ? <Badge className="bg-emerald-500/15 text-emerald-300"><CheckCircle size={12} className="mr-1" />Yes</Badge> : status === "incorrect" ? <Badge className="bg-red-500/15 text-red-300"><XCircle size={12} className="mr-1" />No</Badge> : <Badge className="bg-zinc-800 text-zinc-300">Pending</Badge>;
 
-const CluesPanel = ({ aiDirection, setAiDirection, generateClues, generating, selectedSession, clueQuestionRows, selectedClueKeys, setSelectedClueKeys, message, setMessage, socialPost, setSocialPost, copySocialPost, openSocialComposer, socialLinks, clueHistory }) => {
+const CluesPanel = ({ aiDirection, setAiDirection, generateClues, generating, selectedSession, clueQuestionRows, selectedClueKeys, setSelectedClueKeys, socialPost, setSocialPost, copySocialPost, openSocialComposer, socialLinks, clueHistory, sessions, reassignCluePost, addManualCluePost, editCluePost, removeCluePost }) => {
+  const [addClueOpen, setAddClueOpen] = useState(false);
   const selectedQuestions = clueQuestionRows.filter((question) => selectedClueKeys.includes(question.key));
   const toggleQuestion = (key) => setSelectedClueKeys((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
   const selectAll = () => setSelectedClueKeys(clueQuestionRows.map((question) => question.key));
   const selectNone = () => setSelectedClueKeys([]);
-  const reusePastClue = (entry) => { setMessage(entry.message); setSocialPost(entry.socialPost); };
+  const reusePastClue = (entry) => setSocialPost(entry.socialPost || entry.message);
+  const sessionNameOptions = [...new Set(sessions.map((session) => session.name || session.session_name).filter(Boolean))];
 
-  return <section className="space-y-6 max-w-6xl"><Panel title="Clue Builder" icon={Sparkles}><div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-5"><div className="space-y-4"><div><p className="text-sm font-bold text-white">Select the questions the clue should hint at</p><p className="text-xs text-zinc-500 mt-1">Only selected questions are sent to AI. Answers are included for context, but the prompt blocks answer reveals.</p></div><div className="flex flex-wrap gap-2"><Button type="button" size="sm" variant="outline" onClick={selectAll} className="border-white/10 text-zinc-300 hover:text-white">Select All</Button><Button type="button" size="sm" variant="outline" onClick={selectNone} className="border-white/10 text-zinc-300 hover:text-white">Clear</Button><Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20">{selectedQuestions.length} selected</Badge></div><div className="max-h-[520px] overflow-y-auto rounded-xl border border-white/10 bg-zinc-950/50 p-2 space-y-2">{clueQuestionRows.map((question) => <button key={question.key} type="button" onClick={() => toggleQuestion(question.key)} className={`w-full rounded-lg border p-3 text-left transition ${selectedClueKeys.includes(question.key) ? "border-[#71E0DC]/50 bg-[#71E0DC]/10" : "border-white/10 bg-zinc-950/50 hover:border-white/20"}`}><div className="flex items-start gap-3"><span className={`mt-0.5 flex h-5 w-5 items-center justify-center rounded border ${selectedClueKeys.includes(question.key) ? "border-[#71E0DC] bg-[#71E0DC] text-zinc-950" : "border-white/20 text-transparent"}`}>{selectedClueKeys.includes(question.key) ? <CheckCircle size={14} /> : null}</span><div className="min-w-0"><div className="mb-1 flex flex-wrap items-center gap-2"><Badge className="bg-zinc-800 text-zinc-300">Q{question.index + 1}</Badge><Badge className="bg-[#AEB2EF]/15 text-[#AEB2EF]">{question.category}</Badge></div><p className="text-sm font-semibold text-white line-clamp-2">{question.question}</p><p className="mt-1 text-xs text-[#71E0DC]">Answer: {question.answer}</p></div></div></button>)}{!clueQuestionRows.length && <p className="p-6 text-center text-sm text-zinc-500">Choose a session with questions first.</p>}</div></div><div className="space-y-4"><label className="block text-sm font-bold text-white">Direction<textarea value={aiDirection} onChange={(event) => setAiDirection(event.target.value)} className="mt-2 min-h-28 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" /></label><Button onClick={() => generateClues(selectedQuestions)} disabled={generating || !selectedSession || !selectedQuestions.length} className="w-full gradient-btn">{generating ? <Sparkles className="mr-2 animate-spin" size={16} /> : <Sparkles className="mr-2" size={16} />}Draft From Selected</Button><p className="text-xs text-zinc-500">Tip: pick 3-6 questions for the most natural Facebook-style teaser.</p></div></div></Panel><Panel title="Drafted Update and Social Post" icon={MessageSquare}><div className="grid grid-cols-1 xl:grid-cols-2 gap-4"><label className="text-sm font-bold text-white">In-game update<textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Short player update..." className="mt-2 min-h-36 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><label className="text-sm font-bold text-white">Social post<textarea value={socialPost} onChange={(event) => setSocialPost(event.target.value)} placeholder="Facebook/social post..." className="mt-2 min-h-36 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /></label></div><div className="grid grid-cols-1 md:grid-cols-3 gap-2"><Button onClick={copySocialPost} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Copy size={16} className="mr-2" />Copy Post</Button><Button onClick={() => openSocialComposer("facebook")} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />{socialLinks.facebook ? "Open Facebook Page" : "Open Facebook"}</Button><Button onClick={() => openSocialComposer("x")} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />X/Twitter</Button></div></Panel><Panel title="Past Clues" icon={Clock}><p className="text-xs text-zinc-500 -mt-2">Logged whenever you copy or open a post to publish it. New drafts lean on your last few posts here to match your own voice once you've used a few.</p><div className="space-y-2 max-h-[480px] overflow-y-auto">{clueHistory.map((entry) => <div key={entry.id} className="rounded-lg border border-white/10 bg-zinc-950/60 p-3"><div className="flex flex-wrap items-center justify-between gap-2 mb-2"><div className="flex flex-wrap items-center gap-2"><Badge className="bg-zinc-800 text-zinc-300">{entry.sessionName || "Trivia Night"}</Badge><span className="text-xs text-zinc-500">{formatDateTime(entry.createdAt)}</span></div><Button type="button" size="sm" variant="outline" onClick={() => reusePastClue(entry)} className="h-7 border-white/10 text-zinc-300 hover:text-white">Reuse</Button></div><p className="text-sm text-zinc-200 line-clamp-3">{entry.socialPost || entry.message}</p></div>)}{!clueHistory.length && <p className="p-6 text-center text-sm text-zinc-500">Posts you copy or open from above will show up here.</p>}</div></Panel></section>;
+  return <section className="space-y-6 max-w-6xl"><Panel title="Clue Builder" icon={Sparkles}><div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-5"><div className="space-y-4"><div><p className="text-sm font-bold text-white">Select the questions the clue should hint at</p><p className="text-xs text-zinc-500 mt-1">Only selected questions are sent to AI. Answers are included for context, but the prompt blocks answer reveals.</p></div><div className="flex flex-wrap gap-2"><Button type="button" size="sm" variant="outline" onClick={selectAll} className="border-white/10 text-zinc-300 hover:text-white">Select All</Button><Button type="button" size="sm" variant="outline" onClick={selectNone} className="border-white/10 text-zinc-300 hover:text-white">Clear</Button><Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20">{selectedQuestions.length} selected</Badge></div><div className="max-h-[520px] overflow-y-auto rounded-xl border border-white/10 bg-zinc-950/50 p-2 space-y-2">{clueQuestionRows.map((question) => <button key={question.key} type="button" onClick={() => toggleQuestion(question.key)} className={`w-full rounded-lg border p-3 text-left transition ${selectedClueKeys.includes(question.key) ? "border-[#71E0DC]/50 bg-[#71E0DC]/10" : "border-white/10 bg-zinc-950/50 hover:border-white/20"}`}><div className="flex items-start gap-3"><span className={`mt-0.5 flex h-5 w-5 items-center justify-center rounded border ${selectedClueKeys.includes(question.key) ? "border-[#71E0DC] bg-[#71E0DC] text-zinc-950" : "border-white/20 text-transparent"}`}>{selectedClueKeys.includes(question.key) ? <CheckCircle size={14} /> : null}</span><div className="min-w-0"><div className="mb-1 flex flex-wrap items-center gap-2"><Badge className="bg-zinc-800 text-zinc-300">Q{question.index + 1}</Badge><Badge className="bg-[#AEB2EF]/15 text-[#AEB2EF]">{question.category}</Badge></div><p className="text-sm font-semibold text-white line-clamp-2">{question.question}</p><p className="mt-1 text-xs text-[#71E0DC]">Answer: {question.answer}</p></div></div></button>)}{!clueQuestionRows.length && <p className="p-6 text-center text-sm text-zinc-500">Choose a session with questions first.</p>}</div></div><div className="space-y-4"><label className="block text-sm font-bold text-white">Direction<textarea value={aiDirection} onChange={(event) => setAiDirection(event.target.value)} className="mt-2 min-h-28 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" /></label><Button onClick={() => generateClues(selectedQuestions)} disabled={generating || !selectedSession || !selectedQuestions.length} className="w-full gradient-btn">{generating ? <Sparkles className="mr-2 animate-spin" size={16} /> : <Sparkles className="mr-2" size={16} />}Draft From Selected</Button><p className="text-xs text-zinc-500">Tip: pick 3-6 questions for the most natural Facebook-style teaser.</p></div></div></Panel><Panel title="Drafted Social Post" icon={MessageSquare}><label className="text-sm font-bold text-white">Social post<textarea value={socialPost} onChange={(event) => setSocialPost(event.target.value)} placeholder="Facebook/social post..." className="mt-2 min-h-36 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-2"><Button onClick={copySocialPost} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Copy size={16} className="mr-2" />Copy Post</Button><Button onClick={() => openSocialComposer("facebook")} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />{socialLinks.facebook ? "Open Facebook Page" : "Open Facebook"}</Button><Button onClick={() => openSocialComposer("x")} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />X/Twitter</Button></div></Panel><Panel title="Past Clues" icon={Clock}><div className="-mt-2 flex flex-wrap items-start justify-between gap-3"><p className="text-xs text-zinc-500">Logged whenever you copy or open a post to publish it, or add one from a screenshot. New drafts lean on your last few posts here to match your own voice once you've used a few.</p><Button type="button" size="sm" onClick={() => setAddClueOpen(true)} className="h-8 shrink-0 gradient-btn"><Upload size={14} className="mr-1.5" />Add Clue</Button></div><div className="space-y-2 max-h-[480px] overflow-y-auto">{clueHistory.map((entry) => <PastClueRow key={entry.id} entry={entry} sessionNameOptions={sessionNameOptions} onReassignSession={(sessionName) => reassignCluePost(entry.id, sessionName)} onReuse={() => reusePastClue(entry)} onEdit={(text) => editCluePost(entry.id, text)} onDelete={() => removeCluePost(entry.id)} />)}{!clueHistory.length && <p className="p-6 text-center text-sm text-zinc-500">Posts you copy or open from above will show up here.</p>}</div></Panel>{addClueOpen && <AddClueModal sessionNameOptions={sessionNameOptions} defaultSessionName={selectedSession?.name || selectedSession?.session_name || ""} onClose={() => setAddClueOpen(false)} onSaved={addManualCluePost} />}</section>;
+};
+
+const PastClueRow = ({ entry, sessionNameOptions, onReassignSession, onReuse, onEdit, onDelete }) => {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(entry.socialPost || entry.message || "");
+  const startEdit = () => {
+    setDraft(entry.socialPost || entry.message || "");
+    setEditing(true);
+  };
+  const saveEdit = () => {
+    onEdit(draft.trim());
+    setEditing(false);
+  };
+  return (
+    <div className="rounded-lg border border-white/10 bg-zinc-950/60 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <select value={entry.sessionName || ""} onChange={(event) => onReassignSession(event.target.value)} className="h-7 rounded-md border border-white/10 bg-zinc-900 px-2 text-xs font-semibold text-zinc-300 outline-none focus:border-[#71E0DC]/60">
+            {!sessionNameOptions.includes(entry.sessionName) && <option value={entry.sessionName || ""}>{entry.sessionName || "Trivia Night"}</option>}
+            {sessionNameOptions.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+          <span className="text-xs text-zinc-500">{formatDateTime(entry.createdAt)}</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          {!editing && <Button type="button" size="sm" variant="outline" onClick={onReuse} className="h-7 border-white/10 text-zinc-300 hover:text-white">Reuse</Button>}
+          {!editing && <Button type="button" size="sm" variant="outline" onClick={startEdit} className="h-7 w-7 p-0 border-white/10 text-zinc-300 hover:text-white" aria-label="Edit past clue"><Pencil size={13} /></Button>}
+          <Button type="button" size="sm" variant="outline" onClick={onDelete} className="h-7 w-7 p-0 border-white/10 text-zinc-400 hover:border-red-500/40 hover:text-red-300" aria-label="Delete past clue"><Trash2 size={13} /></Button>
+        </div>
+      </div>
+      {editing ? (
+        <div className="space-y-2">
+          <textarea value={draft} onChange={(event) => setDraft(event.target.value)} className="min-h-24 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-sm text-zinc-200 outline-none focus:border-[#71E0DC]/60" />
+          <div className="flex justify-end gap-2">
+            <Button type="button" size="sm" variant="outline" onClick={() => setEditing(false)} className="h-7 border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
+            <Button type="button" size="sm" onClick={saveEdit} disabled={!draft.trim()} className="h-7 gradient-btn">Save</Button>
+          </div>
+        </div>
+      ) : (
+        <p className="text-sm text-zinc-200 line-clamp-3">{entry.socialPost || entry.message}</p>
+      )}
+    </div>
+  );
+};
+
+const AddClueModal = ({ sessionNameOptions, defaultSessionName, onClose, onSaved }) => {
+  const [sessionName, setSessionName] = useState(defaultSessionName);
+  const [preview, setPreview] = useState("");
+  const [read, setRead] = useState(false);
+  const [extractedText, setExtractedText] = useState("");
+  const [postedAt, setPostedAt] = useState("");
+  const [postedAtIso, setPostedAtIso] = useState("");
+  const [reading, setReading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [dragging, setDragging] = useState(false);
+
+  const handleFile = async (file) => {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) return toast.error("Choose an image file");
+    if (file.size > 15 * 1024 * 1024) return toast.error("That image is too large -- try a smaller screenshot");
+    setReading(true);
+    setRead(false);
+    setExtractedText("");
+    setPostedAt("");
+    setPostedAtIso("");
+    try {
+      const compressed = await imageBlobToDataUrl(file);
+      setPreview(compressed);
+      const result = await extractCluePostFromImage(compressed);
+      setExtractedText(result.text);
+      setPostedAt(result.postedAt);
+      setPostedAtIso(result.postedAtIso);
+      setRead(true);
+    } catch (error) {
+      toast.error(error.message || "Could not read that screenshot");
+    } finally {
+      setReading(false);
+    }
+  };
+
+  const handleDrop = (event) => {
+    event.preventDefault();
+    setDragging(false);
+    handleFile(event.dataTransfer.files?.[0]);
+  };
+
+  const handleSave = async () => {
+    const text = extractedText.trim();
+    if (!text) return toast.error("Nothing to save yet");
+    setSaving(true);
+    try {
+      await onSaved({ sessionName, text, postedAtIso });
+      toast.success("Clue added to history");
+      onClose();
+    } catch (error) {
+      toast.error(error.message || "Could not save that clue");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/65 backdrop-blur-sm p-4 pt-8 md:pt-14 overflow-y-auto">
+      <div className="w-full max-w-lg rounded-xl bg-[#17181c] border border-white/10 shadow-2xl shadow-black/60 p-5 relative">
+        <button type="button" onClick={onClose} className="absolute right-4 top-4 text-zinc-400 hover:text-white" aria-label="Close add clue"><X size={18} /></button>
+        <div className="mb-5">
+          <h2 className="text-xl font-bold text-white flex items-center gap-2"><Upload size={19} className="text-[#71E0DC]" />Add Clue From Screenshot</h2>
+          <p className="mt-1 text-sm text-zinc-500">Upload a screenshot of the post you actually published. Quiz Crafter reads the text and adds it to your history.</p>
+        </div>
+        <label className="block text-sm font-bold text-white mb-4">
+          Session
+          <select value={sessionName} onChange={(event) => setSessionName(event.target.value)} className="mt-2 h-11 w-full rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60">
+            {!sessionNameOptions.includes(sessionName) && sessionName && <option value={sessionName}>{sessionName}</option>}
+            {sessionNameOptions.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+        </label>
+        <label
+          onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={handleDrop}
+          className={`flex h-40 cursor-pointer flex-col items-center justify-center rounded-md border-2 border-dashed transition-colors ${dragging ? "border-[#71E0DC] bg-[#71E0DC]/10" : "border-zinc-600 bg-zinc-950/20 hover:border-[#71E0DC]"}`}
+        >
+          {preview ? <img src={preview} alt="Screenshot preview" className="max-h-36 max-w-full rounded object-contain" /> : <><Upload className="mb-3 text-white" size={26} /><p className="text-sm font-medium text-white">Drag a screenshot or click to upload</p></>}
+          <input type="file" accept="image/*" className="hidden" onChange={(event) => handleFile(event.target.files?.[0])} />
+        </label>
+        {reading && <p className="mt-3 flex items-center gap-2 text-sm text-zinc-400"><Loader2 size={14} className="animate-spin text-[#71E0DC]" />Reading the screenshot...</p>}
+        {!reading && read && (
+          <div className="mt-4 space-y-2">
+            <label className="block text-sm font-bold text-white">
+              Extracted post text
+              <textarea value={extractedText} onChange={(event) => setExtractedText(event.target.value)} placeholder="Nothing extracted -- type it in manually" className="mt-2 min-h-28 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
+            </label>
+            {postedAt && (
+              <p className="text-xs text-zinc-500">
+                Posted label detected in screenshot: {postedAt}
+                {postedAtIso ? ` -- will be saved as ${formatDateTime(postedAtIso)}` : " -- couldn't resolve an exact date, will be saved with today's date"}
+              </p>
+            )}
+          </div>
+        )}
+        <div className="mt-5 flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={onClose} className="border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
+          <Button type="button" onClick={handleSave} disabled={saving || reading || !extractedText.trim()} className="gradient-btn">{saving ? <Loader2 size={16} className="mr-2 animate-spin" /> : <Upload size={16} className="mr-2" />}Save to Past Clues</Button>
+        </div>
+      </div>
+    </div>
+  );
 };
 
 const OutreachPanel = ({ message, setMessage, sendUpdate, openEmailDraft, copyEmails, contacts, sessionEmailCount, socialLinks, updateSocialLink }) => <section className="space-y-6 max-w-6xl"><Panel title="Opt-In Email List" icon={Mail}><div className="grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-4"><div className="rounded-xl border border-[#71E0DC]/25 bg-[#71E0DC]/10 p-4"><p className="text-xs font-bold uppercase tracking-wide text-[#71E0DC]">Stored Contacts</p><p className="mt-2 text-4xl font-black text-white">{contacts.length}</p><p className="mt-1 text-sm text-zinc-400">{sessionEmailCount} from this selected session</p><div className="mt-4 grid gap-2"><Button onClick={copyEmails} className="gradient-btn"><Copy size={16} className="mr-2" />Copy All Emails</Button><Button onClick={openEmailDraft} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Mail size={16} className="mr-2" />Email All</Button></div></div><div className="rounded-xl border border-white/10 bg-zinc-950/60 overflow-hidden"><div className="grid grid-cols-[1fr_1fr_140px] gap-3 border-b border-white/10 px-3 py-2 text-xs font-bold uppercase tracking-wide text-zinc-500"><span>Team</span><span>Email</span><span>Source</span></div><div className="max-h-72 overflow-y-auto">{contacts.map((contact) => <div key={contact.email} className="grid grid-cols-[1fr_1fr_140px] gap-3 border-b border-white/5 px-3 py-3 text-sm"><span className="font-semibold text-white truncate">{contact.name || "Team"}</span><span className="text-[#71E0DC] truncate">{contact.email}</span><span className="text-zinc-500 truncate">{contact.sessionName || "Trivia"}</span></div>)}{!contacts.length && <p className="p-6 text-center text-sm text-zinc-500">When players choose Email me on the join screen, they will be stored here across sessions.</p>}</div></div></div></Panel><Panel title="Email and Player Updates" icon={MessageSquare}><textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Type a clue, cancellation, schedule change, or player update..." className="min-h-32 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /><div className="grid grid-cols-1 md:grid-cols-3 gap-2"><Button onClick={sendUpdate} className="gradient-btn"><Send size={16} className="mr-2" />Send In-App</Button><Button onClick={openEmailDraft} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Mail size={16} className="mr-2" />Email Draft</Button><Button onClick={copyEmails} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Copy size={16} className="mr-2" />Copy Emails</Button></div></Panel><Panel title="Connected Pages" icon={ExternalLink}><div className="grid grid-cols-1 md:grid-cols-3 gap-3"><input value={socialLinks.facebook} onChange={(event) => updateSocialLink("facebook", event.target.value)} placeholder="Facebook page URL" className="h-10 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none" /><input value={socialLinks.instagram} onChange={(event) => updateSocialLink("instagram", event.target.value)} placeholder="Instagram profile URL" className="h-10 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none" /><input value={socialLinks.x} onChange={(event) => updateSocialLink("x", event.target.value)} placeholder="X/Twitter profile URL" className="h-10 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none" /></div><p className="text-xs text-zinc-500">Facebook posts can be copied and opened from the Clues tab. One-click publishing will require a Meta account connection.</p></Panel></section>;
