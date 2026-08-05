@@ -283,7 +283,17 @@ const PresentSession = () => {
   const [liveGameId, setLiveGameId] = useState(null);
   const [livePlayers, setLivePlayers] = useState([]);
   const [now, setNow] = useState(Date.now());
+  const [isSuperseded, setIsSuperseded] = useState(false);
   const hasLiveStateRef = useRef(false);
+  // Claims this mount as the active presentation screen (see the host's
+  // present_ready handler) so an older screen -- a stray tab left open from
+  // a previous test, a duplicate click of "Open Presentation" -- steps aside
+  // instead of the two racing each other for every broadcast.
+  const instanceIdRef = useRef(null);
+  if (!instanceIdRef.current) {
+    instanceIdRef.current = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+  const hasClaimedRef = useRef(false);
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 500);
@@ -378,7 +388,8 @@ const PresentSession = () => {
       })
       .subscribe((status) => {
         if (status === "SUBSCRIBED") {
-          channel.send({ type: "broadcast", event: "present_ready", payload: { sessionId: id, requestedAt: new Date().toISOString() } });
+          hasClaimedRef.current = true;
+          channel.send({ type: "broadcast", event: "present_ready", payload: { sessionId: id, instanceId: instanceIdRef.current, requestedAt: new Date().toISOString() } });
         }
       });
 
@@ -386,6 +397,15 @@ const PresentSession = () => {
       supabase.removeChannel(channel);
     };
   }, [id]);
+
+  // Once this screen has sent its own claim, any state update carrying a
+  // different presentInstanceId means a newer screen (or reconnect) has
+  // taken over -- step aside instead of continuing to redraw in parallel.
+  useEffect(() => {
+    const claimedInstanceId = presentState.presentInstanceId;
+    if (!claimedInstanceId || !hasClaimedRef.current) return;
+    setIsSuperseded(claimedInstanceId !== instanceIdRef.current);
+  }, [presentState.presentInstanceId]);
 
   // This is a fallback for the realtime broadcast channel above (catches
   // state it might have missed, e.g. after a reconnect) -- not the primary
@@ -438,6 +458,17 @@ const PresentSession = () => {
 
   if (loading) {
     return <div className="min-h-screen bg-[#07080C] flex items-center justify-center"><Loader2 className="text-[#71E0DC] animate-spin" size={42} /></div>;
+  }
+
+  if (isSuperseded) {
+    return (
+      <div className="min-h-screen bg-[#07080C] text-white flex items-center justify-center text-center p-8">
+        <div>
+          <p className="text-4xl font-black mb-2">Presentation Moved</p>
+          <p className="text-zinc-400">This session is now showing on another screen. Close this tab, or reopen it from the host to take back over.</p>
+        </div>
+      </div>
+    );
   }
 
   if (showLobby && session) {

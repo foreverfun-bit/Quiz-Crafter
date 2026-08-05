@@ -901,7 +901,18 @@ const HostSession = () => {
       .on("broadcast", { event: "idea_submit" }, ({ payload }) => {
         applyLivePlayerEvent("idea_submit", payload);
       })
-      .on("broadcast", { event: "present_ready" }, () => {
+      .on("broadcast", { event: "present_ready" }, ({ payload }) => {
+        // A presentation screen claiming itself as active (see PresentSession) --
+        // the most recent claim always wins, which is what actually kicks an
+        // older screen (a stray tab, a duplicate "Open Presentation" click) out
+        // of the running instead of it continuing to redraw in parallel. Forcing
+        // through persistLiveState bumps the sequence/timestamp so already-synced
+        // screens don't ignore the change as a no-newer-than-current update.
+        const claimedInstanceId = payload?.instanceId ? String(payload.instanceId) : null;
+        if (claimedInstanceId && liveStateRef.current && claimedInstanceId !== liveStateRef.current.presentInstanceId) {
+          persistLiveState({ ...liveStateRef.current, presentInstanceId: claimedInstanceId, updatedAt: new Date().toISOString() }, true);
+          return;
+        }
         // Every open presentation screen pings this on mount/reconnect with
         // no coalescing -- two screens open (or one screen reconnect-looping
         // from a throttled background tab) used to mean two-plus independent
@@ -924,6 +935,10 @@ const HostSession = () => {
       supabase.removeChannel(channel);
       liveChannelRef.current = null;
     };
+  // persistLiveState is intentionally omitted -- it's redefined every render,
+  // and this effect must only re-subscribe the channel on id changes, not on
+  // every render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [applyLivePlayerEvent, id]);
 
   const questions = useMemo(() => flattenSession(session), [session]);
@@ -1042,6 +1057,11 @@ const HostSession = () => {
       players,
       leaderboard: leaderboard.map((team) => ({ id: team.id, name: team.name || players.find((player) => player.id === team.id)?.name || "Team", score: Number(team.score || 0) })),
       branding,
+      // Carried forward rather than dropped -- this is whichever presentation
+      // screen last claimed itself active (see the present_ready handler
+      // below); every ordinary state update needs to preserve it or the next
+      // question advance would silently un-claim the current screen.
+      presentInstanceId: liveStateRef.current?.presentInstanceId ?? null,
       updatedAt: new Date().toISOString(),
     };
   };
