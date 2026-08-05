@@ -1493,7 +1493,7 @@ const HostSession = () => {
     const team = leaderboard.find((item) => item.id === teamId) || players.find((item) => item.id === teamId);
     setScoreModal({ teamId, teamName: team?.name || context.playerName || "Team", currentScore: Number(team?.score || 0), adjustment: "", setTo: String(Number(team?.score || 0)), ...context });
   };
-  const addManualAnswer = ({ playerId, answer, wagerAmount = 0 }) => {
+  const addManualAnswer = ({ playerId, answer, wagerAmount = 0, silent = false }) => {
     const team = leaderboard.find((item) => item.id === playerId) || players.find((item) => item.id === playerId);
     if (!team || !displayedQuestion) return toast.error("Choose a team and answer");
     const finalAnswer = String(answer || "").trim();
@@ -1529,7 +1529,7 @@ const HostSession = () => {
       return next;
     });
     if (showAnswer || isReviewing) markAnswer(payload, isCorrectSubmission(payload, displayedQuestion) ? "correct" : "incorrect", { applyScore: !isReviewing });
-    toast.success(`Added answer for ${team.name || "team"}`);
+    if (!silent) toast.success(`Added answer for ${team.name || "team"}`);
   };
   const markAnswer = (answer, status, options = {}) => {
     const key = answerKey(answer);
@@ -1963,7 +1963,7 @@ const optionToneClasses = {
 // The grading UI for a question's answers, rendered as the same rows that
 // display the options -- there is no separate "answers submitted" section.
 const AnswerRows = ({ question, players, answers, activity, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, wagerMode, wagerLimit, pointsPerQuestion, setMode, isReviewing, showAnswer }) => {
-  const [manualTeamId, setManualTeamId] = useState("");
+  const [manualTeamIds, setManualTeamIds] = useState([]);
   const [manualAnswer, setManualAnswer] = useState("");
   const [manualWager, setManualWager] = useState("");
   const [manualOpen, setManualOpen] = useState(false);
@@ -2011,10 +2011,20 @@ const AnswerRows = ({ question, players, answers, activity, fairPlayStats, grade
   };
 
   const quickAnswers = question.type === "true_false" ? ["True", "False"] : question.type === "multiple_choice" ? question.options || [] : [];
+  const toggleManualTeam = (teamId) => {
+    setManualTeamIds((current) => current.includes(teamId) ? current.filter((id) => id !== teamId) : [...current, teamId]);
+  };
+  // Lets the host add the same answer for a whole cluster of teams at once
+  // (e.g. four tables all shout the same wrong guess) instead of repeating
+  // the team-answer-wager entry per team.
   const submitManual = (value = manualAnswer) => {
-    addManualAnswer({ playerId: manualTeamId, answer: value, wagerAmount: manualWager });
+    if (!manualTeamIds.length) return toast.error("Select at least one team");
+    manualTeamIds.forEach((playerId) => addManualAnswer({ playerId, answer: value, wagerAmount: manualWager, silent: true }));
+    const firstTeam = players.find((player) => player.id === manualTeamIds[0]);
+    toast.success(manualTeamIds.length === 1 ? `Added answer for ${firstTeam?.name || "team"}` : `Added answer for ${manualTeamIds.length} teams`);
     setManualAnswer("");
     setManualWager("");
+    setManualTeamIds([]);
   };
 
   return <div>
@@ -2045,7 +2055,26 @@ const AnswerRows = ({ question, players, answers, activity, fairPlayStats, grade
       {!rows.length && <p className="text-xs text-zinc-500 text-center py-4">Answers for the current question will appear here.</p>}
     </div>
 
-    {manualOpen ? <div className="mb-3 rounded-lg border border-white/10 bg-zinc-950/60 p-3"><div className="mb-2 flex items-center justify-between gap-2"><p className="text-xs font-bold uppercase tracking-wide text-zinc-500">Manual answer</p><Button size="sm" variant="ghost" onClick={() => setManualOpen(false)} className="h-7 px-2 text-xs text-zinc-400 hover:text-white">Collapse</Button></div><div className={`grid gap-2 ${wagerMode ? "grid-cols-[1fr_1fr_76px]" : "grid-cols-[1fr_1fr]"}`}><select value={manualTeamId} onChange={(event) => setManualTeamId(event.target.value)} className="h-9 min-w-0 rounded-md border border-white/10 bg-zinc-950 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60"><option value="">Team</option>{players.map((player) => <option key={player.id} value={player.id}>{player.name || "Team"}</option>)}</select><input value={manualAnswer} onChange={(event) => setManualAnswer(event.target.value)} onKeyDown={(event) => event.key === "Enter" && submitManual()} placeholder="Answer" className="h-9 min-w-0 rounded-md border border-white/10 bg-zinc-950 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" />{wagerMode && <input value={manualWager} onChange={(event) => setManualWager(event.target.value)} onKeyDown={(event) => event.key === "Enter" && submitManual()} placeholder="Wager" type="number" min="0" max={Number(wagerLimit || 0) || undefined} className="h-9 min-w-0 rounded-md border border-white/10 bg-zinc-950 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" />}</div>{quickAnswers.length > 0 && <div className="mt-2 flex flex-wrap gap-2">{quickAnswers.map((option) => <button key={option} type="button" onClick={() => { setManualAnswer(option); submitManual(option); }} className="rounded-full border border-white/10 bg-zinc-900 px-2.5 py-1 text-xs font-bold text-zinc-200 hover:border-[#71E0DC]/50">{option}</button>)}</div>}<Button size="sm" onClick={() => submitManual()} className="mt-2 h-8 w-full gradient-btn">Add Manual Answer</Button></div> : <Button size="sm" variant="outline" onClick={() => setManualOpen(true)} className="mb-3 h-9 w-full border-white/10 text-zinc-300 hover:text-white"><Plus size={14} className="mr-2" />Manual Answer</Button>}
+    {manualOpen ? <div className="mb-3 rounded-lg border border-white/10 bg-zinc-950/60 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="text-xs font-bold uppercase tracking-wide text-zinc-500">Manual answer</p>
+        <Button size="sm" variant="ghost" onClick={() => setManualOpen(false)} className="h-7 px-2 text-xs text-zinc-400 hover:text-white">Collapse</Button>
+      </div>
+      <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-zinc-600">{manualTeamIds.length > 0 ? `Teams (${manualTeamIds.length} selected)` : "Teams (tap to select, pick more than one to bulk-add)"}</p>
+      <div className="mb-2 flex flex-wrap gap-1.5">
+        {players.map((player) => {
+          const selected = manualTeamIds.includes(player.id);
+          return <button key={player.id} type="button" onClick={() => toggleManualTeam(player.id)} className={`rounded-full border px-2.5 py-1 text-xs font-bold transition ${selected ? "border-[#71E0DC]/60 bg-[#71E0DC]/20 text-[#71E0DC]" : "border-white/10 bg-zinc-900 text-zinc-400 hover:text-white"}`}>{player.name || "Team"}</button>;
+        })}
+        {!players.length && <p className="text-xs text-zinc-500">Add a team first.</p>}
+      </div>
+      <div className={`grid gap-2 ${wagerMode ? "grid-cols-[1fr_76px]" : "grid-cols-1"}`}>
+        <input value={manualAnswer} onChange={(event) => setManualAnswer(event.target.value)} onKeyDown={(event) => event.key === "Enter" && submitManual()} placeholder="Answer" className="h-9 min-w-0 rounded-md border border-white/10 bg-zinc-950 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
+        {wagerMode && <input value={manualWager} onChange={(event) => setManualWager(event.target.value)} onKeyDown={(event) => event.key === "Enter" && submitManual()} placeholder="Wager" type="number" min="0" max={Number(wagerLimit || 0) || undefined} className="h-9 min-w-0 rounded-md border border-white/10 bg-zinc-950 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" />}
+      </div>
+      {quickAnswers.length > 0 && <div className="mt-2 flex flex-wrap gap-2">{quickAnswers.map((option) => <button key={option} type="button" onClick={() => { setManualAnswer(option); submitManual(option); }} className="rounded-full border border-white/10 bg-zinc-900 px-2.5 py-1 text-xs font-bold text-zinc-200 hover:border-[#71E0DC]/50">{option}</button>)}</div>}
+      <Button size="sm" onClick={() => submitManual()} className="mt-2 h-8 w-full gradient-btn">{manualTeamIds.length > 1 ? `Add for ${manualTeamIds.length} Teams` : "Add Manual Answer"}</Button>
+    </div> : <Button size="sm" variant="outline" onClick={() => setManualOpen(true)} className="mb-3 h-9 w-full border-white/10 text-zinc-300 hover:text-white"><Plus size={14} className="mr-2" />Manual Answer</Button>}
 
     {waitingPlayers.length > 0 && <p className="mb-2 text-[11px] text-zinc-500">Waiting on <b className="font-semibold text-amber-300">{waitingPlayers.map((player) => player.name || "Team").join(", ")}</b></p>}
     {wageredCount > 0 && <div className="mb-2 rounded-lg border border-purple-400/25 bg-purple-400/10 p-2.5 text-xs font-bold text-purple-200">Wagers submitted: {wageredCount}/{submittedCount || 0}</div>}
