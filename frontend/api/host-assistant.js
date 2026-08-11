@@ -211,11 +211,13 @@ async function handler(req, res) {
                     "candidates must be an array of 0-6 usable question objects.",
                     "Each candidate must include category, question_text, correct_answer, incorrect_answers, fun_fact, difficulty, question_type, image_url.",
                     "question_type must be true_false, multiple_choice, or written.",
+                    "If host_context.session.targetType is set to true_false, multiple_choice, or written, every candidate's question_type must match it -- unless the host's request explicitly asks for a mix of types or a specific different type, in which case follow the request instead.",
                     "For multiple_choice, incorrect_answers must contain exactly 3 plausible wrong answers.",
                     "For true_false, correct_answer must be exactly True or False.",
                     "For written, answers must be familiar/gettable enough for a live bar team.",
                     "fun_fact must be one short sentence of genuinely true additional context about THAT SAME candidate's specific subject or answer -- never a generic or unrelated trivia tidbit about a different topic, even a true one. If you have no real fact directly relevant to that exact question/answer, return fun_fact as an empty string rather than inventing an unrelated one.",
                     "Use only approved_categories if any are provided.",
+                    "Do not give more than 2 of the returned candidates the same category, and prefer categories not already heavily represented in host_context.build.builtQuestions, unless the host's request specifically asks for a category or only a couple approved categories are available.",
                     "If host_context.venue.insights is present, prefer categories listed under loved there and avoid repeating categories or specific questions listed under struggled/disliked there, unless the host explicitly asks otherwise.",
                     "Do not claim to save or edit anything directly.",
                   ]
@@ -247,7 +249,20 @@ async function handler(req, res) {
       const parsed = parseAssistantJson(answer);
       const blocked = collectBlockedQuestions(context);
       const normalized = Array.isArray(parsed?.candidates) ? parsed.candidates.map(normalizeCandidate).filter(Boolean) : [];
-      const candidates = normalized.filter((candidate) => !isBlockedCandidate(candidate, blocked)).slice(0, 6);
+      // "Don't repeat a category" is only a prompt instruction above, and the
+      // model doesn't reliably follow it -- cap it mechanically too, same as
+      // generate-session-candidates.js does for the main draft flow.
+      const categoryCounts = new Map();
+      const candidates = normalized
+        .filter((candidate) => !isBlockedCandidate(candidate, blocked))
+        .filter((candidate) => {
+          const key = fingerprint(candidate.category);
+          const count = categoryCounts.get(key) || 0;
+          if (count >= 2) return false;
+          categoryCounts.set(key, count + 1);
+          return true;
+        })
+        .slice(0, 6);
       const dropped = normalized.length - candidates.length;
       const assistantAnswer = clean(parsed?.answer) || "I drafted a few co-host suggestions for this build.";
       return res.status(200).json({

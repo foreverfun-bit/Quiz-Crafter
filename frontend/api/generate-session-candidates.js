@@ -138,6 +138,15 @@ export default async function handler(req, res) {
     const existingFingerprints = new Set(existingQuestions.map((q) => fingerprint(q.question_text)));
     const existingAnswerPairs = new Set(existingQuestions.map((q) => answerPairFingerprint(q.question_text, q.correct_answer)));
     const existingAnswers = new Set(existingQuestions.map((q) => answerFingerprint(q.correct_answer)).filter(Boolean));
+    // Questions already placed in THIS in-progress build only ever reached the
+    // model as prompt text ("do not duplicate these") -- a soft instruction the
+    // model doesn't reliably honor, and unlike the library/past-session sets
+    // above this can't be gated behind avoidDuplicates or reset by the
+    // no-candidates-came-back fallback passes below -- re-suggesting something
+    // already sitting in the build should never be allowed.
+    const inBuildQuestions = [...(cleanSessionContext?.builtQuestions || []), ...(cleanSessionContext?.activeRoundQuestions || [])];
+    const inBuildFingerprints = new Set(inBuildQuestions.map((q) => fingerprint(q.question_text)));
+    const inBuildAnswerPairs = new Set(inBuildQuestions.map((q) => answerPairFingerprint(q.question_text, q.correct_answer)));
     const rejectedQuestionFingerprints = new Set(cleanRejectedQuestions.map(fingerprint));
     const rejectedAnswerFingerprints = new Set([
       ...cleanRejectedAnswers.map(answerFingerprint),
@@ -228,6 +237,8 @@ export default async function handler(req, res) {
       existingFingerprints,
       existingAnswerPairs,
       existingAnswers,
+      inBuildFingerprints,
+      inBuildAnswerPairs,
       rejectedQuestionFingerprints,
       rejectedAnswerFingerprints,
       avoidDuplicates,
@@ -413,8 +424,14 @@ function normalizeSessionContext(value) {
     question_type: cleanText(question?.question_type || question?.type).slice(0, 40),
     round: cleanText(question?.round || question?.roundName).slice(0, 80),
   });
-  const builtQuestions = Array.isArray(value.builtQuestions) ? value.builtQuestions.map(cleanQuestion).filter((q) => q.question_text && q.correct_answer).slice(0, 18) : [];
-  const activeRoundQuestions = Array.isArray(value.activeRoundQuestions) ? value.activeRoundQuestions.map(cleanQuestion).filter((q) => q.question_text && q.correct_answer).slice(0, 8) : [];
+  // Was capped at 18/8 -- a leftover from when this only padded prompt text.
+  // Now that it also feeds the hard in-build duplicate check below, a host
+  // more than 18 questions into a build had everything past that point
+  // invisible to both the soft prompt guidance and the dedup check. Raised
+  // to match buildPrompt's own intended non-fast-mode ceiling (80) for the
+  // full session, and to comfortably cover any single round for the active one.
+  const builtQuestions = Array.isArray(value.builtQuestions) ? value.builtQuestions.map(cleanQuestion).filter((q) => q.question_text && q.correct_answer).slice(0, 80) : [];
+  const activeRoundQuestions = Array.isArray(value.activeRoundQuestions) ? value.activeRoundQuestions.map(cleanQuestion).filter((q) => q.question_text && q.correct_answer).slice(0, 30) : [];
   const roundDescriptions = Array.isArray(value.roundDescriptions) ? value.roundDescriptions.map((round) => ({
     name: cleanText(round?.name).slice(0, 80),
     description: cleanText(round?.description).slice(0, 180),
@@ -965,16 +982,23 @@ async function requestCandidates(prompt, { fastMode = false } = {}) {
   }
 }
 
-function normalizeCandidates({ candidates, config, questionType, difficultyKey, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, requireApprovedCategories = true, existingFingerprints, existingAnswerPairs, existingAnswers, rejectedQuestionFingerprints, rejectedAnswerFingerprints, avoidDuplicates, includeImagePrompt, sourceSeeds = [], sourceBacked = false, sessionStyleProfile = null }) {
+function normalizeCandidates({ candidates, config, questionType, difficultyKey, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, requireApprovedCategories = true, existingFingerprints, existingAnswerPairs, existingAnswers, inBuildFingerprints = new Set(), inBuildAnswerPairs = new Set(), rejectedQuestionFingerprints, rejectedAnswerFingerprints, avoidDuplicates, includeImagePrompt, sourceSeeds = [], sourceBacked = false, sessionStyleProfile = null }) {
   const rejected = [];
   const accepted = [];
   const batchFingerprints = new Set();
   const batchAnswerPairs = new Set();
   const batchAnswers = new Set();
+  const batchCategoryCounts = new Map();
   const excludedCategories = new Set(cleanExcludeCategories.map(categoryKey));
   const approvedCategorySet = new Set(cleanApprovedCategories.map(categoryKey));
   const lockedCategorySet = new Set(cleanLockedCategories.map(categoryKey));
   const shouldBlockRepeatedAnswers = questionType !== "true_false";
+  // A batch spreading across categories relied entirely on a soft prompt
+  // instruction the model doesn't reliably follow -- cap how many candidates
+  // in one response can share a category. Skipped when the category pool is
+  // deliberately narrow (locked, or an approved list of 2 or fewer), since a
+  // cap would just make those batches impossible to fill.
+  const maxPerCategory = lockedCategorySet.size > 0 || (approvedCategorySet.size > 0 && approvedCategorySet.size <= 2) ? Infinity : 2;
 
   if (!Array.isArray(candidates)) throw new Error("No candidates returned");
 
@@ -1025,6 +1049,21 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
       rejected.push({ index, question: item.question_text, reason: "rejected_answer_repeated" });
       return;
     }
+    // Unconditional -- not gated behind avoidDuplicates -- a question or
+    // answer angle already sitting in this in-progress build should never
+    // come back as a "new" suggestion.
+    if (inBuildFingerprints.has(itemFingerprint) || isTooSimilarToAny(itemFingerprint, inBuildFingerprints)) {
+      rejected.push({ index, question: item.question_text, reason: "duplicate_in_current_build" });
+      return;
+    }
+    if (!isOwnSourceCandidate && inBuildAnswerPairs.has(itemAnswerPair)) {
+      rejected.push({ index, question: item.question_text, reason: "duplicate_answer_angle_in_current_build" });
+      return;
+    }
+    if (maxPerCategory !== Infinity && (batchCategoryCounts.get(itemCategoryKey) || 0) >= maxPerCategory) {
+      rejected.push({ index, question: item.question_text, reason: "category_overrepresented_in_batch" });
+      return;
+    }
     if (avoidDuplicates) {
       if (existingFingerprints.has(itemFingerprint) || batchFingerprints.has(itemFingerprint)) {
         rejected.push({ index, question: item.question_text, reason: "duplicate_question" });
@@ -1047,6 +1086,7 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
     batchFingerprints.add(itemFingerprint);
     batchAnswerPairs.add(itemAnswerPair);
     if (shouldBlockRepeatedAnswers && itemAnswer) batchAnswers.add(itemAnswer);
+    batchCategoryCounts.set(itemCategoryKey, (batchCategoryCounts.get(itemCategoryKey) || 0) + 1);
     accepted.push(item);
   });
 
