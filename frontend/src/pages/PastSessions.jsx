@@ -90,19 +90,23 @@ const getSessionLeaderboard = (session) => {
   return Array.isArray(leaderboard) ? leaderboard.filter((team) => team && team.name) : [];
 };
 
+const getAttendanceTotals = (session) => {
+  const teamHeadcounts = session?.attendance?.teamHeadcounts || {};
+  const nonPlayers = normalizeHeadcount(session?.attendance?.nonPlayers);
+  const playing = Object.values(teamHeadcounts).reduce((sum, value) => {
+    const hc = normalizeHeadcount(value);
+    return { adults: sum.adults + hc.adults, kids: sum.kids + hc.kids };
+  }, { adults: 0, kids: 0 });
+  const bar = { adults: playing.adults + nonPlayers.adults, kids: playing.kids + nonPlayers.kids };
+  return { nonPlayers, playing, bar };
+};
+
 const buildSessionSummaryRow = (session) => {
   const leaderboard = getSessionLeaderboard(session);
   const scores = leaderboard.map((team) => Number(team.score) || 0);
   const topTeam = leaderboard.length ? [...leaderboard].sort((a, b) => Number(b.score || 0) - Number(a.score || 0))[0] : null;
   const averageScore = scores.length ? Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length) : "";
-  const teamHeadcounts = session?.attendance?.teamHeadcounts || {};
-  const nonPlayers = normalizeHeadcount(session?.attendance?.nonPlayers);
-  const playingTotals = Object.values(teamHeadcounts).reduce((sum, value) => {
-    const hc = normalizeHeadcount(value);
-    return { adults: sum.adults + hc.adults, kids: sum.kids + hc.kids };
-  }, { adults: 0, kids: 0 });
-  const barAdults = playingTotals.adults + nonPlayers.adults;
-  const barKids = playingTotals.kids + nonPlayers.kids;
+  const { bar } = getAttendanceTotals(session);
   return [
     getSessionTitle(session),
     formatHostDate(session),
@@ -113,7 +117,27 @@ const buildSessionSummaryRow = (session) => {
     topTeam?.name || "",
     topTeam ? Number(topTeam.score) || 0 : "",
     averageScore,
-    barAdults || barKids ? barAdults + barKids : "",
+    bar.adults || bar.kids ? bar.adults + bar.kids : "",
+  ];
+};
+
+const buildAttendanceRow = (session) => {
+  const { nonPlayers, playing, bar } = getAttendanceTotals(session);
+  const teamCount = getSessionLeaderboard(session).length || Object.keys(session?.attendance?.teamHeadcounts || {}).length;
+  return [
+    getSessionTitle(session),
+    formatHostDate(session),
+    session.venue || session.venue_name || "",
+    teamCount,
+    nonPlayers.adults,
+    nonPlayers.kids,
+    nonPlayers.adults + nonPlayers.kids,
+    playing.adults,
+    playing.kids,
+    playing.adults + playing.kids,
+    bar.adults,
+    bar.kids,
+    bar.adults + bar.kids,
   ];
 };
 
@@ -297,15 +321,29 @@ const PastSessions = () => {
     });
   };
 
-  const handleExportSelected = () => {
+  const getSortedSelectedSessions = () => {
     const selected = allSessions.filter((session) => selectedIds.has(session.id));
+    return [...selected].sort((a, b) => (getHostDate(b)?.getTime() || 0) - (getHostDate(a)?.getTime() || 0));
+  };
+
+  const handleExportSelected = () => {
+    const selected = getSortedSelectedSessions();
     if (!selected.length) return;
-    const sorted = [...selected].sort((a, b) => (getHostDate(b)?.getTime() || 0) - (getHostDate(a)?.getTime() || 0));
     downloadCsv(`trivia-sessions-summary-${new Date().toISOString().slice(0, 10)}.csv`, [
       ["Session", "Host Date", "Venue", "Source", "Total Questions", "Teams", "Top Team", "Top Score", "Average Score", "Bar Total"],
-      ...sorted.map(buildSessionSummaryRow),
+      ...selected.map(buildSessionSummaryRow),
     ]);
     toast.success(`Exported ${selected.length} session${selected.length === 1 ? "" : "s"}`);
+  };
+
+  const handleExportAttendance = () => {
+    const selected = getSortedSelectedSessions();
+    if (!selected.length) return;
+    downloadCsv(`trivia-sessions-attendance-${new Date().toISOString().slice(0, 10)}.csv`, [
+      ["Session", "Host Date", "Venue", "Teams", "Not Playing Adults", "Not Playing Kids", "Not Playing Total", "Playing Adults", "Playing Kids", "Playing Total", "Bar Total Adults", "Bar Total Kids", "Bar Total"],
+      ...selected.map(buildAttendanceRow),
+    ]);
+    toast.success(`Exported attendance for ${selected.length} session${selected.length === 1 ? "" : "s"}`);
   };
 
   const builtCount = useMemo(
@@ -387,6 +425,15 @@ const PastSessions = () => {
             >
               <Download size={16} className="mr-2" />
               Export {selectedIds.size} Session{selectedIds.size === 1 ? "" : "s"}
+            </Button>
+            <Button
+              onClick={handleExportAttendance}
+              variant="outline"
+              className="border-white/20 text-white hover:bg-zinc-800"
+              data-testid="export-selected-attendance-btn"
+            >
+              <Download size={16} className="mr-2" />
+              Attendance
             </Button>
             <Button
               onClick={() => setSelectedIds(new Set())}
