@@ -457,12 +457,12 @@ const PresentSession = () => {
   const timerTotal = Math.max(1, Number(currentQuestion?.timerSeconds) || 30);
 
   if (loading) {
-    return <div className="min-h-screen bg-[#07080C] flex items-center justify-center"><Loader2 className="text-[#71E0DC] animate-spin" size={42} /></div>;
+    return <div className="min-h-dvh bg-[#07080C] flex items-center justify-center"><Loader2 className="text-[#71E0DC] animate-spin" size={42} /></div>;
   }
 
   if (isSuperseded) {
     return (
-      <div className="min-h-screen bg-[#07080C] text-white flex items-center justify-center text-center p-8">
+      <div className="min-h-dvh bg-[#07080C] text-white flex items-center justify-center text-center p-8">
         <div>
           <p className="text-4xl font-black mb-2">Presentation Moved</p>
           <p className="text-zinc-400">This session is now showing on another screen. Close this tab, or reopen it from the host to take back over.</p>
@@ -481,7 +481,7 @@ const PresentSession = () => {
 
   if (!session || !currentQuestion) {
     return (
-      <div className="min-h-screen bg-[#07080C] text-white flex items-center justify-center text-center p-8">
+      <div className="min-h-dvh bg-[#07080C] text-white flex items-center justify-center text-center p-8">
         <div>
           <p className="text-4xl font-black mb-2">Presentation Not Ready</p>
           <p className="text-zinc-400">Open the host screen first, then choose what to show.</p>
@@ -492,7 +492,7 @@ const PresentSession = () => {
 
   return (
     <Stage branding={branding} data-testid="present-session-page">
-      <div className="h-screen flex flex-col p-3 lg:p-5 relative z-10">
+      <div className="h-dvh flex flex-col p-3 lg:p-5 relative z-10">
         <TopStrip
           branding={branding}
           sessionName={sessionName}
@@ -528,7 +528,7 @@ const PresentSession = () => {
 // this is a screen meant for a dark room (TV/projector), so it deliberately
 // doesn't have a light-mode treatment.
 const Stage = ({ branding, children, ...rest }) => (
-  <div className="h-screen bg-[#07080C] text-white overflow-hidden relative" {...rest}>
+  <div className="h-dvh bg-[#07080C] text-white overflow-hidden relative" {...rest}>
     <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
       <div className="absolute -top-[22vw] -left-[14vw] h-[60vw] w-[60vw] rounded-full blur-[90px] opacity-20 animate-[drift-a_26s_ease-in-out_infinite]" style={{ background: branding.primaryColor }} />
       <div className="absolute -top-[26vw] -right-[18vw] h-[60vw] w-[60vw] rounded-full blur-[90px] opacity-20 animate-[drift-b_32s_ease-in-out_infinite]" style={{ background: branding.accentColor }} />
@@ -811,7 +811,7 @@ const QuestionView = ({ branding, correctColor, question, index, total, showAnsw
   const shouldShowFunFactImage = Boolean(imageUrl) && revealTiming === "after_answer" && showFunFact;
   const funFactOnly = Boolean(showFunFact && (question.funFact || shouldShowFunFactImage));
   const imageRevealed = Boolean(showAnswer || showFunFact);
-  const questionImageClass = imageRevealed ? "max-h-[26vh] max-w-[min(680px,100%)]" : "max-h-[42vh] w-full max-w-[min(880px,100%)]";
+  const questionImageClass = imageRevealed ? "max-h-[26dvh] max-w-[min(680px,100%)]" : "max-h-[42dvh] w-full max-w-[min(880px,100%)]";
   const optionColor = branding.optionColor;
 
   return (
@@ -835,7 +835,7 @@ const QuestionView = ({ branding, correctColor, question, index, total, showAnsw
           {funFactOnly ? (
             <div className="min-h-0 flex flex-1 items-center justify-center">
               <div className="max-h-full min-h-0 w-full overflow-y-auto rounded-lg border p-4 lg:p-6 text-center" style={{ borderColor: tint(branding.accentColor, 30), background: tint(branding.accentColor, 10) }}>
-                {shouldShowFunFactImage && <div className="mb-3 flex justify-center"><img src={imageUrl} alt="Fun fact media" className="max-h-[32vh] max-w-full rounded-lg border border-white/10 object-contain" /></div>}
+                {shouldShowFunFactImage && <div className="mb-3 flex justify-center"><img src={imageUrl} alt="Fun fact media" className="max-h-[32dvh] max-w-full rounded-lg border border-white/10 object-contain" /></div>}
                 <div className="flex items-center justify-center gap-3 font-black mb-3 text-xl" style={{ color: branding.accentColor }}><Sparkles size={24} />{question.funFact ? "Fun Fact" : "Media"}</div>
                 {question.funFact && <p className={`${funFactTextClass(question.funFact)} font-black leading-snug text-white max-w-5xl mx-auto`}>{question.funFact}</p>}
               </div>
@@ -847,14 +847,14 @@ const QuestionView = ({ branding, correctColor, question, index, total, showAnsw
               <h2 className="text-3xl lg:text-5xl font-black leading-tight text-white text-center mb-4">{question.questionText}</h2>
 
               {question.type === "true_false" && (
-                <div className={`grid w-full grid-cols-2 gap-4 max-w-4xl mx-auto mb-3 ${showAnswer ? "" : "min-h-32 flex-1 max-h-[34vh]"}`}>
+                <div className={`grid w-full grid-cols-2 gap-4 max-w-4xl mx-auto mb-3 ${showAnswer ? "" : "min-h-32 flex-1 max-h-[34dvh]"}`}>
                   <div className="flex min-h-0 items-center justify-center rounded-lg border-2 px-5 py-4 text-center text-4xl font-black lg:text-5xl transition-all" style={showAnswer && question.answer === "False" ? { opacity: 0.35, borderColor: "rgba(52,211,153,0.3)", background: "rgba(52,211,153,0.1)", color: "#6ee7b7" } : { borderColor: showAnswer ? correctColor : "rgba(52,211,153,0.3)", background: showAnswer ? tint(correctColor, 16) : "rgba(52,211,153,0.1)", color: showAnswer ? correctColor : "#6ee7b7", boxShadow: showAnswer ? `0 0 0 2px ${correctColor}` : "none", transform: showAnswer ? "scale(1.02)" : "none" }}>True</div>
                   <div className="flex min-h-0 items-center justify-center rounded-lg border-2 px-5 py-4 text-center text-4xl font-black lg:text-5xl transition-all" style={showAnswer && question.answer === "True" ? { opacity: 0.35, borderColor: "rgba(255,111,112,0.3)", background: "rgba(255,111,112,0.1)", color: "#ff9b9c" } : { borderColor: showAnswer ? correctColor : "rgba(255,111,112,0.3)", background: showAnswer ? tint(correctColor, 16) : "rgba(255,111,112,0.1)", color: showAnswer ? correctColor : "#ff9b9c", boxShadow: showAnswer ? `0 0 0 2px ${correctColor}` : "none", transform: showAnswer ? "scale(1.02)" : "none" }}>False</div>
                 </div>
               )}
 
               {question.type === "multiple_choice" && question.options.length > 0 && (
-                <div className={`grid w-full grid-cols-2 gap-4 max-w-5xl mx-auto mb-3 ${showAnswer ? "" : "min-h-52 flex-1 max-h-[38vh] auto-rows-fr"}`}>
+                <div className={`grid w-full grid-cols-2 gap-4 max-w-5xl mx-auto mb-3 ${showAnswer ? "" : "min-h-52 flex-1 max-h-[38dvh] auto-rows-fr"}`}>
                   {question.options.map((option, optionIndex) => {
                     const isCorrect = showAnswer && optionKey(option) === optionKey(question.answer);
                     const isWrong = showAnswer && !isCorrect;
