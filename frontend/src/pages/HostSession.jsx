@@ -2209,32 +2209,28 @@ const EditableStatBadge = ({ label, value, unit, suffix, tone, onSave, step = 5 
 // A per-team click-to-edit wager amount -- corrects a submitted wager
 // (mis-heard over the mic, fat-fingered manual entry) without touching the
 // team's answer text or resubmitting it as a fresh answer.
+// Edits inline (swaps the badge for an input in place) rather than in an
+// absolutely-positioned popover -- this sits inside QuestionStage's
+// overflow-hidden card, low enough in the layout that a popover opening
+// below the button was getting silently clipped, making the chip look
+// unresponsive even though the click was registering.
 const WagerChip = ({ answer, disabled, onSave }) => {
-  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(answer.wagerAmount);
-  const ref = useRef(null);
-  useEffect(() => { if (open) setDraft(answer.wagerAmount); }, [open, answer.wagerAmount]);
-  useEffect(() => {
-    if (!open) return undefined;
-    const onDocClick = (event) => { if (ref.current && !ref.current.contains(event.target)) setOpen(false); };
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, [open]);
+  useEffect(() => { if (editing) setDraft(answer.wagerAmount); }, [editing, answer.wagerAmount]);
   const save = () => {
     onSave(Math.max(0, Number(draft) || 0));
-    setOpen(false);
+    setEditing(false);
   };
-  return <div className="relative" ref={ref}>
-    <button type="button" disabled={disabled} onClick={() => setOpen((current) => !current)} className="rounded-full border border-purple-400/30 bg-purple-400/10 px-2.5 py-1 text-[11px] font-bold text-purple-200 transition disabled:cursor-default disabled:opacity-70 enabled:hover:border-purple-300/60">{answer.playerName || "Team"}: {Number(answer.wagerAmount || 0)}</button>
-    {open && !disabled && <div className="absolute left-0 top-full z-30 mt-2 w-52 rounded-xl border border-white/10 bg-zinc-950 p-3 shadow-2xl">
-      <p className="mb-2 text-[11px] font-bold uppercase tracking-wide text-zinc-500">{answer.playerName || "Team"}'s wager</p>
-      <input type="number" min="0" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => event.key === "Enter" && save()} className="mb-2.5 h-8 w-full rounded-md border border-white/10 bg-zinc-900 px-2 text-center font-mono text-white outline-none focus:border-[#71E0DC]/60" />
-      <div className="flex gap-2">
-        <Button size="sm" variant="outline" onClick={() => setOpen(false)} className="h-8 flex-1 border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
-        <Button size="sm" onClick={save} className="h-8 flex-1 gradient-btn">Save</Button>
-      </div>
-    </div>}
-  </div>;
+  if (editing) {
+    return <span className="inline-flex items-center gap-1 rounded-full border border-purple-400/40 bg-zinc-950 py-1 pl-2.5 pr-1.5">
+      <span className="text-[11px] font-bold text-purple-200">{answer.playerName || "Team"}</span>
+      <input type="number" min="0" autoFocus value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => event.key === "Enter" && save()} className="h-6 w-16 rounded border border-white/10 bg-zinc-900 px-1 text-center text-xs text-white outline-none focus:border-[#71E0DC]/60" />
+      <button type="button" onClick={save} aria-label="Save wager" className="text-emerald-300 hover:text-emerald-200"><CheckCircle size={14} /></button>
+      <button type="button" onClick={() => setEditing(false)} aria-label="Cancel" className="text-zinc-500 hover:text-zinc-300"><XCircle size={14} /></button>
+    </span>;
+  }
+  return <button type="button" disabled={disabled} onClick={() => setEditing(true)} className="rounded-full border border-purple-400/30 bg-purple-400/10 px-2.5 py-1 text-[11px] font-bold text-purple-200 transition disabled:cursor-default disabled:opacity-70 enabled:hover:border-purple-300/60">{answer.playerName || "Team"}: {Number(answer.wagerAmount || 0)}</button>;
 };
 
 const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusMode, pointsPerQuestion, timerSeconds, timeRemaining, wagerMode, wagerLimit, wagerTiming, onUpdateSettings, branding, players, answers, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, editWager, setMode, isReviewing }) => {
