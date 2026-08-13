@@ -1541,6 +1541,25 @@ const HostSession = () => {
     setGradedAnswers((current) => ({ ...current, [key]: { status, points: nextPoints, scoreApplied, gradedAt: new Date().toISOString() } }));
     if (!options.silent) toast.success(!scoreApplied ? `Marked ${status}; score updates on reveal` : status === "correct" ? `Marked correct (+${delta || 0})` : delta ? `Marked incorrect (${delta})` : "Marked incorrect");
   };
+  // Corrects a wager amount after the fact (mis-heard team, fat-fingered
+  // manual entry) without touching the answer text or resubmitting it as a
+  // new answer. Re-runs it through markAnswer so an already-graded answer's
+  // award/penalty recomputes off the corrected amount instead of the stale one.
+  const editWager = (playerId, questionIndex, nextWagerAmount) => {
+    const existing = answers.find((item) => item.playerId === playerId && Number(item.questionIndex) === Number(questionIndex));
+    if (!existing) return toast.error("No submitted answer to edit for this team");
+    const wager = Math.max(0, Number(nextWagerAmount) || 0);
+    const updated = { ...existing, wagerAmount: wager, wagerSubmitted: true };
+    setAnswers((current) => {
+      const next = current.map((item) => (item.playerId === playerId && Number(item.questionIndex) === Number(questionIndex) ? updated : item));
+      writeStoredList(hostToolsStorageKey(id, "answers"), next);
+      persistHostToolsPatch({ answers: next }, "Wager edit");
+      return next;
+    });
+    const grade = gradedAnswers[answerKey(existing)];
+    if (grade?.status) markAnswer(updated, grade.status, { silent: true });
+    toast.success(`Wager set to ${wager} for ${existing.playerName || "team"}`);
+  };
 
   // Points/timer/wager edits used to only touch the live pointsPerQuestion/
   // timerSeconds/wagerLimit state, which goToQuestion resets from the
@@ -1677,7 +1696,7 @@ const HostSession = () => {
       <div className={focusMode ? "flex-1 flex items-center" : "grid grid-cols-1 2xl:grid-cols-[minmax(0,1fr)_360px] gap-7"}>
         <main className="w-full">
           {!focusMode && customizeOpen && <HostCustomizePanel branding={branding} defaultBranding={readDefaultBranding()} onSave={saveBranding} onSaveDefault={saveBrandingAsDefault} onUseDefault={useDefaultBranding} onClose={() => setCustomizeOpen(false)} />}
-          {!gameStarted && !isReviewing ? <LobbyStage playerCount={players.length} onStartTrivia={startTriviaIntro} /> : presentMode === "categories" && !isReviewing ? <RoundIntroStage round={introRound} gameStarted={gameStarted} onStartIntro={startTriviaIntro} onStartQuestion={startIntroQuestion} /> : presentMode === "bonus_pause" && !isReviewing ? <BonusPauseStage round={rounds.find((round) => pendingBonusIndex >= round.startIndex && pendingBonusIndex < round.startIndex + round.questions.length)} leaderboard={leaderboard} /> : presentMode === "winners" && !isReviewing ? <WinnersStage leaderboard={leaderboard} /> : presentMode === "feedback" && !isReviewing ? <FeedbackStage ideas={playerIdeas} /> : <QuestionStage question={displayedQuestion} index={hostIndex} total={questions.length} showAnswer={isReviewing ? true : showAnswer} showFunFact={isReviewing ? false : showFunFact} focusMode={focusMode} pointsPerQuestion={viewPointsPerQuestion} timerSeconds={viewTimerSeconds} timeRemaining={isReviewing ? null : timeRemaining} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} wagerTiming={viewWagerTiming} onUpdateSettings={isReviewing ? () => {} : updateQuestionSettings} branding={branding} players={playingPlayers} answers={activeCurrentAnswers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} setMode={releaseMode} isReviewing={isReviewing} />}
+          {!gameStarted && !isReviewing ? <LobbyStage playerCount={players.length} onStartTrivia={startTriviaIntro} /> : presentMode === "categories" && !isReviewing ? <RoundIntroStage round={introRound} gameStarted={gameStarted} onStartIntro={startTriviaIntro} onStartQuestion={startIntroQuestion} /> : presentMode === "bonus_pause" && !isReviewing ? <BonusPauseStage round={rounds.find((round) => pendingBonusIndex >= round.startIndex && pendingBonusIndex < round.startIndex + round.questions.length)} leaderboard={leaderboard} /> : presentMode === "winners" && !isReviewing ? <WinnersStage leaderboard={leaderboard} /> : presentMode === "feedback" && !isReviewing ? <FeedbackStage ideas={playerIdeas} /> : <QuestionStage question={displayedQuestion} index={hostIndex} total={questions.length} showAnswer={isReviewing ? true : showAnswer} showFunFact={isReviewing ? false : showFunFact} focusMode={focusMode} pointsPerQuestion={viewPointsPerQuestion} timerSeconds={viewTimerSeconds} timeRemaining={isReviewing ? null : timeRemaining} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} wagerTiming={viewWagerTiming} onUpdateSettings={isReviewing ? () => {} : updateQuestionSettings} branding={branding} players={playingPlayers} answers={activeCurrentAnswers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} setMode={releaseMode} isReviewing={isReviewing} />}
         </main>
         {!focusMode && <PlaybackRail mode={presentMode} setMode={releaseMode} rounds={rounds} introRoundKey={selectedIntroKey} chooseIntroRound={chooseIntroRound} isReviewing={isReviewing} showAnswer={isReviewing ? true : showAnswer} onRevealAnswer={toggleAnswer} showFunFact={isReviewing ? false : showFunFact} onShowFunFact={toggleFunFact} hasRevealExtra={hasRevealExtra} hasFunFact={Boolean(displayedQuestion.funFact)} timeRemaining={isReviewing ? null : timeRemaining} timerSeconds={viewTimerSeconds} startTimer={startTimer} resetTimer={isReviewing ? () => {} : resetTimer} currentIndex={currentIndex} total={questions.length} onPrev={() => goToQuestion(currentIndex - 1, { startTimer: false })} onNext={() => {
           if (!gameStarted) return startTriviaIntro();
@@ -1955,7 +1974,7 @@ const optionToneClasses = {
 
 // The grading UI for a question's answers, rendered as the same rows that
 // display the options -- there is no separate "answers submitted" section.
-const AnswerRows = ({ question, players, answers, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, wagerMode, wagerLimit, pointsPerQuestion, setMode, isReviewing, showAnswer }) => {
+const AnswerRows = ({ question, players, answers, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, editWager, wagerMode, wagerLimit, pointsPerQuestion, setMode, isReviewing, showAnswer }) => {
   const [manualTeamIds, setManualTeamIds] = useState([]);
   const [manualAnswer, setManualAnswer] = useState("");
   const [manualWager, setManualWager] = useState("");
@@ -2068,7 +2087,7 @@ const AnswerRows = ({ question, players, answers, fairPlayStats, gradedAnswers, 
     </div> : <Button size="sm" variant="outline" onClick={() => setManualOpen(true)} className="mb-3 h-9 w-full border-white/10 text-zinc-300 hover:text-white"><Plus size={14} className="mr-2" />Manual Answer</Button>}
 
     {waitingPlayers.length > 0 && <p className="mb-2 text-[11px] text-zinc-500">Waiting on <b className="font-semibold text-amber-300">{waitingPlayers.map((player) => player.name || "Team").join(", ")}</b></p>}
-    {wageredCount > 0 && <div className="mb-2 rounded-lg border border-purple-400/25 bg-purple-400/10 p-2.5 text-xs font-bold text-purple-200">Wagers submitted: {wageredCount}/{submittedCount || 0}</div>}
+    {wageredCount > 0 && <div className="mb-2 rounded-lg border border-purple-400/25 bg-purple-400/10 p-2.5"><p className="mb-1.5 text-xs font-bold text-purple-200">Wagers submitted: {wageredCount}/{submittedCount || 0}</p><div className="flex flex-wrap gap-1.5">{answers.filter(hasSubmittedWager).map((answer) => <WagerChip key={answer.playerId} answer={answer} disabled={isReviewing || !editWager} onSave={(value) => editWager(answer.playerId, answer.questionIndex, value)} />)}</div></div>}
     {lateCorrectIds.size > 0 && <div className="mb-2 rounded-lg border border-purple-400/30 bg-purple-400/10 p-2.5 text-xs font-bold text-purple-200">{lateCorrectIds.size} late correct answer{lateCorrectIds.size === 1 ? "" : "s"} flagged</div>}
 
     <div className="mt-1 flex items-center justify-between gap-2">
@@ -2187,8 +2206,38 @@ const EditableStatBadge = ({ label, value, unit, suffix, tone, onSave, step = 5 
     </div>}
   </div>;
 };
+// A per-team click-to-edit wager amount -- corrects a submitted wager
+// (mis-heard over the mic, fat-fingered manual entry) without touching the
+// team's answer text or resubmitting it as a fresh answer.
+const WagerChip = ({ answer, disabled, onSave }) => {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(answer.wagerAmount);
+  const ref = useRef(null);
+  useEffect(() => { if (open) setDraft(answer.wagerAmount); }, [open, answer.wagerAmount]);
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDocClick = (event) => { if (ref.current && !ref.current.contains(event.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+  const save = () => {
+    onSave(Math.max(0, Number(draft) || 0));
+    setOpen(false);
+  };
+  return <div className="relative" ref={ref}>
+    <button type="button" disabled={disabled} onClick={() => setOpen((current) => !current)} className="rounded-full border border-purple-400/30 bg-purple-400/10 px-2.5 py-1 text-[11px] font-bold text-purple-200 transition disabled:cursor-default disabled:opacity-70 enabled:hover:border-purple-300/60">{answer.playerName || "Team"}: {Number(answer.wagerAmount || 0)}</button>
+    {open && !disabled && <div className="absolute left-0 top-full z-30 mt-2 w-52 rounded-xl border border-white/10 bg-zinc-950 p-3 shadow-2xl">
+      <p className="mb-2 text-[11px] font-bold uppercase tracking-wide text-zinc-500">{answer.playerName || "Team"}'s wager</p>
+      <input type="number" min="0" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => event.key === "Enter" && save()} className="mb-2.5 h-8 w-full rounded-md border border-white/10 bg-zinc-900 px-2 text-center font-mono text-white outline-none focus:border-[#71E0DC]/60" />
+      <div className="flex gap-2">
+        <Button size="sm" variant="outline" onClick={() => setOpen(false)} className="h-8 flex-1 border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
+        <Button size="sm" onClick={save} className="h-8 flex-1 gradient-btn">Save</Button>
+      </div>
+    </div>}
+  </div>;
+};
 
-const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusMode, pointsPerQuestion, timerSeconds, timeRemaining, wagerMode, wagerLimit, wagerTiming, onUpdateSettings, branding, players, answers, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, setMode, isReviewing }) => {
+const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusMode, pointsPerQuestion, timerSeconds, timeRemaining, wagerMode, wagerLimit, wagerTiming, onUpdateSettings, branding, players, answers, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, editWager, setMode, isReviewing }) => {
   const meta = typeMeta[question.type] || typeMeta.written;
   const Icon = meta.icon;
   const imageUrl = buildStorageUrl(question.imageUrl);
@@ -2201,7 +2250,7 @@ const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusM
   const submittedPct = playerCount > 0 ? Math.min(100, Math.round((submittedCount / playerCount) * 100)) : 0;
   const accentColor = branding?.accentColor || DEFAULT_BRANDING.accentColor;
 
-  const answerRows = <AnswerRows question={question} players={players} answers={answers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} wagerMode={wagerMode} wagerLimit={wagerLimit} pointsPerQuestion={Number(pointsPerQuestion) || getDefaultPoints(question)} setMode={setMode} isReviewing={isReviewing} showAnswer={showAnswer} />;
+  const answerRows = <AnswerRows question={question} players={players} answers={answers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} wagerMode={wagerMode} wagerLimit={wagerLimit} pointsPerQuestion={Number(pointsPerQuestion) || getDefaultPoints(question)} setMode={setMode} isReviewing={isReviewing} showAnswer={showAnswer} />;
   // Visible to the host as soon as the question is live -- not gated behind
   // "Reveal Fun Fact", which only controls what players/the presentation see.
   const funFactBox = question.funFact && <div className="mt-4 flex items-start gap-2.5 rounded-lg border border-dashed p-3.5 text-sm leading-relaxed transition-opacity" style={{ borderColor: `${accentColor}59`, backgroundColor: `${accentColor}0F`, color: "#C7C9F5", opacity: showFunFact ? 1 : 0.65 }}><Sparkles size={15} className="mt-0.5 shrink-0" style={{ color: accentColor }} /><div><b style={{ color: accentColor }}>Fun fact:</b> {question.funFact}</div></div>;
