@@ -10,6 +10,7 @@ import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 import {
   Calendar,
   Copy,
+  Download,
   Eye,
   MapPin,
   Pencil,
@@ -23,6 +24,7 @@ import {
 import { toast } from "sonner";
 import { mergeProfileRecords, normalizeVenue, readLocalVenues } from "../lib/venues";
 import { loadProfileValue, profileKeys, readCurrentProjectSessionId, writeCurrentProjectSessionId } from "../lib/profileState";
+import { downloadCsv } from "../lib/csv";
 
 const titleDatePatterns = [
   /\b(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})\b/,
@@ -73,6 +75,57 @@ const formatHostDate = (session) => {
   return hostDate ? hostDate.toLocaleDateString() : "No host date";
 };
 
+const normalizeHeadcount = (value) => {
+  if (value && typeof value === "object" && !Array.isArray(value)) return { adults: Number(value.adults) || 0, kids: Number(value.kids) || 0 };
+  if (value === undefined || value === null || value === "") return { adults: 0, kids: 0 };
+  return { adults: Number(value) || 0, kids: 0 };
+};
+
+// Everything here reads straight off the already-fetched session row (the
+// stored final leaderboard and attendance) instead of re-querying per
+// session, so selecting a lot of sessions to export stays a single,
+// instant, client-side pass rather than a burst of network calls.
+const getSessionLeaderboard = (session) => {
+  const leaderboard = session?.hosted_results?.liveState?.leaderboard;
+  return Array.isArray(leaderboard) ? leaderboard.filter((team) => team && team.name) : [];
+};
+
+const buildSessionSummaryRow = (session) => {
+  const leaderboard = getSessionLeaderboard(session);
+  const scores = leaderboard.map((team) => Number(team.score) || 0);
+  const topTeam = leaderboard.length ? [...leaderboard].sort((a, b) => Number(b.score || 0) - Number(a.score || 0))[0] : null;
+  const averageScore = scores.length ? Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length) : "";
+  const teamHeadcounts = session?.attendance?.teamHeadcounts || {};
+  const nonPlayers = normalizeHeadcount(session?.attendance?.nonPlayers);
+  const playingTotals = Object.values(teamHeadcounts).reduce((sum, value) => {
+    const hc = normalizeHeadcount(value);
+    return { adults: sum.adults + hc.adults, kids: sum.kids + hc.kids };
+  }, { adults: 0, kids: 0 });
+  const barAdults = playingTotals.adults + nonPlayers.adults;
+  const barKids = playingTotals.kids + nonPlayers.kids;
+  return [
+    getSessionTitle(session),
+    formatHostDate(session),
+    session.venue || session.venue_name || "",
+    isImportedSession(session) ? "Imported" : "Built",
+    getTotalQuestions(session),
+    leaderboard.length,
+    topTeam?.name || "",
+    topTeam ? Number(topTeam.score) || 0 : "",
+    averageScore,
+    barAdults || barKids ? barAdults + barKids : "",
+  ];
+};
+
+const safeArray = (value) => (Array.isArray(value) ? value : []);
+
+const getTotalQuestions = (session) => (
+  safeArray(session.true_false_questions).length +
+  safeArray(session.multiple_choice_questions).length +
+  safeArray(session.written_questions).length +
+  safeArray(session.picture_questions).length
+);
+
 const PastSessions = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -85,6 +138,7 @@ const PastSessions = () => {
   const [venues, setVenues] = useState([]);
   const [savingVenueId, setSavingVenueId] = useState(null);
   const [currentProjectId, setCurrentProjectId] = useState(null);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
 
   useEffect(() => {
     const localVenues = readLocalVenues();
@@ -233,15 +287,25 @@ const PastSessions = () => {
     }
   };
 
-  const safeArray = (value) => (Array.isArray(value) ? value : []);
+  const toggleSessionSelected = (sessionId, event) => {
+    event.stopPropagation();
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(sessionId)) next.delete(sessionId);
+      else next.add(sessionId);
+      return next;
+    });
+  };
 
-  const getTotalQuestions = (session) => {
-    return (
-      safeArray(session.true_false_questions).length +
-      safeArray(session.multiple_choice_questions).length +
-      safeArray(session.written_questions).length +
-      safeArray(session.picture_questions).length
-    );
+  const handleExportSelected = () => {
+    const selected = allSessions.filter((session) => selectedIds.has(session.id));
+    if (!selected.length) return;
+    const sorted = [...selected].sort((a, b) => (getHostDate(b)?.getTime() || 0) - (getHostDate(a)?.getTime() || 0));
+    downloadCsv(`trivia-sessions-summary-${new Date().toISOString().slice(0, 10)}.csv`, [
+      ["Session", "Host Date", "Venue", "Source", "Total Questions", "Teams", "Top Team", "Top Score", "Average Score", "Bar Total"],
+      ...sorted.map(buildSessionSummaryRow),
+    ]);
+    toast.success(`Exported ${selected.length} session${selected.length === 1 ? "" : "s"}`);
   };
 
   const builtCount = useMemo(
@@ -313,14 +377,34 @@ const PastSessions = () => {
           </p>
         </div>
 
-        <Button
-          onClick={() => navigate("/build")}
-          className="gradient-btn"
-          data-testid="new-session-btn"
-        >
-          <PlusCircle size={18} className="mr-2" />
-          New Session
-        </Button>
+        <div className="flex items-center gap-2">
+          {selectedIds.size > 0 && <>
+            <Button
+              onClick={handleExportSelected}
+              variant="outline"
+              className="border-white/20 text-white hover:bg-zinc-800"
+              data-testid="export-selected-sessions-btn"
+            >
+              <Download size={16} className="mr-2" />
+              Export {selectedIds.size} Session{selectedIds.size === 1 ? "" : "s"}
+            </Button>
+            <Button
+              onClick={() => setSelectedIds(new Set())}
+              variant="ghost"
+              className="text-zinc-400 hover:text-white"
+            >
+              Clear
+            </Button>
+          </>}
+          <Button
+            onClick={() => navigate("/build")}
+            className="gradient-btn"
+            data-testid="new-session-btn"
+          >
+            <PlusCircle size={18} className="mr-2" />
+            New Session
+          </Button>
+        </div>
       </div>
 
       <Card className="glass-card mb-6">
@@ -429,7 +513,7 @@ const PastSessions = () => {
           {filteredSessions.map((session, index) => (
             <Card
               key={session.id}
-              className="glass-card cursor-pointer transition-all hover:scale-[1.02]"
+              className={`glass-card cursor-pointer transition-all hover:scale-[1.02] ${selectedIds.has(session.id) ? "ring-2 ring-[#71E0DC]/60" : ""}`}
               onClick={() => navigate(`/session/${session.id}`)}
               data-testid={`session-${index}`}
             >
@@ -437,9 +521,21 @@ const PastSessions = () => {
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex-1">
                     <div className="mb-2 flex items-start justify-between gap-2">
-                      <h3 className="text-white font-semibold line-clamp-2">
-                        {getSessionTitle(session)}
-                      </h3>
+                      <div className="flex min-w-0 items-start gap-2">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(session.id)}
+                          onChange={(e) => toggleSessionSelected(session.id, e)}
+                          onClick={(e) => e.stopPropagation()}
+                          title="Select for export"
+                          aria-label={`Select ${getSessionTitle(session)} for export`}
+                          className="mt-1 h-4 w-4 flex-shrink-0 accent-[#71E0DC]"
+                          data-testid={`select-session-${index}`}
+                        />
+                        <h3 className="text-white font-semibold line-clamp-2">
+                          {getSessionTitle(session)}
+                        </h3>
+                      </div>
                       <button
                         type="button"
                         onClick={(e) => handleToggleCurrentProject(session.id, e)}
