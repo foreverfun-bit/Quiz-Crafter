@@ -10,6 +10,7 @@ import { loadHostToolsSessionState, profileKeys, saveHostToolsSessionState, save
 import { buildClueStyleExamples, deleteCluePost, extractCluePostFromImage, logCluePost, readClueHistory, syncClueHistory, updateCluePostSession, updateCluePostText } from "../lib/clueHistory";
 import { imageBlobToDataUrl } from "../lib/mediaUpload";
 import { dedupeCategories } from "../lib/categories";
+import { downloadCsv } from "../lib/csv";
 import { useCopilot } from "../context/CopilotContext";
 
 const SOCIAL_STORAGE_KEY = "quiz-crafter-social-links";
@@ -1048,17 +1049,6 @@ const FeedbackVoteList = ({ row, sentiment, label, count }) => {
 const IdeasFeedbackCard = ({ ideas }) => <Card className="glass-card xl:col-span-2"><CardHeader><CardTitle className="text-white flex items-center gap-2"><MessageSquare className="text-[#71E0DC]" />End-of-Session Ideas</CardTitle></CardHeader><CardContent className="space-y-3 max-h-[520px] overflow-y-auto">{ideas.map((idea, index) => <div key={`${idea.playerId}-${idea.submittedAt}-${index}`} className="rounded-lg border border-white/10 bg-zinc-950/60 p-4"><div className="flex flex-wrap items-center justify-between gap-2 mb-3"><p className="font-bold text-white">{idea.playerName || "Team"}</p><p className="text-xs text-zinc-500">{formatDateTime(idea.submittedAt)}</p></div>{idea.category && <p className="text-sm text-zinc-300"><span className="text-[#71E0DC] font-semibold">Category idea:</span> {idea.category}</p>}{idea.question && <p className="text-sm text-zinc-300 mt-2"><span className="text-[#AEB2EF] font-semibold">Question idea:</span> {idea.question}</p>}</div>)}{!ideas.length && <p className="text-sm text-zinc-500 text-center py-8">Player category and question ideas from the post-game feedback screen will appear here.</p>}</CardContent></Card>;
 
 const answerSymbol = (status) => status === "correct" ? "✓" : status === "incorrect" ? "×" : status === "missing" ? "-" : "◐";
-
-const downloadCsv = (filename, rows) => {
-  const csv = rows.map((row) => row.map((cell) => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.click();
-  URL.revokeObjectURL(url);
-};
 
 const formatSessionDate = (session) => {
   const raw = session?.session_date || session?.hosted_at || session?.date || session?.created_at;
