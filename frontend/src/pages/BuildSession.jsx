@@ -924,9 +924,16 @@ const BuildSession = () => {
       try {
         const latestStyle = readHostStyleProfile();
         setHostStyleProfile(latestStyle);
+        // Only tell the model to leave the correct answer untouched when it's
+        // actually already filled in -- saying "keep the correct answer
+        // unchanged" while also asking it to "add" the correct answer (because
+        // it was blank) is a contradiction that let the model ignore this
+        // question entirely and answer some other question from context instead.
+        const keepUnchanged = ["the exact question wording"];
+        if (normalizeText(writeForm.correct_answer)) keepUnchanged.push("the correct answer");
         const { data } = await axios.post("/api/host-assistant", {
           mode: "question_edit",
-          request: `Keep this exact question and correct answer unchanged -- do not rewrite or replace them. Add only: ${missing.join("; ")}.`,
+          request: `Do not rewrite or replace ${keepUnchanged.join(" or ")} -- keep them exactly as given. Every addition must directly answer or relate to this exact question's specific subject -- do not answer or draw from a different question anywhere else in context. Add only: ${missing.join("; ")}.`,
           context: {
             session: { name: sessionName, session_date: sessionDate, difficulty, activeRound: activeRound.name },
             build: buildAiSessionContext(),
