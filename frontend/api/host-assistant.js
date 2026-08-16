@@ -187,6 +187,7 @@ async function handler(req, res) {
               },
               response_rules: editMode
                 ? [
+                    "The question you are editing is host_context.questions[0], and only that one. Everything else in host_context (host_context.build.activeRoundQuestions, host_context.build.builtQuestions, host_context.host_style_profile examples, etc.) is background for style and avoiding duplicates only -- never copy, answer, or draw facts from any of those other questions.",
                     "Return JSON with keys: answer, candidate.",
                     "answer should briefly explain what changed and any caveat the host should know.",
                     "candidate must include category, question_text, correct_answer, incorrect_answers, fun_fact, difficulty, question_type, image_url.",
@@ -194,6 +195,7 @@ async function handler(req, res) {
                     "If the host asks to make it false, create a true_false question whose correct_answer is exactly False.",
                     "If the host asks to make it true, create a true_false question whose correct_answer is exactly True.",
                     "If the host asks to make it easier or harder, keep the same broad trivia idea and category unless impossible.",
+                    "When asked to add a missing correct_answer, it must be the real, verifiably correct answer to host_context.questions[0]'s exact question_text -- if you are not confident of a real answer to that specific question, say so in answer and omit candidate rather than guessing or substituting an answer to a different question.",
                     "For multiple_choice, incorrect_answers must contain exactly 3 plausible wrong answers.",
                     "fun_fact must be one short sentence of genuinely true additional context about THIS SAME question's specific subject or answer -- never a generic or unrelated trivia tidbit about a different topic, even a true one. If you were only asked to add a fun fact and have no real fact directly relevant to this exact question/answer, return fun_fact as an empty string rather than inventing an unrelated one.",
                     "Do not claim to save or edit anything directly.",
