@@ -150,6 +150,17 @@ const getTotalQuestions = (session) => (
   safeArray(session.picture_questions).length
 );
 
+// Matches BuildSession.jsx's isBonusCategory / HostSession.jsx's isBonusQuestion --
+// Bonus isn't its own question_type, it's this reserved category value.
+const isBonusQuestion = (question) => String(question?.category || "").trim().toUpperCase() === "BONUS";
+
+const getBonusQuestionCount = (session) => [
+  ...safeArray(session.true_false_questions),
+  ...safeArray(session.multiple_choice_questions),
+  ...safeArray(session.written_questions),
+  ...safeArray(session.picture_questions),
+].filter(isBonusQuestion).length;
+
 const PastSessions = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -645,8 +656,8 @@ const PastSessions = () => {
                   <div className="flex items-center gap-4">
                     <span className="text-zinc-500">Written:</span>
                     <span className="text-white">{safeArray(session.written_questions).length}</span>
-                    <span className="text-zinc-500">Picture:</span>
-                    <span className="text-white">{safeArray(session.picture_questions).length}</span>
+                    <span className="text-zinc-500">Bonus:</span>
+                    <span className="text-white">{getBonusQuestionCount(session)}</span>
                   </div>
                 </div>
 
