@@ -26,7 +26,9 @@ import {
   MessageSquare,
   MonitorPlay,
   MoreHorizontal,
+  Music,
   Palette,
+  Pause,
   Pencil,
   Play,
   Plus,
@@ -522,6 +524,11 @@ const HostSession = () => {
   const [disputeNotes, setDisputeNotes] = useState(() => readStoredList(hostToolsStorageKey(id, "disputes")));
   const [showAnswer, setShowAnswer] = useState(false);
   const [showFunFact, setShowFunFact] = useState(false);
+  // Audio clips play from the host's own device (speakers/PA hooked up to
+  // this machine), not broadcast to the presentation screen or players --
+  // so this is purely local playback state, no live-state/broadcast plumbing.
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  const audioRef = useRef(null);
   // Session-wide switch, not tied to any one question -- lets the host
   // collect answers manually (verbally, on paper) for as long as they want
   // instead of via phone, without touching join, feedback, or idea
@@ -939,6 +946,20 @@ const HostSession = () => {
   const rounds = useMemo(() => makeRounds(questions), [questions]);
   const isReviewing = reviewIndex !== null;
   const hostIndex = isReviewing ? reviewIndex : currentIndex;
+  // Stop and rewind whenever the displayed question changes -- there are
+  // several separate navigation paths (next/prev, jump to question, review
+  // mode) that all end up changing hostIndex, so hooking that one derived
+  // value instead of each navigation function covers all of them without
+  // leaving a clip silently playing in the background after the host has
+  // moved on to a different question.
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.currentTime = 0;
+    }
+    setIsPlayingAudio(false);
+  }, [hostIndex]);
   const currentQuestion = questions[currentIndex] || null;
   const liveDisplayedQuestion = emergencyOverride || currentQuestion;
   const displayedQuestion = isReviewing ? questions[hostIndex] : liveDisplayedQuestion;
@@ -1216,6 +1237,20 @@ const HostSession = () => {
     setShowFunFact((value) => !value);
     setGameStarted(true);
     releaseMode("question");
+  };
+
+  const toggleAudioPlayback = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (isPlayingAudio) {
+      audio.pause();
+      return;
+    }
+    audio.currentTime = 0;
+    audio.play().catch((error) => {
+      console.error("Audio clip playback error:", error);
+      toast.error("Couldn't play that clip -- check this device's speaker/volume");
+    });
   };
 
   const toggleAnswersPaused = () => setAnswersPaused((value) => !value);
@@ -1685,6 +1720,7 @@ const HostSession = () => {
     if (presentMode === "categories") releaseMode("categories", roundKey);
   };
   return <div className="min-h-screen bg-[#09090B] text-white" data-testid="host-session-page" style={brandStyle}>
+    {displayedQuestion?.audio_url && <audio ref={audioRef} src={displayedQuestion.audio_url} preload="none" onPlay={() => setIsPlayingAudio(true)} onPause={() => setIsPlayingAudio(false)} onEnded={() => setIsPlayingAudio(false)} className="hidden" />}
     {isTestRun && !focusMode && <div className="bg-amber-400/15 border-b border-amber-400/30 text-amber-200 text-sm px-4 py-2 flex items-center justify-center gap-2" data-testid="test-mode-banner">
       <AlertTriangle size={14} />
       Test Run -- teams and scores here won't count. Starting the real event clears this out automatically.
@@ -1698,7 +1734,7 @@ const HostSession = () => {
           {!focusMode && customizeOpen && <HostCustomizePanel branding={branding} defaultBranding={readDefaultBranding()} onSave={saveBranding} onSaveDefault={saveBrandingAsDefault} onUseDefault={useDefaultBranding} onClose={() => setCustomizeOpen(false)} />}
           {!gameStarted && !isReviewing ? <LobbyStage playerCount={players.length} onStartTrivia={startTriviaIntro} /> : presentMode === "categories" && !isReviewing ? <RoundIntroStage round={introRound} gameStarted={gameStarted} onStartIntro={startTriviaIntro} onStartQuestion={startIntroQuestion} /> : presentMode === "bonus_pause" && !isReviewing ? <BonusPauseStage round={rounds.find((round) => pendingBonusIndex >= round.startIndex && pendingBonusIndex < round.startIndex + round.questions.length)} leaderboard={leaderboard} /> : presentMode === "winners" && !isReviewing ? <WinnersStage leaderboard={leaderboard} /> : presentMode === "feedback" && !isReviewing ? <FeedbackStage ideas={playerIdeas} /> : <QuestionStage question={displayedQuestion} index={hostIndex} total={questions.length} showAnswer={isReviewing ? true : showAnswer} showFunFact={isReviewing ? false : showFunFact} focusMode={focusMode} pointsPerQuestion={viewPointsPerQuestion} timerSeconds={viewTimerSeconds} timeRemaining={isReviewing ? null : timeRemaining} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} wagerTiming={viewWagerTiming} onUpdateSettings={isReviewing ? () => {} : updateQuestionSettings} branding={branding} players={playingPlayers} answers={activeCurrentAnswers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} setMode={releaseMode} isReviewing={isReviewing} />}
         </main>
-        {!focusMode && <PlaybackRail mode={presentMode} setMode={releaseMode} rounds={rounds} introRoundKey={selectedIntroKey} chooseIntroRound={chooseIntroRound} isReviewing={isReviewing} showAnswer={isReviewing ? true : showAnswer} onRevealAnswer={toggleAnswer} showFunFact={isReviewing ? false : showFunFact} onShowFunFact={toggleFunFact} hasRevealExtra={hasRevealExtra} hasFunFact={Boolean(displayedQuestion.funFact)} timeRemaining={isReviewing ? null : timeRemaining} timerSeconds={viewTimerSeconds} startTimer={startTimer} resetTimer={isReviewing ? () => {} : resetTimer} currentIndex={currentIndex} total={questions.length} onPrev={() => goToQuestion(currentIndex - 1, { startTimer: false })} onNext={() => {
+        {!focusMode && <PlaybackRail mode={presentMode} setMode={releaseMode} rounds={rounds} introRoundKey={selectedIntroKey} chooseIntroRound={chooseIntroRound} isReviewing={isReviewing} showAnswer={isReviewing ? true : showAnswer} onRevealAnswer={toggleAnswer} showFunFact={isReviewing ? false : showFunFact} onShowFunFact={toggleFunFact} hasRevealExtra={hasRevealExtra} hasFunFact={Boolean(displayedQuestion.funFact)} hasAudio={Boolean(displayedQuestion.audio_url)} isPlayingAudio={isPlayingAudio} onToggleAudio={toggleAudioPlayback} timeRemaining={isReviewing ? null : timeRemaining} timerSeconds={viewTimerSeconds} startTimer={startTimer} resetTimer={isReviewing ? () => {} : resetTimer} currentIndex={currentIndex} total={questions.length} onPrev={() => goToQuestion(currentIndex - 1, { startTimer: false })} onNext={() => {
           if (!gameStarted) return startTriviaIntro();
           if (presentMode === "categories") return startIntroQuestion();
           if (presentMode === "bonus_pause" && pendingBonusIndex !== null) return goToQuestion(pendingBonusIndex, { startTimer: true, pauseBeforeBonus: false });
@@ -1772,7 +1808,7 @@ const PLAYBACK_TOOLS = [
   { key: "feedback", label: "Feedback", icon: ThumbsUp },
 ];
 
-const PlaybackRail = ({ mode, setMode, rounds, introRoundKey, chooseIntroRound, isReviewing, showAnswer, onRevealAnswer, showFunFact, onShowFunFact, hasRevealExtra, hasFunFact, timeRemaining, timerSeconds, startTimer, resetTimer, currentIndex, total, onPrev, onNext, onOpenDrawer, flaggedTeamCount, currentQuestionLabel }) => {
+const PlaybackRail = ({ mode, setMode, rounds, introRoundKey, chooseIntroRound, isReviewing, showAnswer, onRevealAnswer, showFunFact, onShowFunFact, hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, timeRemaining, timerSeconds, startTimer, resetTimer, currentIndex, total, onPrev, onNext, onOpenDrawer, flaggedTeamCount, currentQuestionLabel }) => {
   const nonQuestionMode = mode === "bonus_pause" || mode === "winners" || mode === "feedback";
   const liveRound = rounds.find((round) => currentIndex >= round.startIndex && currentIndex < round.startIndex + round.questions.length);
   const liveRoundListIndex = rounds.findIndex((round) => round.key === liveRound?.key);
@@ -1813,6 +1849,7 @@ const PlaybackRail = ({ mode, setMode, rounds, introRoundKey, chooseIntroRound, 
           </div>
           <Button onClick={onRevealAnswer} disabled={isReviewing || nonQuestionMode} className={`w-full h-10 ${showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-40" : "gradient-btn disabled:opacity-40"}`}>{showAnswer ? <EyeOff size={16} className="mr-2" /> : <Eye size={16} className="mr-2" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button>
           <Button onClick={onShowFunFact} disabled={isReviewing || nonQuestionMode || !hasRevealExtra} className="w-full h-10 bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-40"><Sparkles size={16} className="mr-2" />{showFunFact ? "Hide" : hasFunFact ? "Reveal Fun Fact" : "Reveal Media"}</Button>
+          {hasAudio && <Button onClick={onToggleAudio} disabled={isReviewing || nonQuestionMode} className={`w-full h-10 ${isPlayingAudio ? "bg-purple-500/20 text-purple-200 hover:bg-purple-500/30" : "bg-zinc-800 text-white hover:bg-zinc-700"} disabled:opacity-40`}>{isPlayingAudio ? <Pause size={16} className="mr-2" /> : <Music size={16} className="mr-2" />}{isPlayingAudio ? "Stop Audio" : "Play Audio"}</Button>}
         </div>
       </CardContent>
     </Card>

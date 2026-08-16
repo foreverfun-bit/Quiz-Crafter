@@ -16,13 +16,19 @@ const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/heic", "image/heif", "image/bmp", "image/tiff", "image/svg+xml"]);
 const EXTENSION_BY_MIME = { "image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg", "image/gif": "gif", "image/webp": "webp", "image/heic": "heic", "image/heif": "heif", "image/bmp": "bmp", "image/tiff": "tiff", "image/svg+xml": "svg" };
 
+// Same bucket, same size-limit/allowlist-must-match-Storage caveat as the
+// image constants above -- see the widen_question_media_for_audio migration.
+const MAX_AUDIO_FILE_SIZE_BYTES = 25 * 1024 * 1024;
+const ALLOWED_AUDIO_MIME_TYPES = new Set(["audio/mpeg", "audio/mp4", "audio/x-m4a", "audio/wav", "audio/x-wav", "audio/ogg", "audio/webm", "audio/aac"]);
+const AUDIO_EXTENSION_BY_MIME = { "audio/mpeg": "mp3", "audio/mp4": "m4a", "audio/x-m4a": "m4a", "audio/wav": "wav", "audio/x-wav": "wav", "audio/ogg": "ogg", "audio/webm": "webm", "audio/aac": "aac" };
+
 const sanitizeFileName = (name) => (name || "media").replace(/[^a-zA-Z0-9._-]/g, "_").slice(-80);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const resolveUploadType = (file) => {
+const resolveUploadType = (file, allowedTypes, fallbackType) => {
   const type = (file.type || "").toLowerCase();
-  return ALLOWED_MIME_TYPES.has(type) ? type : "image/jpeg";
+  return allowedTypes.has(type) ? type : fallbackType;
 };
 
 const verifyUrlIsReachable = async (url) => {
@@ -41,14 +47,14 @@ const verifyUrlIsReachable = async (url) => {
 // does. Reading also nudges Windows/OneDrive to hydrate the file, and gives
 // Storage a fully materialized Blob instead of a lazy File handle that
 // could read short mid-upload.
-const readFileBytes = async (file) => {
+const readFileBytes = async (file, label = "image") => {
   let buffer;
   try {
     buffer = await file.arrayBuffer();
   } catch {
-    throw new Error("Could not read this image -- if it's from a cloud-synced folder (OneDrive, Google Drive, etc.), make sure it's fully downloaded (not just showing as available) before trying again");
+    throw new Error(`Could not read this ${label} -- if it's from a cloud-synced folder (OneDrive, Google Drive, etc.), make sure it's fully downloaded (not just showing as available) before trying again`);
   }
-  if (!buffer.byteLength) throw new Error("That image looks empty once read -- if it's from a cloud-synced folder (OneDrive, Google Drive, etc.), make sure it's fully downloaded before trying again");
+  if (!buffer.byteLength) throw new Error(`That ${label} looks empty once read -- if it's from a cloud-synced folder (OneDrive, Google Drive, etc.), make sure it's fully downloaded before trying again`);
   return buffer;
 };
 
@@ -84,9 +90,9 @@ export const imageBlobToDataUrl = async (blob) => new Promise((resolve, reject) 
   image.src = objectUrl;
 });
 
-const uploadOnce = async (blob, fileName, userId) => {
-  const contentType = resolveUploadType(blob);
-  const extension = EXTENSION_BY_MIME[contentType] || "jpg";
+const uploadOnce = async (blob, fileName, userId, { allowedTypes, extensionByMime, fallbackType }) => {
+  const contentType = resolveUploadType(blob, allowedTypes, fallbackType);
+  const extension = extensionByMime[contentType] || extensionByMime[fallbackType];
   const baseName = sanitizeFileName(fileName).replace(/\.[a-zA-Z0-9]+$/, "") || "media";
   const path = `${userId}/${crypto.randomUUID()}-${baseName}.${extension}`;
   const { error: uploadError } = await supabase.storage
@@ -115,16 +121,17 @@ export const uploadQuestionMedia = async (file) => {
   if (!file) throw new Error("No file selected");
   if (file.size === 0) throw new Error("That image looks empty (0 bytes) -- if it's from a cloud-synced folder (OneDrive, Google Drive, etc.), make sure it's fully downloaded first, then try again");
   if (file.size > MAX_FILE_SIZE_BYTES) throw new Error(`That image is too large (${(file.size / (1024 * 1024)).toFixed(1)}MB) -- images must be 10MB or smaller`);
-  const bytes = await readFileBytes(file);
+  const bytes = await readFileBytes(file, "image");
   const blob = new Blob([bytes], { type: file.type || "" });
   const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
   const userId = sessionData?.session?.user?.id;
   if (sessionError || !userId) throw new Error("You must be signed in to upload media");
 
+  const uploadOptions = { allowedTypes: ALLOWED_MIME_TYPES, extensionByMime: EXTENSION_BY_MIME, fallbackType: "image/jpeg" };
   let lastError = null;
   for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt += 1) {
     try {
-      const url = await uploadOnce(blob, file.name, userId);
+      const url = await uploadOnce(blob, file.name, userId, uploadOptions);
       if (await verifyUrlIsReachable(url)) return url;
       lastError = new Error("Upload finished but the image isn't reachable yet -- retrying");
     } catch (error) {
@@ -134,4 +141,36 @@ export const uploadQuestionMedia = async (file) => {
   }
   console.warn("Question media storage upload failed; using compressed browser fallback:", lastError);
   return imageBlobToDataUrl(blob);
+};
+
+// Same retry/verify approach as uploadQuestionMedia, but with no data-URL
+// fallback on failure -- that trick only works for images (cheap canvas
+// recompression into a small base64 string). Doing the equivalent for audio
+// would mean embedding a multi-MB base64 clip in question JSON, which is
+// exactly what the question-media bucket was built to get away from (see
+// add_question_media_bucket migration). Surfacing the error and letting the
+// host retry is better than silently reintroducing that.
+export const uploadQuestionAudio = async (file) => {
+  if (!file) throw new Error("No file selected");
+  if (file.size === 0) throw new Error("That audio clip looks empty (0 bytes) -- if it's from a cloud-synced folder (OneDrive, Google Drive, etc.), make sure it's fully downloaded first, then try again");
+  if (file.size > MAX_AUDIO_FILE_SIZE_BYTES) throw new Error(`That clip is too large (${(file.size / (1024 * 1024)).toFixed(1)}MB) -- audio clips must be 25MB or smaller`);
+  const bytes = await readFileBytes(file, "audio clip");
+  const blob = new Blob([bytes], { type: file.type || "" });
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  const userId = sessionData?.session?.user?.id;
+  if (sessionError || !userId) throw new Error("You must be signed in to upload media");
+
+  const uploadOptions = { allowedTypes: ALLOWED_AUDIO_MIME_TYPES, extensionByMime: AUDIO_EXTENSION_BY_MIME, fallbackType: "audio/mpeg" };
+  let lastError = null;
+  for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt += 1) {
+    try {
+      const url = await uploadOnce(blob, file.name, userId, uploadOptions);
+      if (await verifyUrlIsReachable(url)) return url;
+      lastError = new Error("Upload finished but the clip isn't reachable yet -- retrying");
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < MAX_UPLOAD_ATTEMPTS) await sleep(RETRY_DELAY_MS[attempt - 1] || 1500);
+  }
+  throw lastError || new Error("Failed to upload audio clip");
 };
