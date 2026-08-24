@@ -202,10 +202,16 @@ export default function Library() {
     );
   }, [questions]);
 
+  // A real match against a saved session's questions is authoritative -- it means
+  // this exact question was actually played. That must win over a manual "mark
+  // unused" override, which can go stale (e.g. was toggled on a duplicate row
+  // before the library was cleaned up) and otherwise hides a genuinely-used
+  // question from the "used" filter.
   const isUsed = useCallback((question) => {
     const id = String(question?.id || "");
+    if (usedFingerprints.has(fingerprint(question.question_text))) return true;
     if (unusedIds.has(id)) return false;
-    return isMemoryUsed(question, questionMemory) || isQuestionMarkedUsed(question, usedIds) || usedFingerprints.has(fingerprint(question.question_text));
+    return isMemoryUsed(question, questionMemory) || isQuestionMarkedUsed(question, usedIds);
   }, [questionMemory, unusedIds, usedIds, usedFingerprints]);
   const usedCount = useMemo(() => questions.filter((question) => isUsed(question)).length, [questions, isUsed]);
   const blockedMemoryCount = useMemo(() => questions.filter((question) => isMemoryBlocked(question, questionMemory)).length, [questionMemory, questions]);

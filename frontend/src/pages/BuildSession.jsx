@@ -736,7 +736,7 @@ const BuildSession = () => {
   const settingsQuestion = settingsQuestionId ? (questionById.get(String(settingsQuestionId)) || aiCandidates.find((candidate) => String(candidate.id) === String(settingsQuestionId))) : null;
   const isCandidateId = (id) => aiCandidates.some((candidate) => String(candidate.id) === String(id));
   const updateAiCandidate = (candidateId, patch) => setAiCandidates((prev) => prev.map((candidate) => String(candidate.id) === String(candidateId) ? normalizeQuestion({ ...candidate, ...patch }, patch.question_type || normalizeType(candidate)) : candidate));
-  const availableQuestions = useMemo(() => { const query = searchQuery.trim().toLowerCase(); return normalizedQuestions.filter((question) => { const type = normalizeType(question); const id = String(question.id); const selected = selectedIds.has(id); const manuallyUnused = unusedQuestionIds.has(id); const blockedByMemory = !manuallyUnused && isMemoryBlocked(question, questionMemory); const used = !manuallyUnused && (isQuestionMarkedUsed(question, usedQuestionIds) || usedFingerprints.has(fingerprint(question.question_text))); if (typeFilter !== "all" && type !== typeFilter) return false; if (rejectedAi.has(fingerprint(question.question_text))) return false; if ((used || blockedByMemory) && !selected) return false; if (!query) return true; return [question.question_text, question.correct_answer, question.category, question.fun_fact].filter(Boolean).some((value) => String(value).toLowerCase().includes(query)); }); }, [normalizedQuestions, questionMemory, rejectedAi, searchQuery, selectedIds, typeFilter, usedFingerprints, usedQuestionIds, unusedQuestionIds]);
+  const availableQuestions = useMemo(() => { const query = searchQuery.trim().toLowerCase(); return normalizedQuestions.filter((question) => { const type = normalizeType(question); const id = String(question.id); const selected = selectedIds.has(id); const usedByFingerprint = usedFingerprints.has(fingerprint(question.question_text)); const manuallyUnused = !usedByFingerprint && unusedQuestionIds.has(id); const blockedByMemory = !manuallyUnused && isMemoryBlocked(question, questionMemory); const used = usedByFingerprint || (!manuallyUnused && isQuestionMarkedUsed(question, usedQuestionIds)); if (typeFilter !== "all" && type !== typeFilter) return false; if (rejectedAi.has(fingerprint(question.question_text))) return false; if ((used || blockedByMemory) && !selected) return false; if (!query) return true; return [question.question_text, question.correct_answer, question.category, question.fun_fact].filter(Boolean).some((value) => String(value).toLowerCase().includes(query)); }); }, [normalizedQuestions, questionMemory, rejectedAi, searchQuery, selectedIds, typeFilter, usedFingerprints, usedQuestionIds, unusedQuestionIds]);
   useEffect(() => {
     if (loading) return;
     const addId = searchParams.get("addQuestionId");
@@ -837,7 +837,62 @@ const BuildSession = () => {
     const activeSoftExclusions = preferredApproved.length ? soft.filter((category) => !poolKeys.has(categoryKey(category))) : [];
     return { excludedCategories: uniqueCategories([...hardExcluded, ...activeSoftExclusions]), approvedPool: uniqueCategories(pool) };
   };
-  const handleSaveQuestionToLibrary = async (question) => { if (!user?.id) { toast.error("You must be signed in"); return false; } const type = normalizeType(question); const basePayload = { user_id: user.id, question_text: question.question_text, correct_answer: question.correct_answer, question_type: type, category: question.category || "", incorrect_answers: Array.isArray(question.options) && question.options.length ? question.options.join("; ") : question.incorrect_answers || null, fun_fact: question.fun_fact || null, image_url: question.image_url || null }; const attempts = [basePayload, (({ image_url, ...rest }) => rest)(basePayload), (({ image_url, fun_fact, ...rest }) => rest)(basePayload), (({ image_url, fun_fact, incorrect_answers, ...rest }) => rest)(basePayload)]; try { let saved = null; let lastError = null; for (const payload of attempts) { const { data, error } = await supabase.from("questions").insert(payload).select("*").single(); if (!error) { saved = data; break; } lastError = error; if (!String(error.message || "").includes("column")) break; } if (!saved) throw lastError || new Error("Failed to save question"); setQuestions((prev) => [normalizeQuestion(saved, saved.question_type, approvedCategories), ...prev]); toast.success("Saved to library"); return true; } catch (error) { console.error("Save question to library error:", error); toast.error(error.message || "Failed to save to library"); return false; } };
+  // Matches on text+type+image (not just text) so reusing the same question
+  // with a different bonus-round picture is treated as a distinct question,
+  // not an edit of the existing one -- collapsing those would silently
+  // overwrite a legitimate variant with different art.
+  const findExistingLibraryQuestion = (question, type) => {
+    const incomingFingerprint = fingerprint(question.question_text);
+    const incomingImageUrl = question.image_url || null;
+    return questions.find((item) => {
+      const itemId = String(item.id);
+      if (itemId === String(question.id)) return false;
+      if (itemId.startsWith("custom-") || itemId.startsWith("session-") || itemId.startsWith("local-") || itemId.startsWith("ai-") || itemId.startsWith("cohost-")) return false;
+      if (normalizeType(item) !== type) return false;
+      if (fingerprint(item.question_text) !== incomingFingerprint) return false;
+      return (item.image_url || null) === incomingImageUrl;
+    });
+  };
+  const handleSaveQuestionToLibrary = async (question) => {
+    if (!user?.id) { toast.error("You must be signed in"); return false; }
+    const type = normalizeType(question);
+    const basePayload = { user_id: user.id, question_text: question.question_text, correct_answer: question.correct_answer, question_type: type, category: question.category || "", incorrect_answers: Array.isArray(question.options) && question.options.length ? question.options.join("; ") : question.incorrect_answers || null, fun_fact: question.fun_fact || null, image_url: question.image_url || null };
+    const existing = findExistingLibraryQuestion(question, type);
+    if (existing) {
+      const unchanged = (existing.correct_answer || "") === (basePayload.correct_answer || "") && (existing.category || "") === (basePayload.category || "") && (existing.fun_fact || "") === (basePayload.fun_fact || "") && (existing.incorrect_answers || "") === (basePayload.incorrect_answers || "");
+      if (unchanged) { toast.info("Already saved in your library"); return true; }
+      try {
+        const { data, error } = await supabase.from("questions").update(basePayload).eq("id", existing.id).select("*").single();
+        if (error) throw error;
+        setQuestions((prev) => prev.map((item) => String(item.id) === String(existing.id) ? normalizeQuestion(data, data.question_type, approvedCategories) : item));
+        toast.success("Updated the existing question in your library");
+        return true;
+      } catch (error) {
+        console.error("Update library question error:", error);
+        toast.error(error.message || "Failed to update library question");
+        return false;
+      }
+    }
+    const attempts = [basePayload, (({ image_url, ...rest }) => rest)(basePayload), (({ image_url, fun_fact, ...rest }) => rest)(basePayload), (({ image_url, fun_fact, incorrect_answers, ...rest }) => rest)(basePayload)];
+    try {
+      let saved = null;
+      let lastError = null;
+      for (const payload of attempts) {
+        const { data, error } = await supabase.from("questions").insert(payload).select("*").single();
+        if (!error) { saved = data; break; }
+        lastError = error;
+        if (!String(error.message || "").includes("column")) break;
+      }
+      if (!saved) throw lastError || new Error("Failed to save question");
+      setQuestions((prev) => [normalizeQuestion(saved, saved.question_type, approvedCategories), ...prev]);
+      toast.success("Saved to library");
+      return true;
+    } catch (error) {
+      console.error("Save question to library error:", error);
+      toast.error(error.message || "Failed to save to library");
+      return false;
+    }
+  };
   // Closing the Write Question modal (Cancel, the X button, switching to
   // another panel, etc.) never used to clear writeForm -- only submitting a
   // question did. That left a half-written draft's answer/fun fact sitting in
