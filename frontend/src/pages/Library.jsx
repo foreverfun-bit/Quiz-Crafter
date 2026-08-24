@@ -20,6 +20,7 @@ import {
   Save,
   Search,
   Star,
+  Trash2,
   Upload,
   MoreHorizontal,
   X,
@@ -286,6 +287,27 @@ export default function Library() {
     toast.success(willBeUsed ? "Marked used" : "Marked unused");
   };
 
+  const handleDeleteQuestion = async (question) => {
+    if (!window.confirm(`Delete "${question.question_text}"? This can't be undone.`)) return;
+    const id = String(question.id);
+    try {
+      const { error } = await supabase.from("questions").delete().eq("id", question.id).eq("user_id", user?.id);
+      if (error) throw error;
+      setQuestions((prev) => prev.filter((item) => String(item.id) !== id));
+      if (editingId === question.id) { setEditingId(null); setEditForm(null); }
+      const nextUsed = new Set(usedIds); nextUsed.delete(id);
+      const nextUnused = new Set(unusedIds); nextUnused.delete(id);
+      setUsedIds(nextUsed);
+      setUnusedIds(nextUnused);
+      writeUsedIds(nextUsed);
+      writeUnusedIds(nextUnused);
+      toast.success("Question deleted");
+    } catch (error) {
+      console.error("Delete question error:", error);
+      toast.error(error.message || "Failed to delete question");
+    }
+  };
+
   const startEditing = (question) => {
     setEditingId(question.id);
     setEditForm(toEditForm(question));
@@ -457,7 +479,7 @@ export default function Library() {
                   onCancel={cancelEditing}
                 />
               ) : (
-                <QuestionCard key={question.id} question={question} used={isUsed(question)} memory={getQuestionMemory(question, questionMemory)} onEdit={() => startEditing(question)} onToggleUsed={() => toggleUsed(question)} onAddToBuild={() => navigate(`/build?addQuestionId=${question.id}`)} />
+                <QuestionCard key={question.id} question={question} used={isUsed(question)} memory={getQuestionMemory(question, questionMemory)} onEdit={() => startEditing(question)} onToggleUsed={() => toggleUsed(question)} onAddToBuild={() => navigate(`/build?addQuestionId=${question.id}`)} onDelete={() => handleDeleteQuestion(question)} />
               );
             })}
           </div>
@@ -467,7 +489,7 @@ export default function Library() {
   );
 }
 
-const QuestionCard = ({ question, used, memory, onEdit, onToggleUsed, onAddToBuild }) => {
+const QuestionCard = ({ question, used, memory, onEdit, onToggleUsed, onAddToBuild, onDelete }) => {
   const type = question.question_type || "written";
   const config = typeConfig[type] || typeConfig.written;
   const Icon = config.icon;
@@ -496,6 +518,9 @@ const QuestionCard = ({ question, used, memory, onEdit, onToggleUsed, onAddToBui
             </Button>
             <Button size="sm" variant="outline" onClick={onEdit} className="border-zinc-700 text-zinc-300 hover:text-white">
               <Pencil size={14} className="mr-2" />Edit
+            </Button>
+            <Button size="sm" variant="outline" onClick={onDelete} className="border-red-500/30 text-red-300 hover:bg-red-500/10 hover:text-red-200">
+              <Trash2 size={14} className="mr-2" />Delete
             </Button>
           </div>
         </div>
