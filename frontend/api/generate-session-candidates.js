@@ -36,6 +36,7 @@ const BROAD_CATEGORIES = ["Art", "Books", "Food & Drink", "Geography", "History"
 const APPROVED_CATEGORY_STRICT_THRESHOLD = 14;
 const EXISTING_QUESTIONS_CACHE_MS = 5 * 60 * 1000;
 const STYLE_EXAMPLE_LIMIT = 24;
+const FAST_STYLE_EXAMPLE_LIMIT = 8;
 const DUPLICATE_EXAMPLE_LIMIT = 24;
 const SOURCE_SEED_LIMIT = 18;
 const SESSION_STYLE_REFERENCE_LIMIT = 8;
@@ -128,7 +129,13 @@ export default async function handler(req, res) {
     const requireApprovedCategories = cleanLockedCategories.length > 0 || cleanApprovedCategories.length > 0;
     const categoryExpansionMode = false;
     const existingQuestions = avoidDuplicates || excludeUsed ? await fetchExistingQuestions(fastMode ? 220 : 1500, fastMode ? 100 : 500) : [];
-    const styleExamples = fastMode ? [] : buildStyleExamples(existingQuestions, normalizedQuestionType, cleanApprovedCategories);
+    // Quick mode used to skip real-library style examples entirely to save
+    // prompt size, even though existingQuestions is already fetched either
+    // way -- that left Quick-mode generations with no automatic signal for
+    // the host's actual voice, only whatever was manually taught via the
+    // Style feedback buttons. A smaller sample keeps Quick mode fast while
+    // still calibrating from real past questions instead of zero of them.
+    const styleExamples = buildStyleExamples(existingQuestions, normalizedQuestionType, cleanApprovedCategories, fastMode ? FAST_STYLE_EXAMPLE_LIMIT : STYLE_EXAMPLE_LIMIT);
     const sessionStyleProfile = fastMode ? null : buildSessionStyleProfile(existingQuestions, {
       cleanTheme,
       cleanSessionContext,
@@ -610,7 +617,7 @@ function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, clea
   const excludedCategoryText = cleanExcludeCategories.length ? `Do not use these rejected or avoided categories: ${cleanExcludeCategories.join(", ")}.` : "";
   const categoryDiversityText = !cleanLockedCategories.length && safeCount > 1 ? "Spread candidates across as many different categories as the approved list allows. Do not use the same category for more than a couple of candidates unless the approved list is very short." : "";
   const themeText = cleanTheme ? `Theme/vibe/category guidance: ${cleanTheme}. Stay useful to that direction, but avoid repetitive question angles.` : "";
-  const tasteProfileText = fastMode ? "" : buildTasteProfileText(styleExamples, cleanSessionContext);
+  const tasteProfileText = buildTasteProfileText(styleExamples, cleanSessionContext);
   const hostStyleProfileText = buildHostStyleProfileText(cleanHostStyleProfile);
   const sessionStyleText = sessionStyleProfile?.text || "";
   const styleText = styleExamples.length ? `Style calibration examples. These are not a source to copy from; they are the host's taste profile. Match their practical qualities: readable aloud, fresh-but-playable, specific without being tiny-name trivia, playful but clean, and useful for a US live bar crowd. Do not copy, lightly rewrite, reuse their answers, or generate the same topic angles:\n${styleExamples.map(formatStyleExample).join("\n")}` : "";
@@ -729,7 +736,7 @@ ${duplicateText}
 `.trim();
 }
 
-function buildStyleExamples(existingQuestions, questionType, approvedCategories) {
+function buildStyleExamples(existingQuestions, questionType, approvedCategories, limit = STYLE_EXAMPLE_LIMIT) {
   const approvedSet = new Set(approvedCategories.map(categoryKey));
   const usableQuestions = existingQuestions.filter((q) => q.question_text && q.correct_answer);
   const matchingType = usableQuestions.filter((q) => q.question_type === questionType);
@@ -740,7 +747,7 @@ function buildStyleExamples(existingQuestions, questionType, approvedCategories)
     ...(likedMatchingType.length ? likedMatchingType : liked),
     ...(matchingApproved.length >= 8 ? matchingApproved : matchingType.length >= 8 ? matchingType : usableQuestions),
   ];
-  return sampleStable(candidates, STYLE_EXAMPLE_LIMIT);
+  return sampleStable(candidates, limit);
 }
 
 function buildTasteProfileText(styleExamples, cleanSessionContext) {
