@@ -1416,6 +1416,12 @@ const HostSession = () => {
     const cachedCurrentProject = readCurrentProjectSessionId();
     const activeCurrentProject = cachedCurrentProject !== undefined ? cachedCurrentProject : await loadProfileValue(profileKeys.currentProjectSessionId).catch(() => null);
     if (activeCurrentProject && String(activeCurrentProject) === String(id)) writeCurrentProjectSessionId(null);
+    // Most hosts have already shown winners/feedback manually at their own pace
+    // before clicking End Session -- staying on the host screen afterward (still
+    // showing winners) is redundant. Leave host mode once the save is confirmed;
+    // stay put on a failed save so the "try again before closing this tab" advice
+    // above still makes sense.
+    if (!error) navigate(`/session/${id}`);
   };
   const openPresentation = () => window.open(`/present-session/${id}`, "_blank", "noopener,noreferrer");
   const copyJoinLink = async () => {
