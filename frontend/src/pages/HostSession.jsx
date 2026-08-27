@@ -1487,23 +1487,37 @@ const HostSession = () => {
   // joining), added rather than silently dropped -- and the score is
   // upserted, not just updated, so it lands even if the player's roster
   // row hasn't been written yet.
+  // Both used to read `leaderboard` from the render-time closure to compute
+  // nextScore, then hand that already-computed number to setLeaderboard's
+  // updater instead of deriving it inside the updater. Two adjustments for
+  // the same team landing before a re-render flushed between them (e.g. a
+  // manual grade plus the auto-grade effect, or grading two teams back to
+  // back) both read the same stale prior score, so the second call's write
+  // silently clobbered the first instead of stacking on top of it -- a
+  // team's score would end up missing exactly one grade's worth of points.
+  // Computing nextScore inside the updater guarantees each call builds on
+  // whatever the true latest state is, not a snapshot from when it was called.
   const adjustScore = (teamId, amount) => {
-    const existing = leaderboard.find((team) => team.id === teamId);
-    const nextScore = Number(existing?.score || 0) + amount;
-    const name = existing?.name || players.find((player) => player.id === teamId)?.name || "Team";
-    setLeaderboard((teams) => teams.some((team) => team.id === teamId)
-      ? teams.map((team) => team.id === teamId ? { ...team, score: nextScore } : team)
-      : [...teams, { id: teamId, name, score: nextScore }]);
-    if (liveGameId) upsertLivePlayer(liveGameId, { id: teamId, name, score: nextScore }).catch((error) => console.warn("Live roster save unavailable:", error));
+    setLeaderboard((teams) => {
+      const existing = teams.find((team) => team.id === teamId);
+      const name = existing?.name || players.find((player) => player.id === teamId)?.name || "Team";
+      const nextScore = Number(existing?.score || 0) + amount;
+      if (liveGameId) upsertLivePlayer(liveGameId, { id: teamId, name, score: nextScore }).catch((error) => console.warn("Live roster save unavailable:", error));
+      return teams.some((team) => team.id === teamId)
+        ? teams.map((team) => team.id === teamId ? { ...team, score: nextScore } : team)
+        : [...teams, { id: teamId, name, score: nextScore }];
+    });
   };
   const setScore = (teamId, score) => {
-    const existing = leaderboard.find((team) => team.id === teamId);
-    const name = existing?.name || players.find((player) => player.id === teamId)?.name || "Team";
-    const nextScore = Number(score || 0);
-    setLeaderboard((teams) => teams.some((team) => team.id === teamId)
-      ? teams.map((team) => team.id === teamId ? { ...team, score: nextScore } : team)
-      : [...teams, { id: teamId, name, score: nextScore }]);
-    if (liveGameId) upsertLivePlayer(liveGameId, { id: teamId, name, score: nextScore }).catch((error) => console.warn("Live roster save unavailable:", error));
+    setLeaderboard((teams) => {
+      const existing = teams.find((team) => team.id === teamId);
+      const name = existing?.name || players.find((player) => player.id === teamId)?.name || "Team";
+      const nextScore = Number(score || 0);
+      if (liveGameId) upsertLivePlayer(liveGameId, { id: teamId, name, score: nextScore }).catch((error) => console.warn("Live roster save unavailable:", error));
+      return teams.some((team) => team.id === teamId)
+        ? teams.map((team) => team.id === teamId ? { ...team, score: nextScore } : team)
+        : [...teams, { id: teamId, name, score: nextScore }];
+    });
   };
   const removeTeam = (teamId) => {
     setLeaderboard((teams) => teams.filter((team) => team.id !== teamId));
@@ -1559,22 +1573,35 @@ const HostSession = () => {
     if (showAnswer || isReviewing) markAnswer(payload, isCorrectSubmission(payload, displayedQuestion) ? "correct" : "incorrect", { applyScore: !isReviewing });
     if (!silent) toast.success(`Added answer for ${team.name || "team"}`);
   };
+  // previous/previousPoints/delta used to read gradedAnswers from the
+  // render-time closure, same bug as adjustScore above: two grades for the
+  // same answer landing before a re-render flushed between them (the direct
+  // call from addManualAnswer plus the reveal-effect's auto-grade pass is
+  // the common way this happens) both saw the same stale "not yet graded"
+  // previous state and both applied the full award as a delta -- double-
+  // counting that answer's points. Reading gradedAnswers from inside the
+  // setGradedAnswers updater guarantees each call sees whatever the true
+  // latest grade is, not a snapshot from when it was called.
   const markAnswer = (answer, status, options = {}) => {
     const key = answerKey(answer);
-    const previous = gradedAnswers[key];
-    const previousPoints = previous?.scoreApplied === false ? 0 : Number(previous?.points || 0);
     const answerQuestion = questions[Number(answer.questionIndex)] || displayedQuestion;
     const answerPoints = Number(answer.points || 0) || Number(answerQuestion?.points || 0) || getDefaultPoints(answerQuestion);
     const answerWagerLimit = Number(answer.wagerLimit || 0) || Number(answerQuestion?.wagerLimit || 0) || wagerLimit;
     const answerUsesWager = Boolean(answer.wagerMode) || Number(answerQuestion?.wagerLimit || 0) > 0 || hasSubmittedWager(answer) || Number(answer.wagerAmount || 0) > 0;
-    const award = answerUsesWager ? getWagerAward(answer, leaderboard, answerWagerLimit, previousPoints) : answerPoints;
-    const wagerPenalty = answerUsesWager ? getWagerAward(answer, leaderboard, answerWagerLimit, previousPoints) : 0;
-    const nextPoints = status === "correct" ? award : status === "incorrect" && wagerPenalty > 0 ? -wagerPenalty : 0;
-    const scoreApplied = Boolean(showAnswer || options.applyScore || previous?.scoreApplied === true);
-    const delta = scoreApplied ? nextPoints - previousPoints : 0;
-    if (delta) adjustScore(answer.playerId, delta);
-    setGradedAnswers((current) => ({ ...current, [key]: { status, points: nextPoints, scoreApplied, gradedAt: new Date().toISOString() } }));
-    if (!options.silent) toast.success(!scoreApplied ? `Marked ${status}; score updates on reveal` : status === "correct" ? `Marked correct (+${delta || 0})` : delta ? `Marked incorrect (${delta})` : "Marked incorrect");
+    let toastMessage = null;
+    setGradedAnswers((current) => {
+      const previous = current[key];
+      const previousPoints = previous?.scoreApplied === false ? 0 : Number(previous?.points || 0);
+      const award = answerUsesWager ? getWagerAward(answer, leaderboard, answerWagerLimit, previousPoints) : answerPoints;
+      const wagerPenalty = answerUsesWager ? getWagerAward(answer, leaderboard, answerWagerLimit, previousPoints) : 0;
+      const nextPoints = status === "correct" ? award : status === "incorrect" && wagerPenalty > 0 ? -wagerPenalty : 0;
+      const scoreApplied = Boolean(showAnswer || options.applyScore || previous?.scoreApplied === true);
+      const delta = scoreApplied ? nextPoints - previousPoints : 0;
+      if (delta) adjustScore(answer.playerId, delta);
+      toastMessage = !scoreApplied ? `Marked ${status}; score updates on reveal` : status === "correct" ? `Marked correct (+${delta || 0})` : delta ? `Marked incorrect (${delta})` : "Marked incorrect";
+      return { ...current, [key]: { status, points: nextPoints, scoreApplied, gradedAt: new Date().toISOString() } };
+    });
+    if (!options.silent) toast.success(toastMessage);
   };
   // Corrects a wager amount after the fact (mis-heard team, fat-fingered
   // manual entry) without touching the answer text or resubmitting it as a
