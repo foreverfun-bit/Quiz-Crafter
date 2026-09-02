@@ -12,18 +12,35 @@ import { supabase, getAccessToken } from "./supabase";
 const LIVE_GAME_ENDPOINT = "/api/live-game";
 const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const LIVE_GAME_RETRY_DELAYS_MS = [600, 1200, 2400];
+// This fires on every player join/leave/answer/rename during a live session
+// and used to have no timeout -- a hang here (a slow function, a downstream
+// auth check stuck on a degraded Supabase endpoint) never reached the retry
+// loop below at all, it just hung the calling await forever. Bounding it and
+// treating a timeout as retryable (like the existing 5xx handling) lets the
+// same backoff/retry logic actually kick in instead.
+const LIVE_GAME_TIMEOUT_MS = 8000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const retryDelay = (attempt) => LIVE_GAME_RETRY_DELAYS_MS[Math.min(attempt, LIVE_GAME_RETRY_DELAYS_MS.length - 1)] + Math.floor(Math.random() * 180);
 
 const postLiveGame = async (action, params) => {
-  const response = await fetch(LIVE_GAME_ENDPOINT, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ action, ...params }),
-  });
-  const result = await response.json().catch(() => ({}));
-  return { ok: response.ok, status: response.status, data: result?.data, error: result?.error, retryable: Boolean(result?.retryable) };
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), LIVE_GAME_TIMEOUT_MS);
+  try {
+    const response = await fetch(LIVE_GAME_ENDPOINT, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({ action, ...params }),
+    });
+    const result = await response.json().catch(() => ({}));
+    return { ok: response.ok, status: response.status, data: result?.data, error: result?.error, retryable: Boolean(result?.retryable) };
+  } catch (error) {
+    const timedOut = error?.name === "AbortError";
+    return { ok: false, status: 0, data: undefined, error: timedOut ? "Live game request timed out" : (error?.message || "Live game request failed"), retryable: true };
+  } finally {
+    clearTimeout(timeoutId);
+  }
 };
 
 const callLiveGame = async (action, params = {}) => {

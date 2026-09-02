@@ -1298,10 +1298,17 @@ const HostSession = () => {
   });
   const generateEmergencyQuestion = async (kind = "replacement") => {
     setEmergencyLoading(true);
+    // This already falls back to a backup emergency question on any error --
+    // but with no timeout, a hung request never reached that fallback at
+    // all, it just left the host waiting on-stage with a spinner. Bounding
+    // it lets the existing fallback actually do its job.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
     try {
       const response = await fetch("/api/generate-session-candidates", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           sessionId: `emergency-${id}-${currentIndex}`,
           questionType: "written",
@@ -1331,6 +1338,7 @@ const HostSession = () => {
       setGeneratedEmergency(makeFallbackEmergency(kind));
       toast.info("Using backup emergency question");
     } finally {
+      clearTimeout(timeoutId);
       setEmergencyLoading(false);
     }
   };

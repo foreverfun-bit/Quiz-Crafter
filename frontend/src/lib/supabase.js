@@ -12,6 +12,14 @@ const supabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
 })
 
 const DATA_PROXY_PATH = "/api/supabase-data";
+// This proxy fetch is the single chokepoint every supabase.from() call in
+// the app funnels through (see the override at the bottom of this file).
+// It used to have no timeout at all, so if the serverless function on the
+// other end ever hung (a cold start, DB pool exhaustion, or a slow
+// downstream call), every query on every page would hang forever with no
+// client-side escape hatch -- the same failure mode as the /auth/v1/user
+// bug this proxy itself was just fixed for, one layer up.
+const REQUEST_TIMEOUT_MS = 12000;
 
 const makeProxyError = (message, details = null) => ({
   message: message || "Supabase data request failed",
@@ -136,22 +144,27 @@ class ProxyQueryBuilder {
       const headers = { "content-type": "application/json" };
       let { accessToken, clientUserId } = await getSessionContext();
 
-      const runRequest = (authToken) => fetch(DATA_PROXY_PATH, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          authToken,
-          clientUserId,
-          table: this.table,
-          action: this.action,
-          columns: this.columns,
-          payload: this.payload,
-          filters: this.filters,
-          orders: this.orders,
-          limit: this.limitValue,
-          single: this.singleResult,
-        }),
-      });
+      const runRequest = (authToken) => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+        return fetch(DATA_PROXY_PATH, {
+          method: "POST",
+          headers,
+          signal: controller.signal,
+          body: JSON.stringify({
+            authToken,
+            clientUserId,
+            table: this.table,
+            action: this.action,
+            columns: this.columns,
+            payload: this.payload,
+            filters: this.filters,
+            orders: this.orders,
+            limit: this.limitValue,
+            single: this.singleResult,
+          }),
+        }).finally(() => clearTimeout(timeoutId));
+      };
 
       let response = await runRequest(accessToken);
       if (response.status === 401) {
@@ -167,7 +180,8 @@ class ProxyQueryBuilder {
       }
       return { data: result.data ?? null, error: result.error ?? null };
     } catch (error) {
-      return { data: null, error: makeProxyError(error.message) };
+      const timedOut = error?.name === "AbortError";
+      return { data: null, error: makeProxyError(timedOut ? "Request timed out -- check your connection and try again" : error.message) };
     }
   }
 
