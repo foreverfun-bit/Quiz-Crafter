@@ -20,6 +20,7 @@ import {
   Search,
   PlusCircle,
   ArrowUpDown,
+  Circle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { mergeProfileRecords, normalizeVenue, readLocalVenues } from "../lib/venues";
@@ -153,6 +154,26 @@ const getTotalQuestions = (session) => (
 // Matches BuildSession.jsx's isBonusCategory / HostSession.jsx's isBonusQuestion --
 // Bonus isn't its own question_type, it's this reserved category value.
 const isBonusQuestion = (question) => String(question?.category || "").trim().toUpperCase() === "BONUS";
+
+// A lightweight "where is this event in its lifecycle" read, styled after
+// TrivNow's Scheduled/In Progress/Completed status pill. Quiz Crafter has no
+// cheap way to know a session is live *right now* (that lives in a separate
+// live_games row, not on the session itself), so this collapses to the two
+// states the sessions table can actually answer without an extra query.
+const getSessionLifecycleStatus = (session) => {
+  const hosted = Boolean(session?.hosted_results) || session?.is_past === true;
+  if (hosted) return { key: "hosted", label: "Hosted", dotClassName: "text-emerald-400" };
+  const hostDate = getHostDate(session);
+  if (hostDate && hostDate.getTime() < Date.now()) return { key: "past_unhosted", label: "Past, not hosted", dotClassName: "text-zinc-500" };
+  return { key: "scheduled", label: "Scheduled", dotClassName: "text-amber-400" };
+};
+
+const StatusPill = ({ status }) => (
+  <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-zinc-900/70 px-2.5 py-1 text-xs font-semibold text-zinc-300">
+    <Circle size={8} className={`${status.dotClassName} fill-current`} />
+    {status.label}
+  </span>
+);
 
 const getBonusQuestionCount = (session) => [
   ...safeArray(session.true_false_questions),
@@ -465,70 +486,68 @@ const PastSessions = () => {
         </div>
       </div>
 
-      <Card className="glass-card mb-6">
-        <CardContent className="p-4">
-          <div className="flex flex-col xl:flex-row gap-4 items-center">
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full md:w-auto">
-              <TabsList className="bg-zinc-800/50">
-                <TabsTrigger value="all" className="data-[state=active]:bg-zinc-700">
-                  All ({allSessions.length})
-                </TabsTrigger>
-                <TabsTrigger value="built" className="data-[state=active]:bg-zinc-700">
-                  Built ({builtCount})
-                </TabsTrigger>
-                <TabsTrigger value="imported" className="data-[state=active]:bg-zinc-700">
-                  Imported ({importedCount})
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
+      <div className="mb-6 space-y-3">
+        <div className="relative">
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
+          <Input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search sessions..."
+            className="h-12 rounded-full pl-11 bg-zinc-900/70 border-white/10 text-white"
+            data-testid="search-sessions-input"
+          />
+        </div>
 
-            <div className="flex-1 relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
-              <Input
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search sessions..."
-                className="pl-9 bg-zinc-950/50 border-white/10 text-white"
-                data-testid="search-sessions-input"
-              />
-            </div>
+        <div className="flex flex-col md:flex-row md:items-center gap-3">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full md:w-auto">
+            <TabsList className="rounded-full bg-zinc-900/70 border border-white/10 p-1">
+              <TabsTrigger value="all" className="rounded-full data-[state=active]:bg-[#71E0DC] data-[state=active]:text-zinc-950 data-[state=active]:shadow-none">
+                All ({allSessions.length})
+              </TabsTrigger>
+              <TabsTrigger value="built" className="rounded-full data-[state=active]:bg-[#71E0DC] data-[state=active]:text-zinc-950 data-[state=active]:shadow-none">
+                Built ({builtCount})
+              </TabsTrigger>
+              <TabsTrigger value="imported" className="rounded-full data-[state=active]:bg-[#71E0DC] data-[state=active]:text-zinc-950 data-[state=active]:shadow-none">
+                Imported ({importedCount})
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
 
-            <div className="flex w-full md:w-auto gap-2">
-              <label className="relative flex-1 md:flex-none">
-                <ArrowUpDown className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
-                <select
-                  value={sortMode}
-                  onChange={(event) => setSortMode(event.target.value)}
-                  className="h-10 w-full md:w-[190px] rounded-md bg-zinc-950/50 border border-white/10 pl-9 pr-3 text-sm text-white outline-none focus:border-[#71E0DC]/60"
-                  aria-label="Sort sessions"
-                >
-                  <option value="host_desc">Host date newest</option>
-                  <option value="host_asc">Host date oldest</option>
-                  <option value="created_desc">Created newest</option>
-                  <option value="created_asc">Created oldest</option>
-                  <option value="name_asc">Name A-Z</option>
-                  <option value="name_desc">Name Z-A</option>
-                </select>
-              </label>
-              <label className="relative flex-1 md:flex-none">
-                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
-                <select
-                  value={dateFilter}
-                  onChange={(event) => setDateFilter(event.target.value)}
-                  className="h-10 w-full md:w-[160px] rounded-md bg-zinc-950/50 border border-white/10 pl-9 pr-3 text-sm text-white outline-none focus:border-[#71E0DC]/60"
-                  aria-label="Filter by host date"
-                >
-                  <option value="all">All dates</option>
-                  <option value="this_year">This year</option>
-                  <option value="last_year">Last year</option>
-                  <option value="with_date">Has host date</option>
-                  <option value="missing_date">Missing host date</option>
-                </select>
-              </label>
-            </div>
+          <div className="flex flex-1 flex-wrap gap-2 md:justify-end">
+            <label className="relative">
+              <ArrowUpDown className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
+              <select
+                value={sortMode}
+                onChange={(event) => setSortMode(event.target.value)}
+                className="h-9 appearance-none rounded-full bg-zinc-900/70 border border-white/10 pl-9 pr-8 text-xs font-semibold text-zinc-300 outline-none focus:border-[#71E0DC]/60"
+                aria-label="Sort sessions"
+              >
+                <option value="host_desc">Order: Host date newest</option>
+                <option value="host_asc">Order: Host date oldest</option>
+                <option value="created_desc">Order: Created newest</option>
+                <option value="created_asc">Order: Created oldest</option>
+                <option value="name_asc">Order: Name A-Z</option>
+                <option value="name_desc">Order: Name Z-A</option>
+              </select>
+            </label>
+            <label className="relative">
+              <Calendar className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
+              <select
+                value={dateFilter}
+                onChange={(event) => setDateFilter(event.target.value)}
+                className="h-9 appearance-none rounded-full bg-zinc-900/70 border border-white/10 pl-9 pr-8 text-xs font-semibold text-zinc-300 outline-none focus:border-[#71E0DC]/60"
+                aria-label="Filter by host date"
+              >
+                <option value="all">Date: All</option>
+                <option value="this_year">Date: This year</option>
+                <option value="last_year">Date: Last year</option>
+                <option value="with_date">Date: Has host date</option>
+                <option value="missing_date">Date: Missing host date</option>
+              </select>
+            </label>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {allSessions.length === 0 ? (
         <Card className="glass-card">
@@ -605,7 +624,10 @@ const PastSessions = () => {
                       </button>
                     </div>
 
-                    <div className="flex flex-wrap gap-2">
+                    <p className="mb-3 text-xs text-zinc-500">{formatHostDate(session)}</p>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <StatusPill status={getSessionLifecycleStatus(session)} />
                       <button
                         type="button"
                         onClick={(e) => handleToggleSourceType(session, e)}
@@ -661,61 +683,51 @@ const PastSessions = () => {
                   </div>
                 </div>
 
-                <div className="mt-4 pt-4 border-t border-white/10 flex items-center justify-between">
-                  <span className="text-zinc-600 text-xs">
-                    Host: {formatHostDate(session)}
-                  </span>
+                <div className="mt-4 pt-4 border-t border-white/10 flex items-center justify-end gap-1.5">
+                  <button
+                    type="button"
+                    onClick={(e) => handleDelete(session.id, e)}
+                    data-testid={`delete-session-${index}`}
+                    title="Delete"
+                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 text-zinc-500 hover:border-red-400/40 hover:text-red-400"
+                  >
+                    <Trash2 size={14} />
+                  </button>
 
-                  <div className="flex gap-1">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-zinc-500 hover:text-red-400 hover:bg-red-500/10 px-2"
-                      onClick={(e) => handleDelete(session.id, e)}
-                      data-testid={`delete-session-${index}`}
-                      title="Delete"
-                    >
-                      <Trash2 size={14} />
-                    </Button>
+                  <button
+                    type="button"
+                    onClick={(e) => handleDuplicate(session, e)}
+                    data-testid={`duplicate-session-${index}`}
+                    title="Duplicate"
+                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 text-zinc-400 hover:border-white/30 hover:text-white"
+                  >
+                    <Copy size={14} />
+                  </button>
 
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-zinc-400 hover:text-white hover:bg-zinc-800 px-2"
-                      onClick={(e) => handleDuplicate(session, e)}
-                      data-testid={`duplicate-session-${index}`}
-                      title="Duplicate"
-                    >
-                      <Copy size={14} />
-                    </Button>
-
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-zinc-400 hover:text-white hover:bg-zinc-800 px-2"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        navigate(`/session/${session.id}`);
-                      }}
-                      data-testid={`view-session-${index}`}
-                      title="View"
-                    >
-                      <Eye size={14} />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-[#71E0DC] hover:text-white hover:bg-[#71E0DC]/10 px-2"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        navigate(`/build/${session.id}`);
-                      }}
-                      data-testid={`build-session-${index}`}
-                      title="Open in Builder"
-                    >
-                      <Pencil size={14} />
-                    </Button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigate(`/session/${session.id}`);
+                    }}
+                    data-testid={`view-session-${index}`}
+                    title="View"
+                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 text-zinc-400 hover:border-white/30 hover:text-white"
+                  >
+                    <Eye size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigate(`/build/${session.id}`);
+                    }}
+                    data-testid={`build-session-${index}`}
+                    title="Open in Builder"
+                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-[#71E0DC]/30 text-[#71E0DC] hover:bg-[#71E0DC]/10"
+                  >
+                    <Pencil size={14} />
+                  </button>
                 </div>
               </CardContent>
             </Card>
