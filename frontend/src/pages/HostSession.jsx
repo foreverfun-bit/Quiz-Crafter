@@ -2,7 +2,7 @@
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { uploadQuestionMedia } from "../lib/mediaUpload";
-import { ensureLiveGame, fetchLivePlayers, subscribeLivePlayers, upsertLivePlayer, removeLivePlayer, resetTestGame } from "../lib/liveGame";
+import { ensureLiveGame, fetchLivePlayers, subscribeLivePlayers, upsertLivePlayer, removeLivePlayer, resetTestGame, endLiveGame } from "../lib/liveGame";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent } from "../components/ui/card";
@@ -490,8 +490,25 @@ const sendLiveBroadcast = (channel, message, attempt = 0) => {
   });
 };
 
-const HostSession = () => {
-  const { id } = useParams();
+// sessionIdProp/onEditBuild let this render embedded inside EventWorkspace.jsx's
+// merged popout (id passed as a prop, the Emergency panel's "editBuild" link
+// flips the popout's own mode back to the editor instead of navigating to a
+// different page) while leaving the standalone /host-session/:id route's
+// behavior -- reading the id from the URL, navigating to /build/:id --
+// completely unchanged.
+const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {}) => {
+  const { id: idParam } = useParams();
+  const id = sessionIdProp || idParam;
+  const embedded = Boolean(sessionIdProp);
+  // Whether the host has actually opened this event yet. Defaults to true
+  // (today's always-on behavior) at the standalone /host-session/:id route;
+  // EventWorkspace passes an explicit value for the embedded, unified view,
+  // where this component now mounts before the host is ready to go live so
+  // they can review/arrange questions first. Gates ensureLiveGame and the
+  // live-state broadcast/persist effect below -- without that gate, simply
+  // opening the workspace to look at questions would silently create a
+  // live_games row and start broadcasting live state before "Open Event".
+  const [eventOpen, setEventOpen] = useState(initialEventOpen);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const isTestRun = searchParams.get("mode") === "test";
@@ -765,7 +782,7 @@ const HostSession = () => {
   // Retries with backoff, and surfaces a toast if it's still failing after
   // a few attempts instead of staying silent forever.
   useEffect(() => {
-    if (!session) return undefined;
+    if (!session || !eventOpen) return undefined;
     let cancelled = false;
     let timeoutId = null;
     let attempt = 0;
@@ -782,7 +799,7 @@ const HostSession = () => {
     };
     tryEnsure();
     return () => { cancelled = true; window.clearTimeout(timeoutId); };
-  }, [id, session, isTestRun]);
+  }, [id, session, isTestRun, eventOpen]);
 
   useEffect(() => {
     if (!liveGameId) return undefined;
@@ -1120,7 +1137,9 @@ const HostSession = () => {
   }, [id, attendance, isTestRun]);
 
   useEffect(() => {
-    if (!session || !questions.length || !liveDisplayedQuestion) return;
+    // Pre-open, nothing should be broadcasting/persisting as "live" yet --
+    // see the eventOpen comment near this component's state declarations.
+    if (!eventOpen || !session || !questions.length || !liveDisplayedQuestion) return;
     const state = buildLiveState({
       question: liveDisplayedQuestion,
       index: currentIndex,
@@ -1129,7 +1148,7 @@ const HostSession = () => {
     if (state) persistLiveState(state);
   // The live snapshot helpers intentionally read the latest host state in this render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, session, sessionName, questions.length, liveDisplayedQuestion, currentIndex, pendingBonusIndex, rounds, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerSeconds, timerEndAt, acceptingAnswers, answersPaused, branding, players, leaderboard]);
+  }, [id, session, sessionName, questions.length, liveDisplayedQuestion, currentIndex, pendingBonusIndex, rounds, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerSeconds, timerEndAt, acceptingAnswers, answersPaused, branding, players, leaderboard, eventOpen]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -1212,6 +1231,11 @@ const HostSession = () => {
     if (!isReviewing) return;
     goToQuestion(reviewIndex, { startTimer: false, pauseBeforeBonus: false });
   };
+  // The one-time transition out of "still arranging questions" -- flips the
+  // gate on ensureLiveGame/persistLiveState above. Nothing else needs to
+  // happen here: goToQuestion (via each card's own Ask Question button)
+  // still owns actually starting a question.
+  const openEvent = () => setEventOpen(true);
 
   const releaseMode = (mode, roundKey = null) => {
     if (mode === "categories") setIntroRoundKey(roundKey || introRound?.key || currentRound?.key || null);
@@ -1260,18 +1284,6 @@ const HostSession = () => {
     setTimerEndAt(Date.now() + Math.max(1, Number(timerSeconds) || 30) * 1000);
     setGameStarted(true);
     setPresentMode("question");
-  };
-  const startTriviaIntro = () => {
-    setIntroRoundKey(introRound?.key || currentRound?.key || null);
-    setShowAnswer(false);
-    setShowFunFact(false);
-    setTimerEndAt(null);
-    setPresentMode("categories");
-    setGameStarted(true);
-  };
-  const startIntroQuestion = () => {
-    const targetIndex = Number(introRound?.startIndex ?? currentIndex);
-    goToQuestion(targetIndex, { startTimer: true, pauseBeforeBonus: false });
   };
   const resetTimer = () => setTimerEndAt(null);
   const startTimerOnly = (seconds = 60) => {
@@ -1378,7 +1390,8 @@ const HostSession = () => {
         console.warn("Test run cleanup unavailable:", error);
       }
       toast.success("Test run ended. Nothing was saved.");
-      navigate(`/session/${id}`);
+      if (onEditBuild) onEditBuild();
+      else navigate(`/session/${id}`);
       return;
     }
     if (!window.confirm("End this hosted session and save the live results?")) return;
@@ -1414,6 +1427,7 @@ const HostSession = () => {
     persistHostToolsPatch({ endedAt, currentIndex, presentMode: "winners" }, "End session marker");
     hostedResultsRef.current = { ...results, liveState: liveStateRef.current, liveStateUpdatedAt: new Date().toISOString() };
     const { error } = await supabase.from("sessions").update({ hosted_at: endedAt, hosted_results: hostedResultsRef.current, is_past: true }).eq("id", id);
+    if (liveGameId) endLiveGame(liveGameId).catch((endError) => console.warn("Marking live game finished unavailable:", endError));
     if (error) {
       console.error("End session database save failed:", error);
       toast.error("Session ended, but saving the results failed. Results are kept on this device -- try again before closing this tab.");
@@ -1429,7 +1443,7 @@ const HostSession = () => {
     // showing winners) is redundant. Leave host mode once the save is confirmed;
     // stay put on a failed save so the "try again before closing this tab" advice
     // above still makes sense.
-    if (!error) navigate(`/session/${id}`);
+    if (!error) { if (onEditBuild) onEditBuild(); else navigate(`/session/${id}`); }
   };
   const openPresentation = () => window.open(`/present-session/${id}`, "_blank", "noopener,noreferrer");
   const copyJoinLink = async () => {
@@ -1720,9 +1734,9 @@ const HostSession = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentAnswers, displayedQuestion, gradedAnswers, wagerMode, wagerTiming, showAnswer]);
 
-  if (loading) return <div className="min-h-screen bg-[#09090B] flex items-center justify-center"><Loader2 className="text-[#71E0DC] animate-spin" size={34} /></div>;
+  if (loading) return <div className={`${embedded ? "h-full" : "min-h-screen"} bg-[#09090B] flex items-center justify-center`}><Loader2 className="text-[#71E0DC] animate-spin" size={34} /></div>;
   if (!session || !displayedQuestion) {
-    return <div className="min-h-screen bg-[#09090B] flex items-center justify-center p-6 text-center"><div><p className="text-white text-2xl font-bold mb-2">No questions to host</p><p className="text-zinc-500 mb-4">Add questions to this session first.</p><Button onClick={() => navigate(`/session/${id}`)} className="gradient-btn">Back to Session</Button></div></div>;
+    return <div className={`${embedded ? "h-full" : "min-h-screen"} bg-[#09090B] flex items-center justify-center p-6 text-center`}><div><p className="text-white text-2xl font-bold mb-2">No questions to host</p><p className="text-zinc-500 mb-4">Add questions to this session first.</p>{!embedded && <Button onClick={() => navigate(`/session/${id}`)} className="gradient-btn">Back to Session</Button>}</div></div>;
   }
 
   const viewPointsPerQuestion = isReviewing ? getQuestionPoints(displayedQuestion) : pointsPerQuestion;
@@ -1755,89 +1769,161 @@ const HostSession = () => {
   const droppedTeamIds = new Set(leaderboard.filter((team) => team.dropped).map((team) => team.id));
   const playingPlayers = activePlayers.filter((player) => !droppedTeamIds.has(player.id));
   const activeCurrentAnswers = currentAnswers.filter((answer) => activeTeamIds.has(answer.playerId));
+  // Same shape as activeCurrentAnswers above, parameterized by question index
+  // instead of hardcoded to hostIndex -- the card list needs every question's
+  // own answers at once (for the completed-card correct-count summary), not
+  // just whichever one is currently displayed.
+  const answersForQuestionIndex = (index) => answers.filter((answer) => Number(answer.questionIndex) === index && activeTeamIds.has(answer.playerId));
   const selectedIntroKey = introRoundKey || currentRound?.key || rounds[0]?.key || "";
   const chooseIntroRound = (roundKey) => {
     setIntroRoundKey(roundKey);
     if (presentMode === "categories") releaseMode("categories", roundKey);
   };
-  return <div className="min-h-screen bg-[#09090B] text-white" data-testid="host-session-page" style={brandStyle}>
+  return <div className={`${embedded ? "h-full" : "min-h-screen"} bg-[#09090B] text-white`} data-testid="host-session-page" style={brandStyle}>
     {displayedQuestion?.audio_url && <audio ref={audioRef} src={displayedQuestion.audio_url} preload="none" onPlay={() => setIsPlayingAudio(true)} onPause={() => setIsPlayingAudio(false)} onEnded={() => setIsPlayingAudio(false)} className="hidden" />}
     {isTestRun && !focusMode && <div className="bg-amber-400/15 border-b border-amber-400/30 text-amber-200 text-sm px-4 py-2 flex items-center justify-center gap-2" data-testid="test-mode-banner">
       <AlertTriangle size={14} />
       Test Run -- teams and scores here won't count. Starting the real event clears this out automatically.
     </div>}
-    {!focusMode && <TopBar navigate={navigate} id={id} sessionName={sessionName} venueName={session?.venue_name || session?.venueName || session?.venue || ""} questions={questions} players={players} currentIndex={currentIndex} liveStatus={liveStatus} openPresentation={openPresentation} setFocusMode={setFocusMode} progress={progress} branding={branding} customizeOpen={customizeOpen} setCustomizeOpen={setCustomizeOpen} endSession={endSession} collapsed={topbarCollapsed} onToggleCollapse={() => setTopbarCollapsed((value) => !value)} answersPaused={answersPaused} onToggleAnswersPaused={toggleAnswersPaused} />}
-    <div className={`max-w-[1680px] mx-auto p-4 lg:p-8 ${focusMode ? "min-h-screen flex flex-col" : ""}`}>
+    {!focusMode && <TopBar navigate={navigate} id={id} embedded={embedded} sessionName={sessionName} venueName={session?.venue_name || session?.venueName || session?.venue || ""} questions={questions} players={players} currentIndex={currentIndex} liveStatus={liveStatus} openPresentation={openPresentation} setFocusMode={setFocusMode} progress={progress} branding={branding} customizeOpen={customizeOpen} setCustomizeOpen={setCustomizeOpen} endSession={endSession} collapsed={topbarCollapsed} onToggleCollapse={() => setTopbarCollapsed((value) => !value)} answersPaused={answersPaused} onToggleAnswersPaused={toggleAnswersPaused} />}
+    <div className={`max-w-[1680px] mx-auto p-4 lg:p-8 ${focusMode ? `${embedded ? "h-full" : "min-h-screen"} flex flex-col` : ""}`}>
       {focusMode && <div className="flex justify-between items-center mb-4"><Badge className="bg-zinc-800 text-zinc-300">{currentRound?.name || "Round"} - {currentIndex + 1} / {questions.length}</Badge><Button variant="outline" onClick={() => setFocusMode(false)} className="border-white/10 text-zinc-300 hover:text-white">Exit Focus</Button></div>}
-      {!focusMode && <QuestionNavStrip questions={questions} rounds={rounds} currentIndex={currentIndex} hostIndex={hostIndex} isReviewing={isReviewing} currentRound={currentRound} onSelectPill={reviewQuestion} onPrev={() => reviewQuestion(hostIndex - 1)} onNext={() => reviewQuestion(hostIndex + 1)} onBackToLive={returnToLiveQuestion} onGoLive={releaseReviewedQuestion} onSelectRoundIntro={(roundKey) => releaseMode("categories", roundKey)} />}
       <div className={focusMode ? "flex-1 flex items-center" : "grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-7"}>
-        <main className="w-full">
+        <main className="w-full min-w-0">
           {!focusMode && customizeOpen && <HostCustomizePanel branding={branding} defaultBranding={readDefaultBranding()} onSave={saveBranding} onSaveDefault={saveBrandingAsDefault} onUseDefault={useDefaultBranding} onClose={() => setCustomizeOpen(false)} />}
-          {!gameStarted && !isReviewing ? <LobbyStage playerCount={players.length} onStartTrivia={startTriviaIntro} /> : presentMode === "categories" && !isReviewing ? <RoundIntroStage round={introRound} gameStarted={gameStarted} onStartIntro={startTriviaIntro} onStartQuestion={startIntroQuestion} /> : presentMode === "bonus_pause" && !isReviewing ? <BonusPauseStage round={rounds.find((round) => pendingBonusIndex >= round.startIndex && pendingBonusIndex < round.startIndex + round.questions.length)} leaderboard={leaderboard} /> : presentMode === "winners" && !isReviewing ? <WinnersStage leaderboard={leaderboard} /> : presentMode === "feedback" && !isReviewing ? <FeedbackStage ideas={playerIdeas} /> : <QuestionStage question={displayedQuestion} index={hostIndex} total={questions.length} showAnswer={isReviewing ? true : showAnswer} showFunFact={isReviewing ? false : showFunFact} focusMode={focusMode} pointsPerQuestion={viewPointsPerQuestion} timerSeconds={viewTimerSeconds} timeRemaining={isReviewing ? null : timeRemaining} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} wagerTiming={viewWagerTiming} onUpdateSettings={isReviewing ? () => {} : updateQuestionSettings} branding={branding} players={playingPlayers} answers={activeCurrentAnswers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} setMode={releaseMode} isReviewing={isReviewing} />}
+          <QuestionListView
+            rounds={rounds}
+            questions={questions}
+            currentIndex={currentIndex}
+            hostIndex={hostIndex}
+            isReviewing={isReviewing}
+            eventOpen={eventOpen}
+            displayedQuestion={displayedQuestion}
+            goToQuestion={goToQuestion}
+            reviewQuestion={reviewQuestion}
+            onBackToLive={returnToLiveQuestion}
+            onGoLiveWithThis={releaseReviewedQuestion}
+            answersForQuestionIndex={answersForQuestionIndex}
+            gradedAnswers={gradedAnswers}
+            players={playingPlayers}
+            hostAnswers={activeCurrentAnswers}
+            fairPlayStats={fairPlayStats}
+            showAnswer={isReviewing ? true : showAnswer}
+            showFunFact={isReviewing ? false : showFunFact}
+            timeRemaining={isReviewing ? null : timeRemaining}
+            viewPointsPerQuestion={viewPointsPerQuestion}
+            viewTimerSeconds={viewTimerSeconds}
+            viewWagerMode={viewWagerMode}
+            viewWagerLimit={viewWagerLimit}
+            viewWagerTiming={viewWagerTiming}
+            onUpdateSettings={isReviewing ? () => {} : updateQuestionSettings}
+            branding={branding}
+            markAnswer={markAnswer}
+            addManualAnswer={addManualAnswer}
+            editWager={editWager}
+            releaseMode={releaseMode}
+            hasRevealExtra={hasRevealExtra}
+            hasFunFact={Boolean(displayedQuestion.funFact)}
+            hasAudio={Boolean(displayedQuestion.audio_url)}
+            isPlayingAudio={isPlayingAudio}
+            onToggleAudio={toggleAudioPlayback}
+            onRevealAnswer={toggleAnswer}
+            onShowFunFact={toggleFunFact}
+            startTimer={startTimer}
+            resetTimer={isReviewing ? () => {} : resetTimer}
+          />
         </main>
-        {!focusMode && <PlaybackRail mode={presentMode} setMode={releaseMode} rounds={rounds} introRoundKey={selectedIntroKey} chooseIntroRound={chooseIntroRound} isReviewing={isReviewing} showAnswer={isReviewing ? true : showAnswer} onRevealAnswer={toggleAnswer} showFunFact={isReviewing ? false : showFunFact} onShowFunFact={toggleFunFact} hasRevealExtra={hasRevealExtra} hasFunFact={Boolean(displayedQuestion.funFact)} hasAudio={Boolean(displayedQuestion.audio_url)} isPlayingAudio={isPlayingAudio} onToggleAudio={toggleAudioPlayback} timeRemaining={isReviewing ? null : timeRemaining} timerSeconds={viewTimerSeconds} startTimer={startTimer} resetTimer={isReviewing ? () => {} : resetTimer} currentIndex={currentIndex} total={questions.length} onPrev={() => goToQuestion(currentIndex - 1, { startTimer: false })} onNext={() => {
-          if (!gameStarted) return startTriviaIntro();
-          if (presentMode === "categories") return startIntroQuestion();
-          if (presentMode === "bonus_pause" && pendingBonusIndex !== null) return goToQuestion(pendingBonusIndex, { startTimer: true, pauseBeforeBonus: false });
-          const liveRoundNow = rounds.find((round) => currentIndex >= round.startIndex && currentIndex < round.startIndex + round.questions.length);
-          const isLastQuestionOfRound = liveRoundNow && currentIndex === liveRoundNow.startIndex + liveRoundNow.questions.length - 1;
-          const nextRoundNow = isLastQuestionOfRound ? rounds[rounds.findIndex((round) => round.key === liveRoundNow.key) + 1] : null;
-          if (nextRoundNow) return releaseMode("categories", nextRoundNow.key);
-          return goToQuestion(currentIndex + 1, { startTimer: true });
-        }} onOpenDrawer={setActiveDrawer} flaggedTeamCount={flaggedTeamCount} currentQuestionLabel={`Q${currentIndex + 1}`} />}
+        {!focusMode && <PlaybackRail eventOpen={eventOpen} onOpenEvent={openEvent} mode={presentMode} setMode={releaseMode} rounds={rounds} introRoundKey={selectedIntroKey} chooseIntroRound={chooseIntroRound} onOpenDrawer={setActiveDrawer} flaggedTeamCount={flaggedTeamCount} />}
       </div>
     </div>
     {scoreModal && <ScoreAdjustModal modal={scoreModal} setModal={setScoreModal} adjustScore={adjustScore} setScore={setScore} />}
     {!focusMode && <ToolDrawer activeDrawer={activeDrawer} onClose={() => setActiveDrawer(null)}>
       {activeDrawer === "teams" && <LeaderboardPanel leaderboard={leaderboard} teamName={teamName} teamScore={teamScore} setTeamName={setTeamName} setTeamScore={setTeamScore} addTeam={addTeam} openScoreModal={openScoreModal} removeTeam={removeTeam} toggleTeamDropped={toggleTeamDropped} showLeaderboard={() => releaseMode("leaderboard")} fairPlayStats={fairPlayStats} attendance={attendance} updateNonPlayers={updateNonPlayers} updateTeamHeadcount={updateTeamHeadcount} />}
-      {activeDrawer === "run" && <div className="space-y-4"><RunSheet rounds={rounds} currentIndex={hostIndex} goToQuestion={reviewQuestion} answers={answers} players={activePlayers} gradedAnswers={gradedAnswers} editBuild={() => navigate(`/build/${id}`)} /><AnswerHistoryPanel rounds={rounds} players={activePlayers} leaderboard={leaderboard} answers={answers} gradedAnswers={gradedAnswers} currentIndex={hostIndex} markAnswer={markAnswer} openScoreModal={openScoreModal} reviewQuestion={reviewQuestion} /></div>}
+      {activeDrawer === "run" && <div className="space-y-4"><RunSheet rounds={rounds} currentIndex={hostIndex} goToQuestion={reviewQuestion} answers={answers} players={activePlayers} gradedAnswers={gradedAnswers} editBuild={() => (onEditBuild ? onEditBuild() : navigate(`/build/${id}`))} /><AnswerHistoryPanel rounds={rounds} players={activePlayers} leaderboard={leaderboard} answers={answers} gradedAnswers={gradedAnswers} currentIndex={hostIndex} markAnswer={markAnswer} openScoreModal={openScoreModal} reviewQuestion={reviewQuestion} /></div>}
       {activeDrawer === "fairplay" && <FairPlayPanel leaderboard={leaderboard} fairPlayStats={fairPlayStats} openScoreModal={openScoreModal} />}
       {activeDrawer === "disputes" && <DisputesPanel currentIndex={currentIndex} addDisputeNote={addDisputeNote} disputeNotes={disputeNotes} />}
-      {activeDrawer === "emergency" && <EmergencyPanel currentIndex={currentIndex} emergencyOverride={emergencyOverride} generatedEmergency={generatedEmergency} emergencyLoading={emergencyLoading} generateEmergencyQuestion={generateEmergencyQuestion} activateEmergencyQuestion={activateEmergencyQuestion} clearEmergency={() => setEmergencyOverride(null)} startTimerOnly={startTimerOnly} goToQuestion={goToQuestion} editBuild={() => navigate(`/build/${id}`)} />}
+      {activeDrawer === "emergency" && <EmergencyPanel currentIndex={currentIndex} emergencyOverride={emergencyOverride} generatedEmergency={generatedEmergency} emergencyLoading={emergencyLoading} generateEmergencyQuestion={generateEmergencyQuestion} activateEmergencyQuestion={activateEmergencyQuestion} clearEmergency={() => setEmergencyOverride(null)} startTimerOnly={startTimerOnly} goToQuestion={goToQuestion} editBuild={() => (onEditBuild ? onEditBuild() : navigate(`/build/${id}`))} />}
       {activeDrawer === "feedback" && <LiveSignalsPanel feedback={feedback} categoryFeedback={categoryFeedback} ideas={playerIdeas} currentIndex={currentIndex} displayedQuestion={displayedQuestion} />}
     </ToolDrawer>}
   </div>;
 };
 
-const QuestionNavStrip = ({ questions, rounds, currentIndex, hostIndex, isReviewing, currentRound, onSelectPill, onPrev, onNext, onBackToLive, onGoLive, onSelectRoundIntro }) => {
-  const activeRound = currentRound || rounds[0];
-  const jumpToRound = (roundKey) => {
-    const round = rounds.find((item) => item.key === roundKey);
-    if (round) onSelectPill(round.startIndex);
-  };
-  return <div className="glass-card rounded-xl mb-4 sticky top-[57px] z-10">
-    <div className="flex items-center gap-2 p-2.5">
-      <select aria-label="Jump to round" value={activeRound?.key || ""} onChange={(event) => jumpToRound(event.target.value)} className="h-9 shrink-0 rounded-md border border-white/10 bg-zinc-950 px-2.5 text-xs font-bold text-zinc-200 outline-none focus:border-[#71E0DC]/60">
-        {rounds.map((round) => <option key={round.key} value={round.key}>{round.name}</option>)}
-      </select>
-      <button type="button" onClick={onPrev} disabled={hostIndex === 0} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-white/10 bg-zinc-950 text-zinc-300 hover:border-[#71E0DC]/40 hover:text-[#71E0DC] disabled:opacity-30" aria-label="Previous question"><ChevronLeft size={16} /></button>
-      <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto py-0.5">
-        <button type="button" onClick={() => onSelectRoundIntro(activeRound?.key)} title={`Show ${activeRound?.name || "round"} intro`} className="shrink-0 max-w-[12ch] truncate rounded-md border border-white/10 bg-zinc-900/60 px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-wide text-zinc-400 hover:border-[#71E0DC]/40 hover:text-[#71E0DC]">{activeRound?.name || "Round"}</button>
-        {(activeRound?.questions || []).map((question, localIndex) => {
-          const index = activeRound.startIndex + localIndex;
-          const isLive = index === currentIndex;
-          const isSelected = index === hostIndex;
-          const isDone = index < currentIndex;
-          return <button key={question.id} type="button" onClick={() => onSelectPill(index)} title={question.questionText} className={`relative flex h-8 min-w-8 shrink-0 items-center justify-center rounded-md px-2 text-xs font-bold transition ${isSelected ? "bg-[#71E0DC]/15 text-[#71E0DC] ring-1 ring-[#71E0DC]/50" : isDone ? "bg-zinc-900 text-zinc-400" : "bg-zinc-900/60 text-zinc-500 hover:text-zinc-300"}`}>
-            {index + 1}
-            {isBonusQuestion(question) && <span className="absolute -top-1.5 left-0.5 text-[9px] text-amber-300">&#9733;</span>}
-            {isLive && <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-rose-400 ring-2 ring-zinc-950 animate-pulse" />}
-          </button>;
-        })}
-      </div>
-      <button type="button" onClick={onNext} disabled={hostIndex >= questions.length - 1} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-white/10 bg-zinc-950 text-zinc-300 hover:border-[#71E0DC]/40 hover:text-[#71E0DC] disabled:opacity-30" aria-label="Next question"><ChevronRight size={16} /></button>
-      <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-rose-400/30 bg-rose-400/10 px-2.5 py-1.5 text-xs font-bold text-rose-200">
-        <span className="h-1.5 w-1.5 rounded-full bg-rose-400 animate-pulse" />
-        LIVE: Q{currentIndex + 1}
-      </div>
+// The unified card list: replaces the old QuestionNavStrip pill-bar +
+// single-question QuestionStage split. Every question in every round renders
+// as its own card at all times -- whichever one is "displayed" (the live
+// question, or whatever's being reviewed) renders via QuestionStage's full
+// interactive body (unchanged, including AnswerRows/Manual Answer); every
+// other question renders as a compact summary card with Ask Question/Review
+// actions. The true live question always gets a small pulsing indicator even
+// while a different one is being reviewed, mirroring the old nav strip's
+// "LIVE: Q#" badge.
+const QuestionListView = ({
+  rounds, questions, currentIndex, hostIndex, isReviewing, eventOpen,
+  displayedQuestion, goToQuestion, reviewQuestion, onBackToLive, onGoLiveWithThis,
+  answersForQuestionIndex, gradedAnswers, players, hostAnswers, fairPlayStats,
+  showAnswer, showFunFact, timeRemaining, viewPointsPerQuestion, viewTimerSeconds, viewWagerMode, viewWagerLimit, viewWagerTiming,
+  onUpdateSettings, branding, markAnswer, addManualAnswer, editWager, releaseMode,
+  hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer,
+}) => <div className="space-y-6">
+  {rounds.map((round) => <section key={round.key}>
+    <div className="sticky top-0 z-[5] mb-3 flex items-center gap-2 rounded-lg border border-white/10 bg-zinc-950/95 px-3 py-2 backdrop-blur">
+      <span className="text-sm font-bold text-white">{round.name}</span>
+      <span className="text-xs text-zinc-500">{round.questions.length} question{round.questions.length === 1 ? "" : "s"}</span>
     </div>
-    {isReviewing && <div className="flex flex-wrap items-center gap-2 border-t border-amber-400/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-100">
-      <Eye size={13} className="shrink-0 text-amber-300" />
-      <span className="flex-1">Reviewing Q{hostIndex + 1} &mdash; players and the presentation screen still see <b>Q{currentIndex + 1}</b>, live.</span>
-      <Button size="sm" variant="outline" onClick={onBackToLive} className="h-7 border-amber-300/30 text-amber-100 hover:text-white">Back to Live</Button>
-      <Button size="sm" onClick={onGoLive} className="h-7 bg-amber-300 text-zinc-950 hover:bg-amber-200">Go Live With This Question</Button>
-    </div>}
-  </div>;
+    <div className="space-y-3">
+      {round.questions.map((question, localIndex) => {
+        const index = round.startIndex + localIndex;
+        if (index === hostIndex) {
+          return <QuestionStage key={question.id} question={displayedQuestion} index={hostIndex} total={questions.length} showAnswer={showAnswer} showFunFact={showFunFact} pointsPerQuestion={viewPointsPerQuestion} timerSeconds={viewTimerSeconds} timeRemaining={timeRemaining} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} wagerTiming={viewWagerTiming} onUpdateSettings={onUpdateSettings} branding={branding} players={players} answers={hostAnswers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} setMode={releaseMode} isReviewing={isReviewing} hasRevealExtra={hasRevealExtra} hasFunFact={hasFunFact} hasAudio={hasAudio} isPlayingAudio={isPlayingAudio} onToggleAudio={onToggleAudio} onRevealAnswer={onRevealAnswer} onShowFunFact={onShowFunFact} startTimer={startTimer} resetTimer={resetTimer} onBackToLive={onBackToLive} onGoLiveWithThis={onGoLiveWithThis} />;
+        }
+        const isLiveElsewhere = index === currentIndex && isReviewing;
+        const state = isLiveElsewhere ? "live" : index < currentIndex ? "completed" : "upcoming";
+        const questionAnswers = answersForQuestionIndex(index);
+        const graded = questionAnswers.map((answer) => gradedAnswers[answerKey(answer)]).filter(Boolean);
+        const correctCount = graded.filter((item) => item.status === "correct").length;
+        return <CollapsedQuestionCard
+          key={question.id}
+          question={question}
+          index={index}
+          state={state}
+          submittedCount={questionAnswers.length}
+          playerCount={players.length}
+          correctCount={correctCount}
+          eventOpen={eventOpen}
+          onAsk={() => goToQuestion(index, { startTimer: true })}
+          onReview={isLiveElsewhere ? onBackToLive : () => reviewQuestion(index)}
+        />;
+      })}
+    </div>
+  </section>)}
+</div>;
+
+const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerCount, correctCount, eventOpen, onAsk, onReview }) => {
+  const meta = typeMeta[question.type] || typeMeta.written;
+  const Icon = meta.icon;
+  const points = getQuestionPoints(question);
+  const wagerLimit = Number(question.wagerLimit || 0);
+  const timerSeconds = Number(question.timerSeconds || 30);
+  return <Card className={`glass-card ${state === "live" ? "border-rose-400/40" : ""}`}>
+    <CardContent className="flex flex-wrap items-center gap-3 p-3.5">
+      <span className="text-xs font-mono text-zinc-500 shrink-0">Q{index + 1}</span>
+      <Badge className="bg-zinc-800 text-zinc-300 text-[11px] shrink-0"><Icon size={11} className={`mr-1 ${meta.color}`} />{meta.short}</Badge>
+      {isBonusQuestion(question) && <span className="shrink-0 text-amber-300" title="Bonus question">&#9733;</span>}
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-semibold text-white">{question.questionText}</p>
+        <p className="truncate text-xs text-zinc-500">{question.category}</p>
+      </div>
+      <span className="shrink-0 rounded-full border border-amber-400/20 bg-amber-400/10 px-2.5 py-1 text-xs font-bold text-amber-200">{wagerLimit > 0 ? `Wager ${wagerLimit}` : `${points} pts`}</span>
+      <span className="shrink-0 rounded-full border border-[#71E0DC]/20 bg-[#71E0DC]/10 px-2.5 py-1 text-xs font-bold text-[#71E0DC]">{timerSeconds}s</span>
+      {state === "live" && <span className="flex shrink-0 items-center gap-1.5 rounded-full border border-rose-400/30 bg-rose-400/10 px-2.5 py-1 text-xs font-bold text-rose-200"><span className="h-1.5 w-1.5 rounded-full bg-rose-400 animate-pulse" />LIVE</span>}
+      {state === "completed" && <span className="shrink-0 rounded-full bg-zinc-800 px-2.5 py-1 text-xs font-bold text-zinc-300">{correctCount > 0 ? `${correctCount} correct` : "Asked"} &middot; {submittedCount}/{playerCount || 0}</span>}
+      <div className="flex shrink-0 items-center gap-2">
+        {state !== "live" && <Button size="sm" variant="outline" onClick={onReview} className="h-8 border-white/10 text-zinc-300 hover:text-white"><Eye size={13} className="mr-1.5" />{state === "completed" ? "Review" : "Preview"}</Button>}
+        {state === "upcoming" && <Button size="sm" onClick={onAsk} disabled={!eventOpen} title={!eventOpen ? "Open the event to start asking questions" : undefined} className="h-8 gradient-btn disabled:opacity-40"><Play size={13} className="mr-1.5" />Ask Question</Button>}
+        {state === "live" && <Button size="sm" variant="outline" onClick={onReview} className="h-8 border-rose-300/30 text-rose-200 hover:text-white">View Live</Button>}
+      </div>
+    </CardContent>
+  </Card>;
 };
 
 const PLAYBACK_TOOLS = [
@@ -1849,13 +1935,13 @@ const PLAYBACK_TOOLS = [
   { key: "feedback", label: "Feedback", icon: ThumbsUp },
 ];
 
-const PlaybackRail = ({ mode, setMode, rounds, introRoundKey, chooseIntroRound, isReviewing, showAnswer, onRevealAnswer, showFunFact, onShowFunFact, hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, timeRemaining, timerSeconds, startTimer, resetTimer, currentIndex, total, onPrev, onNext, onOpenDrawer, flaggedTeamCount, currentQuestionLabel }) => {
-  const nonQuestionMode = mode === "bonus_pause" || mode === "winners" || mode === "feedback";
-  const liveRound = rounds.find((round) => currentIndex >= round.startIndex && currentIndex < round.startIndex + round.questions.length);
-  const liveRoundListIndex = rounds.findIndex((round) => round.key === liveRound?.key);
-  const nextRound = liveRoundListIndex >= 0 ? rounds[liveRoundListIndex + 1] : null;
-  const isLastQuestionOfRound = liveRound && currentIndex === liveRound.startIndex + liveRound.questions.length - 1;
-  const nextIsRoundIntro = mode === "question" && isLastQuestionOfRound && Boolean(nextRound);
+// Per-question controls (timer, reveal, audio) moved into QuestionStage's own
+// card -- see the unified card list above. What's left here is genuinely
+// global: the drawer-tool row, the viewer-screen scene switcher (gated behind
+// eventOpen -- none of those scenes have a real audience until the event is
+// open, since ensureLiveGame/persistLiveState don't run before then either),
+// and the Open Event action itself.
+const PlaybackRail = ({ eventOpen, onOpenEvent, mode, setMode, rounds, introRoundKey, chooseIntroRound, onOpenDrawer, flaggedTeamCount }) => {
   const sceneActive = (key) => mode === key;
   const sceneButtonClass = (active) => `h-14 rounded-lg text-[11px] font-bold flex flex-col items-center justify-center gap-1 transition ${active ? "text-zinc-950" : "border border-white/10 text-zinc-300 hover:bg-white/5 hover:text-white"}`;
   const sceneButtonStyle = (active) => active ? { background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" } : undefined;
@@ -1865,7 +1951,7 @@ const PlaybackRail = ({ mode, setMode, rounds, introRoundKey, chooseIntroRound, 
       <CardContent className="p-0">
         <div className="flex items-center justify-between gap-2 border-b border-white/10 px-4 py-3">
           <p className="text-xs font-bold uppercase tracking-wide text-zinc-500">Playback</p>
-          <p className="text-[11px] text-zinc-600">controls {currentQuestionLabel}, live</p>
+          {eventOpen && <p className="text-[11px] text-zinc-600">event is open</p>}
         </div>
         <div className="flex flex-wrap gap-2 border-b border-white/10 px-3 py-3">
           {PLAYBACK_TOOLS.map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => onOpenDrawer(key)} className="relative flex items-center gap-1.5 rounded-md border border-white/10 bg-zinc-950/60 px-2.5 py-1.5 text-xs font-bold text-zinc-300 hover:border-white/25 hover:text-white">
@@ -1873,29 +1959,14 @@ const PlaybackRail = ({ mode, setMode, rounds, introRoundKey, chooseIntroRound, 
             {key === "fairplay" && flaggedTeamCount > 0 && <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-rose-400 text-[9px] font-black text-zinc-950">{flaggedTeamCount}</span>}
           </button>)}
         </div>
-        <div className="space-y-2.5 p-3.5">
-          <div className="flex items-center justify-center gap-4 py-1">
-            <button type="button" onClick={onPrev} disabled={isReviewing || currentIndex <= 0} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-zinc-950 text-zinc-300 hover:border-[#71E0DC]/40 hover:text-[#71E0DC] disabled:opacity-30" aria-label="Previous question"><ChevronLeft size={17} /></button>
-            <div className="flex h-16 w-16 items-center justify-center rounded-full border-4 border-[#71E0DC]/25" style={{ borderTopColor: "var(--host-primary)" }}>
-              <span className="font-mono text-sm font-bold text-white">{timeRemaining !== null ? `${timeRemaining}s` : `${Number(timerSeconds) || 0}s`}</span>
-            </div>
-            <div className="flex shrink-0 flex-col items-center gap-1">
-              <button type="button" onClick={onNext} disabled={isReviewing || (currentIndex >= total - 1 && !nextIsRoundIntro)} title={nextIsRoundIntro ? `Go to ${nextRound.name} intro` : undefined} className={`flex h-9 w-9 items-center justify-center rounded-full border text-zinc-300 hover:text-[#71E0DC] disabled:opacity-30 ${nextIsRoundIntro ? "border-[#71E0DC]/50 bg-[#71E0DC]/10" : "border-white/10 bg-zinc-950 hover:border-[#71E0DC]/40"}`} aria-label={nextIsRoundIntro ? `Go to ${nextRound.name} intro` : "Next question"}><ChevronRight size={17} /></button>
-              {nextIsRoundIntro && <span className="max-w-[64px] truncate text-[9px] font-bold uppercase tracking-wide text-[#71E0DC]">Next: {nextRound.name}</span>}
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <Button size="sm" onClick={startTimer} disabled={isReviewing} className="h-10 gradient-btn disabled:opacity-40"><Play size={15} className="mr-1.5" />Start Timer</Button>
-            <Button size="sm" variant="outline" onClick={resetTimer} disabled={isReviewing} className="h-10 border-white/10 text-zinc-300 hover:text-white disabled:opacity-40"><RotateCcw size={15} className="mr-1.5" />Clear</Button>
-          </div>
-          <Button onClick={onRevealAnswer} disabled={isReviewing || nonQuestionMode} className={`w-full h-10 ${showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-40" : "gradient-btn disabled:opacity-40"}`}>{showAnswer ? <EyeOff size={16} className="mr-2" /> : <Eye size={16} className="mr-2" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button>
-          <Button onClick={onShowFunFact} disabled={isReviewing || nonQuestionMode || !hasRevealExtra} className="w-full h-10 bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-40"><Sparkles size={16} className="mr-2" />{showFunFact ? "Hide" : hasFunFact ? "Reveal Fun Fact" : "Reveal Media"}</Button>
-          {hasAudio && <Button onClick={onToggleAudio} disabled={isReviewing || nonQuestionMode} className={`w-full h-10 ${isPlayingAudio ? "bg-purple-500/20 text-purple-200 hover:bg-purple-500/30" : "bg-zinc-800 text-white hover:bg-zinc-700"} disabled:opacity-40`}>{isPlayingAudio ? <Pause size={16} className="mr-2" /> : <Music size={16} className="mr-2" />}{isPlayingAudio ? "Stop Audio" : "Play Audio"}</Button>}
+        <div className="p-3.5">
+          {eventOpen ? <p className="rounded-lg border border-white/10 bg-zinc-950/60 px-3 py-4 text-center text-xs text-zinc-500">Use each question card&apos;s <b className="text-zinc-300">Ask Question</b> button to go live, reveal the answer, and grade.</p>
+            : <Button onClick={onOpenEvent} className="w-full h-11 gradient-btn text-sm font-bold"><Play size={16} className="mr-2" />Open Event</Button>}
         </div>
       </CardContent>
     </Card>
 
-    <Card className="glass-card">
+    {eventOpen && <Card className="glass-card">
       <CardContent className="p-3.5">
         <div className="mb-2.5 flex items-center justify-between gap-2">
           <p className="text-xs font-bold uppercase tracking-wide text-zinc-500">Viewer Screen</p>
@@ -1912,11 +1983,11 @@ const PlaybackRail = ({ mode, setMode, rounds, introRoundKey, chooseIntroRound, 
           <button type="button" onClick={() => setMode("feedback")} className={sceneButtonClass(sceneActive("feedback"))} style={sceneButtonStyle(sceneActive("feedback"))}><MessageSquare size={16} /><span>Feedback</span></button>
         </div>
       </CardContent>
-    </Card>
+    </Card>}
   </aside>;
 };
 
-const TopBar = ({ navigate, id, sessionName, venueName, questions, players, currentIndex, liveStatus, openPresentation, setFocusMode, progress, branding, customizeOpen, setCustomizeOpen, endSession, collapsed, onToggleCollapse, answersPaused, onToggleAnswersPaused }) => <div className="border-b border-white/10 bg-zinc-950/85 sticky top-0 z-20 backdrop-blur"><div className={`max-w-[1680px] mx-auto px-4 lg:px-6 flex items-center gap-3 transition-[padding] ${collapsed ? "py-1.5" : "py-3"}`}>{!collapsed && <Button variant="ghost" onClick={() => navigate(`/session/${id}`)} className="text-zinc-400 hover:text-white h-9 w-9 p-0 shrink-0" aria-label="Back to session"><ArrowLeft size={18} /></Button>}{!collapsed && branding?.logoUrl && <img src={branding.logoUrl} alt={branding.name || "Host logo"} className="h-10 w-10 rounded-md bg-white object-contain p-1 shrink-0" />}<div className="min-w-0 flex-1">{!collapsed && <p className="text-xs font-bold uppercase tracking-wide truncate" style={{ color: "var(--host-primary)" }}>{venueName || branding?.name || "Live Trivia"}</p>}<h1 className={`font-bold truncate ${collapsed ? "text-sm" : ""}`}>{sessionName}</h1>{!collapsed && <p className="text-xs text-zinc-500">{players.length} player{players.length === 1 ? "" : "s"} connected</p>}</div>{!collapsed && <div className="flex items-center gap-2 flex-wrap justify-end"><Badge className={liveStatus === "live" ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/20" : "bg-zinc-800 text-zinc-300"}><Wifi size={13} className="mr-1" />{liveStatus === "live" ? "Live" : "Connecting"}</Badge><Badge className="bg-zinc-800 text-zinc-300">Question {currentIndex + 1} of {questions.length}</Badge><Button onClick={onToggleAnswersPaused} title="Session-wide -- stays on or off across every question until you flip it back. Join, feedback, and idea submission on phones are never affected." className={answersPaused ? "bg-amber-400/15 text-amber-300 border border-amber-400/30 hover:bg-amber-400/20" : "bg-transparent border border-white/10 text-zinc-300 hover:bg-white/5 hover:text-white"}>{answersPaused ? <Unlock size={16} className="mr-2" /> : <Lock size={16} className="mr-2" />}Phone Answers: {answersPaused ? "Paused" : "On"}</Button><Button onClick={endSession} className="bg-amber-300 text-zinc-950 hover:bg-amber-200"><Save size={16} className="mr-2" />End Session</Button><DropdownMenu><DropdownMenuTrigger asChild><Button variant="outline" className="h-10 w-10 border-white/10 p-0 text-zinc-300 hover:text-white" aria-label="Host screen options"><MoreHorizontal size={18} /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" className="border-white/10 bg-zinc-950 text-zinc-100"><DropdownMenuItem onClick={() => setCustomizeOpen((value) => !value)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Palette size={15} className="mr-2" />{customizeOpen ? "Hide Customize" : "Customize"}</DropdownMenuItem><DropdownMenuItem onClick={() => setFocusMode(true)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Maximize2 size={15} className="mr-2" />Focus Mode</DropdownMenuItem></DropdownMenuContent></DropdownMenu></div>}<Button variant="outline" onClick={onToggleCollapse} className="h-8 w-8 shrink-0 border-white/10 p-0 text-zinc-400 hover:text-white" aria-label={collapsed ? "Expand toolbar" : "Minimize toolbar"} title={collapsed ? "Expand toolbar" : "Minimize toolbar"}><ChevronLeft size={15} className={`transition-transform ${collapsed ? "-rotate-90" : "rotate-90"}`} /></Button><div className="w-px h-7 bg-white/10 shrink-0" /><Button onClick={openPresentation} className="shrink-0 text-zinc-950 font-bold shadow-lg shadow-[#71E0DC]/20" style={{ background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" }} title="Opens the audience screen in a new tab, for a TV or projector"><MonitorPlay size={16} className="mr-2" />Present<ExternalLink size={13} className="ml-2 opacity-70" /></Button></div>{!collapsed && <div className="h-1 bg-zinc-900"><div className="h-1 transition-all" style={{ width: `${progress}%`, background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" }} /></div>}</div>;
+const TopBar = ({ navigate, id, embedded, sessionName, venueName, questions, players, currentIndex, liveStatus, openPresentation, setFocusMode, progress, branding, customizeOpen, setCustomizeOpen, endSession, collapsed, onToggleCollapse, answersPaused, onToggleAnswersPaused }) => <div className="border-b border-white/10 bg-zinc-950/85 sticky top-0 z-20 backdrop-blur"><div className={`max-w-[1680px] mx-auto px-4 lg:px-6 flex items-center gap-3 transition-[padding] ${collapsed ? "py-1.5" : "py-3"}`}>{!collapsed && !embedded && <Button variant="ghost" onClick={() => navigate(`/session/${id}`)} className="text-zinc-400 hover:text-white h-9 w-9 p-0 shrink-0" aria-label="Back to session"><ArrowLeft size={18} /></Button>}{!collapsed && branding?.logoUrl && <img src={branding.logoUrl} alt={branding.name || "Host logo"} className="h-10 w-10 rounded-md bg-white object-contain p-1 shrink-0" />}<div className="min-w-0 flex-1">{!collapsed && <p className="text-xs font-bold uppercase tracking-wide truncate" style={{ color: "var(--host-primary)" }}>{venueName || branding?.name || "Live Trivia"}</p>}<h1 className={`font-bold truncate ${collapsed ? "text-sm" : ""}`}>{sessionName}</h1>{!collapsed && <p className="text-xs text-zinc-500">{players.length} player{players.length === 1 ? "" : "s"} connected</p>}</div>{!collapsed && <div className="flex items-center gap-2 flex-wrap justify-end"><Badge className={liveStatus === "live" ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/20" : "bg-zinc-800 text-zinc-300"}><Wifi size={13} className="mr-1" />{liveStatus === "live" ? "Live" : "Connecting"}</Badge><Badge className="bg-zinc-800 text-zinc-300">Question {currentIndex + 1} of {questions.length}</Badge><Button onClick={onToggleAnswersPaused} title="Session-wide -- stays on or off across every question until you flip it back. Join, feedback, and idea submission on phones are never affected." className={answersPaused ? "bg-amber-400/15 text-amber-300 border border-amber-400/30 hover:bg-amber-400/20" : "bg-transparent border border-white/10 text-zinc-300 hover:bg-white/5 hover:text-white"}>{answersPaused ? <Unlock size={16} className="mr-2" /> : <Lock size={16} className="mr-2" />}Phone Answers: {answersPaused ? "Paused" : "On"}</Button><Button onClick={endSession} className="bg-amber-300 text-zinc-950 hover:bg-amber-200"><Save size={16} className="mr-2" />End Session</Button><DropdownMenu><DropdownMenuTrigger asChild><Button variant="outline" className="h-10 w-10 border-white/10 p-0 text-zinc-300 hover:text-white" aria-label="Host screen options"><MoreHorizontal size={18} /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" className="border-white/10 bg-zinc-950 text-zinc-100"><DropdownMenuItem onClick={() => setCustomizeOpen((value) => !value)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Palette size={15} className="mr-2" />{customizeOpen ? "Hide Customize" : "Customize"}</DropdownMenuItem><DropdownMenuItem onClick={() => setFocusMode(true)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Maximize2 size={15} className="mr-2" />Focus Mode</DropdownMenuItem></DropdownMenuContent></DropdownMenu></div>}<Button variant="outline" onClick={onToggleCollapse} className="h-8 w-8 shrink-0 border-white/10 p-0 text-zinc-400 hover:text-white" aria-label={collapsed ? "Expand toolbar" : "Minimize toolbar"} title={collapsed ? "Expand toolbar" : "Minimize toolbar"}><ChevronLeft size={15} className={`transition-transform ${collapsed ? "-rotate-90" : "rotate-90"}`} /></Button><div className="w-px h-7 bg-white/10 shrink-0" /><Button onClick={openPresentation} className="shrink-0 text-zinc-950 font-bold shadow-lg shadow-[#71E0DC]/20" style={{ background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" }} title="Opens the audience screen in a new tab, for a TV or projector"><MonitorPlay size={16} className="mr-2" />Present<ExternalLink size={13} className="ml-2 opacity-70" /></Button></div>{!collapsed && <div className="h-1 bg-zinc-900"><div className="h-1 transition-all" style={{ width: `${progress}%`, background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" }} /></div>}</div>;
 
 const PresentationControls = ({ mode, setMode, rounds, currentIndex, currentRound, introRoundKey, setIntroRoundKey }) => {
   const nextRound = rounds.find((round) => round.startIndex > currentIndex);
@@ -2183,28 +2254,6 @@ const LeaderboardPanel = ({ leaderboard, teamName, teamScore, setTeamName, setTe
   const barTotals = { adults: playingTotals.adults + (Number(nonPlayers.adults) || 0), kids: playingTotals.kids + (Number(nonPlayers.kids) || 0) };
   return <Card className="glass-card"><CardContent className="p-3"><div className="flex items-center justify-between gap-2 mb-3"><div className="flex items-center gap-2 text-white font-semibold"><Trophy size={18} className="text-amber-300" />Leaderboard</div><Button size="sm" variant="outline" onClick={showLeaderboard} className="h-8 border-white/10 text-zinc-300 hover:text-white">Show</Button></div><div className="mb-3 rounded-md border border-white/10 bg-zinc-950/60 px-3 py-2"><span className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-zinc-500 mb-2"><Users size={13} />Not playing (bar only)</span><div className="grid grid-cols-2 gap-2 mb-2"><label className="block text-[11px] text-zinc-500">Adults<input type="number" min="0" value={nonPlayers.adults} onChange={(event) => updateNonPlayers("adults", event.target.value)} placeholder="0" className="mt-1 h-8 w-full rounded-md border border-white/10 bg-zinc-900 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" /></label><label className="block text-[11px] text-zinc-500">Kids<input type="number" min="0" value={nonPlayers.kids} onChange={(event) => updateNonPlayers("kids", event.target.value)} placeholder="0" className="mt-1 h-8 w-full rounded-md border border-white/10 bg-zinc-900 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" /></label></div><div className="flex items-center justify-between gap-2 rounded-md border border-[#71E0DC]/20 bg-[#71E0DC]/5 px-2 py-1.5"><span className="text-[11px] font-bold uppercase tracking-wide text-zinc-500">Bar Total</span><span className="text-sm font-black text-[#71E0DC]">{barTotals.adults + barTotals.kids} <span className="text-[10px] font-semibold text-zinc-500">({barTotals.adults}A · {barTotals.kids}K)</span></span></div></div><div className="grid grid-cols-[1fr_76px_36px] gap-2 mb-3"><input value={teamName} onChange={(event) => setTeamName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && addTeam()} placeholder="Team name" className="h-9 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" /><input value={teamScore} onChange={(event) => setTeamScore(event.target.value)} onKeyDown={(event) => event.key === "Enter" && addTeam()} placeholder="Score" type="number" className="h-9 rounded-md bg-zinc-950 border border-white/10 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" /><Button onClick={addTeam} className="h-9 w-9 p-0 gradient-btn" aria-label="Add team"><Plus size={16} /></Button></div><div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">{sorted.map((team) => { const stats = fairPlayStats.get(team.id) || {}; const hc = normalizeHeadcount(teamHeadcounts[team.id]); return <div key={team.id} className={`rounded-md border border-white/10 bg-zinc-950/60 p-2 ${team.dropped ? "opacity-60" : ""}`}><div className="flex items-center justify-between gap-2 mb-2"><span className="flex min-w-0 items-center gap-1.5"><span className="font-semibold text-sm truncate">{team.name}</span>{team.dropped && <span className="shrink-0 rounded-full bg-zinc-800 px-1.5 py-0.5 text-[10px] font-bold text-zinc-400">Dropped</span>}</span><span className="flex shrink-0 items-center gap-1.5"><input type="number" min="0" value={hc.adults} onChange={(event) => updateTeamHeadcount(team.id, "adults", event.target.value)} placeholder="0" title="Adults on this team" className="h-6 w-10 rounded border border-white/10 bg-zinc-900 px-1 text-center text-xs text-zinc-300 outline-none focus:border-[#71E0DC]/60" /><span className="text-[9px] text-zinc-600">A</span><input type="number" min="0" value={hc.kids} onChange={(event) => updateTeamHeadcount(team.id, "kids", event.target.value)} placeholder="0" title="Kids on this team" className="h-6 w-10 rounded border border-white/10 bg-zinc-900 px-1 text-center text-xs text-zinc-300 outline-none focus:border-[#71E0DC]/60" /><span className="text-[9px] text-zinc-600">K</span><span className="font-black text-[#71E0DC]">{Number(team.score || 0)}</span></span></div>{Boolean(stats.flags?.length) && <div className="mb-2 flex flex-wrap gap-1">{stats.flags.map((flag) => <span key={flag} className="rounded-full bg-red-400/15 px-2 py-0.5 text-[11px] font-bold text-red-200">{flag}</span>)}</div>}<div className="mb-2 grid grid-cols-2 gap-1 text-[11px] text-zinc-500"><span>Streak {stats.correctStreak || 0}</span><span>Late {stats.lateCorrect || 0}</span></div><div className="flex items-center justify-end gap-1"><Button size="sm" variant="outline" onClick={() => openScoreModal(team.id)} className="h-7 min-w-24 border-white/10 text-zinc-300 hover:text-white">Edit</Button><Button size="sm" variant="outline" onClick={() => toggleTeamDropped(team.id)} className="h-7 w-8 p-0 border-white/10 text-zinc-400 hover:text-amber-300" aria-label={team.dropped ? "Restore team" : "Mark team dropped"} title={team.dropped ? "Restore team" : "Mark team dropped"}>{team.dropped ? <RotateCcw size={13} /> : <UserX size={13} />}</Button><Button size="sm" variant="outline" onClick={() => removeTeam(team.id)} className="h-7 w-8 p-0 border-white/10 text-zinc-400 hover:text-red-300" aria-label="Remove team"><Trash2 size={13} /></Button></div></div>; })}{!sorted.length && <p className="text-xs text-zinc-500 text-center py-3">Teams will appear here when players join from their phones.</p>}</div></CardContent></Card>; };
 
-const LobbyStage = ({ playerCount, onStartTrivia }) => <Card className="glass-card overflow-hidden"><CardContent className="p-8 lg:p-12 text-center"><div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full border border-[#71E0DC]/30 bg-[#71E0DC]/10"><QrCode className="text-[#71E0DC]" size={34} /></div><p className="text-sm font-bold uppercase tracking-wide text-[#71E0DC]">Presentation is showing</p><h2 className="mt-2 text-4xl lg:text-6xl font-black text-white">Lobby / QR Code</h2><p className="mx-auto mt-4 max-w-2xl text-xl text-zinc-300">Players are scanning in from their phones. Start trivia when your room is ready.</p><div className="mx-auto mt-6 inline-flex items-center gap-2 rounded-full border border-white/10 bg-zinc-950/60 px-4 py-2 text-sm font-bold text-zinc-300"><Users size={15} className="text-[#71E0DC]" />{playerCount} {playerCount === 1 ? "team" : "teams"} joined</div><div className="mt-8"><Button onClick={onStartTrivia} className="h-12 px-8 text-base gradient-btn"><Play size={18} className="mr-2" />Start Trivia</Button></div></CardContent></Card>;
-
-const RoundIntroStage = ({ round, gameStarted, onStartIntro, onStartQuestion }) => {
-  const categories = [...new Set((round?.questions || []).map((question) => question.category).filter(Boolean))];
-  return <Card className="glass-card overflow-hidden"><CardContent className="p-8 lg:p-12 text-center"><div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full border border-[#71E0DC]/30 bg-[#71E0DC]/10"><Tags className="text-[#71E0DC]" size={34} /></div><p className="text-sm font-bold uppercase tracking-wide text-[#71E0DC]">Round Intro</p><h2 className="mt-2 text-4xl lg:text-6xl font-black text-white">{round?.name || "Round"}</h2>{round?.description && <p className="mx-auto mt-4 max-w-3xl text-xl text-zinc-300">{round.description}</p>}<div className="mx-auto mt-8 flex max-w-3xl flex-wrap justify-center gap-2">{categories.map((category) => <Badge key={category} className="border border-white/10 bg-zinc-900 px-4 py-2 text-base text-zinc-200">{category}</Badge>)}{!categories.length && <p className="rounded-lg border border-white/10 bg-zinc-950/70 p-5 text-zinc-500">Categories will appear here when this round has questions.</p>}</div><div className="mt-8 flex flex-wrap justify-center gap-3"><Button onClick={gameStarted ? onStartQuestion : onStartIntro} className="gradient-btn"><Play size={18} className="mr-2" />{gameStarted ? "Start Question" : "Start Trivia"}</Button>{gameStarted && <Button variant="outline" onClick={onStartIntro} className="border-white/10 text-zinc-300 hover:text-white">Show Intro Again</Button>}</div></CardContent></Card>;
-};
-
-const BonusPauseStage = ({ round, leaderboard }) => {
-  const sorted = [...leaderboard].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)).slice(0, 8);
-  return <Card className="glass-card overflow-hidden"><CardContent className="p-8 lg:p-10 text-center"><div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full border border-[#71E0DC]/30 bg-[#71E0DC]/10"><Loader2 className="animate-spin text-[#71E0DC]" size={30} /></div><p className="text-sm font-bold uppercase tracking-wide text-[#71E0DC]">Bonus question next</p><h2 className="mt-2 text-4xl lg:text-6xl font-black text-white">{round?.name || "Round"} Bonus</h2><p className="mt-3 text-zinc-400">Leaderboard pause before the final question of the round.</p><div className="mx-auto mt-8 max-w-3xl space-y-3 text-left">{sorted.map((team, index) => <div key={team.id || team.name} className="grid grid-cols-[44px_1fr_auto] items-center gap-3 rounded-lg border border-white/10 bg-zinc-950/70 px-4 py-3"><div className={`h-9 w-9 rounded-full flex items-center justify-center font-black ${index === 0 ? "bg-amber-300 text-zinc-950" : "bg-white/10 text-zinc-200"}`}>{index + 1}</div><span className="truncate text-lg font-bold text-white">{team.name}</span><span className="text-2xl font-black text-[#71E0DC]">{Number(team.score || 0)}</span></div>)}{!sorted.length && <p className="rounded-lg border border-white/10 bg-zinc-950/70 p-5 text-center text-zinc-500">Leaderboard will appear once teams join or are added.</p>}</div></CardContent></Card>;
-};
-
-const WinnersStage = ({ leaderboard }) => {
-  const sorted = [...leaderboard].sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
-  const winners = sorted.slice(0, 3);
-  const first = winners[0];
-  const runnersUp = winners.slice(1);
-  return <Card className="glass-card overflow-hidden"><CardContent className="p-8 lg:p-12 text-center"><div className="mx-auto mb-5 flex h-18 w-18 items-center justify-center rounded-full border border-amber-300/30 bg-amber-300/10"><Trophy className="text-amber-300" size={42} /></div><p className="text-sm font-bold uppercase tracking-wide text-[#71E0DC]">Final Scores</p><h2 className="mt-2 text-4xl lg:text-6xl font-black text-white">Tonight&apos;s Winners</h2>{first ? <div className="mx-auto mt-8 max-w-2xl rounded-xl border-2 border-amber-300/50 bg-amber-300/15 p-7 text-center shadow-xl shadow-amber-300/5"><div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-amber-300 text-xl font-black text-zinc-950">1</div><p className="mt-3 text-sm font-black uppercase tracking-[0.18em] text-amber-200">Champion</p><p className="mt-3 truncate text-3xl font-black text-white lg:text-5xl">{first.name}</p><p className="mt-2 text-5xl font-black text-amber-200 lg:text-6xl">{Number(first.score || 0)}</p></div> : <p className="mx-auto mt-8 max-w-2xl rounded-lg border border-white/10 bg-zinc-950/70 p-5 text-center text-zinc-500">Winners will appear once teams have scores.</p>}{runnersUp.length > 0 && <div className="mx-auto mt-4 grid max-w-3xl grid-cols-1 gap-4 text-left md:grid-cols-2">{runnersUp.map((team, index) => { const place = index + 2; return <div key={team.id || team.name} className={`rounded-xl border p-5 ${place === 2 ? "border-[#AEB2EF]/30 bg-[#AEB2EF]/10" : "border-[#71E0DC]/30 bg-[#71E0DC]/10"}`}><div className="flex items-center gap-3"><span className={`flex h-9 w-9 items-center justify-center rounded-full font-black text-zinc-950 ${place === 2 ? "bg-[#AEB2EF]" : "bg-[#71E0DC]"}`}>{place}</span><p className="text-sm font-bold uppercase tracking-wide text-zinc-400">{place === 2 ? "Second Place" : "Third Place"}</p></div><p className="mt-3 truncate text-2xl font-black text-white">{team.name}</p><p className="mt-2 text-4xl font-black" style={{ color: place === 2 ? "#AEB2EF" : "#71E0DC" }}>{Number(team.score || 0)}</p></div>; })}</div>}<p className="mt-8 text-xl font-bold text-zinc-300">Thanks for playing.</p></CardContent></Card>;
-};
-
-const FeedbackStage = ({ ideas }) => <Card className="glass-card overflow-hidden"><CardContent className="p-8 lg:p-12 text-center"><div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full border border-[#71E0DC]/30 bg-[#71E0DC]/10"><MessageSquare className="text-[#71E0DC]" size={34} /></div><p className="text-sm font-bold uppercase tracking-wide text-[#71E0DC]">Player Feedback</p><h2 className="mt-2 text-4xl lg:text-6xl font-black text-white">Send Category or Question Ideas</h2><p className="mx-auto mt-4 max-w-2xl text-xl text-zinc-300">Players can submit ideas from their phones now.</p><div className="mx-auto mt-8 max-w-3xl rounded-lg border border-white/10 bg-zinc-950/60 p-5"><p className="text-5xl font-black text-[#71E0DC]">{ideas.length}</p><p className="text-zinc-400">idea{ideas.length === 1 ? "" : "s"} submitted</p></div></CardContent></Card>;
-
 const IdeasPanel = ({ ideas }) => <Card className="glass-card"><CardContent className="p-4"><div className="flex items-center justify-between gap-2 mb-4"><div className="flex items-center gap-2 text-white font-semibold"><Sparkles size={18} className="text-[#71E0DC]" />Player Ideas</div><Badge className="bg-zinc-800 text-zinc-300">{ideas.length}</Badge></div><div className="space-y-3 max-h-[620px] overflow-y-auto pr-1">{ideas.map((idea, index) => <div key={`${idea.playerId}-${idea.submittedAt}-${index}`} className="rounded-md border border-white/10 bg-zinc-950/60 p-3"><div className="mb-2 flex items-center justify-between gap-2"><span className="text-sm font-bold text-white truncate">{idea.playerName || "Team"}</span><span className="text-[11px] text-zinc-600">{new Date(idea.submittedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span></div>{idea.category && <p className="text-sm text-[#71E0DC]"><span className="text-zinc-500">Category:</span> {idea.category}</p>}{idea.question && <p className="mt-2 text-sm text-zinc-200 whitespace-pre-wrap">{idea.question}</p>}</div>)}{!ideas.length && <p className="text-xs text-zinc-500 text-center py-6">Ideas will appear here after players submit them.</p>}</div></CardContent></Card>;
 
 const ScoreAdjustModal = ({ modal, setModal, adjustScore, setScore }) => {
@@ -2311,7 +2360,7 @@ const WagerChip = ({ answer, disabled, onSave }) => {
   return <button type="button" disabled={disabled} onClick={() => setEditing(true)} className="rounded-full border border-purple-400/30 bg-purple-400/10 px-2.5 py-1 text-[11px] font-bold text-purple-200 transition disabled:cursor-default disabled:opacity-70 enabled:hover:border-purple-300/60">{answer.playerName || "Team"}: {Number(answer.wagerAmount || 0)}</button>;
 };
 
-const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusMode, pointsPerQuestion, timerSeconds, timeRemaining, wagerMode, wagerLimit, wagerTiming, onUpdateSettings, branding, players, answers, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, editWager, setMode, isReviewing }) => {
+const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusMode, pointsPerQuestion, timerSeconds, timeRemaining, wagerMode, wagerLimit, wagerTiming, onUpdateSettings, branding, players, answers, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, editWager, setMode, isReviewing, hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, onBackToLive, onGoLiveWithThis }) => {
   const meta = typeMeta[question.type] || typeMeta.written;
   const Icon = meta.icon;
   const imageUrl = buildStorageUrl(question.imageUrl);
@@ -2330,7 +2379,7 @@ const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusM
   const funFactBox = question.funFact && <div className="mt-4 flex items-start gap-2.5 rounded-lg border border-dashed p-3.5 text-sm leading-relaxed transition-opacity" style={{ borderColor: `${accentColor}59`, backgroundColor: `${accentColor}0F`, color: "#C7C9F5", opacity: showFunFact ? 1 : 0.65 }}><Sparkles size={15} className="mt-0.5 shrink-0" style={{ color: accentColor }} /><div><b style={{ color: accentColor }}>Fun fact:</b> {question.funFact}</div></div>;
   const answerColumn = <div>{answerRows}{funFactBox}</div>;
 
-  return <Card className={`glass-card overflow-hidden ${focusMode ? "w-full" : ""}`}><CardContent className={focusMode ? "p-8 lg:p-12" : "p-5 lg:p-7"}><div className="flex items-start justify-between gap-3 mb-1"><div className="flex items-center gap-2 flex-wrap">{branding?.logoUrl && <img src={branding.logoUrl} alt={branding.name || "Host logo"} className="h-8 w-8 rounded bg-white object-contain p-1" />}</div><span className="text-zinc-500 font-mono text-sm">{index + 1} / {total}</span></div><div className="mb-8 flex items-center gap-2 flex-wrap"><Badge variant="outline" className="border-zinc-700 text-zinc-300">{question.category}</Badge><Badge className="border" style={{ backgroundColor: `${accentColor}1F`, borderColor: `${accentColor}00`, color: accentColor }}><Icon size={13} className="mr-1" />{meta.label}</Badge><span className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-zinc-700 bg-zinc-900/60 px-3 py-1.5 text-xs font-bold text-zinc-400" title="Only visible on this screen -- players and the presentation screen don't see this until you reveal"><EyeOff size={12} />Answer: {question.answer || "Not set"}</span>{wagerMode ? <EditableStatBadge label="Wager" value={Number(wagerLimit) || 0} unit="points, 0 = off" suffix=" pts" tone="purple" step={10} onSave={(value, scope) => onUpdateSettings({ wagerLimit: value }, scope, question)} /> : <EditableStatBadge label="Points" value={Number(pointsPerQuestion) || getDefaultPoints(question)} tone="amber" step={5} onSave={(value, scope) => onUpdateSettings({ points: value }, scope, question)} />}<button type="button" onClick={() => onUpdateSettings({ wagerLimit: wagerMode ? 0 : Math.max(20, Number(pointsPerQuestion) || getDefaultPoints(question)) }, "question", question)} className="rounded-full border border-purple-500/30 bg-purple-500/10 px-3 py-1.5 text-xs font-bold text-purple-200 hover:border-purple-400/60">{wagerMode ? "Turn Off Wager" : "Enable Wager"}</button><EditableStatBadge label="Timer" value={Number(timerSeconds) || 0} unit="seconds" suffix="s" tone="teal" step={5} onSave={(value, scope) => onUpdateSettings({ timerSeconds: value }, scope, question)} />{timeRemaining !== null && <span className="rounded-full border border-[#71E0DC]/25 bg-[#71E0DC]/10 px-3 py-1.5 text-sm font-bold text-[#71E0DC]">{timeRemaining}s left</span>}{wagerMode && <button type="button" onClick={() => onUpdateSettings({ wagerTiming: wagerTiming === "after_answer" ? "before_answer" : "after_answer" }, "question", question)} className="rounded-full border border-purple-500/30 bg-purple-500/10 px-3 py-1.5 text-sm font-bold text-purple-200 hover:border-purple-400/60">{wagerTiming === "after_answer" ? "After Answer" : "Before Answer"}</button>}{imageUrl && <Badge className="bg-amber-400/15 text-amber-200 border border-amber-400/20">{question.imageTiming === "after_answer" ? "Reveal Media" : "Media"}</Badge>}{playerCount > 0 && <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-bold ${allSubmitted ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-400/15 text-amber-200"}`}><span className="h-1.5 w-12 overflow-hidden rounded-full bg-white/15"><span className="block h-full rounded-full bg-current" style={{ width: `${submittedPct}%` }} /></span>{submittedCount}/{playerCount} in</span>}</div><h2 className={`${focusMode ? "text-4xl lg:text-6xl" : "text-2xl lg:text-4xl"} font-black leading-tight text-white text-center mb-6`}>{question.questionText}</h2>{shouldShowImage ? <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_220px] items-start gap-5 mb-6">{answerColumn}<div className="overflow-hidden rounded-xl border border-white/10 bg-zinc-950 aspect-[4/3]"><img src={imageUrl} alt="Question" className="h-full w-full object-cover" /></div></div> : <div className="mx-auto mb-6 w-full max-w-2xl">{answerColumn}</div>}{shouldShowFunFactImage && <div className="mt-5 max-h-[42vh] overflow-y-auto rounded-lg border p-5 text-center" style={{ backgroundColor: `${accentColor}18`, borderColor: `${accentColor}55` }}><div className="mb-4 flex justify-center"><img src={imageUrl} alt="Reveal media" className="max-h-[28vh] max-w-full rounded-lg border border-white/10 object-contain" /></div><div className="flex items-center justify-center gap-2 font-bold mb-2" style={{ color: accentColor }}><Sparkles size={18} />Media</div></div>}</CardContent></Card>;
+  return <Card className={`glass-card overflow-hidden ${isReviewing ? "border-amber-400/40" : "border-rose-400/30"} ${focusMode ? "w-full" : ""}`}><CardContent className={focusMode ? "p-8 lg:p-12" : "p-5 lg:p-7"}>{isReviewing && <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-100"><Eye size={13} className="shrink-0 text-amber-300" /><span className="flex-1">Reviewing this question &mdash; players and the presentation screen still see the live question.</span>{onBackToLive && <Button size="sm" variant="outline" onClick={onBackToLive} className="h-7 border-amber-300/30 text-amber-100 hover:text-white">Back to Live</Button>}{onGoLiveWithThis && <Button size="sm" onClick={onGoLiveWithThis} className="h-7 bg-amber-300 text-zinc-950 hover:bg-amber-200">Go Live With This Question</Button>}</div>}<div className="flex items-start justify-between gap-3 mb-1"><div className="flex items-center gap-2 flex-wrap">{branding?.logoUrl && <img src={branding.logoUrl} alt={branding.name || "Host logo"} className="h-8 w-8 rounded bg-white object-contain p-1" />}</div><span className="text-zinc-500 font-mono text-sm">{index + 1} / {total}</span></div><div className="mb-8 flex items-center gap-2 flex-wrap"><Badge variant="outline" className="border-zinc-700 text-zinc-300">{question.category}</Badge><Badge className="border" style={{ backgroundColor: `${accentColor}1F`, borderColor: `${accentColor}00`, color: accentColor }}><Icon size={13} className="mr-1" />{meta.label}</Badge><span className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-zinc-700 bg-zinc-900/60 px-3 py-1.5 text-xs font-bold text-zinc-400" title="Only visible on this screen -- players and the presentation screen don't see this until you reveal"><EyeOff size={12} />Answer: {question.answer || "Not set"}</span>{wagerMode ? <EditableStatBadge label="Wager" value={Number(wagerLimit) || 0} unit="points, 0 = off" suffix=" pts" tone="purple" step={10} onSave={(value, scope) => onUpdateSettings({ wagerLimit: value }, scope, question)} /> : <EditableStatBadge label="Points" value={Number(pointsPerQuestion) || getDefaultPoints(question)} tone="amber" step={5} onSave={(value, scope) => onUpdateSettings({ points: value }, scope, question)} />}<button type="button" onClick={() => onUpdateSettings({ wagerLimit: wagerMode ? 0 : Math.max(20, Number(pointsPerQuestion) || getDefaultPoints(question)) }, "question", question)} className="rounded-full border border-purple-500/30 bg-purple-500/10 px-3 py-1.5 text-xs font-bold text-purple-200 hover:border-purple-400/60">{wagerMode ? "Turn Off Wager" : "Enable Wager"}</button><EditableStatBadge label="Timer" value={Number(timerSeconds) || 0} unit="seconds" suffix="s" tone="teal" step={5} onSave={(value, scope) => onUpdateSettings({ timerSeconds: value }, scope, question)} />{timeRemaining !== null && <span className="rounded-full border border-[#71E0DC]/25 bg-[#71E0DC]/10 px-3 py-1.5 text-sm font-bold text-[#71E0DC]">{timeRemaining}s left</span>}{wagerMode && <button type="button" onClick={() => onUpdateSettings({ wagerTiming: wagerTiming === "after_answer" ? "before_answer" : "after_answer" }, "question", question)} className="rounded-full border border-purple-500/30 bg-purple-500/10 px-3 py-1.5 text-sm font-bold text-purple-200 hover:border-purple-400/60">{wagerTiming === "after_answer" ? "After Answer" : "Before Answer"}</button>}{imageUrl && <Badge className="bg-amber-400/15 text-amber-200 border border-amber-400/20">{question.imageTiming === "after_answer" ? "Reveal Media" : "Media"}</Badge>}{playerCount > 0 && <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-bold ${allSubmitted ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-400/15 text-amber-200"}`}><span className="h-1.5 w-12 overflow-hidden rounded-full bg-white/15"><span className="block h-full rounded-full bg-current" style={{ width: `${submittedPct}%` }} /></span>{submittedCount}/{playerCount} in</span>}</div>{!isReviewing && <div className="mb-6 flex flex-wrap items-center gap-2"><Button size="sm" onClick={startTimer} className="h-9 gradient-btn"><Play size={14} className="mr-1.5" />Start Timer</Button><Button size="sm" variant="outline" onClick={resetTimer} className="h-9 border-white/10 text-zinc-300 hover:text-white"><RotateCcw size={14} className="mr-1.5" />Clear Timer</Button><Button size="sm" onClick={onRevealAnswer} className={`h-9 ${showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700" : "gradient-btn"}`}>{showAnswer ? <EyeOff size={14} className="mr-1.5" /> : <Eye size={14} className="mr-1.5" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button><Button size="sm" onClick={onShowFunFact} disabled={!hasRevealExtra} className="h-9 bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-40"><Sparkles size={14} className="mr-1.5" />{showFunFact ? "Hide" : hasFunFact ? "Reveal Fun Fact" : "Reveal Media"}</Button>{hasAudio && <Button size="sm" onClick={onToggleAudio} className={`h-9 ${isPlayingAudio ? "bg-purple-500/20 text-purple-200 hover:bg-purple-500/30" : "bg-zinc-800 text-white hover:bg-zinc-700"}`}>{isPlayingAudio ? <Pause size={14} className="mr-1.5" /> : <Music size={14} className="mr-1.5" />}{isPlayingAudio ? "Stop Audio" : "Play Audio"}</Button>}</div>}<h2 className={`${focusMode ? "text-4xl lg:text-6xl" : "text-2xl lg:text-4xl"} font-black leading-tight text-white text-center mb-6`}>{question.questionText}</h2>{shouldShowImage ? <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_220px] items-start gap-5 mb-6">{answerColumn}<div className="overflow-hidden rounded-xl border border-white/10 bg-zinc-950 aspect-[4/3]"><img src={imageUrl} alt="Question" className="h-full w-full object-cover" /></div></div> : <div className="mx-auto mb-6 w-full max-w-2xl">{answerColumn}</div>}{shouldShowFunFactImage && <div className="mt-5 max-h-[42vh] overflow-y-auto rounded-lg border p-5 text-center" style={{ backgroundColor: `${accentColor}18`, borderColor: `${accentColor}55` }}><div className="mb-4 flex justify-center"><img src={imageUrl} alt="Reveal media" className="max-h-[28vh] max-w-full rounded-lg border border-white/10 object-contain" /></div><div className="flex items-center justify-center gap-2 font-bold mb-2" style={{ color: accentColor }}><Sparkles size={18} />Media</div></div>}</CardContent></Card>;
 };
 
 export default HostSession;

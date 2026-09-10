@@ -433,9 +433,15 @@ const createBuildSnapshot = ({ sessionName, sessionDate, selectedVenueId, rounds
   };
 };
 
-const BuildSession = () => {
+// sessionIdProp/onGoLive let this render embedded inside EventWorkspace.jsx's
+// merged popout (id passed as a prop, "Go Live" flips the popout's own mode
+// instead of navigating to a different page) while leaving the standalone
+// /build/:sessionId route's behavior -- reading the id from the URL,
+// navigating to /host-session/:id on Go Live -- completely unchanged.
+const BuildSession = ({ sessionIdProp, onGoLive } = {}) => {
   const navigate = useNavigate();
-  const { sessionId } = useParams();
+  const { sessionId: sessionIdParam } = useParams();
+  const sessionId = sessionIdProp || sessionIdParam;
   const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
   useEffect(() => {
@@ -1274,7 +1280,7 @@ const BuildSession = () => {
   const handleTuneGeneratedDifficulty = async (question, direction) => { setActionQuestionId(question.id); try { const type = normalizeType(question); const targetDifficulty = direction === "easier" ? easierDifficulty[difficulty] || "medium" : harderDifficulty[difficulty] || "hard"; const tuningTheme = [theme, direction === "easier" ? "Make a more accessible version of this same trivia idea. Keep it fresh, but add a clearer clue path and make the answer more gettable for a strong bar-trivia team." : "Make a harder version of this same trivia idea. Keep it fair and satisfying, but require a stronger clue path or second-layer knowledge.", type === "written" ? "Because this is a written-answer question, make the answer especially fair to recall without options. Avoid exact-spelling traps." : type === "multiple_choice" ? "Because this is multiple choice, keep the wrong answers plausible and comparable." : "Because this is true/false, keep the claim cleanly verifiable and not a coin flip.", `Original category: ${question.category || "General"}`, `Original question: ${question.question_text}`, `Original answer: ${question.correct_answer}`, question.fun_fact ? `Original fun fact: ${question.fun_fact}` : "", "Return a replacement, not a duplicate. It may keep the same broad subject, but should be newly worded and calibrated to the requested difficulty."].filter(Boolean).join("\n"); const { data } = await requestGeneratedQuestions({ replacement: question, rejectCurrent: true, difficultyOverride: targetDifficulty, themeOverride: tuningTheme, allowCurrentCategory: true, lockedCategoriesOverride: [question.category].filter(Boolean) }); const generated = normalizeGeneratedCandidates(data?.candidates, activeRound.id, type).map((candidate) => normalizeQuestion({ ...candidate, category: question.category || candidate.category }, type)); if (!generated.length) throw new Error(`No ${direction} version came back. Try changing the AI direction.`); addGeneratedToRound(generated, question); toast.success(direction === "easier" ? "Made easier" : "Made harder"); } catch (error) { console.error("Tune generated question error:", error); toast.error(error.response?.data?.error || error.message || `Failed to make question ${direction}`); } finally { setActionQuestionId(null); } };
   const handleRejectQuestion = (question) => { const nextRejectedAi = new Set(rejectedAi); nextRejectedAi.add(fingerprint(question.question_text)); setRejectedAi(nextRejectedAi); saveRejectedAi(nextRejectedAi); const nextMemory = upsertQuestionMemory(question, { status: "too_common" }, readQuestionMemory()); setQuestionMemory(nextMemory); saveQuestionMemoryToProfile(supabase, nextMemory).catch((error) => console.warn("Question memory profile save unavailable:", error)); rememberStyleFeedback(question, "too_common", "Rejected from build").then(setHostStyleProfile).catch((error) => console.warn("Style feedback save unavailable:", error)); setQuestions((prev) => prev.filter((q) => String(q.id) !== String(question.id))); setRounds((prev) => prev.map((round) => ({ ...round, questionIds: (round.questionIds || []).filter((id) => String(id) !== String(question.id)) }))); toast.success("Question blocked from future AI suggestions"); };
   const handleRejectCategory = (question) => { if (!question.category) return; const clean = canonicalCategory(question.category, [...approvedCategories, ...rejectedCategories]); const approved = new Set(approvedCategories.filter((category) => categoryKey(category) !== categoryKey(clean))); const rejected = new Set(uniqueCategories([...rejectedCategories, clean], [clean])); setApprovedCategories(uniqueCategories([...approved]).sort((a, b) => a.localeCompare(b))); setRejectedCategories(uniqueCategories([...rejected]).sort((a, b) => a.localeCompare(b))); saveLocalCategoryPrefs(approved, rejected); removeFromRound(activeRound.id, question.id); toast.success(`${clean} moved to rejected categories`); };
-  const handleClearSession = async () => { if (!window.confirm("Clear this build? All rounds and questions in it will be removed.")) return; await clearSavedState(); setEditingSessionId(null); setEditingSessionWasPast(false); setSessionName(""); setSessionDate(todayInputDate()); setSelectedVenueId(readActiveVenueId() || ""); setRounds(createDefaultRounds()); setActiveRoundId("round-1"); setTheme(""); setTypeFilter("all"); setGenerateType("multiple_choice"); setAiCandidates([]); setShowAiPanel(false); setShowWriteForm(false); setShowLibrary(false); if (sessionId || buildContext) navigate("/build?new=1", { replace: true }); toast.success("Session cleared"); };
+  const handleClearSession = async () => { if (!window.confirm("Clear this build? All rounds and questions in it will be removed.")) return; await clearSavedState(); setEditingSessionId(null); setEditingSessionWasPast(false); setSessionName(""); setSessionDate(todayInputDate()); setSelectedVenueId(readActiveVenueId() || ""); setRounds(createDefaultRounds()); setActiveRoundId("round-1"); setTheme(""); setTypeFilter("all"); setGenerateType("multiple_choice"); setAiCandidates([]); setShowAiPanel(false); setShowWriteForm(false); setShowLibrary(false); if ((sessionId || buildContext) && !sessionIdProp) navigate("/build?new=1", { replace: true }); toast.success("Session cleared"); };
   const handleStartFromTemplate = () => {
     const template = templates.find((item) => item.id === selectedTemplateId) || templates[0];
     if (!template) return toast.error("Create a template in Setup first");
@@ -1618,7 +1624,8 @@ const BuildSession = () => {
           setUsedQuestionIds(nextUsedIds);
         }
         toast.success("Session saved. Opening host screen.");
-        navigate(`/host-session/${data.id}`);
+        if (onGoLive) onGoLive(data.id);
+        else navigate(`/host-session/${data.id}`);
       } else {
         toast.success("Build saved");
         if (!sessionId) navigate(`/build/${data.id}`, { replace: true });
