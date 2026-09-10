@@ -1,28 +1,36 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Settings, X } from "lucide-react";
+import { Settings, X, Loader2 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { findLiveGame } from "../lib/liveGame";
-import BuildSession from "./BuildSession";
 import HostSession from "./HostSession";
 import EventSettingsModal from "../components/EventSettings/EventSettingsModal";
 
 // The merged builder/host popout: one screen per event instead of separate
 // /build/:id and /host-session/:id pages. Mounted at /session/:id, replacing
-// SessionDetail.jsx there. Mode is derived from live state, not a new state
-// machine on `sessions` -- but naively trusting "does a non-finished
-// live_games row exist" isn't enough: ending a real session never used to
-// mark that row finished (fixed in this same change, see endSession() in
-// HostSession.jsx), so every session ever hosted even once would otherwise
-// open straight into the live view forever. Two guards fix that:
-// - A session already marked is_past (fully hosted before) always opens to
-//   the editor, regardless of any leftover live_games row.
+// SessionDetail.jsx there. HostSession now owns both editing (the question
+// card list) and hosting in one always-mounted tree -- there is no more
+// separate "editor" component to switch to (see Sub-phase 2b: the earlier
+// mode-toggle between embedded BuildSession/HostSession still looked like
+// two different screens swapping, which is exactly what the unified view was
+// meant to replace). BuildSession stays reachable at its own /build/:id
+// route for now; a card's "Advanced Edit" entry point back into it is a
+// follow-up, not part of this pass.
+//
+// What HostSession does need up front is whether the event has actually
+// been opened yet (initialEventOpen) -- naively trusting "does a
+// non-finished live_games row exist" isn't enough: ending a real session
+// never used to mark that row finished (fixed in the same change that added
+// this check, see endSession() in HostSession.jsx), so every session ever
+// hosted even once would otherwise look "live" forever. Two guards fix that:
+// - A session already marked is_past (fully hosted before) always opens
+//   already-open, so its cards show as completed/reviewable immediately.
 // - A live_games row from an abandoned Test Run (is_test: true) never
-//   counts as "live" either -- only a real, still-open game does.
+//   counts as "open" either -- only a real, still-open game does.
 const EventWorkspace = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const [mode, setMode] = useState(null); // null while checking, then "editor" | "live"
+  const [initialEventOpen, setInitialEventOpen] = useState(null); // null while checking, then boolean
   const [settingsSession, setSettingsSession] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -32,12 +40,12 @@ const EventWorkspace = () => {
       try {
         const { data: sessionRow, error: sessionError } = await supabase.from("sessions").select("is_past").eq("id", id).single();
         if (sessionError) throw sessionError;
-        if (sessionRow?.is_past) { if (!cancelled) setMode("editor"); return; }
+        if (sessionRow?.is_past) { if (!cancelled) setInitialEventOpen(true); return; }
         const game = await findLiveGame(id);
-        if (!cancelled) setMode(game && !game.is_test ? "live" : "editor");
+        if (!cancelled) setInitialEventOpen(Boolean(game && !game.is_test));
       } catch (error) {
         console.warn("Live game lookup unavailable:", error);
-        if (!cancelled) setMode("editor");
+        if (!cancelled) setInitialEventOpen(false);
       }
     })();
     return () => { cancelled = true; };
@@ -83,11 +91,11 @@ const EventWorkspace = () => {
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {mode === "live" ? (
-            <HostSession sessionIdProp={id} onEditBuild={() => setMode("editor")} />
-          ) : mode === "editor" ? (
-            <BuildSession sessionIdProp={id} onGoLive={() => setMode("live")} />
-          ) : null}
+          {initialEventOpen === null ? (
+            <div className="flex h-full items-center justify-center"><Loader2 className="text-[#71E0DC] animate-spin" size={34} /></div>
+          ) : (
+            <HostSession sessionIdProp={id} initialEventOpen={initialEventOpen} />
+          )}
         </div>
       </div>
       {settingsOpen && settingsSession && (
