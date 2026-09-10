@@ -2,7 +2,7 @@
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { uploadQuestionMedia } from "../lib/mediaUpload";
-import { ensureLiveGame, fetchLivePlayers, subscribeLivePlayers, upsertLivePlayer, removeLivePlayer, resetTestGame } from "../lib/liveGame";
+import { ensureLiveGame, fetchLivePlayers, subscribeLivePlayers, upsertLivePlayer, removeLivePlayer, resetTestGame, endLiveGame } from "../lib/liveGame";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent } from "../components/ui/card";
@@ -1423,6 +1423,7 @@ const HostSession = ({ sessionIdProp, onEditBuild } = {}) => {
     persistHostToolsPatch({ endedAt, currentIndex, presentMode: "winners" }, "End session marker");
     hostedResultsRef.current = { ...results, liveState: liveStateRef.current, liveStateUpdatedAt: new Date().toISOString() };
     const { error } = await supabase.from("sessions").update({ hosted_at: endedAt, hosted_results: hostedResultsRef.current, is_past: true }).eq("id", id);
+    if (liveGameId) endLiveGame(liveGameId).catch((endError) => console.warn("Marking live game finished unavailable:", endError));
     if (error) {
       console.error("End session database save failed:", error);
       toast.error("Session ended, but saving the results failed. Results are kept on this device -- try again before closing this tab.");

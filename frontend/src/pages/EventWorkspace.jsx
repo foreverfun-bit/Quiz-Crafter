@@ -9,16 +9,16 @@ import EventSettingsModal from "../components/EventSettings/EventSettingsModal";
 
 // The merged builder/host popout: one screen per event instead of separate
 // /build/:id and /host-session/:id pages. Mounted at /session/:id, replacing
-// SessionDetail.jsx there. Mode is derived from whether an active (non
-// -"finished") live_games row exists for this session -- the same signal
-// BuildSession's "Go Live" and HostSession's own mount effect already use
-// via ensureLiveGame/findLiveGame -- not a new state machine on `sessions`.
-//
-// BuildSession and HostSession keep almost all of their internals; they're
-// rendered here with the session id passed as a prop (falling back to their
-// own useParams() when reached directly at their standalone routes, which
-// still work), and their Go-Live / editBuild / End-Session actions flip
-// `mode` below instead of navigating to a different page.
+// SessionDetail.jsx there. Mode is derived from live state, not a new state
+// machine on `sessions` -- but naively trusting "does a non-finished
+// live_games row exist" isn't enough: ending a real session never used to
+// mark that row finished (fixed in this same change, see endSession() in
+// HostSession.jsx), so every session ever hosted even once would otherwise
+// open straight into the live view forever. Two guards fix that:
+// - A session already marked is_past (fully hosted before) always opens to
+//   the editor, regardless of any leftover live_games row.
+// - A live_games row from an abandoned Test Run (is_test: true) never
+//   counts as "live" either -- only a real, still-open game does.
 const EventWorkspace = () => {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -28,12 +28,18 @@ const EventWorkspace = () => {
 
   useEffect(() => {
     let cancelled = false;
-    findLiveGame(id)
-      .then((game) => { if (!cancelled) setMode(game ? "live" : "editor"); })
-      .catch((error) => {
+    (async () => {
+      try {
+        const { data: sessionRow, error: sessionError } = await supabase.from("sessions").select("is_past").eq("id", id).single();
+        if (sessionError) throw sessionError;
+        if (sessionRow?.is_past) { if (!cancelled) setMode("editor"); return; }
+        const game = await findLiveGame(id);
+        if (!cancelled) setMode(game && !game.is_test ? "live" : "editor");
+      } catch (error) {
         console.warn("Live game lookup unavailable:", error);
         if (!cancelled) setMode("editor");
-      });
+      }
+    })();
     return () => { cancelled = true; };
   }, [id]);
 
