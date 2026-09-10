@@ -19,6 +19,7 @@ import {
   Plus,
   Radio,
   Save,
+  Settings,
   Star,
   Trash2,
   FlaskConical,
@@ -28,6 +29,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { mergeProfileRecords, normalizeVenue, readLocalVenues } from "../lib/venues";
 import { resetTestGame } from "../lib/liveGame";
 import { loadProfileValue, profileKeys, readCurrentProjectSessionId, resetHostToolsSessionState, writeCurrentProjectSessionId } from "../lib/profileState";
+import EventSettingsModal from "../components/EventSettings/EventSettingsModal";
 
 const questionTypes = [
   { value: "true_false", label: "True/False" },
@@ -153,6 +155,7 @@ const SessionDetail = () => {
   const [savingVenue, setSavingVenue] = useState(false);
   const [currentProjectId, setCurrentProjectId] = useState(null);
   const [isEditingImported, setIsEditingImported] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [savingImported, setSavingImported] = useState(false);
   const [editableSessionName, setEditableSessionName] = useState("");
   const [editableQuestions, setEditableQuestions] = useState({
@@ -567,6 +570,8 @@ const SessionDetail = () => {
     URL.revokeObjectURL(url);
   };
 
+  const handleUpdateSession = (patch) => setSession((prev) => ({ ...prev, ...patch }));
+
   const handleGoLive = () => navigate(`/host-session/${id}`);
   // Wipes any leftover test data before navigating in, so a Test Run always
   // opens on a clean slate instead of showing whoever joined last time you
@@ -669,8 +674,8 @@ const SessionDetail = () => {
               <Button variant="outline" onClick={handleTestRun} className="border-amber-400/30 text-amber-300 hover:bg-amber-400/10 hover:text-amber-200" data-testid="test-run-btn">
                 <FlaskConical size={16} className="mr-2" />Test Run
               </Button>
-              <Button onClick={handleGoLive} className="bg-gradient-to-r from-[#71E0DC] to-[#AEB2EF] text-zinc-900 font-bold hover:opacity-90" data-testid="go-live-btn">
-                <Radio size={16} className="mr-2" />Go Live
+              <Button variant="outline" onClick={() => setSettingsOpen(true)} className="border-white/15 text-zinc-300 hover:text-white hover:bg-zinc-800" aria-label="Event settings" data-testid="event-settings-btn">
+                <Settings size={16} />
               </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -691,6 +696,29 @@ const SessionDetail = () => {
           )}
         </div>
       </div>
+
+      {!isEditingImported && (
+        <div className="mb-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Card className="glass-card">
+            <CardContent className="p-5">
+              <p className="text-xs font-bold uppercase tracking-wide text-zinc-500 mb-1">Round & Question Editor</p>
+              <p className="text-sm text-zinc-400 mb-4">Build and edit this event's rounds and questions before it goes live.</p>
+              <Button variant="outline" onClick={() => navigate(`/build/${id}`)} className="border-white/15 text-zinc-300 hover:text-white hover:bg-zinc-800">
+                <Pencil size={16} className="mr-2" />Open Editor
+              </Button>
+            </CardContent>
+          </Card>
+          <Card className="glass-card border-[#71E0DC]/20">
+            <CardContent className="p-5">
+              <p className="text-xs font-bold uppercase tracking-wide text-[#71E0DC] mb-1">Live Hosting</p>
+              <p className="text-sm text-zinc-400 mb-4">Players won't be able to join until you open the event.</p>
+              <Button onClick={handleGoLive} className="bg-gradient-to-r from-[#71E0DC] to-[#AEB2EF] text-zinc-900 font-bold hover:opacity-90" data-testid="go-live-btn">
+                <Radio size={16} className="mr-2" />Open Event
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       <Card className="glass-card">
         <CardHeader>
@@ -738,6 +766,7 @@ const SessionDetail = () => {
           </ScrollArea>
         </CardContent>
       </Card>
+      {settingsOpen && <EventSettingsModal session={session} onClose={() => setSettingsOpen(false)} onUpdateSession={handleUpdateSession} />}
     </div>
   );
 };
