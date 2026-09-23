@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Settings, X, Loader2 } from "lucide-react";
+import { Settings, Wrench, X, Loader2 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { findLiveGame } from "../lib/liveGame";
 import HostSession from "./HostSession";
@@ -13,9 +13,9 @@ import EventSettingsModal from "../components/EventSettings/EventSettingsModal";
 // separate "editor" component to switch to (see Sub-phase 2b: the earlier
 // mode-toggle between embedded BuildSession/HostSession still looked like
 // two different screens swapping, which is exactly what the unified view was
-// meant to replace). BuildSession stays reachable at its own /build/:id
-// route for now; a card's "Advanced Edit" entry point back into it is a
-// follow-up, not part of this pass.
+// meant to replace). Rounds/AI generation/import still live on the
+// standalone BuildSession page though -- reachable via the "Advanced Edit"
+// button below, not merged into this card list (see openAdvancedEdit).
 //
 // What HostSession does need up front is whether the event has actually
 // been opened yet (initialEventOpen) -- naively trusting "does a
@@ -51,6 +51,18 @@ const EventWorkspace = () => {
     return () => { cancelled = true; };
   }, [id]);
 
+  // The deeper editing tools (rounds, AI generation, import, bulk reorder)
+  // still live on the standalone BuildSession page rather than in this card
+  // list -- reachable deliberately, not the default view. Confirming first
+  // means a host mid-way through hosting doesn't lose this screen by
+  // accident; players and the presentation screen stay connected regardless
+  // since they don't depend on this tab staying open.
+  const openAdvancedEdit = () => {
+    if (window.confirm("Open the advanced round editor? This leaves the current event screen -- players and the presentation screen stay connected.")) {
+      navigate(`/build/${id}`);
+    }
+  };
+
   // A lightweight fetch of its own, used only for the Event Settings modal --
   // BuildSession/HostSession each already load the full session independently,
   // no need to share state with them for this.
@@ -71,6 +83,16 @@ const EventWorkspace = () => {
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 backdrop-blur-sm p-3 lg:p-6">
       <div className="relative flex h-full w-full max-w-[1680px] flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#09090B] shadow-2xl shadow-black/60">
         <div className="absolute right-3 top-3 z-50 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={openAdvancedEdit}
+            className="flex h-9 items-center gap-1.5 rounded-lg border border-white/10 bg-zinc-950/80 px-3 text-sm font-semibold text-zinc-400 hover:text-white"
+            aria-label="Advanced edit"
+            data-testid="event-workspace-advanced-edit-btn"
+          >
+            <Wrench size={15} />
+            <span className="hidden sm:inline">Advanced Edit</span>
+          </button>
           <button
             type="button"
             onClick={openSettings}
