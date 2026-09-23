@@ -162,13 +162,16 @@ const writeUsedIds = (ids) => {
 const isQuestionMarkedUsed = (question, usedIds) => usedIds.has(String(question?.id || "")) || question?.is_used === true || question?.used === true || Boolean(question?.used_at) || Number(question?.times_used || 0) > 0;
 const normalizeType = (question, fallbackType = "written") => { const type = question?.question_type || fallbackType || "written"; return type === "true_false" || type === "multiple_choice" || type === "written" ? type : "written"; };
 const normalizeImageTiming = (value) => value === "after_answer" || value === "after" ? "after_answer" : "initial";
-const normalizeWagerTiming = (value) => value === "after_answer" || value === "after" ? "after_answer" : "before_answer";
+// After-answer is the default going forward -- matches HostSession.jsx's
+// normalizeWagerTiming. Only a question explicitly saved with "before_answer"
+// keeps that behavior; anything unset normalizes to after_answer.
+const normalizeWagerTiming = (value) => value === "before_answer" || value === "before" ? "before_answer" : "after_answer";
 // Matches HostSession.jsx's isBonusQuestion -- Bonus isn't a question_type of
 // its own, it's this reserved category value overriding the round's normal
 // category for that one question.
 const BONUS_CATEGORY = "Bonus";
 const isBonusCategory = (category) => String(category || "").trim().toUpperCase() === "BONUS";
-const defaultQuestionSettings = { points: "", timer_seconds: 30, wager_limit: 0, wager_timing: "before_answer" };
+const defaultQuestionSettings = { points: "", timer_seconds: 30, wager_limit: 0, wager_timing: "after_answer" };
 const easierDifficulty = { host_hard: "medium", hard: "medium", medium: "easy", easy: "easy" };
 const harderDifficulty = { easy: "medium", medium: "hard", hard: "host_hard", host_hard: "host_hard" };
 const getQuestionSettings = (question) => ({ points: question?.points ?? question?.question_points ?? defaultQuestionSettings.points, timer_seconds: question?.timer_seconds ?? question?.time_limit ?? defaultQuestionSettings.timer_seconds, wager_limit: question?.wager_limit ?? question?.free_wager_limit ?? 0, wager_timing: normalizeWagerTiming(question?.wager_timing || question?.wagerTiming) });
