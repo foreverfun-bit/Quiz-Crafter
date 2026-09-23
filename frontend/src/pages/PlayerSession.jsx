@@ -378,8 +378,11 @@ const PlayerSession = () => {
   const submissionTiming = () => ({ secondsRemainingAtSubmit: timeRemaining, timerEndAt: hostState?.timerEndAt || null, timerSeconds: hostState?.timerSeconds || null });
   const pointsPerQuestion = getCurrentQuestionPoints(hostState, currentQuestion);
   const wagerMode = Boolean(hostState?.wagerMode);
+  // wagerLimit itself is no longer a real ceiling -- the host only turns
+  // wagering on/off per question (wagerLimit > 0 just signals "on"). The
+  // only real cap is however many points this team currently has.
   const wagerLimit = Number(hostState?.wagerLimit || 0);
-  const effectiveWagerLimit = wagerMode ? Math.max(0, Math.min(wagerLimit || Number.POSITIVE_INFINITY, Number(myScore || 0))) : 0;
+  const effectiveWagerLimit = wagerMode ? Math.max(0, Number(myScore || 0)) : 0;
   // After-answer is the default -- matches HostSession.jsx's normalizeWagerTiming.
   const wagerTiming = hostState?.wagerTiming === "before_answer" ? "before_answer" : "after_answer";
   const gameStarted = hasGameStarted(hostState);
