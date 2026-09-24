@@ -1307,9 +1307,11 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   // fresh. Any points already awarded from grading must be reversed through
   // adjustScore (the normal scoring path), not just dropped, or the
   // leaderboard would silently keep points for answers that no longer exist.
-  const resetQuestion = () => {
-    if (isReviewing) return;
-    const targetIndex = currentIndex;
+  // Parameterized by index (defaulting to the live question) so this can
+  // also run from a completed question's own overflow menu, not just the
+  // currently-live one -- only the live UI flags (timer/reveal state) reset
+  // when the target actually is the live question.
+  const resetQuestion = (targetIndex = currentIndex) => {
     const existingAnswers = answers.filter((answer) => Number(answer.questionIndex) === targetIndex);
     if (existingAnswers.length > 0 && !window.confirm(`Reset this question? This clears ${existingAnswers.length} submitted answer${existingAnswers.length === 1 ? "" : "s"}, undoes any points already awarded for it, and lets you ask it fresh.`)) return;
     existingAnswers.forEach((answer) => {
@@ -1329,9 +1331,11 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
       persistHostToolsPatch({ gradedAnswers: next }, "Reset question");
       return next;
     });
-    setShowAnswer(false);
-    setShowFunFact(false);
-    setTimerEndAt(null);
+    if (targetIndex === currentIndex) {
+      setShowAnswer(false);
+      setShowFunFact(false);
+      setTimerEndAt(null);
+    }
     toast.success("Question reset -- ready to ask again");
   };
   const startTimerOnly = (seconds = 60) => {
@@ -2297,7 +2301,8 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
             onShowFunFact={toggleFunFact}
             startTimer={startTimer}
             resetTimer={isReviewing ? () => {} : resetTimer}
-            resetQuestion={isReviewing ? () => {} : resetQuestion}
+            resetQuestion={() => resetQuestion(hostIndex)}
+            resetQuestionAt={resetQuestion}
           />
         </main>
         {!focusMode && <PlaybackRail eventOpen={eventOpen} onOpenEvent={openEvent} mode={presentMode} setMode={releaseMode} rounds={rounds} introRoundKey={selectedIntroKey} chooseIntroRound={chooseIntroRound} onOpenDrawer={setActiveDrawer} flaggedTeamCount={flaggedTeamCount} />}
@@ -2624,7 +2629,7 @@ const QuestionListView = ({
   answersForQuestionIndex, gradedAnswers, players, hostAnswers, fairPlayStats,
   showAnswer, showFunFact, timeRemaining, viewPointsPerQuestion, viewTimerSeconds, viewWagerMode, viewWagerLimit, viewWagerTiming,
   onUpdateSettings, renameRound, describeRound, moveRound, deleteRound, createRound, moveQuestionToRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, updateQuestionContent, branding, markAnswer, addManualAnswer, editWager, releaseMode,
-  hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion,
+  hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, resetQuestionAt,
 }) => {
   // Only one round is shown at a time (see RoundHeader/RoundSwitcher) --
   // defaults to whichever round the live/reviewed question is in, and
@@ -2718,6 +2723,7 @@ const QuestionListView = ({
             onUpdateContent={(patch) => updateQuestionContent(question, patch)}
             onDuplicate={() => duplicateQuestion(question)}
             onDiscard={() => discardQuestion(question)}
+            onResetQuestion={() => resetQuestionAt(index)}
           />;
         })}
       </div>
@@ -2783,7 +2789,7 @@ const AnswerOptionPreview = ({ question }) => {
   return null;
 };
 
-const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerCount, correctCount, eventOpen, onAsk, onReview, currentRoundName, otherRounds, onMoveToRound, onUpdateContent, onDuplicate, onDiscard }) => {
+const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerCount, correctCount, eventOpen, onAsk, onReview, currentRoundName, otherRounds, onMoveToRound, onUpdateContent, onDuplicate, onDiscard, onResetQuestion }) => {
   const meta = typeMeta[question.type] || typeMeta.written;
   const points = getQuestionPoints(question);
   const wagerLimit = Number(question.wagerLimit || 0);
@@ -2842,6 +2848,8 @@ const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerC
                   <div className="my-1 h-px bg-white/10" />
                   <p className="px-2 py-1 text-[11px] font-bold uppercase tracking-wide text-zinc-500">Options</p>
                   <DropdownMenuItem onClick={startEdit} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Pencil size={14} className="mr-2" />Edit</DropdownMenuItem>
+                  {state === "completed" && <DropdownMenuItem onClick={onResetQuestion} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><RotateCcw size={14} className="mr-2" />Reset Question</DropdownMenuItem>}
+                  {state === "completed" && <DropdownMenuItem onClick={onAsk} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><RefreshCw size={14} className="mr-2" />Reactivate Question</DropdownMenuItem>}
                   <DropdownMenuItem onClick={onDuplicate} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Copy size={14} className="mr-2" />Clone</DropdownMenuItem>
                   {state !== "live" && <DropdownMenuItem onClick={onDiscard} className="cursor-pointer text-rose-300 focus:bg-zinc-900 focus:text-rose-200"><Trash2 size={14} className="mr-2" />Discard</DropdownMenuItem>}
                 </DropdownMenuContent>
@@ -2850,6 +2858,7 @@ const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerC
           </div>
           <p className="mt-1.5 text-sm font-semibold text-white">{question.questionText}</p>
           <AnswerOptionPreview question={question} />
+          {state === "completed" && question.funFact && <p className="mt-2 rounded-md border border-dashed border-white/10 bg-white/5 p-2 text-xs text-zinc-400"><b className="text-zinc-300">Fun fact:</b> {question.funFact}</p>}
         </div>
       </div>
       <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-white/5 pt-2.5">
@@ -3307,15 +3316,8 @@ const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusM
   const [draft, setDraft] = useState(() => draftFromQuestion(question));
   const [savingEdit, setSavingEdit] = useState(false);
   const meta = typeMeta[question.type] || typeMeta.written;
-  const Icon = meta.icon;
   const imageUrl = buildStorageUrl(question.imageUrl);
   const revealTiming = normalizeImageTiming(question.imageTiming || question.image_timing);
-  const shouldShowImage = Boolean(imageUrl) && revealTiming !== "after_answer";
-  const shouldShowFunFactImage = Boolean(imageUrl) && revealTiming === "after_answer" && showFunFact;
-  const submittedCount = new Set(answers.map((answer) => answer.playerId)).size;
-  const playerCount = players.length;
-  const allSubmitted = playerCount > 0 && submittedCount >= playerCount;
-  const submittedPct = playerCount > 0 ? Math.min(100, Math.round((submittedCount / playerCount) * 100)) : 0;
   const accentColor = branding?.accentColor || DEFAULT_BRANDING.accentColor;
 
   const startEdit = () => { setDraft(draftFromQuestion(question)); setEditing(true); };
@@ -3333,16 +3335,71 @@ const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusM
     if (ok) setEditing(false);
   };
 
-  const answerRows = <AnswerRows question={question} players={players} answers={answers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} wagerMode={wagerMode} pointsPerQuestion={Number(pointsPerQuestion) || getDefaultPoints(question)} setMode={setMode} isReviewing={isReviewing} showAnswer={showAnswer} />;
-  // Visible to the host as soon as the question is live -- not gated behind
-  // "Reveal Fun Fact", which only controls what players/the presentation see.
-  const funFactBox = question.funFact && <div className="mt-4 flex items-start gap-2.5 rounded-lg border border-dashed p-3.5 text-sm leading-relaxed transition-opacity" style={{ borderColor: `${accentColor}59`, backgroundColor: `${accentColor}0F`, color: "#C7C9F5", opacity: showFunFact ? 1 : 0.65 }}><Sparkles size={15} className="mt-0.5 shrink-0" style={{ color: accentColor }} /><div><b style={{ color: accentColor }}>Fun fact:</b> {question.funFact}</div></div>;
-  const answerColumn = <div>{answerRows}{funFactBox}</div>;
+  // Fun fact renders directly under the question now (not off in its own
+  // block elsewhere) -- always visible to the host once a question has one,
+  // dimmed until actually revealed to players/presentation.
+  const funFactBox = question.funFact && <div className="mt-2 flex items-start gap-2 rounded-md border border-dashed p-2.5 text-xs leading-relaxed transition-opacity" style={{ borderColor: `${accentColor}59`, backgroundColor: `${accentColor}0F`, color: "#C7C9F5", opacity: showFunFact ? 1 : 0.6 }}><Sparkles size={13} className="mt-0.5 shrink-0" style={{ color: accentColor }} /><div><b style={{ color: accentColor }}>Fun fact:</b> {question.funFact}</div></div>;
 
   return <>
-  <Card className={`glass-card overflow-hidden ${isReviewing ? "border-amber-400/40" : "border-rose-400/30"} ${focusMode ? "w-full" : ""}`}><CardContent className={focusMode ? "p-8 lg:p-12" : "p-5 lg:p-7"}>{isReviewing && <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-100"><Eye size={13} className="shrink-0 text-amber-300" /><span className="flex-1">Reviewing this question &mdash; players and the presentation screen still see the live question.</span>{onBackToLive && <Button size="sm" variant="outline" onClick={onBackToLive} className="h-7 border-amber-300/30 text-amber-100 hover:text-white">Back to Live</Button>}{onGoLiveWithThis && <Button size="sm" onClick={onGoLiveWithThis} className="h-7 bg-amber-300 text-zinc-950 hover:bg-amber-200">Go Live With This Question</Button>}</div>}<div className="flex items-start justify-between gap-3 mb-1"><div className="flex items-center gap-2 flex-wrap">{branding?.logoUrl && <img src={branding.logoUrl} alt={branding.name || "Host logo"} className="h-8 w-8 rounded bg-white object-contain p-1" />}</div><div className="flex items-center gap-2">{!editing && <button type="button" onClick={startEdit} title="Edit question" aria-label="Edit question" className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 text-zinc-400 hover:text-white"><Pencil size={13} /></button>}<span className="text-zinc-500 font-mono text-sm">{index + 1} / {total}</span></div></div>{editing ? <div className="mb-6 space-y-3"><QuestionEditFields type={question.type} draft={draft} setDraft={setDraft} /><div className="flex justify-end gap-2"><Button size="sm" variant="outline" onClick={() => setEditing(false)} className="border-white/10 text-zinc-300 hover:text-white">Cancel</Button><Button size="sm" onClick={handleSaveEdit} disabled={savingEdit} className="gradient-btn">{savingEdit ? "Saving..." : "Save"}</Button></div></div> : <>
-    <div className="mb-8 flex items-center gap-2 flex-wrap"><Badge variant="outline" className="border-zinc-700 text-zinc-300">{question.category}</Badge><Badge className="border" style={{ backgroundColor: `${accentColor}1F`, borderColor: `${accentColor}00`, color: accentColor }}><Icon size={13} className="mr-1" />{meta.label}</Badge><span className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-zinc-700 bg-zinc-900/60 px-3 py-1.5 text-xs font-bold text-zinc-400" title="Only visible on this screen -- players and the presentation screen don't see this until you reveal"><EyeOff size={12} />Answer: {question.answer || "Not set"}</span><EditableStatBadge label="Points" value={Number(pointsPerQuestion) || getDefaultPoints(question)} tone="amber" step={5} onSave={(value, scope) => onUpdateSettings({ points: value }, scope, question)} /><button type="button" onClick={() => onUpdateSettings({ wagerLimit: wagerMode ? 0 : 1 }, "question", question)} className={`rounded-full border px-3 py-1.5 text-xs font-bold ${wagerMode ? "border-purple-400/50 bg-purple-500/20 text-purple-100" : "border-purple-500/30 bg-purple-500/10 text-purple-200 hover:border-purple-400/60"}`} title="Teams can wager up to whatever points they currently have -- there's no separate host-set limit">{wagerMode ? "Wager: On" : "Wager: Off"}</button><EditableStatBadge label="Timer" value={Number(timerSeconds) || 0} unit="seconds" suffix="s" tone="teal" step={5} onSave={(value, scope) => onUpdateSettings({ timerSeconds: value }, scope, question)} />{timeRemaining !== null && <span className="rounded-full border border-[#71E0DC]/25 bg-[#71E0DC]/10 px-3 py-1.5 text-sm font-bold text-[#71E0DC]">{timeRemaining}s left</span>}{wagerMode && <button type="button" onClick={() => onUpdateSettings({ wagerTiming: wagerTiming === "after_answer" ? "before_answer" : "after_answer" }, "question", question)} className="rounded-full border border-purple-500/30 bg-purple-500/10 px-3 py-1.5 text-sm font-bold text-purple-200 hover:border-purple-400/60">{wagerTiming === "after_answer" ? "After Answer" : "Before Answer"}</button>}{imageUrl && <Badge className="bg-amber-400/15 text-amber-200 border border-amber-400/20">{question.imageTiming === "after_answer" ? "Reveal Media" : "Media"}</Badge>}{playerCount > 0 && <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-bold ${allSubmitted ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-400/15 text-amber-200"}`}><span className="h-1.5 w-12 overflow-hidden rounded-full bg-white/15"><span className="block h-full rounded-full bg-current" style={{ width: `${submittedPct}%` }} /></span>{submittedCount}/{playerCount} in</span>}</div>{!isReviewing && <div className="mb-6 flex flex-wrap items-center gap-2"><Button size="sm" onClick={startTimer} className="h-9 gradient-btn"><Play size={14} className="mr-1.5" />Start Timer</Button><Button size="sm" onClick={onRevealAnswer} className={`h-9 ${showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700" : "gradient-btn"}`}>{showAnswer ? <EyeOff size={14} className="mr-1.5" /> : <Eye size={14} className="mr-1.5" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button><Button size="sm" variant="outline" onClick={onShowFunFact} disabled={!hasRevealExtra} className="h-8 border-white/10 text-xs text-zinc-300 hover:text-white disabled:opacity-40"><Sparkles size={12} className="mr-1" />{showFunFact ? "Hide" : hasFunFact ? "Fun Fact" : "Media"}</Button>{hasAudio && <Button size="sm" onClick={onToggleAudio} className={`h-9 ${isPlayingAudio ? "bg-purple-500/20 text-purple-200 hover:bg-purple-500/30" : "bg-zinc-800 text-white hover:bg-zinc-700"}`}>{isPlayingAudio ? <Pause size={14} className="mr-1.5" /> : <Music size={14} className="mr-1.5" />}{isPlayingAudio ? "Stop Audio" : "Play Audio"}</Button>}<DropdownMenu><DropdownMenuTrigger asChild><button type="button" title="More actions" aria-label="More actions" className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 text-zinc-400 hover:text-white"><MoreVertical size={16} /></button></DropdownMenuTrigger><DropdownMenuContent align="start" className="border-white/10 bg-zinc-950 text-zinc-100"><DropdownMenuItem onClick={resetTimer} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><RotateCcw size={14} className="mr-2" />Clear Timer</DropdownMenuItem><DropdownMenuItem onClick={() => setMediaModalOpen(true)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Image size={14} className="mr-2" />Media</DropdownMenuItem><DropdownMenuItem onClick={onDuplicate} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Copy size={14} className="mr-2" />Clone</DropdownMenuItem>{resetQuestion && <DropdownMenuItem onClick={resetQuestion} className="cursor-pointer text-amber-300 focus:bg-zinc-900 focus:text-amber-200"><RefreshCw size={14} className="mr-2" />Reset Question</DropdownMenuItem>}</DropdownMenuContent></DropdownMenu></div>}<h2 className={`${focusMode ? "text-4xl lg:text-6xl" : "text-2xl lg:text-4xl"} font-black leading-tight text-white text-center mb-6`}>{question.questionText}</h2>{shouldShowImage ? <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_220px] items-start gap-5 mb-6">{answerColumn}<div className="overflow-hidden rounded-xl border border-white/10 bg-zinc-950 aspect-[4/3]"><img src={imageUrl} alt="Question" className="h-full w-full object-cover" /></div></div> : <div className="mx-auto mb-6 w-full max-w-2xl">{answerColumn}</div>}{shouldShowFunFactImage && <div className="mt-5 max-h-[42vh] overflow-y-auto rounded-lg border p-5 text-center" style={{ backgroundColor: `${accentColor}18`, borderColor: `${accentColor}55` }}><div className="mb-4 flex justify-center"><img src={imageUrl} alt="Reveal media" className="max-h-[28vh] max-w-full rounded-lg border border-white/10 object-contain" /></div><div className="flex items-center justify-center gap-2 font-bold mb-2" style={{ color: accentColor }}><Sparkles size={18} />Media</div></div>}
-  </>}</CardContent></Card>
+  <Card className={`glass-card ${isReviewing ? "border-amber-400/40" : "border-rose-400/40"} ${focusMode ? "w-full" : ""}`}>
+    <CardContent className={focusMode ? "p-6 lg:p-8" : "p-3.5"}>
+      {isReviewing && <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-100"><Eye size={13} className="shrink-0 text-amber-300" /><span className="flex-1">Reviewing this question &mdash; players and the presentation screen still see the live question.</span>{onBackToLive && <Button size="sm" variant="outline" onClick={onBackToLive} className="h-7 border-amber-300/30 text-amber-100 hover:text-white">Back to Live</Button>}{onGoLiveWithThis && <Button size="sm" onClick={onGoLiveWithThis} className="h-7 bg-amber-300 text-zinc-950 hover:bg-amber-200">Go Live With This Question</Button>}</div>}
+      {editing ? <>
+        <QuestionEditFields type={question.type} draft={draft} setDraft={setDraft} />
+        <div className="mt-2 flex justify-end gap-2">
+          <Button size="sm" variant="outline" onClick={() => setEditing(false)} className="h-8 border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
+          <Button size="sm" onClick={handleSaveEdit} disabled={savingEdit} className="h-8 gradient-btn">{savingEdit ? "Saving..." : "Save"}</Button>
+        </div>
+      </> : <>
+        <div className="flex items-start gap-3">
+          {imageUrl && revealTiming !== "after_answer" && <img src={imageUrl} alt="Question media" className={`shrink-0 rounded-lg border border-white/10 object-cover ${focusMode ? "h-28 w-28" : "h-16 w-16"}`} />}
+          <div className="min-w-0 flex-1">
+            <div className="flex items-start justify-between gap-2">
+              <p className="text-xs text-zinc-500">{meta.label}{isBonusQuestion(question) && <span className="ml-1.5 text-amber-300" title="Bonus question">&#9733;</span>}<br />#{index + 1} / {total} &middot; {question.category}</p>
+              <div className="flex shrink-0 items-center gap-2">
+                {wagerMode && <button type="button" onClick={() => onUpdateSettings({ wagerTiming: wagerTiming === "after_answer" ? "before_answer" : "after_answer" }, "question", question)} className="rounded-full border border-purple-500/30 bg-purple-500/10 px-2 py-0.5 text-[11px] font-bold text-purple-200 hover:border-purple-400/60" title="Wager timing">{wagerTiming === "after_answer" ? "After Answer" : "Before Answer"}</button>}
+                {!isReviewing && <span className="flex items-center gap-1.5 rounded-full border border-rose-400/30 bg-rose-400/10 px-2 py-0.5 text-[11px] font-bold text-rose-200"><span className="h-1.5 w-1.5 rounded-full bg-rose-400 animate-pulse" />LIVE</span>}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button type="button" title="More actions" aria-label="More actions" className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white"><MoreVertical size={15} /></button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="border-white/10 bg-zinc-950 text-zinc-100">
+                    <DropdownMenuItem onClick={startEdit} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Pencil size={14} className="mr-2" />Edit</DropdownMenuItem>
+                    {!isReviewing && <DropdownMenuItem onClick={resetTimer} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><RotateCcw size={14} className="mr-2" />Clear Timer</DropdownMenuItem>}
+                    <DropdownMenuItem onClick={() => setMediaModalOpen(true)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Image size={14} className="mr-2" />Media</DropdownMenuItem>
+                    <DropdownMenuItem onClick={onDuplicate} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Copy size={14} className="mr-2" />Clone</DropdownMenuItem>
+                    {resetQuestion && <DropdownMenuItem onClick={resetQuestion} className="cursor-pointer text-amber-300 focus:bg-zinc-900 focus:text-amber-200"><RefreshCw size={14} className="mr-2" />Reset Question</DropdownMenuItem>}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </div>
+            <h2 className={`mt-1.5 font-bold leading-snug text-white ${focusMode ? "text-2xl lg:text-4xl" : "text-sm"}`}>{question.questionText}</h2>
+            <p className="mt-1 flex items-center gap-1 text-[11px] text-zinc-500" title="Only visible on this screen -- players and the presentation screen don't see this until you reveal"><EyeOff size={11} />Answer: {question.answer || "Not set"}</p>
+            <AnswerOptionPreview question={question} />
+            {funFactBox}
+          </div>
+        </div>
+        {imageUrl && revealTiming === "after_answer" && showFunFact && <div className="mt-3 overflow-hidden rounded-lg border border-white/10 bg-zinc-950"><img src={imageUrl} alt="Reveal media" className="max-h-64 w-full object-contain" /></div>}
+        <div className="mt-2.5 border-t border-white/5 pt-2.5">
+          <AnswerRows question={question} players={players} answers={answers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} wagerMode={wagerMode} pointsPerQuestion={Number(pointsPerQuestion) || getDefaultPoints(question)} setMode={setMode} isReviewing={isReviewing} showAnswer={showAnswer} />
+        </div>
+        {!isReviewing && <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-white/5 pt-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" onClick={startTimer} className="h-8 gradient-btn text-xs"><Play size={12} className="mr-1" />Start Timer</Button>
+            <Button size="sm" onClick={onRevealAnswer} className={`h-8 text-xs ${showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700" : "gradient-btn"}`}>{showAnswer ? <EyeOff size={12} className="mr-1" /> : <Eye size={12} className="mr-1" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button>
+            <Button size="sm" variant="outline" onClick={onShowFunFact} disabled={!hasRevealExtra} className="h-7 border-white/10 text-[11px] text-zinc-300 hover:text-white disabled:opacity-40"><Sparkles size={11} className="mr-1" />{showFunFact ? "Hide" : hasFunFact ? "Fun Fact" : "Media"}</Button>
+            {hasAudio && <Button size="sm" onClick={onToggleAudio} className={`h-8 text-xs ${isPlayingAudio ? "bg-purple-500/20 text-purple-200 hover:bg-purple-500/30" : "bg-zinc-800 text-white hover:bg-zinc-700"}`}>{isPlayingAudio ? <Pause size={12} className="mr-1" /> : <Music size={12} className="mr-1" />}{isPlayingAudio ? "Stop Audio" : "Play Audio"}</Button>}
+          </div>
+          <div className="flex items-center gap-2">
+            {timeRemaining !== null && <span className="rounded-full border border-[#71E0DC]/25 bg-[#71E0DC]/10 px-2.5 py-1 text-xs font-bold text-[#71E0DC]">{timeRemaining}s left</span>}
+            <EditableStatBadge label="Points" value={Number(pointsPerQuestion) || getDefaultPoints(question)} tone="amber" step={5} onSave={(value, scope) => onUpdateSettings({ points: value }, scope, question)} />
+            <button type="button" onClick={() => onUpdateSettings({ wagerLimit: wagerMode ? 0 : 1 }, "question", question)} className={`rounded-full border px-3 py-1.5 text-xs font-bold ${wagerMode ? "border-purple-400/50 bg-purple-500/20 text-purple-100" : "border-purple-500/30 bg-purple-500/10 text-purple-200 hover:border-purple-400/60"}`} title="Teams can wager up to whatever points they currently have -- there's no separate host-set limit">{wagerMode ? "Wager: On" : "Wager: Off"}</button>
+            <EditableStatBadge label="Timer" value={Number(timerSeconds) || 0} unit="seconds" suffix="s" tone="teal" step={5} onSave={(value, scope) => onUpdateSettings({ timerSeconds: value }, scope, question)} />
+          </div>
+        </div>}
+      </>}
+    </CardContent>
+  </Card>
   {mediaModalOpen && <MediaEditModal question={question} onSave={(patch) => { onUpdateSettings(patch, "question", question); setMediaModalOpen(false); }} onClose={() => setMediaModalOpen(false)} />}
   </>;
 };
