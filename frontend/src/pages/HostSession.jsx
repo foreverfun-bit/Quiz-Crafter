@@ -2374,7 +2374,13 @@ const QuestionDraftFields = ({ draft, setDraft }) => {
   </div>;
 };
 
+// Two steps, not one combined form: naming the round is round-specific and
+// belongs on its own screen; writing its first question is a separate
+// concern that happens to be required (a round only becomes real once it
+// has a question -- see flattenSession/makeRounds) but shouldn't visually
+// read as "the round's fields" alongside the name field.
 const AddRoundModal = ({ onCreate, onClose }) => {
+  const [step, setStep] = useState("name");
   const [name, setName] = useState("");
   const [draft, setDraft] = useState(emptyRoundDraft);
   const [saving, setSaving] = useState(false);
@@ -2392,16 +2398,30 @@ const AddRoundModal = ({ onCreate, onClose }) => {
   return <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 pt-8 md:pt-14 overflow-y-auto">
     <div className="w-full max-w-2xl rounded-xl bg-[#17181c] border border-white/10 shadow-2xl shadow-black/60 p-5 relative">
       <button type="button" onClick={onClose} className="absolute right-4 top-4 text-zinc-400 hover:text-white" aria-label="Close"><X size={18} /></button>
-      <h2 className="mb-1 text-xl font-bold text-white">Add Round</h2>
-      <p className="mb-5 text-sm text-zinc-500">Name the round and write its first question -- more questions can be added to it after.</p>
-      <div className="space-y-3">
-        <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Round name" className="h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" autoFocus />
+      {step === "name" ? <>
+        <h2 className="mb-1 text-xl font-bold text-white">Add Round</h2>
+        <p className="mb-5 text-sm text-zinc-500">Name your new round.</p>
+        <input
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          onKeyDown={(event) => { if (event.key === "Enter" && name.trim()) setStep("question"); }}
+          placeholder="Round name"
+          className="h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60"
+          autoFocus
+        />
+        <div className="mt-5 flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={onClose} className="border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
+          <Button type="button" onClick={() => setStep("question")} disabled={!name.trim()} className="gradient-btn">Next</Button>
+        </div>
+      </> : <>
+        <h2 className="mb-1 text-xl font-bold text-white">Write Question</h2>
+        <p className="mb-5 text-sm text-zinc-500">First question for <span className="text-zinc-300 font-semibold">{name}</span> -- a round needs at least one to be created; more can be added after.</p>
         <QuestionDraftFields draft={draft} setDraft={setDraft} />
-      </div>
-      <div className="mt-5 flex justify-end gap-2">
-        <Button type="button" variant="outline" onClick={onClose} className="border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
-        <Button type="button" onClick={handleCreate} disabled={saving} className="gradient-btn">{saving ? "Creating..." : "Create Round"}</Button>
-      </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={() => setStep("name")} className="border-white/10 text-zinc-300 hover:text-white">Back</Button>
+          <Button type="button" onClick={handleCreate} disabled={saving} className="gradient-btn">{saving ? "Creating..." : "Create Round"}</Button>
+        </div>
+      </>}
     </div>
   </div>;
 };
