@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../App";
 import { Button } from "./ui/button";
+import NewEventModal from "./NewEventModal";
 import {
   LayoutDashboard,
   Library,
@@ -34,6 +36,7 @@ const Sidebar = ({ isOpen, onClose }) => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const [newEventOpen, setNewEventOpen] = useState(false);
 
   const handleLogout = () => {
     logout();
@@ -101,8 +104,12 @@ const Sidebar = ({ isOpen, onClose }) => {
               })}
             </div>
             <div className="space-y-2 mb-5">
-              <Button asChild className="w-full gradient-btn justify-center">
-                <NavLink to="/build" onClick={onClose} data-testid="nav-build"><PlusCircle size={16} className="mr-2" />Create Event</NavLink>
+              <Button
+                className="w-full gradient-btn justify-center"
+                onClick={() => { onClose(); setNewEventOpen(true); }}
+                data-testid="nav-build"
+              >
+                <PlusCircle size={16} className="mr-2" />Create Event
               </Button>
               <Button asChild variant="outline" className="w-full justify-center border-white/10 text-zinc-300 hover:text-white">
                 <NavLink to="/host-tools" onClick={onClose}><Gamepad2 size={16} className="mr-2" />Practice Hosting</NavLink>
@@ -157,6 +164,7 @@ const Sidebar = ({ isOpen, onClose }) => {
           </div>
         </div>
       </aside>
+      {newEventOpen && <NewEventModal onClose={() => setNewEventOpen(false)} />}
     </>
   );
 };

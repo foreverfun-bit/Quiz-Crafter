@@ -23,6 +23,7 @@ import {
   Circle,
 } from "lucide-react";
 import { toast } from "sonner";
+import NewEventModal from "../components/NewEventModal";
 import { mergeProfileRecords, normalizeVenue, readLocalVenues } from "../lib/venues";
 import { loadProfileValue, profileKeys, readCurrentProjectSessionId, writeCurrentProjectSessionId } from "../lib/profileState";
 import { downloadCsv } from "../lib/csv";
@@ -195,6 +196,7 @@ const PastSessions = () => {
   const [savingVenueId, setSavingVenueId] = useState(null);
   const [currentProjectId, setCurrentProjectId] = useState(null);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [newEventOpen, setNewEventOpen] = useState(false);
 
   useEffect(() => {
     const localVenues = readLocalVenues();
@@ -436,6 +438,7 @@ const PastSessions = () => {
   }
 
   return (
+    <>
     <div className="p-6 lg:p-8 max-w-7xl mx-auto animate-fade-in" data-testid="past-sessions-page">
       <div className="flex items-center justify-between mb-8">
         <div>
@@ -476,7 +479,7 @@ const PastSessions = () => {
             </Button>
           </>}
           <Button
-            onClick={() => navigate("/build")}
+            onClick={() => setNewEventOpen(true)}
             className="gradient-btn"
             data-testid="new-session-btn"
           >
@@ -560,7 +563,7 @@ const PastSessions = () => {
               Build a new session or import a CSV to create one
             </p>
             <div className="flex gap-4 justify-center">
-              <Button onClick={() => navigate("/build")} className="gradient-btn">
+              <Button onClick={() => setNewEventOpen(true)} className="gradient-btn">
                 Build Session
               </Button>
               <Button
@@ -735,6 +738,8 @@ const PastSessions = () => {
         </div>
       )}
     </div>
+    {newEventOpen && <NewEventModal onClose={() => setNewEventOpen(false)} />}
+    </>
   );
 };
 
