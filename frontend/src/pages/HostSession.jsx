@@ -43,6 +43,7 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
+  SlidersHorizontal,
   Sparkles,
   Tags,
   ThumbsDown,
@@ -1967,7 +1968,8 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
       correct_answer: draft.question_type === "true_false" ? (correctAnswer.toLowerCase() === "false" ? "False" : "True") : correctAnswer,
       incorrect_answers: draft.question_type === "multiple_choice" ? wrongAnswers.join("; ") : null,
       fun_fact: draft.fun_fact.trim(),
-      timer_seconds: 30,
+      timer_seconds: Number(draft.timer_seconds) || 30,
+      points: draft.points === "" || draft.points === null || draft.points === undefined ? null : Number(draft.points) || null,
       wager_limit: 0,
       wager_timing: "after_answer",
     };
@@ -1981,7 +1983,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   // guarantees the new round -- and its one question -- lands at the very
   // end of the sorted `questions` list, after every existing currentIndex/
   // reviewIndex position, so nothing needs remapping the way move/delete do.
-  const createRound = async (name, draft) => {
+  const createRound = async (name, draft, description = "") => {
     const roundName = name.trim();
     if (!roundName) { toast.error("Give the round a name"); return false; }
     const built = buildQuestionFromDraft(draft);
@@ -1990,6 +1992,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     const roundOrder = rounds.reduce((max, round) => Math.max(max, Number(round.questions[0]?.roundOrder) || 0), 0) + 1;
     question.round_name = roundName;
     question.round_order = roundOrder;
+    question.round_description = description.trim();
     const current = Array.isArray(session[key]) ? session[key] : [];
     const updatedArrays = { [key]: [...current, question] };
     setSession((prevSession) => ({ ...prevSession, ...updatedArrays }));
@@ -2349,7 +2352,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
 // reload today; see flattenSession/makeRounds above). Rename/describe never
 // touch round_order, so they can't shift which question is live or being
 // reviewed; move does, and compensates for it in moveRound itself.
-const emptyRoundDraft = { question_type: "written", category: "", question_text: "", correct_answer: "", incorrect_answers: ["", "", ""], fun_fact: "" };
+const emptyRoundDraft = { question_type: "written", category: "", question_text: "", correct_answer: "", incorrect_answers: ["", "", ""], fun_fact: "", points: "", timer_seconds: 30 };
 
 // Shared by AddRoundModal and WriteQuestionModal -- a cut-down manual
 // question form. AI-assisted drafting and media attachment stay on the
@@ -2382,13 +2385,23 @@ const QuestionDraftFields = ({ draft, setDraft }) => {
 const AddRoundModal = ({ onCreate, onClose }) => {
   const [step, setStep] = useState("name");
   const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [questionType, setQuestionType] = useState("mixed");
+  const [points, setPoints] = useState("");
+  const [timerSeconds, setTimerSeconds] = useState(30);
   const [draft, setDraft] = useState(emptyRoundDraft);
   const [saving, setSaving] = useState(false);
+
+  const goToQuestionStep = () => {
+    if (!name.trim()) return;
+    setDraft((prev) => ({ ...prev, question_type: questionType === "mixed" ? prev.question_type : questionType, points, timer_seconds: timerSeconds }));
+    setStep("question");
+  };
 
   const handleCreate = async () => {
     setSaving(true);
     try {
-      const ok = await onCreate(name, draft);
+      const ok = await onCreate(name, draft, description);
       if (ok) onClose();
     } finally {
       setSaving(false);
@@ -2400,18 +2413,41 @@ const AddRoundModal = ({ onCreate, onClose }) => {
       <button type="button" onClick={onClose} className="absolute right-4 top-4 text-zinc-400 hover:text-white" aria-label="Close"><X size={18} /></button>
       {step === "name" ? <>
         <h2 className="mb-1 text-xl font-bold text-white">Add Round</h2>
-        <p className="mb-5 text-sm text-zinc-500">Name your new round.</p>
-        <input
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          onKeyDown={(event) => { if (event.key === "Enter" && name.trim()) setStep("question"); }}
-          placeholder="Round name"
-          className="h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60"
-          autoFocus
-        />
+        <p className="mb-5 text-sm text-zinc-500">Name the round and set its defaults -- these apply to the questions you add to it.</p>
+        <div className="space-y-3">
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="Round name"
+            className="h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60"
+            autoFocus
+          />
+          <textarea
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            placeholder="Description (optional) -- read out before this round starts"
+            className="min-h-16 w-full resize-none rounded-md border border-white/10 bg-zinc-950/50 px-3 py-2 text-sm text-white outline-none focus:border-[#71E0DC]/60"
+          />
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <label className="block text-xs text-zinc-500">Question type
+              <select value={questionType} onChange={(event) => setQuestionType(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60">
+                <option value="mixed">Mix</option>
+                <option value="true_false">True/False</option>
+                <option value="multiple_choice">Multiple Choice</option>
+                <option value="written">Written</option>
+              </select>
+            </label>
+            <label className="block text-xs text-zinc-500">Points
+              <input type="number" min="0" step="5" value={points} onChange={(event) => setPoints(event.target.value)} placeholder="Default for type" className="mt-1 h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
+            </label>
+            <label className="block text-xs text-zinc-500">Timer (seconds)
+              <input type="number" min="1" step="5" value={timerSeconds} onChange={(event) => setTimerSeconds(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
+            </label>
+          </div>
+        </div>
         <div className="mt-5 flex justify-end gap-2">
           <Button type="button" variant="outline" onClick={onClose} className="border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
-          <Button type="button" onClick={() => setStep("question")} disabled={!name.trim()} className="gradient-btn">Next</Button>
+          <Button type="button" onClick={goToQuestionStep} disabled={!name.trim()} className="gradient-btn">Next</Button>
         </div>
       </> : <>
         <h2 className="mb-1 text-xl font-bold text-white">Write Question</h2>
@@ -2430,7 +2466,18 @@ const AddRoundModal = ({ onCreate, onClose }) => {
 // AddRoundModal's first-question step, reachable from any round once it
 // already exists.
 const WriteQuestionModal = ({ round, onCreate, onClose }) => {
-  const [draft, setDraft] = useState(emptyRoundDraft);
+  // Prefills from the round's own first question -- the closest thing this
+  // app has to a stored "round default" (rounds aren't first-class entities,
+  // see flattenSession/makeRounds), so a round's points/timer/type set at
+  // creation carry forward to every question added to it after, while
+  // staying fully overridable per question here.
+  const roundDefaults = round.questions[0];
+  const [draft, setDraft] = useState(() => ({
+    ...emptyRoundDraft,
+    question_type: roundDefaults?.type || emptyRoundDraft.question_type,
+    points: roundDefaults?.points ?? "",
+    timer_seconds: roundDefaults?.timerSeconds ?? 30,
+  }));
   const [saving, setSaving] = useState(false);
 
   const handleCreate = async () => {
@@ -2602,7 +2649,7 @@ const RoundSwitcher = ({ rounds, activeRound, activeIndex, onSelect, onManage })
 // The structural surface for rounds -- rename/reorder/delete/add, all in one
 // place since seeing every round next to its siblings is what makes those
 // operations legible when only one round shows on the main screen at a time.
-const RoundManagerModal = ({ rounds, onRename, onDescribe, onMoveRound, onDelete, onAddRound, onClose }) => <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 pt-8 md:pt-14 overflow-y-auto">
+const RoundManagerModal = ({ rounds, onRename, onDescribe, onSetRoundSettings, onMoveRound, onDelete, onAddRound, onClose }) => <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 pt-8 md:pt-14 overflow-y-auto">
   <div className="w-full max-w-xl rounded-xl border border-white/10 bg-[#17181c] p-5 shadow-2xl shadow-black/60 relative">
     <button type="button" onClick={onClose} className="absolute right-4 top-4 text-zinc-400 hover:text-white" aria-label="Close"><X size={18} /></button>
     <h2 className="mb-4 text-xl font-bold text-white">Manage Rounds</h2>
@@ -2615,6 +2662,7 @@ const RoundManagerModal = ({ rounds, onRename, onDescribe, onMoveRound, onDelete
         canDelete={rounds.length > 1}
         onRename={(name) => onRename(round, name)}
         onDescribe={(description) => onDescribe(round, description)}
+        onSetSettings={(settings) => onSetRoundSettings(round, settings)}
         onMoveUp={() => onMoveRound(round, -1)}
         onMoveDown={() => onMoveRound(round, 1)}
         onDelete={() => onDelete(round)}
@@ -2624,14 +2672,23 @@ const RoundManagerModal = ({ rounds, onRename, onDescribe, onMoveRound, onDelete
   </div>
 </div>;
 
-const RoundManagerRow = ({ round, canMoveUp, canMoveDown, canDelete, onRename, onDescribe, onMoveUp, onMoveDown, onDelete }) => {
+const RoundManagerRow = ({ round, canMoveUp, canMoveDown, canDelete, onRename, onDescribe, onSetSettings, onMoveUp, onMoveDown, onDelete }) => {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(round.name);
   const [editingDescription, setEditingDescription] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState(round.description || "");
+  const [editingSettings, setEditingSettings] = useState(false);
+  const roundPoints = round.questions[0]?.points;
+  const roundTimerSeconds = round.questions[0]?.timerSeconds;
+  const [pointsDraft, setPointsDraft] = useState(roundPoints ?? "");
+  const [timerDraft, setTimerDraft] = useState(roundTimerSeconds ?? 30);
 
   const commitName = () => { onRename(nameDraft); setEditingName(false); };
   const commitDescription = () => { onDescribe(descriptionDraft.trim()); setEditingDescription(false); };
+  const commitSettings = () => {
+    onSetSettings({ points: pointsDraft === "" ? null : Number(pointsDraft) || 0, timerSeconds: Number(timerDraft) || 30 });
+    setEditingSettings(false);
+  };
 
   return <div className="rounded-lg border border-white/10 bg-zinc-950/40 p-2.5">
     <div className="flex items-center gap-2">
@@ -2644,12 +2701,23 @@ const RoundManagerRow = ({ round, canMoveUp, canMoveDown, canDelete, onRename, o
         <span className="ml-1 text-xs font-normal text-zinc-500">{round.questions.length} question{round.questions.length === 1 ? "" : "s"}</span>
       </button>}
       <div className="flex shrink-0 items-center gap-1">
+        <button type="button" onClick={() => { setPointsDraft(roundPoints ?? ""); setTimerDraft(roundTimerSeconds ?? 30); setEditingSettings((value) => !value); }} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white" title="Points &amp; timer for this round" aria-label="Round points and timer"><SlidersHorizontal size={14} /></button>
         <button type="button" onClick={() => setEditingDescription((value) => !value)} className={`flex h-7 w-7 items-center justify-center rounded ${round.description ? "text-[#71E0DC]" : "text-zinc-500"} hover:text-white`} title={round.description ? "Edit round note" : "Add round note"} aria-label="Round note"><MessageSquare size={14} /></button>
         <button type="button" onClick={onMoveUp} disabled={!canMoveUp} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white disabled:opacity-30" aria-label="Move round up"><ChevronUp size={15} /></button>
         <button type="button" onClick={onMoveDown} disabled={!canMoveDown} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white disabled:opacity-30" aria-label="Move round down"><ChevronDown size={15} /></button>
         <button type="button" onClick={onDelete} disabled={!canDelete} title={canDelete ? "Delete round" : "Keep at least one round"} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-rose-300 disabled:opacity-30" aria-label="Delete round"><Trash2 size={14} /></button>
       </div>
     </div>
+    {editingSettings && <div className="mt-2 flex items-end gap-2 border-t border-white/5 pt-2">
+      <label className="block flex-1 text-xs text-zinc-500">Points (whole round)
+        <input type="number" min="0" step="5" value={pointsDraft} onChange={(event) => setPointsDraft(event.target.value)} placeholder="Default for type" className="mt-1 h-8 w-full rounded border border-white/10 bg-zinc-900 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
+      </label>
+      <label className="block flex-1 text-xs text-zinc-500">Timer (seconds)
+        <input type="number" min="1" step="5" value={timerDraft} onChange={(event) => setTimerDraft(event.target.value)} className="mt-1 h-8 w-full rounded border border-white/10 bg-zinc-900 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
+      </label>
+      <button type="button" onClick={commitSettings} className="mb-0.5 text-emerald-300 hover:text-emerald-200" aria-label="Save round points and timer"><Check size={15} /></button>
+      <button type="button" onClick={() => setEditingSettings(false)} className="mb-0.5 text-zinc-500 hover:text-white" aria-label="Cancel points and timer edit"><X size={15} /></button>
+    </div>}
     {editingDescription && <div className="mt-2 flex items-start gap-2 border-t border-white/5 pt-2">
       <textarea autoFocus value={descriptionDraft} onChange={(event) => setDescriptionDraft(event.target.value)} placeholder="Optional note read out before this round starts..." className="min-h-16 flex-1 resize-none rounded-md border border-white/10 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-200 outline-none focus:border-[#71E0DC]/60" />
       <div className="flex flex-col gap-1.5 pt-1">
@@ -2771,6 +2839,7 @@ const QuestionListView = ({
       rounds={rounds}
       onRename={renameRound}
       onDescribe={describeRound}
+      onSetRoundSettings={(round, settings) => onUpdateSettings({ points: settings.points, timerSeconds: settings.timerSeconds }, "round", round.questions[0])}
       onMoveRound={moveRound}
       onDelete={deleteRound}
       onAddRound={() => setAddRoundOpen(true)}
