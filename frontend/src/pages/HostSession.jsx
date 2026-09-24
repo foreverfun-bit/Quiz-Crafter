@@ -1952,10 +1952,12 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   // every later round, which does shift every question after this round's
   // insertion point (including a live/reviewed one in a later round). Same
   // "flatten the hypothetical, look up by id" fix as moveQuestionToRound.
-  const addQuestionToRound = async (round, draft) => {
-    const built = buildQuestionFromDraft(draft);
-    if (!built) return false;
-    const { key, question } = built;
+  // Shared by addQuestionToRound and addLibraryQuestionToRound (Phase 4):
+  // stamps a fully-built question onto the end of `round`, remaps
+  // currentIndex/reviewIndex by id the same way moveQuestionToRound does
+  // (appending inside an *existing* round shifts every later round by one),
+  // and saves.
+  const appendQuestionToRound = async (round, key, question) => {
     const roundOrder = round.questions[0]?.roundOrder;
     const sourceOrder = round.questions.reduce((max, item) => Math.max(max, Number(item.sourceOrder) || 0), 0) + 1;
     question.round_name = round.name;
@@ -1977,11 +1979,41 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     if (!isTestRun) {
       const { error } = await supabase.from("sessions").update(updatedArrays).eq("id", id);
       if (error) {
-        console.warn("Write question save unavailable:", error);
+        console.warn("Add question save unavailable:", error);
         toast.error("Saved for this session, but couldn't sync to the database");
       }
     }
     return true;
+  };
+
+  const addQuestionToRound = async (round, draft) => {
+    const built = buildQuestionFromDraft(draft);
+    if (!built) return false;
+    return appendQuestionToRound(round, built.key, built.question);
+  };
+
+  // Library questions come from the questions table already valid/saved, so
+  // this skips buildQuestionFromDraft's manual-form validation and just
+  // reshapes the row into the same embedded-question shape createRound/
+  // addQuestionToRound write, media fields included (the manual write form
+  // doesn't support media yet, but a library question often already has it).
+  const addLibraryQuestionToRound = async (round, libraryQuestion) => {
+    const type = libraryQuestion.question_type === "true_false" || libraryQuestion.question_type === "multiple_choice" ? libraryQuestion.question_type : "written";
+    const key = type === "true_false" ? "true_false_questions" : type === "multiple_choice" ? "multiple_choice_questions" : "written_questions";
+    const question = {
+      question_type: type,
+      category: libraryQuestion.category || "General",
+      question_text: libraryQuestion.question_text || libraryQuestion.question || "",
+      correct_answer: libraryQuestion.correct_answer || libraryQuestion.answer || "",
+      incorrect_answers: libraryQuestion.incorrect_answers ?? null,
+      fun_fact: libraryQuestion.fun_fact || "",
+      image_url: libraryQuestion.image_url || "",
+      image_timing: libraryQuestion.image_timing || libraryQuestion.image_display_timing || "initial",
+      timer_seconds: 30,
+      wager_limit: 0,
+      wager_timing: "after_answer",
+    };
+    return appendQuestionToRound(round, key, question);
   };
 
   // Unlike moveRound's whole-round swap, moving a single question can shift
@@ -2144,6 +2176,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
             createRound={createRound}
             moveQuestionToRound={moveQuestionToRound}
             addQuestionToRound={addQuestionToRound}
+            addLibraryQuestionToRound={addLibraryQuestionToRound}
             branding={branding}
             markAnswer={markAnswer}
             addManualAnswer={addManualAnswer}
@@ -2278,6 +2311,70 @@ const WriteQuestionModal = ({ round, onCreate, onClose }) => {
   </div>;
 };
 
+// Browses the user's saved question library (the `questions` table) and
+// inserts a pick straight into `round`. Fetched lazily and cached in
+// QuestionListView's state across round-picker opens for one page visit.
+// Deliberately narrower than BuildSession's LibraryModal for now: no
+// cross-session "used elsewhere" fingerprinting, question-memory blocking,
+// or Generate-when-empty AI trigger -- just hides anything whose question
+// text is already somewhere in *this* session, which is the case that
+// actually matters for avoiding an accidental duplicate mid-event. The
+// fuller usage-aware picker and AI generation land in later merge phases.
+const LibraryPickerModal = ({ round, libraryQuestions, loading, existingTexts, onInsert, onClose }) => {
+  const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [addedIds, setAddedIds] = useState(() => new Set());
+
+  const filtered = (libraryQuestions || []).filter((question) => {
+    const type = normalizeType(question);
+    if (typeFilter !== "all" && type !== typeFilter) return false;
+    const text = String(question.question_text || question.question || "").trim();
+    if (!text) return false;
+    if (existingTexts.has(text.toLowerCase()) && !addedIds.has(String(question.id))) return false;
+    const query = search.trim().toLowerCase();
+    if (!query) return true;
+    return [question.question_text, question.correct_answer, question.category].filter(Boolean).some((value) => String(value).toLowerCase().includes(query));
+  });
+
+  const handlePick = async (question) => {
+    const ok = await onInsert(question);
+    if (ok) setAddedIds((prev) => new Set(prev).add(String(question.id)));
+  };
+
+  return <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 pt-8 md:pt-14 overflow-y-auto">
+    <div className="flex w-full max-w-3xl max-h-[85vh] flex-col overflow-hidden rounded-xl border border-white/10 bg-[#17181c] p-5 shadow-2xl shadow-black/60 relative">
+      <button type="button" onClick={onClose} className="absolute right-4 top-4 text-zinc-400 hover:text-white" aria-label="Close"><X size={18} /></button>
+      <h2 className="mb-1 text-xl font-bold text-white">Add from Library</h2>
+      <p className="mb-4 text-sm text-zinc-500">Adding to <span className="font-semibold text-zinc-300">{round.name}</span>. Questions already used in this event are hidden.</p>
+      <div className="mb-3 flex flex-col gap-2 md:flex-row">
+        <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)} className="h-10 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white">
+          <option value="all">All types</option>
+          <option value="written">Free Response</option>
+          <option value="true_false">True/False</option>
+          <option value="multiple_choice">Multiple Choice</option>
+        </select>
+        <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search your library..." className="h-10 flex-1 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
+      </div>
+      <div className="flex-1 space-y-2 overflow-y-auto pr-1">
+        {loading && <p className="py-10 text-center text-sm text-zinc-500">Loading your library...</p>}
+        {!loading && filtered.length === 0 && <p className="py-10 text-center text-sm text-zinc-500">No matching questions.</p>}
+        {!loading && filtered.map((question) => {
+          const added = addedIds.has(String(question.id));
+          const meta = typeMeta[normalizeType(question)] || typeMeta.written;
+          return <button key={question.id} type="button" onClick={() => !added && handlePick(question)} disabled={added} className={`w-full rounded-lg border p-3 text-left transition ${added ? "border-emerald-400/30 bg-emerald-400/5 opacity-60" : "border-white/10 bg-zinc-950/40 hover:border-[#71E0DC]/40"}`}>
+            <div className="mb-1 flex flex-wrap items-center gap-2">
+              <Badge variant="outline" className="border-zinc-700 text-xs text-zinc-400">{question.category || "General"}</Badge>
+              <Badge className="bg-zinc-800 text-xs text-zinc-300">{meta.short}</Badge>
+              {added && <Badge className="bg-emerald-500/15 text-xs text-emerald-300">Added</Badge>}
+            </div>
+            <p className="text-sm text-white">{question.question_text || question.question}</p>
+          </button>;
+        })}
+      </div>
+    </div>
+  </div>;
+};
+
 const RoundHeader = ({ round, canMoveUp, canMoveDown, canDelete, onRename, onDescribe, onMoveUp, onMoveDown, onDelete }) => {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(round.name);
@@ -2343,12 +2440,32 @@ const QuestionListView = ({
   displayedQuestion, goToQuestion, reviewQuestion, onBackToLive, onGoLiveWithThis,
   answersForQuestionIndex, gradedAnswers, players, hostAnswers, fairPlayStats,
   showAnswer, showFunFact, timeRemaining, viewPointsPerQuestion, viewTimerSeconds, viewWagerMode, viewWagerLimit, viewWagerTiming,
-  onUpdateSettings, renameRound, describeRound, moveRound, deleteRound, createRound, moveQuestionToRound, addQuestionToRound, branding, markAnswer, addManualAnswer, editWager, releaseMode,
+  onUpdateSettings, renameRound, describeRound, moveRound, deleteRound, createRound, moveQuestionToRound, addQuestionToRound, addLibraryQuestionToRound, branding, markAnswer, addManualAnswer, editWager, releaseMode,
   hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion,
 }) => {
   const [addRoundOpen, setAddRoundOpen] = useState(false);
   const [writeQuestionRoundKey, setWriteQuestionRoundKey] = useState(null);
   const writeQuestionRound = rounds.find((round) => round.key === writeQuestionRoundKey) || null;
+  const [libraryRoundKey, setLibraryRoundKey] = useState(null);
+  const libraryRound = rounds.find((round) => round.key === libraryRoundKey) || null;
+  const [libraryQuestions, setLibraryQuestions] = useState(null);
+  const [libraryLoading, setLibraryLoading] = useState(false);
+  const openLibrary = (roundKey) => {
+    setLibraryRoundKey(roundKey);
+    if (libraryQuestions !== null || libraryLoading) return;
+    setLibraryLoading(true);
+    supabase.from("questions").select("*").order("created_at", { ascending: false }).then(({ data, error }) => {
+      if (error) {
+        console.warn("Library fetch unavailable:", error);
+        toast.error("Couldn't load your question library");
+        setLibraryQuestions([]);
+      } else {
+        setLibraryQuestions(data || []);
+      }
+      setLibraryLoading(false);
+    });
+  };
+  const existingQuestionTexts = new Set(questions.map((question) => String(question.questionText || "").trim().toLowerCase()).filter(Boolean));
   return <div className="space-y-6">
     <div className="flex justify-end">
       <Button size="sm" variant="outline" onClick={() => setAddRoundOpen(true)} className="h-8 border-white/10 text-zinc-300 hover:text-white"><Plus size={14} className="mr-1.5" />Add Round</Button>
@@ -2391,11 +2508,15 @@ const QuestionListView = ({
             onMoveToRound={(targetRound) => moveQuestionToRound(question, targetRound)}
           />;
         })}
-        <Button size="sm" variant="outline" onClick={() => setWriteQuestionRoundKey(round.key)} className="h-8 border-dashed border-white/15 text-zinc-400 hover:text-white"><Plus size={14} className="mr-1.5" />Write Question</Button>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" onClick={() => setWriteQuestionRoundKey(round.key)} className="h-8 border-dashed border-white/15 text-zinc-400 hover:text-white"><Plus size={14} className="mr-1.5" />Write Question</Button>
+          <Button size="sm" variant="outline" onClick={() => openLibrary(round.key)} className="h-8 border-dashed border-white/15 text-zinc-400 hover:text-white"><List size={14} className="mr-1.5" />Add from Library</Button>
+        </div>
       </div>
     </section>)}
     {addRoundOpen && <AddRoundModal onCreate={createRound} onClose={() => setAddRoundOpen(false)} />}
     {writeQuestionRound && <WriteQuestionModal round={writeQuestionRound} onCreate={(draft) => addQuestionToRound(writeQuestionRound, draft)} onClose={() => setWriteQuestionRoundKey(null)} />}
+    {libraryRound && <LibraryPickerModal round={libraryRound} libraryQuestions={libraryQuestions} loading={libraryLoading} existingTexts={existingQuestionTexts} onInsert={(question) => addLibraryQuestionToRound(libraryRound, question)} onClose={() => setLibraryRoundKey(null)} />}
   </div>;
 };
 
