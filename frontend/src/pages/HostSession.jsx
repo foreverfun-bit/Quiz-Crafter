@@ -347,7 +347,7 @@ const makeRounds = (questions) => {
   const groups = new Map();
   questions.forEach((question, index) => {
     const key = `${question.roundOrder}-${question.roundName}`;
-    if (!groups.has(key)) groups.set(key, { key, name: question.roundName, description: question.roundDescription || "", startIndex: index, questions: [] });
+    if (!groups.has(key)) groups.set(key, { key, name: question.roundName, description: question.roundDescription || "", startIndex: index, questions: [], roundOrder: question.roundOrder });
     groups.get(key).questions.push(question);
   });
   return [...groups.values()];
@@ -446,7 +446,12 @@ const isCorrectSubmission = (answer, question) => Boolean(question?.answer) && n
 const serializeRoundIntro = (round) => {
   if (!round) return null;
   const firstQuestion = round.questions?.[0];
-  const uniformType = round.questions?.length && round.questions.every((question) => question.type === firstQuestion.type) ? firstQuestion.type : null;
+  // An empty round (createEmptyRound) has no first question to read type/
+  // points/timer off of -- fall back to the defaults stored with the round
+  // itself, so its Round Intro still carries them.
+  const uniformType = firstQuestion
+    ? (round.questions.every((question) => question.type === firstQuestion.type) ? firstQuestion.type : null)
+    : (round.questionType && round.questionType !== "mixed" ? round.questionType : null);
   return {
     key: round.key,
     name: round.name,
@@ -455,8 +460,8 @@ const serializeRoundIntro = (round) => {
     questionCount: round.questions?.length || 0,
     startIndex: round.startIndex,
     questionType: uniformType,
-    points: firstQuestion ? getQuestionPoints(firstQuestion) : null,
-    timerSeconds: firstQuestion?.timerSeconds || null,
+    points: firstQuestion ? getQuestionPoints(firstQuestion) : (round.points ?? null),
+    timerSeconds: firstQuestion?.timerSeconds || round.timerSeconds || null,
   };
 };
 const getTeamScore = (leaderboard, teamId) => Number(leaderboard.find((team) => team.id === teamId)?.score || 0);
@@ -999,7 +1004,38 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   }, [applyLivePlayerEvent, id]);
 
   const questions = useMemo(() => flattenSession(session), [session]);
-  const rounds = useMemo(() => makeRounds(questions), [questions]);
+  // A round can now exist before it has any questions -- "Create Round"
+  // without writing a first question yet (createEmptyRound below) stores a
+  // shell in session.round_descriptions (name/description/order plus the
+  // question-type/points/timer defaults for whatever gets added to it
+  // later). Once it has real questions, its identity moves onto them
+  // (round_name/round_order, same as always) and this shell is just ignored
+  // -- filtered out here because a real group with the same order+name
+  // already exists, never deleted, since the fallback description lookup
+  // still reads it (see getRoundDescription).
+  const rounds = useMemo(() => {
+    const built = makeRounds(questions);
+    // A round_descriptions entry can go stale against a real round (e.g. an
+    // older save wrote it, then the round was renamed or reordered here --
+    // renameRound/moveRound only patch it for a round that's still empty).
+    // Matching on order-or-name against every real round, not just the exact
+    // pair, keeps a stale entry from resurfacing as a bogus duplicate round.
+    const realNames = new Set(built.map((round) => round.name));
+    const realOrders = new Set(built.map((round) => round.roundOrder));
+    const emptyRounds = getRoundMetadata(session)
+      .map((entry) => ({
+        name: entry.name || entry.round_name || "",
+        description: entry.description || entry.round_description || "",
+        order: Number(entry.order ?? entry.round_order) || 0,
+        questionType: entry.question_type || "mixed",
+        points: entry.points ?? null,
+        timerSeconds: Number(entry.timer_seconds) || 30,
+      }))
+      .filter((entry) => entry.name && !realNames.has(entry.name) && !realOrders.has(entry.order))
+      .map((entry) => ({ key: `${entry.order}-${entry.name}`, name: entry.name, description: entry.description, startIndex: questions.length, questions: [], roundOrder: entry.order, isEmpty: true, questionType: entry.questionType, points: entry.points, timerSeconds: entry.timerSeconds }));
+    return [...built, ...emptyRounds].sort((a, b) => a.roundOrder - b.roundOrder);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [questions, session?.round_descriptions]);
   const isReviewing = reviewIndex !== null;
   const hostIndex = isReviewing ? reviewIndex : currentIndex;
   // Stop and rewind whenever the displayed question changes -- there are
@@ -1854,15 +1890,41 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     }
   };
 
+  // Empty rounds (createEmptyRound below) have no questions to patch -- their
+  // whole identity lives in this one round_descriptions entry instead.
+  const matchesRoundMetadata = (entry, round) => Number(entry.order ?? entry.round_order) === round.roundOrder && (entry.name || entry.round_name) === round.name;
+  const writeRoundMetadata = async (entries) => {
+    const updatedArrays = { round_descriptions: entries };
+    setSession((current) => ({ ...current, ...updatedArrays }));
+    if (isTestRun) return;
+    const { error } = await supabase.from("sessions").update(updatedArrays).eq("id", id);
+    if (error) {
+      console.warn("Round metadata save unavailable:", error);
+      toast.error("Saved for this session, but couldn't sync to the database");
+    }
+  };
+
   const renameRound = (round, name) => {
     const trimmed = name.trim();
     if (!trimmed || trimmed === round.name) return;
+    if (round.isEmpty) {
+      writeRoundMetadata(getRoundMetadata(session).map((entry) => (matchesRoundMetadata(entry, round) ? { ...entry, name: trimmed } : entry)));
+      return;
+    }
     commitQuestionPatch(round.questions, { round_name: trimmed });
   };
 
   const describeRound = (round, description) => {
     if ((round.description || "") === description) return;
+    if (round.isEmpty) {
+      writeRoundMetadata(getRoundMetadata(session).map((entry) => (matchesRoundMetadata(entry, round) ? { ...entry, description } : entry)));
+      return;
+    }
     commitQuestionPatch(round.questions, { round_description: description });
+  };
+
+  const setEmptyRoundSettings = (round, settings) => {
+    writeRoundMetadata(getRoundMetadata(session).map((entry) => (matchesRoundMetadata(entry, round) ? { ...entry, points: settings.points, timer_seconds: settings.timerSeconds, question_type: settings.questionType || entry.question_type } : entry)));
   };
 
   // Adjacent-swap only (mirrors BuildSession's handleMoveRound). Renaming a
@@ -1877,8 +1939,8 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     const targetIndex = index + direction;
     if (index === -1 || targetIndex < 0 || targetIndex >= rounds.length) return;
     const other = rounds[targetIndex];
-    const roundOrderValue = round.questions[0]?.roundOrder;
-    const otherOrderValue = other.questions[0]?.roundOrder;
+    const roundOrderValue = round.roundOrder;
+    const otherOrderValue = other.roundOrder;
     if (roundOrderValue === undefined || otherOrderValue === undefined || roundOrderValue === otherOrderValue) return;
 
     const affectedIndicesByKey = new Map();
@@ -1899,6 +1961,23 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
       const current = Array.isArray(session[key]) ? session[key] : [];
       updatedArrays[key] = current.map((question, i) => (indexOrderMap.has(i) ? { ...question, round_order: indexOrderMap.get(i) } : question));
     });
+
+    // An empty side has no questions for queueOrder to have touched above --
+    // its new position only exists in the round_descriptions shell, so patch
+    // that entry's order directly instead.
+    let metadataEntries = getRoundMetadata(session);
+    let metadataChanged = false;
+    const patchEmptySide = (side, newOrder) => {
+      if (!side.isEmpty) return;
+      metadataEntries = metadataEntries.map((entry) => {
+        if (!matchesRoundMetadata(entry, side)) return entry;
+        metadataChanged = true;
+        return { ...entry, order: newOrder };
+      });
+    };
+    patchEmptySide(round, otherOrderValue);
+    patchEmptySide(other, roundOrderValue);
+    if (metadataChanged) updatedArrays.round_descriptions = metadataEntries;
 
     const [first, second] = round.startIndex < other.startIndex ? [round, other] : [other, round];
     const remap = (position) => {
@@ -1924,6 +2003,11 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
 
   const deleteRound = (round) => {
     if (rounds.length <= 1) return toast.error("Keep at least one round");
+    if (round.isEmpty) {
+      if (!window.confirm(`Delete "${round.name}"? This can't be undone.`)) return;
+      writeRoundMetadata(getRoundMetadata(session).filter((entry) => !matchesRoundMetadata(entry, round)));
+      return;
+    }
     const removedCount = round.questions.length;
     if (eventOpen && hostIndex >= round.startIndex && hostIndex < round.startIndex + removedCount) {
       return toast.error("Can't delete the round that's currently live or being reviewed");
@@ -1991,20 +2075,21 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     return { key, question };
   };
 
-  // A round only exists once it has >=1 question (flattenSession/makeRounds
-  // derive rounds purely from question fields -- an empty round doesn't
-  // survive a reload). So "Create Round" is really "name a round and write
-  // its first question in one step." A fresh, always-highest round_order
-  // guarantees the new round -- and its one question -- lands at the very
-  // end of the sorted `questions` list, after every existing currentIndex/
-  // reviewIndex position, so nothing needs remapping the way move/delete do.
+  // A round with real questions gets its identity from them (round_name/
+  // round_order on each one, via makeRounds); an empty round gets it from a
+  // session.round_descriptions shell instead (see createEmptyRound). This is
+  // the "write a first question right away" path -- a fresh, always-highest
+  // round_order guarantees the new round -- and its one question -- lands at
+  // the very end of the sorted `questions` list, after every existing
+  // currentIndex/reviewIndex position, so nothing needs remapping the way
+  // move/delete do.
   const createRound = async (name, draft, description = "") => {
     const roundName = name.trim();
     if (!roundName) { toast.error("Give the round a name"); return false; }
     const built = buildQuestionFromDraft(draft);
     if (!built) return false;
     const { key, question } = built;
-    const roundOrder = rounds.reduce((max, round) => Math.max(max, Number(round.questions[0]?.roundOrder) || 0), 0) + 1;
+    const roundOrder = rounds.reduce((max, round) => Math.max(max, Number(round.roundOrder) || 0), 0) + 1;
     question.round_name = roundName;
     question.round_order = roundOrder;
     question.round_description = description.trim();
@@ -2021,6 +2106,26 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     return true;
   };
 
+  // The no-question path: just a name (plus optional description/type/points/
+  // timer defaults) saved into session.round_descriptions -- see the `rounds`
+  // useMemo above for how this shell surfaces as a real, selectable round with
+  // zero questions until something gets written or added to it.
+  const createEmptyRound = async (name, description, settings) => {
+    const roundName = name.trim();
+    if (!roundName) { toast.error("Give the round a name"); return false; }
+    const roundOrder = rounds.reduce((max, round) => Math.max(max, Number(round.roundOrder) || 0), 0) + 1;
+    const entries = [...getRoundMetadata(session), {
+      name: roundName,
+      description: (description || "").trim(),
+      order: roundOrder,
+      question_type: settings?.questionType && settings.questionType !== "mixed" ? settings.questionType : "mixed",
+      points: settings?.points === "" || settings?.points == null ? null : Number(settings.points) || null,
+      timer_seconds: Number(settings?.timerSeconds) || 30,
+    }];
+    await writeRoundMetadata(entries);
+    return true;
+  };
+
   // Appending to an existing round, unlike createRound, can't rely on a
   // fresh top-level round_order to land safely at the very end of the whole
   // list -- it only needs to land at the end of *this* round, ahead of
@@ -2033,7 +2138,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   // (appending inside an *existing* round shifts every later round by one),
   // and saves.
   const appendQuestionToRound = async (round, key, question) => {
-    const roundOrder = round.questions[0]?.roundOrder;
+    const roundOrder = round.roundOrder;
     const sourceOrder = round.questions.reduce((max, item) => Math.max(max, Number(item.sourceOrder) || 0), 0) + 1;
     question.round_name = round.name;
     question.round_order = roundOrder;
@@ -2100,7 +2205,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     const match = String(question.id || "").match(/^(.+)-(\d+)$/);
     if (!match) return;
     const [, key, indexStr] = match;
-    const targetRoundOrder = targetRound.questions[0]?.roundOrder;
+    const targetRoundOrder = targetRound.roundOrder;
     if (targetRoundOrder === undefined) return;
     const index = Number(indexStr);
     const current = Array.isArray(session[key]) ? session[key] : [];
@@ -2226,7 +2331,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
         {session && <Button onClick={() => setEmptyStateAddRoundOpen(true)} className="gradient-btn"><Plus size={16} className="mr-2" />Add Round</Button>}
         {!embedded && <Button variant="outline" onClick={() => navigate(`/session/${id}`)} className="ml-2 border-white/10 text-zinc-300 hover:text-white">Back to Session</Button>}
       </div>
-      {session && emptyStateAddRoundOpen && <AddRoundModal onCreate={createRound} onClose={() => setEmptyStateAddRoundOpen(false)} />}
+      {session && emptyStateAddRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} onClose={() => setEmptyStateAddRoundOpen(false)} />}
     </div>;
   }
 
@@ -2311,9 +2416,11 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
             onUpdateSettings={isReviewing ? () => {} : updateQuestionSettings}
             renameRound={renameRound}
             describeRound={describeRound}
+            setEmptyRoundSettings={setEmptyRoundSettings}
             moveRound={moveRound}
             deleteRound={deleteRound}
             createRound={createRound}
+            createEmptyRound={createEmptyRound}
             moveQuestionToRound={moveQuestionToRound}
             duplicateQuestion={duplicateQuestion}
             discardQuestion={discardQuestion}
@@ -2397,7 +2504,7 @@ const QuestionDraftFields = ({ draft, setDraft }) => {
 // concern that happens to be required (a round only becomes real once it
 // has a question -- see flattenSession/makeRounds) but shouldn't visually
 // read as "the round's fields" alongside the name field.
-const AddRoundModal = ({ onCreate, onClose }) => {
+const AddRoundModal = ({ onCreate, onCreateEmpty, onClose }) => {
   const [step, setStep] = useState("name");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -2406,6 +2513,7 @@ const AddRoundModal = ({ onCreate, onClose }) => {
   const [timerSeconds, setTimerSeconds] = useState(30);
   const [draft, setDraft] = useState(emptyRoundDraft);
   const [saving, setSaving] = useState(false);
+  const [creatingEmpty, setCreatingEmpty] = useState(false);
 
   const goToQuestionStep = () => {
     if (!name.trim()) return;
@@ -2420,6 +2528,17 @@ const AddRoundModal = ({ onCreate, onClose }) => {
       if (ok) onClose();
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleCreateEmpty = async () => {
+    if (!name.trim()) return;
+    setCreatingEmpty(true);
+    try {
+      const ok = await onCreateEmpty(name, description, { questionType, points, timerSeconds });
+      if (ok) onClose();
+    } finally {
+      setCreatingEmpty(false);
     }
   };
 
@@ -2460,13 +2579,14 @@ const AddRoundModal = ({ onCreate, onClose }) => {
             </label>
           </div>
         </div>
-        <div className="mt-5 flex justify-end gap-2">
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
           <Button type="button" variant="outline" onClick={onClose} className="border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
-          <Button type="button" onClick={goToQuestionStep} disabled={!name.trim()} className="gradient-btn">Next</Button>
+          <Button type="button" variant="outline" onClick={handleCreateEmpty} disabled={!name.trim() || creatingEmpty} className="border-white/10 text-zinc-300 hover:text-white">{creatingEmpty ? "Creating..." : "Create Round"}</Button>
+          <Button type="button" onClick={goToQuestionStep} disabled={!name.trim()} className="gradient-btn">Next: Write Question</Button>
         </div>
       </> : <>
         <h2 className="mb-1 text-xl font-bold text-white">Write Question</h2>
-        <p className="mb-5 text-sm text-zinc-500">First question for <span className="text-zinc-300 font-semibold">{name}</span> -- a round needs at least one to be created; more can be added after.</p>
+        <p className="mb-5 text-sm text-zinc-500">First question for <span className="text-zinc-300 font-semibold">{name}</span> (optional -- "Create Round" on the previous step skips this and adds questions later).</p>
         <QuestionDraftFields draft={draft} setDraft={setDraft} />
         <div className="mt-5 flex justify-end gap-2">
           <Button type="button" variant="outline" onClick={() => setStep("name")} className="border-white/10 text-zinc-300 hover:text-white">Back</Button>
@@ -2481,12 +2601,13 @@ const AddRoundModal = ({ onCreate, onClose }) => {
 // AddRoundModal's first-question step, reachable from any round once it
 // already exists.
 const WriteQuestionModal = ({ round, onCreate, onClose }) => {
-  // Prefills from the round's own first question -- the closest thing this
-  // app has to a stored "round default" (rounds aren't first-class entities,
-  // see flattenSession/makeRounds), so a round's points/timer/type set at
-  // creation carry forward to every question added to it after, while
-  // staying fully overridable per question here.
-  const roundDefaults = round.questions[0];
+  // Prefills from the round's own first question, or (for a round created
+  // without one yet -- see createEmptyRound) from the defaults saved with it
+  // at creation -- either way, the closest thing this app has to a stored
+  // "round default" (rounds aren't first-class entities, see
+  // flattenSession/makeRounds), so a round's points/timer/type carry forward
+  // to every question added to it, while staying fully overridable here.
+  const roundDefaults = round.questions[0] || { type: round.questionType !== "mixed" ? round.questionType : null, points: round.points, timerSeconds: round.timerSeconds };
   const [draft, setDraft] = useState(() => ({
     ...emptyRoundDraft,
     question_type: roundDefaults?.type || emptyRoundDraft.question_type,
@@ -2693,15 +2814,16 @@ const RoundManagerRow = ({ round, canMoveUp, canMoveDown, canDelete, onRename, o
   const [editingDescription, setEditingDescription] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState(round.description || "");
   const [editingSettings, setEditingSettings] = useState(false);
-  const roundPoints = round.questions[0]?.points;
-  const roundTimerSeconds = round.questions[0]?.timerSeconds;
+  const roundPoints = round.questions[0]?.points ?? round.points;
+  const roundTimerSeconds = round.questions[0]?.timerSeconds ?? round.timerSeconds;
   const [pointsDraft, setPointsDraft] = useState(roundPoints ?? "");
   const [timerDraft, setTimerDraft] = useState(roundTimerSeconds ?? 30);
+  const [typeDraft, setTypeDraft] = useState(round.questionType || "mixed");
 
   const commitName = () => { onRename(nameDraft); setEditingName(false); };
   const commitDescription = () => { onDescribe(descriptionDraft.trim()); setEditingDescription(false); };
   const commitSettings = () => {
-    onSetSettings({ points: pointsDraft === "" ? null : Number(pointsDraft) || 0, timerSeconds: Number(timerDraft) || 30 });
+    onSetSettings({ points: pointsDraft === "" ? null : Number(pointsDraft) || 0, timerSeconds: Number(timerDraft) || 30, questionType: round.isEmpty ? typeDraft : undefined });
     setEditingSettings(false);
   };
 
@@ -2716,7 +2838,7 @@ const RoundManagerRow = ({ round, canMoveUp, canMoveDown, canDelete, onRename, o
         <span className="ml-1 text-xs font-normal text-zinc-500">{round.questions.length} question{round.questions.length === 1 ? "" : "s"}</span>
       </button>}
       <div className="flex shrink-0 items-center gap-1">
-        <button type="button" onClick={() => { setPointsDraft(roundPoints ?? ""); setTimerDraft(roundTimerSeconds ?? 30); setEditingSettings((value) => !value); }} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white" title="Points &amp; timer for this round" aria-label="Round points and timer"><SlidersHorizontal size={14} /></button>
+        <button type="button" onClick={() => { setPointsDraft(roundPoints ?? ""); setTimerDraft(roundTimerSeconds ?? 30); setTypeDraft(round.questionType || "mixed"); setEditingSettings((value) => !value); }} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white" title="Points &amp; timer for this round" aria-label="Round points and timer"><SlidersHorizontal size={14} /></button>
         <button type="button" onClick={() => setEditingDescription((value) => !value)} className={`flex h-7 w-7 items-center justify-center rounded ${round.description ? "text-[#71E0DC]" : "text-zinc-500"} hover:text-white`} title={round.description ? "Edit round note" : "Add round note"} aria-label="Round note"><MessageSquare size={14} /></button>
         <button type="button" onClick={onMoveUp} disabled={!canMoveUp} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white disabled:opacity-30" aria-label="Move round up"><ChevronUp size={15} /></button>
         <button type="button" onClick={onMoveDown} disabled={!canMoveDown} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white disabled:opacity-30" aria-label="Move round down"><ChevronDown size={15} /></button>
@@ -2724,6 +2846,14 @@ const RoundManagerRow = ({ round, canMoveUp, canMoveDown, canDelete, onRename, o
       </div>
     </div>
     {editingSettings && <div className="mt-2 flex items-end gap-2 border-t border-white/5 pt-2">
+      {round.isEmpty && <label className="block flex-1 text-xs text-zinc-500">Question type
+        <select value={typeDraft} onChange={(event) => setTypeDraft(event.target.value)} className="mt-1 h-8 w-full rounded border border-white/10 bg-zinc-900 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60">
+          <option value="mixed">Mix</option>
+          <option value="true_false">True/False</option>
+          <option value="multiple_choice">Multiple Choice</option>
+          <option value="written">Written</option>
+        </select>
+      </label>}
       <label className="block flex-1 text-xs text-zinc-500">Points (whole round)
         <input type="number" min="0" step="5" value={pointsDraft} onChange={(event) => setPointsDraft(event.target.value)} placeholder="Default for type" className="mt-1 h-8 w-full rounded border border-white/10 bg-zinc-900 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
       </label>
@@ -2748,7 +2878,7 @@ const QuestionListView = ({
   displayedQuestion, goToQuestion, reviewQuestion, onBackToLive, onGoLiveWithThis,
   answersForQuestionIndex, gradedAnswers, players, hostAnswers, fairPlayStats,
   showAnswer, showFunFact, timeRemaining, viewPointsPerQuestion, viewTimerSeconds, viewWagerMode, viewWagerLimit, viewWagerTiming,
-  onUpdateSettings, renameRound, describeRound, moveRound, deleteRound, createRound, moveQuestionToRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, updateQuestionContent, branding, markAnswer, addManualAnswer, editWager, releaseMode,
+  onUpdateSettings, renameRound, describeRound, setEmptyRoundSettings, moveRound, deleteRound, createRound, createEmptyRound, moveQuestionToRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, updateQuestionContent, branding, markAnswer, addManualAnswer, editWager, releaseMode,
   hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, resetQuestionAt,
 }) => {
   // Only one round is shown at a time (see RoundHeader/RoundSwitcher) --
@@ -2848,19 +2978,26 @@ const QuestionListView = ({
             onResetQuestion={() => resetQuestionAt(index)}
           />;
         })}
+        {!activeRound.questions.length && <div className="rounded-lg border border-dashed border-white/15 bg-zinc-950/40 p-6 text-center">
+          <p className="text-sm text-zinc-400">This round doesn't have any questions yet.</p>
+          <div className="mt-3 flex items-center justify-center gap-2">
+            <Button type="button" size="sm" onClick={() => setWriteQuestionRoundKey(activeRound.key)} className="gradient-btn"><Pencil size={13} className="mr-1.5" />Write Question</Button>
+            <Button type="button" size="sm" variant="outline" onClick={() => openLibrary(activeRound.key)} className="border-white/10 text-zinc-300 hover:text-white"><List size={13} className="mr-1.5" />Add from Library</Button>
+          </div>
+        </div>}
       </div>
     </section>
     {manageRoundsOpen && <RoundManagerModal
       rounds={rounds}
       onRename={renameRound}
       onDescribe={describeRound}
-      onSetRoundSettings={(round, settings) => onUpdateSettings({ points: settings.points, timerSeconds: settings.timerSeconds }, "round", round.questions[0])}
+      onSetRoundSettings={(round, settings) => (round.isEmpty ? setEmptyRoundSettings(round, settings) : onUpdateSettings({ points: settings.points, timerSeconds: settings.timerSeconds }, "round", round.questions[0]))}
       onMoveRound={moveRound}
       onDelete={deleteRound}
       onAddRound={() => setAddRoundOpen(true)}
       onClose={() => setManageRoundsOpen(false)}
     />}
-    {addRoundOpen && <AddRoundModal onCreate={createRound} onClose={() => setAddRoundOpen(false)} />}
+    {addRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} onClose={() => setAddRoundOpen(false)} />}
     {writeQuestionRound && <WriteQuestionModal round={writeQuestionRound} onCreate={(draft) => addQuestionToRound(writeQuestionRound, draft)} onClose={() => setWriteQuestionRoundKey(null)} />}
     {libraryRound && <LibraryPickerModal round={libraryRound} libraryQuestions={libraryQuestions} loading={libraryLoading} existingTexts={existingQuestionTexts} onInsert={(question) => addLibraryQuestionToRound(libraryRound, question)} onClose={() => setLibraryRoundKey(null)} />}
   </div>;
