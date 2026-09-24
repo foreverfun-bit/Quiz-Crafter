@@ -1,4 +1,7 @@
 const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+// The model habitually writes true/false questions as "True or False: <claim>"
+// -- redundant once the app already shows the question as a True/False type.
+const stripTrueFalsePrefix = (text) => text.replace(/^\s*true\s*(?:or|\/)\s*false\s*[:\-–—]?\s*/i, "").trim();
 const fingerprint = (value) => clean(value).toLowerCase().replace(/[^a-z0-9]/g, "");
 const answerPairFingerprint = (question, answer) => `${fingerprint(question)}::${fingerprint(answer)}`;
 
@@ -98,10 +101,11 @@ const parseAssistantJson = (content) => {
 
 const normalizeCandidate = (candidate) => {
   if (!candidate || typeof candidate !== "object") return null;
-  const questionText = clean(candidate.question_text || candidate.question);
+  const type = ["true_false", "multiple_choice", "written"].includes(candidate.question_type || candidate.type) ? candidate.question_type || candidate.type : "written";
+  const rawQuestionText = clean(candidate.question_text || candidate.question);
+  const questionText = type === "true_false" ? stripTrueFalsePrefix(rawQuestionText) : rawQuestionText;
   const correctAnswer = clean(candidate.correct_answer || candidate.answer);
   const category = clean(candidate.category);
-  const type = ["true_false", "multiple_choice", "written"].includes(candidate.question_type || candidate.type) ? candidate.question_type || candidate.type : "written";
   if (!questionText || !correctAnswer || !category) return null;
   const incorrect = Array.isArray(candidate.incorrect_answers) ? candidate.incorrect_answers.map(clean).filter(Boolean) : [];
   return {
