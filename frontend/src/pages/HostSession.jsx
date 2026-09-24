@@ -7,6 +7,7 @@ import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent } from "../components/ui/card";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
+import { Popover, PopoverTrigger, PopoverContent } from "../components/ui/popover";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -3239,18 +3240,18 @@ const EDIT_SCOPE_LABEL = { question: "this question", round: "the rest of this r
 // resets from the question's own stored value on every navigation -- so an
 // edit "stuck" only until you left and came back. This calls onSave(value,
 // scope), which persists into the question data itself.
+// Uses the Radix-backed Popover (portal-rendered) rather than a plain
+// absolutely-positioned div -- this badge lives inside a "glass-card" tile,
+// and stacking a plain div's z-index doesn't actually escape a card's own
+// stacking context (its backdrop-blur/opacity creates one), so a later
+// sibling card in the list was painting over the popover no matter how
+// high its z-index went. Rendering through a portal to the document body
+// sidesteps that entirely, the same way the other dropdown menus already do.
 const EditableStatBadge = ({ label, value, unit, suffix, tone, onSave, step = 5 }) => {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(value);
   const [scope, setScope] = useState("question");
-  const ref = useRef(null);
-  useEffect(() => { if (open) setDraft(value); }, [open, value]);
-  useEffect(() => {
-    if (!open) return undefined;
-    const onDocClick = (event) => { if (ref.current && !ref.current.contains(event.target)) setOpen(false); };
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, [open]);
+  useEffect(() => { if (open) { setDraft(value); setScope("question"); } }, [open, value]);
   const toneClass = {
     amber: "border-amber-400/20 bg-amber-400/15 text-amber-200 hover:border-amber-300/50",
     teal: "border-[#71E0DC]/25 bg-[#71E0DC]/12 text-[#71E0DC] hover:border-[#71E0DC]/60",
@@ -3262,9 +3263,11 @@ const EditableStatBadge = ({ label, value, unit, suffix, tone, onSave, step = 5 
     setOpen(false);
     toast.success(`${label} set to ${Math.max(0, Number(draft) || 0)}${suffix || ""} for ${EDIT_SCOPE_LABEL[scope]}`);
   };
-  return <div className="relative" ref={ref}>
-    <button type="button" onClick={() => setOpen((current) => !current)} className={`rounded-full border px-3 py-1.5 text-sm font-bold transition ${toneClass}`}>{label}: {value}{suffix || ""}</button>
-    {open && <div className="absolute left-0 top-full z-30 mt-2 w-64 rounded-xl border border-white/10 bg-zinc-950 p-3 shadow-2xl">
+  return <Popover open={open} onOpenChange={setOpen}>
+    <PopoverTrigger asChild>
+      <button type="button" className={`rounded-full border px-3 py-1.5 text-sm font-bold transition ${toneClass}`}>{label}: {value}{suffix || ""}</button>
+    </PopoverTrigger>
+    <PopoverContent align="start" className="w-64 border-white/10 bg-zinc-950 p-3 text-white shadow-2xl">
       <p className="mb-2 text-[11px] font-bold uppercase tracking-wide text-zinc-500">{label}{unit ? ` (${unit})` : ""}</p>
       <div className="mb-2.5 flex items-center gap-2">
         <button type="button" onClick={() => setDraft((current) => Math.max(0, Number(current || 0) - step))} className="h-8 w-8 shrink-0 rounded-md border border-white/10 bg-zinc-900 text-zinc-300 hover:text-white">&minus;</button>
@@ -3280,8 +3283,8 @@ const EditableStatBadge = ({ label, value, unit, suffix, tone, onSave, step = 5 
         <Button size="sm" variant="outline" onClick={() => setOpen(false)} className="h-8 flex-1 border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
         <Button size="sm" onClick={save} className="h-8 flex-1 gradient-btn">Save</Button>
       </div>
-    </div>}
-  </div>;
+    </PopoverContent>
+  </Popover>;
 };
 // A per-team click-to-edit wager amount -- corrects a submitted wager
 // (mis-heard over the mic, fat-fingered manual entry) without touching the
