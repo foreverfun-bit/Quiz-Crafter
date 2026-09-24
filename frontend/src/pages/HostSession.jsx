@@ -10,6 +10,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import {
   AlertTriangle,
   ArrowLeft,
+  ArrowRightLeft,
   Check,
   CheckCircle,
   ChevronDown,
@@ -546,6 +547,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   const [loading, setLoading] = useState(true);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [reviewIndex, setReviewIndex] = useState(null);
+  const [emptyStateAddRoundOpen, setEmptyStateAddRoundOpen] = useState(false);
   const [emergencyOverride, setEmergencyOverride] = useState(null);
   const [generatedEmergency, setGeneratedEmergency] = useState(null);
   const [emergencyLoading, setEmergencyLoading] = useState(false);
@@ -1889,6 +1891,83 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     });
   };
 
+  // A round only exists once it has >=1 question (flattenSession/makeRounds
+  // derive rounds purely from question fields -- an empty round doesn't
+  // survive a reload). So "Create Round" is really "name a round and write
+  // its first question in one step." A fresh, always-highest round_order
+  // guarantees the new round -- and its one question -- lands at the very
+  // end of the sorted `questions` list, after every existing currentIndex/
+  // reviewIndex position, so nothing needs remapping the way move/delete do.
+  const createRound = async (name, draft) => {
+    const roundName = name.trim();
+    if (!roundName) return toast.error("Give the round a name");
+    const questionText = draft.question_text.trim();
+    const correctAnswer = draft.correct_answer.trim();
+    if (!questionText || !correctAnswer) return toast.error("Write the first question and its answer");
+    const wrongAnswers = draft.incorrect_answers.map((answer) => answer.trim()).filter(Boolean);
+    if (draft.question_type === "multiple_choice" && wrongAnswers.length < 2) return toast.error("Add at least two wrong answers for multiple choice");
+
+    const key = draft.question_type === "true_false" ? "true_false_questions" : draft.question_type === "multiple_choice" ? "multiple_choice_questions" : "written_questions";
+    const roundOrder = rounds.reduce((max, round) => Math.max(max, Number(round.questions[0]?.roundOrder) || 0), 0) + 1;
+    const newQuestion = {
+      question_type: draft.question_type,
+      category: draft.category.trim() || "General",
+      question_text: questionText,
+      correct_answer: draft.question_type === "true_false" ? (correctAnswer.toLowerCase() === "false" ? "False" : "True") : correctAnswer,
+      incorrect_answers: draft.question_type === "multiple_choice" ? wrongAnswers.join("; ") : null,
+      fun_fact: draft.fun_fact.trim(),
+      round_name: roundName,
+      round_order: roundOrder,
+      timer_seconds: 30,
+      wager_limit: 0,
+      wager_timing: "after_answer",
+    };
+    const current = Array.isArray(session[key]) ? session[key] : [];
+    const updatedArrays = { [key]: [...current, newQuestion] };
+    setSession((prevSession) => ({ ...prevSession, ...updatedArrays }));
+    if (!isTestRun) {
+      const { error } = await supabase.from("sessions").update(updatedArrays).eq("id", id);
+      if (error) {
+        console.warn("Round create save unavailable:", error);
+        toast.error("Saved for this session, but couldn't sync to the database");
+      }
+    }
+    return true;
+  };
+
+  // Unlike moveRound's whole-round swap, moving a single question can shift
+  // an arbitrary number of other questions' positions in between its old and
+  // new spot. Rather than hand-deriving that arithmetic, just flatten the
+  // hypothetical post-move session the same way the real one gets flattened,
+  // then look up where the previously-live/-reviewed question ended up by id.
+  const moveQuestionToRound = async (question, targetRound) => {
+    const match = String(question.id || "").match(/^(.+)-(\d+)$/);
+    if (!match) return;
+    const [, key, indexStr] = match;
+    const targetRoundOrder = targetRound.questions[0]?.roundOrder;
+    if (targetRoundOrder === undefined) return;
+    const index = Number(indexStr);
+    const current = Array.isArray(session[key]) ? session[key] : [];
+    const updatedArrays = { [key]: current.map((item, i) => (i === index ? { ...item, round_name: targetRound.name, round_order: targetRoundOrder } : item)) };
+
+    const pinnedLiveId = questions[currentIndex]?.id;
+    const pinnedReviewId = isReviewing ? questions[reviewIndex]?.id : null;
+    const remappedQuestions = flattenSession({ ...session, ...updatedArrays });
+    const newCurrentIndex = remappedQuestions.findIndex((item) => item.id === pinnedLiveId);
+    const newReviewIndex = pinnedReviewId ? remappedQuestions.findIndex((item) => item.id === pinnedReviewId) : -1;
+
+    setSession((prevSession) => ({ ...prevSession, ...updatedArrays }));
+    if (newCurrentIndex !== -1) setCurrentIndex(newCurrentIndex);
+    if (isReviewing) setReviewIndex(newReviewIndex !== -1 ? newReviewIndex : null);
+
+    if (isTestRun) return;
+    const { error } = await supabase.from("sessions").update(updatedArrays).eq("id", id);
+    if (error) {
+      console.warn("Move question save unavailable:", error);
+      toast.error("Saved for this session, but couldn't sync to the database");
+    }
+  };
+
   useEffect(() => {
     if (!displayedQuestion || !showAnswer) return;
     currentAnswers.forEach((answer) => {
@@ -1916,7 +1995,19 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
 
   if (loading) return <div className={`${embedded ? "h-full" : "min-h-screen"} bg-[#09090B] flex items-center justify-center`}><Loader2 className="text-[#71E0DC] animate-spin" size={34} /></div>;
   if (!session || !displayedQuestion) {
-    return <div className={`${embedded ? "h-full" : "min-h-screen"} bg-[#09090B] flex items-center justify-center p-6 text-center`}><div><p className="text-white text-2xl font-bold mb-2">No questions to host</p><p className="text-zinc-500 mb-4">Add questions to this session first.</p>{!embedded && <Button onClick={() => navigate(`/session/${id}`)} className="gradient-btn">Back to Session</Button>}</div></div>;
+    // A brand-new event (see NewEventModal) lands here with zero questions --
+    // this used to be a dead end pointing back to the old builder page; now
+    // Add Round works from an empty session too, since a round only becomes
+    // real once it has its first question.
+    return <div className={`${embedded ? "h-full" : "min-h-screen"} bg-[#09090B] flex items-center justify-center p-6 text-center`}>
+      <div>
+        <p className="text-white text-2xl font-bold mb-2">{session ? "No questions yet" : "Session not found"}</p>
+        <p className="text-zinc-500 mb-4">{session ? "Add a round to get this event started." : "This session may have been removed."}</p>
+        {session && <Button onClick={() => setEmptyStateAddRoundOpen(true)} className="gradient-btn"><Plus size={16} className="mr-2" />Add Round</Button>}
+        {!embedded && <Button variant="outline" onClick={() => navigate(`/session/${id}`)} className="ml-2 border-white/10 text-zinc-300 hover:text-white">Back to Session</Button>}
+      </div>
+      {session && emptyStateAddRoundOpen && <AddRoundModal onCreate={createRound} onClose={() => setEmptyStateAddRoundOpen(false)} />}
+    </div>;
   }
 
   const viewPointsPerQuestion = isReviewing ? getQuestionPoints(displayedQuestion) : pointsPerQuestion;
@@ -2001,6 +2092,8 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
             describeRound={describeRound}
             moveRound={moveRound}
             deleteRound={deleteRound}
+            createRound={createRound}
+            moveQuestionToRound={moveQuestionToRound}
             branding={branding}
             markAnswer={markAnswer}
             addManualAnswer={addManualAnswer}
@@ -2047,6 +2140,58 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
 // reload today; see flattenSession/makeRounds above). Rename/describe never
 // touch round_order, so they can't shift which question is live or being
 // reviewed; move does, and compensates for it in moveRound itself.
+const emptyRoundDraft = { question_type: "written", category: "", question_text: "", correct_answer: "", incorrect_answers: ["", "", ""], fun_fact: "" };
+
+// A cut-down manual "Write Question" form, just enough to seed a brand new
+// round's first question -- AI-assisted drafting and media stay on the
+// standalone builder page for now (a later merge phase ports those in).
+const AddRoundModal = ({ onCreate, onClose }) => {
+  const [name, setName] = useState("");
+  const [draft, setDraft] = useState(emptyRoundDraft);
+  const [saving, setSaving] = useState(false);
+
+  const updateWrong = (index, value) => setDraft((prev) => ({ ...prev, incorrect_answers: prev.incorrect_answers.map((answer, i) => (i === index ? value : answer)) }));
+
+  const handleCreate = async () => {
+    setSaving(true);
+    try {
+      const ok = await onCreate(name, draft);
+      if (ok) onClose();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 pt-8 md:pt-14 overflow-y-auto">
+    <div className="w-full max-w-2xl rounded-xl bg-[#17181c] border border-white/10 shadow-2xl shadow-black/60 p-5 relative">
+      <button type="button" onClick={onClose} className="absolute right-4 top-4 text-zinc-400 hover:text-white" aria-label="Close"><X size={18} /></button>
+      <h2 className="mb-1 text-xl font-bold text-white">Add Round</h2>
+      <p className="mb-5 text-sm text-zinc-500">Name the round and write its first question -- more questions can be added to it after.</p>
+      <div className="space-y-3">
+        <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Round name" className="h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" autoFocus />
+        <div className="grid grid-cols-1 md:grid-cols-[160px_1fr] gap-3">
+          <select value={draft.question_type} onChange={(event) => setDraft((prev) => ({ ...prev, question_type: event.target.value }))} className="h-10 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white">
+            <option value="written">Free Response</option>
+            <option value="true_false">True/False</option>
+            <option value="multiple_choice">Multiple Choice</option>
+          </select>
+          <input value={draft.category} onChange={(event) => setDraft((prev) => ({ ...prev, category: event.target.value }))} placeholder="Category" className="h-10 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
+        </div>
+        <textarea value={draft.question_text} onChange={(event) => setDraft((prev) => ({ ...prev, question_text: event.target.value }))} placeholder="Question" className="min-h-[86px] w-full resize-none rounded-md border border-white/10 bg-zinc-950/50 px-3 py-2 text-white outline-none focus:border-[#71E0DC]/60" />
+        <input value={draft.correct_answer} onChange={(event) => setDraft((prev) => ({ ...prev, correct_answer: event.target.value }))} placeholder="Correct answer" className="h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
+        {draft.question_type === "multiple_choice" && <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+          {draft.incorrect_answers.map((answer, index) => <input key={index} value={answer} onChange={(event) => updateWrong(index, event.target.value)} placeholder={`Wrong answer ${index + 1}`} className="h-10 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />)}
+        </div>}
+        <input value={draft.fun_fact} onChange={(event) => setDraft((prev) => ({ ...prev, fun_fact: event.target.value }))} placeholder="Fun fact (optional)" className="h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
+      </div>
+      <div className="mt-5 flex justify-end gap-2">
+        <Button type="button" variant="outline" onClick={onClose} className="border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
+        <Button type="button" onClick={handleCreate} disabled={saving} className="gradient-btn">{saving ? "Creating..." : "Create Round"}</Button>
+      </div>
+    </div>
+  </div>;
+};
+
 const RoundHeader = ({ round, canMoveUp, canMoveDown, canDelete, onRename, onDescribe, onMoveUp, onMoveDown, onDelete }) => {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(round.name);
@@ -2112,50 +2257,59 @@ const QuestionListView = ({
   displayedQuestion, goToQuestion, reviewQuestion, onBackToLive, onGoLiveWithThis,
   answersForQuestionIndex, gradedAnswers, players, hostAnswers, fairPlayStats,
   showAnswer, showFunFact, timeRemaining, viewPointsPerQuestion, viewTimerSeconds, viewWagerMode, viewWagerLimit, viewWagerTiming,
-  onUpdateSettings, renameRound, describeRound, moveRound, deleteRound, branding, markAnswer, addManualAnswer, editWager, releaseMode,
+  onUpdateSettings, renameRound, describeRound, moveRound, deleteRound, createRound, moveQuestionToRound, branding, markAnswer, addManualAnswer, editWager, releaseMode,
   hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion,
-}) => <div className="space-y-6">
-  {rounds.map((round, roundIndex) => <section key={round.key}>
-    <RoundHeader
-      round={round}
-      canMoveUp={roundIndex > 0}
-      canMoveDown={roundIndex < rounds.length - 1}
-      canDelete={rounds.length > 1}
-      onRename={(name) => renameRound(round, name)}
-      onDescribe={(description) => describeRound(round, description)}
-      onMoveUp={() => moveRound(round, -1)}
-      onMoveDown={() => moveRound(round, 1)}
-      onDelete={() => deleteRound(round)}
-    />
-    <div className="space-y-3">
-      {round.questions.map((question, localIndex) => {
-        const index = round.startIndex + localIndex;
-        if (index === hostIndex) {
-          return <QuestionStage key={question.id} question={displayedQuestion} index={hostIndex} total={questions.length} showAnswer={showAnswer} showFunFact={showFunFact} pointsPerQuestion={viewPointsPerQuestion} timerSeconds={viewTimerSeconds} timeRemaining={timeRemaining} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} wagerTiming={viewWagerTiming} onUpdateSettings={onUpdateSettings} branding={branding} players={players} answers={hostAnswers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} setMode={releaseMode} isReviewing={isReviewing} hasRevealExtra={hasRevealExtra} hasFunFact={hasFunFact} hasAudio={hasAudio} isPlayingAudio={isPlayingAudio} onToggleAudio={onToggleAudio} onRevealAnswer={onRevealAnswer} onShowFunFact={onShowFunFact} startTimer={startTimer} resetTimer={resetTimer} resetQuestion={resetQuestion} onBackToLive={onBackToLive} onGoLiveWithThis={onGoLiveWithThis} />;
-        }
-        const isLiveElsewhere = index === currentIndex && isReviewing;
-        const state = isLiveElsewhere ? "live" : index < currentIndex ? "completed" : "upcoming";
-        const questionAnswers = answersForQuestionIndex(index);
-        const graded = questionAnswers.map((answer) => gradedAnswers[answerKey(answer)]).filter(Boolean);
-        const correctCount = graded.filter((item) => item.status === "correct").length;
-        return <CollapsedQuestionCard
-          key={question.id}
-          question={question}
-          index={index}
-          state={state}
-          submittedCount={questionAnswers.length}
-          playerCount={players.length}
-          correctCount={correctCount}
-          eventOpen={eventOpen}
-          onAsk={() => goToQuestion(index, { startTimer: true })}
-          onReview={isLiveElsewhere ? onBackToLive : () => reviewQuestion(index)}
-        />;
-      })}
+}) => {
+  const [addRoundOpen, setAddRoundOpen] = useState(false);
+  return <div className="space-y-6">
+    <div className="flex justify-end">
+      <Button size="sm" variant="outline" onClick={() => setAddRoundOpen(true)} className="h-8 border-white/10 text-zinc-300 hover:text-white"><Plus size={14} className="mr-1.5" />Add Round</Button>
     </div>
-  </section>)}
-</div>;
+    {rounds.map((round, roundIndex) => <section key={round.key}>
+      <RoundHeader
+        round={round}
+        canMoveUp={roundIndex > 0}
+        canMoveDown={roundIndex < rounds.length - 1}
+        canDelete={rounds.length > 1}
+        onRename={(name) => renameRound(round, name)}
+        onDescribe={(description) => describeRound(round, description)}
+        onMoveUp={() => moveRound(round, -1)}
+        onMoveDown={() => moveRound(round, 1)}
+        onDelete={() => deleteRound(round)}
+      />
+      <div className="space-y-3">
+        {round.questions.map((question, localIndex) => {
+          const index = round.startIndex + localIndex;
+          if (index === hostIndex) {
+            return <QuestionStage key={question.id} question={displayedQuestion} index={hostIndex} total={questions.length} showAnswer={showAnswer} showFunFact={showFunFact} pointsPerQuestion={viewPointsPerQuestion} timerSeconds={viewTimerSeconds} timeRemaining={timeRemaining} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} wagerTiming={viewWagerTiming} onUpdateSettings={onUpdateSettings} branding={branding} players={players} answers={hostAnswers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} setMode={releaseMode} isReviewing={isReviewing} hasRevealExtra={hasRevealExtra} hasFunFact={hasFunFact} hasAudio={hasAudio} isPlayingAudio={isPlayingAudio} onToggleAudio={onToggleAudio} onRevealAnswer={onRevealAnswer} onShowFunFact={onShowFunFact} startTimer={startTimer} resetTimer={resetTimer} resetQuestion={resetQuestion} onBackToLive={onBackToLive} onGoLiveWithThis={onGoLiveWithThis} />;
+          }
+          const isLiveElsewhere = index === currentIndex && isReviewing;
+          const state = isLiveElsewhere ? "live" : index < currentIndex ? "completed" : "upcoming";
+          const questionAnswers = answersForQuestionIndex(index);
+          const graded = questionAnswers.map((answer) => gradedAnswers[answerKey(answer)]).filter(Boolean);
+          const correctCount = graded.filter((item) => item.status === "correct").length;
+          return <CollapsedQuestionCard
+            key={question.id}
+            question={question}
+            index={index}
+            state={state}
+            submittedCount={questionAnswers.length}
+            playerCount={players.length}
+            correctCount={correctCount}
+            eventOpen={eventOpen}
+            onAsk={() => goToQuestion(index, { startTimer: true })}
+            onReview={isLiveElsewhere ? onBackToLive : () => reviewQuestion(index)}
+            otherRounds={rounds.filter((item) => item.key !== round.key)}
+            onMoveToRound={(targetRound) => moveQuestionToRound(question, targetRound)}
+          />;
+        })}
+      </div>
+    </section>)}
+    {addRoundOpen && <AddRoundModal onCreate={createRound} onClose={() => setAddRoundOpen(false)} />}
+  </div>;
+};
 
-const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerCount, correctCount, eventOpen, onAsk, onReview }) => {
+const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerCount, correctCount, eventOpen, onAsk, onReview, otherRounds, onMoveToRound }) => {
   const meta = typeMeta[question.type] || typeMeta.written;
   const Icon = meta.icon;
   const points = getQuestionPoints(question);
@@ -2176,6 +2330,16 @@ const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerC
       {state === "live" && <span className="flex shrink-0 items-center gap-1.5 rounded-full border border-rose-400/30 bg-rose-400/10 px-2.5 py-1 text-xs font-bold text-rose-200"><span className="h-1.5 w-1.5 rounded-full bg-rose-400 animate-pulse" />LIVE</span>}
       {state === "completed" && <span className="shrink-0 rounded-full bg-zinc-800 px-2.5 py-1 text-xs font-bold text-zinc-300">{correctCount > 0 ? `${correctCount} correct` : "Asked"} &middot; {submittedCount}/{playerCount || 0}</span>}
       <div className="flex shrink-0 items-center gap-2">
+        {state !== "live" && otherRounds?.length > 0 && <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button type="button" title="Move to another round" aria-label="Move to another round" className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 text-zinc-400 hover:text-white">
+              <ArrowRightLeft size={13} />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="border-white/10 bg-zinc-950 text-zinc-100">
+            {otherRounds.map((round) => <DropdownMenuItem key={round.key} onClick={() => onMoveToRound(round)} className="cursor-pointer focus:bg-zinc-900 focus:text-white">Move to {round.name}</DropdownMenuItem>)}
+          </DropdownMenuContent>
+        </DropdownMenu>}
         {state !== "live" && <Button size="sm" variant="outline" onClick={onReview} className="h-8 border-white/10 text-zinc-300 hover:text-white"><Eye size={13} className="mr-1.5" />{state === "completed" ? "Review" : "Preview"}</Button>}
         {state === "upcoming" && <Button size="sm" onClick={onAsk} disabled={!eventOpen} title={!eventOpen ? "Open the event to start asking questions" : undefined} className="h-8 gradient-btn disabled:opacity-40"><Play size={13} className="mr-1.5" />Ask Question</Button>}
         {state === "live" && <Button size="sm" variant="outline" onClick={onReview} className="h-8 border-rose-300/30 text-rose-200 hover:text-white">View Live</Button>}
