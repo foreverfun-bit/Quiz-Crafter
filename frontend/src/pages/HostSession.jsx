@@ -1971,6 +1971,45 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     }
   };
 
+  // "I like this question but don't want to use it this round" -- saves a
+  // copy into the user's permanent question library (the `questions` table),
+  // completely independent of this session/round. Accepts either a flattened
+  // session question (questionText/answer/type/options/funFact/imageUrl) or a
+  // raw AI candidate (question_text/correct_answer/question_type/
+  // incorrect_answers/fun_fact/image_url), so the same action works from an
+  // existing round card and from an unreviewed Generate/Co-Host candidate.
+  const saveQuestionToLibrary = async (question) => {
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+    const userId = sessionData?.session?.user?.id;
+    if (sessionError || !userId) { toast.error("You must be signed in to save to your library"); return false; }
+    const answer = question.answer || question.correct_answer || "";
+    const questionText = question.questionText || question.question_text || question.question || "";
+    if (!questionText.trim() || !answer.trim()) { toast.error("Question and answer can't be empty"); return false; }
+    const incorrectAnswers = Array.isArray(question.options) && question.options.length
+      ? question.options.filter((option) => option !== answer).join("; ")
+      : Array.isArray(question.incorrect_answers) ? question.incorrect_answers.join("; ") : (question.incorrect_answers || null);
+    const payload = {
+      user_id: userId,
+      question_text: questionText,
+      correct_answer: answer,
+      question_type: question.type || question.question_type || "written",
+      category: question.category || "",
+      incorrect_answers: incorrectAnswers,
+      fun_fact: question.funFact || question.fun_fact || null,
+      image_url: question.imageUrl || question.image_url || null,
+    };
+    try {
+      const { error } = await supabase.from("questions").insert(payload);
+      if (error) throw error;
+      toast.success("Saved to library");
+      return true;
+    } catch (error) {
+      console.error("Save to library error:", error);
+      toast.error(error.message || "Failed to save to library");
+      return false;
+    }
+  };
+
   // Shared by every round-header action below: writes the same patch onto
   // every question in `roundQuestions`, across whichever real arrays they
   // live in, mirroring updateQuestionSettings's per-array patch/commit.
@@ -2545,7 +2584,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
       </div>
       {emptyStateAddRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} approvedCategories={approvedCategories} onClose={() => setEmptyStateAddRoundOpen(false)} />}
       {emptyStateWriteRound && <WriteQuestionModal round={emptyStateWriteRound} onCreate={(draft) => addQuestionToRound(emptyStateWriteRound, draft)} approvedCategories={approvedCategories} onClose={() => setEmptyStateWriteRoundKey(null)} />}
-      {emptyStateGenerateRound && <GenerateRoundModal round={emptyStateGenerateRound} venueId={session?.venue_id} existingQuestionTexts={new Set()} onAddAll={(candidates) => addGeneratedQuestionsToRound(emptyStateGenerateRound, candidates)} onClose={() => setEmptyStateGenerateRoundKey(null)} />}
+      {emptyStateGenerateRound && <GenerateRoundModal round={emptyStateGenerateRound} venueId={session?.venue_id} existingQuestionTexts={new Set()} onAddAll={(candidates) => addGeneratedQuestionsToRound(emptyStateGenerateRound, candidates)} onSaveToLibrary={saveQuestionToLibrary} onClose={() => setEmptyStateGenerateRoundKey(null)} />}
       {emptyStateManageRoundsOpen && <RoundManagerModal
         rounds={rounds}
         onRename={renameRound}
@@ -2653,6 +2692,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
             updateQuestionContent={updateQuestionContent}
             editQuestionWithAi={editQuestionWithAi}
             askCoHost={askCoHost}
+            saveQuestionToLibrary={saveQuestionToLibrary}
             approvedCategories={approvedCategories}
             addGeneratedQuestionsToRound={addGeneratedQuestionsToRound}
             venueId={session?.venue_id}
@@ -3129,7 +3169,7 @@ const GENERATE_DIFFICULTIES = [
 // a review step, not an auto-add: the host picks which ones to keep, then
 // "Add to Round" commits the selection in one batch via
 // addGeneratedQuestionsToRound.
-const GenerateRoundModal = ({ round, venueId, existingQuestionTexts, onAddAll, onClose }) => {
+const GenerateRoundModal = ({ round, venueId, existingQuestionTexts, onAddAll, onSaveToLibrary, onClose }) => {
   const [questionType, setQuestionType] = useState(round.questions[0]?.type || (round.questionType && round.questionType !== "mixed" ? round.questionType : "written"));
   const [difficulty, setDifficulty] = useState("medium");
   const [count, setCount] = useState(5);
@@ -3137,7 +3177,13 @@ const GenerateRoundModal = ({ round, venueId, existingQuestionTexts, onAddAll, o
   const [loading, setLoading] = useState(false);
   const [candidates, setCandidates] = useState([]);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [savedIds, setSavedIds] = useState(() => new Set());
   const [adding, setAdding] = useState(false);
+
+  const saveCandidate = async (candidate) => {
+    const ok = await onSaveToLibrary(candidate);
+    if (ok) setSavedIds((prev) => new Set(prev).add(candidate._id));
+  };
 
   const generate = async () => {
     setLoading(true);
@@ -3222,17 +3268,21 @@ const GenerateRoundModal = ({ round, venueId, existingQuestionTexts, onAddAll, o
       {candidates.length > 0 && <div className="mt-4 max-h-[360px] space-y-2 overflow-y-auto pr-1">
         {candidates.map((candidate) => {
           const selected = selectedIds.has(candidate._id);
-          return <button key={candidate._id} type="button" onClick={() => toggle(candidate._id)} className={`block w-full rounded-lg border p-3 text-left transition-colors ${selected ? "border-[#71E0DC]/40 bg-[#71E0DC]/5" : "border-white/10 bg-zinc-950/40 hover:border-white/20"}`}>
+          const saved = savedIds.has(candidate._id);
+          return <div key={candidate._id} role="button" tabIndex={0} onClick={() => toggle(candidate._id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") toggle(candidate._id); }} className={`block w-full cursor-pointer rounded-lg border p-3 text-left transition-colors ${selected ? "border-[#71E0DC]/40 bg-[#71E0DC]/5" : "border-white/10 bg-zinc-950/40 hover:border-white/20"}`}>
             <div className="flex items-start gap-2">
               <div className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border ${selected ? "border-[#71E0DC] bg-[#71E0DC]" : "border-white/20"}`}>{selected && <Check size={12} className="text-zinc-950" />}</div>
               <div className="min-w-0 flex-1">
-                <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-500">{candidate.category}</p>
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-500">{candidate.category}</p>
+                  <button type="button" disabled={saved} onClick={(event) => { event.stopPropagation(); saveCandidate(candidate); }} className={`shrink-0 text-[11px] font-semibold ${saved ? "text-zinc-600" : "text-zinc-400 hover:text-[#71E0DC]"}`}>{saved ? "Saved" : "Save to Library"}</button>
+                </div>
                 <p className="mt-0.5 text-sm font-semibold text-white">{candidate.question_text}</p>
                 <p className="mt-1 text-sm text-[#71E0DC]">Answer: {candidate.correct_answer}</p>
                 {candidate.fun_fact && <p className="mt-1 text-xs text-zinc-400">{candidate.fun_fact}</p>}
               </div>
             </div>
-          </button>;
+          </div>;
         })}
       </div>}
       {candidates.length > 0 && <div className="mt-4 flex items-center justify-between">
@@ -3254,12 +3304,13 @@ const GenerateRoundModal = ({ round, venueId, existingQuestionTexts, onAddAll, o
 // Every reply's candidates stay addable individually and never disappear
 // when a new message comes in, so an earlier answer's suggestions aren't
 // lost by continuing the conversation.
-const CoHostChatModal = ({ round, onAsk, onAddCandidate, onClose }) => {
+const CoHostChatModal = ({ round, onAsk, onAddCandidate, onSaveToLibrary, onClose }) => {
   const [messages, setMessages] = useState([]);
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
   const [candidatesByMessage, setCandidatesByMessage] = useState([]);
   const [addedIds, setAddedIds] = useState(() => new Set());
+  const [savedIds, setSavedIds] = useState(() => new Set());
 
   const send = async () => {
     const request = prompt.trim();
@@ -3283,6 +3334,11 @@ const CoHostChatModal = ({ round, onAsk, onAddCandidate, onClose }) => {
   const addCandidate = async (candidate) => {
     const ok = await onAddCandidate(candidate);
     if (ok) setAddedIds((prev) => new Set(prev).add(candidate._id));
+  };
+
+  const saveCandidate = async (candidate) => {
+    const ok = await onSaveToLibrary(candidate);
+    if (ok) setSavedIds((prev) => new Set(prev).add(candidate._id));
   };
 
   return <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 pt-8 md:pt-14 overflow-y-auto">
@@ -3324,8 +3380,12 @@ const CoHostChatModal = ({ round, onAsk, onAddCandidate, onClose }) => {
           <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
             {candidatesByMessage.length ? candidatesByMessage.map((candidate) => {
               const added = addedIds.has(candidate._id);
+              const saved = savedIds.has(candidate._id);
               return <div key={candidate._id} className="rounded-lg border border-white/10 bg-zinc-950/60 p-3">
-                <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-500">{candidate.category}</p>
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-500">{candidate.category}</p>
+                  <button type="button" disabled={saved} onClick={() => saveCandidate(candidate)} className={`shrink-0 text-[11px] font-semibold ${saved ? "text-zinc-600" : "text-zinc-400 hover:text-[#71E0DC]"}`}>{saved ? "Saved" : "Save to Library"}</button>
+                </div>
                 <p className="mt-1 text-sm font-semibold text-white">{candidate.question_text}</p>
                 <p className="mt-1 text-sm text-[#71E0DC]">Answer: {candidate.correct_answer}</p>
                 {candidate.fun_fact && <p className="mt-1 text-xs text-zinc-400">{candidate.fun_fact}</p>}
@@ -3579,7 +3639,7 @@ const QuestionListView = ({
   displayedQuestion, goToQuestion, reviewQuestion, onBackToLive, onGoLiveWithThis,
   answersForQuestionIndex, gradedAnswers, players, hostAnswers, fairPlayStats,
   showAnswer, showFunFact, timeRemaining, viewPointsPerQuestion, viewTimerSeconds, viewWagerMode, viewWagerLimit, viewWagerTiming,
-  onUpdateSettings, renameRound, describeRound, setEmptyRoundSettings, moveRound, deleteRound, createRound, createEmptyRound, moveQuestionToRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, addGeneratedQuestionsToRound, updateQuestionContent, editQuestionWithAi, askCoHost, venueId, approvedCategories, branding, markAnswer, addManualAnswer, editWager, releaseMode,
+  onUpdateSettings, renameRound, describeRound, setEmptyRoundSettings, moveRound, deleteRound, createRound, createEmptyRound, moveQuestionToRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, addGeneratedQuestionsToRound, updateQuestionContent, editQuestionWithAi, askCoHost, saveQuestionToLibrary, venueId, approvedCategories, branding, markAnswer, addManualAnswer, editWager, releaseMode,
   hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, resetQuestionAt,
 }) => {
   // Only one round is shown at a time (see RoundHeader/RoundSwitcher) --
@@ -3660,7 +3720,7 @@ const QuestionListView = ({
         {activeRound.questions.map((question, localIndex) => {
           const index = activeRound.startIndex + localIndex;
           if (index === hostIndex && (isReviewing || gameStarted)) {
-            return <QuestionStage key={question.id} question={displayedQuestion} index={hostIndex} total={questions.length} showAnswer={showAnswer} showFunFact={showFunFact} pointsPerQuestion={viewPointsPerQuestion} timerSeconds={viewTimerSeconds} timeRemaining={timeRemaining} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} wagerTiming={viewWagerTiming} onUpdateSettings={onUpdateSettings} onUpdateContent={(patch) => updateQuestionContent(displayedQuestion, patch)} onDuplicate={() => duplicateQuestion(displayedQuestion)} onAiEdit={() => setAiEditQuestionId(displayedQuestion.id)} branding={branding} players={players} answers={hostAnswers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} setMode={releaseMode} isReviewing={isReviewing} hasRevealExtra={hasRevealExtra} hasFunFact={hasFunFact} hasAudio={hasAudio} isPlayingAudio={isPlayingAudio} onToggleAudio={onToggleAudio} onRevealAnswer={onRevealAnswer} onShowFunFact={onShowFunFact} startTimer={startTimer} resetTimer={resetTimer} resetQuestion={resetQuestion} onBackToLive={onBackToLive} onGoLiveWithThis={onGoLiveWithThis} />;
+            return <QuestionStage key={question.id} question={displayedQuestion} index={hostIndex} total={questions.length} showAnswer={showAnswer} showFunFact={showFunFact} pointsPerQuestion={viewPointsPerQuestion} timerSeconds={viewTimerSeconds} timeRemaining={timeRemaining} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} wagerTiming={viewWagerTiming} onUpdateSettings={onUpdateSettings} onUpdateContent={(patch) => updateQuestionContent(displayedQuestion, patch)} onDuplicate={() => duplicateQuestion(displayedQuestion)} onAiEdit={() => setAiEditQuestionId(displayedQuestion.id)} onSaveToLibrary={saveQuestionToLibrary} branding={branding} players={players} answers={hostAnswers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} setMode={releaseMode} isReviewing={isReviewing} hasRevealExtra={hasRevealExtra} hasFunFact={hasFunFact} hasAudio={hasAudio} isPlayingAudio={isPlayingAudio} onToggleAudio={onToggleAudio} onRevealAnswer={onRevealAnswer} onShowFunFact={onShowFunFact} startTimer={startTimer} resetTimer={resetTimer} resetQuestion={resetQuestion} onBackToLive={onBackToLive} onGoLiveWithThis={onGoLiveWithThis} />;
           }
           const isLiveElsewhere = index === currentIndex && isReviewing;
           const state = isLiveElsewhere ? "live" : index < currentIndex ? "completed" : "upcoming";
@@ -3686,6 +3746,7 @@ const QuestionListView = ({
             onDiscard={() => discardQuestion(question)}
             onResetQuestion={() => resetQuestionAt(index)}
             onAiEdit={() => setAiEditQuestionId(question.id)}
+            onSaveToLibrary={saveQuestionToLibrary}
           />;
         })}
         {!activeRound.questions.length && <div className="rounded-lg border border-dashed border-white/15 bg-zinc-950/40 p-6 text-center">
@@ -3713,8 +3774,8 @@ const QuestionListView = ({
     {writeQuestionRound && <WriteQuestionModal round={writeQuestionRound} onCreate={(draft) => addQuestionToRound(writeQuestionRound, draft)} approvedCategories={approvedCategories} onClose={() => setWriteQuestionRoundKey(null)} />}
     {libraryRound && <LibraryPickerModal round={libraryRound} libraryQuestions={libraryQuestions} loading={libraryLoading} existingTexts={existingQuestionTexts} onInsert={(question) => addLibraryQuestionToRound(libraryRound, question)} onClose={() => setLibraryRoundKey(null)} />}
     {aiEditQuestion && <AiEditQuestionModal question={aiEditQuestion} onEdit={editQuestionWithAi} onApply={(patch) => updateQuestionContent(aiEditQuestion, patch)} onClose={() => setAiEditQuestionId(null)} />}
-    {generateRound && <GenerateRoundModal round={generateRound} venueId={venueId} existingQuestionTexts={existingQuestionTexts} onAddAll={(candidates) => addGeneratedQuestionsToRound(generateRound, candidates)} onClose={() => setGenerateRoundKey(null)} />}
-    {coHostRound && <CoHostChatModal round={coHostRound} onAsk={askCoHost} onAddCandidate={(candidate) => addGeneratedQuestionsToRound(coHostRound, [candidate])} onClose={() => setCoHostRoundKey(null)} />}
+    {generateRound && <GenerateRoundModal round={generateRound} venueId={venueId} existingQuestionTexts={existingQuestionTexts} onAddAll={(candidates) => addGeneratedQuestionsToRound(generateRound, candidates)} onSaveToLibrary={saveQuestionToLibrary} onClose={() => setGenerateRoundKey(null)} />}
+    {coHostRound && <CoHostChatModal round={coHostRound} onAsk={askCoHost} onAddCandidate={(candidate) => addGeneratedQuestionsToRound(coHostRound, [candidate])} onSaveToLibrary={saveQuestionToLibrary} onClose={() => setCoHostRoundKey(null)} />}
   </div>;
 };
 
@@ -3830,7 +3891,7 @@ const AnswerOptionPreview = ({ question }) => {
   return null;
 };
 
-const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerCount, correctCount, eventOpen, onAsk, onReview, currentRoundName, otherRounds, onMoveToRound, onUpdateContent, onDuplicate, onDiscard, onResetQuestion, onAiEdit }) => {
+const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerCount, correctCount, eventOpen, onAsk, onReview, currentRoundName, otherRounds, onMoveToRound, onUpdateContent, onDuplicate, onDiscard, onResetQuestion, onAiEdit, onSaveToLibrary }) => {
   const meta = typeMeta[question.type] || typeMeta.written;
   const points = getQuestionPoints(question);
   const wagerLimit = Number(question.wagerLimit || 0);
@@ -3896,6 +3957,7 @@ const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerC
                   {state === "completed" && <DropdownMenuItem onClick={onResetQuestion} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><RotateCcw size={14} className="mr-2" />Reset Question</DropdownMenuItem>}
                   {state === "completed" && <DropdownMenuItem onClick={onAsk} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><RefreshCw size={14} className="mr-2" />Reactivate Question</DropdownMenuItem>}
                   <DropdownMenuItem onClick={onDuplicate} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Copy size={14} className="mr-2" />Clone</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => onSaveToLibrary(question)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><List size={14} className="mr-2" />Save to Library</DropdownMenuItem>
                   {state !== "live" && <DropdownMenuItem onClick={onDiscard} className="cursor-pointer text-rose-300 focus:bg-zinc-900 focus:text-rose-200"><Trash2 size={14} className="mr-2" />Discard</DropdownMenuItem>}
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -4357,7 +4419,7 @@ const WagerChip = ({ answer, disabled, onSave }) => {
   return <button type="button" disabled={disabled} onClick={() => setEditing(true)} className="rounded-full border border-purple-400/30 bg-purple-400/10 px-2.5 py-1 text-[11px] font-bold text-purple-200 transition disabled:cursor-default disabled:opacity-70 enabled:hover:border-purple-300/60">{answer.playerName || "Team"}: {Number(answer.wagerAmount || 0)}</button>;
 };
 
-const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusMode, pointsPerQuestion, timerSeconds, timeRemaining, wagerMode, wagerTiming, onUpdateSettings, onUpdateContent, onDuplicate, onAiEdit, branding, players, answers, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, editWager, setMode, isReviewing, hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, onBackToLive, onGoLiveWithThis }) => {
+const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusMode, pointsPerQuestion, timerSeconds, timeRemaining, wagerMode, wagerTiming, onUpdateSettings, onUpdateContent, onDuplicate, onAiEdit, onSaveToLibrary, branding, players, answers, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, editWager, setMode, isReviewing, hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, onBackToLive, onGoLiveWithThis }) => {
   const [mediaModalOpen, setMediaModalOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(() => draftFromQuestion(question));
@@ -4427,6 +4489,7 @@ const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusM
                     {!isReviewing && <DropdownMenuItem onClick={resetTimer} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><RotateCcw size={14} className="mr-2" />Clear Timer</DropdownMenuItem>}
                     <DropdownMenuItem onClick={() => setMediaModalOpen(true)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Image size={14} className="mr-2" />Media</DropdownMenuItem>
                     <DropdownMenuItem onClick={onDuplicate} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Copy size={14} className="mr-2" />Clone</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => onSaveToLibrary(question)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><List size={14} className="mr-2" />Save to Library</DropdownMenuItem>
                     {resetQuestion && <DropdownMenuItem onClick={resetQuestion} className="cursor-pointer text-amber-300 focus:bg-zinc-900 focus:text-amber-200"><RefreshCw size={14} className="mr-2" />Reset Question</DropdownMenuItem>}
                   </DropdownMenuContent>
                 </DropdownMenu>
