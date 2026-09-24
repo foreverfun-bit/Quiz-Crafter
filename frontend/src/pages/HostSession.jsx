@@ -1274,7 +1274,14 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
 
   const toggleAnswer = () => {
     if (isReviewing) return;
-    setShowAnswer((value) => !value);
+    setShowAnswer((value) => {
+      const next = !value;
+      // Revealing settles the question -- a countdown still ticking
+      // underneath the revealed answer doesn't mean anything anymore, and
+      // leaving it running was confusing (looked like more time to answer).
+      if (next) setTimerEndAt(null);
+      return next;
+    });
     setGameStarted(true);
     setPresentMode("question");
   };
@@ -2500,7 +2507,7 @@ const LibraryPickerModal = ({ round, libraryQuestions, loading, existingTexts, o
 // visible at a time, seeing it next to its siblings is what makes reorder
 // and delete-with-guard legible, the same reason BuildSession's original
 // round dropdown paired with a separate management surface.
-const RoundHeader = ({ rounds, activeRound, activeIndex, onSelectRound, onManageRounds, onDescribe, onWriteQuestion, onAddFromLibrary }) => {
+const RoundHeader = ({ rounds, activeRound, activeIndex, onSelectRound, onManageRounds, onDescribe, onWriteQuestion, onAddFromLibrary, onNextRound, hasNextRound }) => {
   const [editingDescription, setEditingDescription] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState(activeRound.description || "");
 
@@ -2514,6 +2521,8 @@ const RoundHeader = ({ rounds, activeRound, activeIndex, onSelectRound, onManage
       <RoundSwitcher rounds={rounds} activeRound={activeRound} activeIndex={activeIndex} onSelect={onSelectRound} onManage={onManageRounds} />
       <span className="text-xs text-zinc-500">{activeRound.questions.length} question{activeRound.questions.length === 1 ? "" : "s"}</span>
       <div className="ml-auto flex items-center gap-1">
+        <button type="button" onClick={onNextRound} disabled={!hasNextRound} className="flex h-7 items-center gap-1 rounded px-2 text-xs font-medium text-zinc-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:text-zinc-400" title={hasNextRound ? "Go to next round" : "This is the last round"} aria-label="Next round">Next Round<ChevronRight size={14} /></button>
+        <div className="mx-0.5 h-4 w-px bg-white/10" />
         <button type="button" onClick={() => setEditingDescription((value) => !value)} className={`flex h-7 w-7 items-center justify-center rounded ${activeRound.description ? "text-[#71E0DC]" : "text-zinc-500"} hover:text-white`} title={activeRound.description ? "Edit round note" : "Add round note"} aria-label="Round note"><MessageSquare size={14} /></button>
         <button type="button" onClick={onWriteQuestion} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white" title="Write a question for this round" aria-label="Write question"><Pencil size={14} /></button>
         <button type="button" onClick={onAddFromLibrary} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white" title="Add from library" aria-label="Add from library"><List size={14} /></button>
@@ -2702,6 +2711,8 @@ const QuestionListView = ({
         onDescribe={(description) => describeRound(activeRound, description)}
         onWriteQuestion={() => setWriteQuestionRoundKey(activeRound.key)}
         onAddFromLibrary={() => openLibrary(activeRound.key)}
+        hasNextRound={activeIndex < rounds.length - 1}
+        onNextRound={() => { if (activeIndex < rounds.length - 1) setActiveRoundKey(rounds[activeIndex + 1].key); }}
       />
       <div className="space-y-3">
         {activeRound.questions.map((question, localIndex) => {
