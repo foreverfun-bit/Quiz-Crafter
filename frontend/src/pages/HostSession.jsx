@@ -2415,16 +2415,16 @@ const LibraryPickerModal = ({ round, libraryQuestions, loading, existingTexts, o
   </div>;
 };
 
-const RoundHeader = ({ round, canMoveUp, canMoveDown, canDelete, onRename, onDescribe, onMoveUp, onMoveDown, onDelete, onWriteQuestion, onAddFromLibrary }) => {
-  const [editingName, setEditingName] = useState(false);
-  const [nameDraft, setNameDraft] = useState(round.name);
+// Only the active round's bar renders here now -- see QuestionListView.
+// Renaming/reordering/deleting moved into RoundManagerModal (opened via the
+// RoundSwitcher dropdown's "Manage Rounds" entry): with only one round
+// visible at a time, seeing it next to its siblings is what makes reorder
+// and delete-with-guard legible, the same reason BuildSession's original
+// round dropdown paired with a separate management surface.
+const RoundHeader = ({ rounds, activeRound, activeIndex, onSelectRound, onManageRounds, onDescribe, onWriteQuestion, onAddFromLibrary }) => {
   const [editingDescription, setEditingDescription] = useState(false);
-  const [descriptionDraft, setDescriptionDraft] = useState(round.description || "");
+  const [descriptionDraft, setDescriptionDraft] = useState(activeRound.description || "");
 
-  const commitName = () => {
-    onRename(nameDraft);
-    setEditingName(false);
-  };
   const commitDescription = () => {
     onDescribe(descriptionDraft.trim());
     setEditingDescription(false);
@@ -2432,31 +2432,12 @@ const RoundHeader = ({ round, canMoveUp, canMoveDown, canDelete, onRename, onDes
 
   return <div className="sticky top-0 z-[5] mb-3 rounded-lg border border-white/10 bg-zinc-950/95 backdrop-blur">
     <div className="flex items-center gap-2 px-3 py-2">
-      {editingName ? (
-        <div className="flex flex-1 items-center gap-1.5">
-          <input
-            autoFocus
-            value={nameDraft}
-            onChange={(event) => setNameDraft(event.target.value)}
-            onKeyDown={(event) => { if (event.key === "Enter") commitName(); if (event.key === "Escape") { setNameDraft(round.name); setEditingName(false); } }}
-            className="h-7 flex-1 rounded border border-[#71E0DC]/40 bg-zinc-900 px-2 text-sm font-bold text-white outline-none"
-          />
-          <button type="button" onClick={commitName} className="text-emerald-300 hover:text-emerald-200" aria-label="Save round name"><Check size={15} /></button>
-          <button type="button" onClick={() => { setNameDraft(round.name); setEditingName(false); }} className="text-zinc-500 hover:text-white" aria-label="Cancel rename"><X size={15} /></button>
-        </div>
-      ) : (
-        <button type="button" onClick={() => { setNameDraft(round.name); setEditingName(true); }} className="flex items-center gap-1.5 text-sm font-bold text-white hover:text-[#71E0DC]" title="Rename round">
-          {round.name}<Pencil size={11} className="text-zinc-500" />
-        </button>
-      )}
-      <span className="text-xs text-zinc-500">{round.questions.length} question{round.questions.length === 1 ? "" : "s"}</span>
+      <RoundSwitcher rounds={rounds} activeRound={activeRound} activeIndex={activeIndex} onSelect={onSelectRound} onManage={onManageRounds} />
+      <span className="text-xs text-zinc-500">{activeRound.questions.length} question{activeRound.questions.length === 1 ? "" : "s"}</span>
       <div className="ml-auto flex items-center gap-1">
-        <button type="button" onClick={() => setEditingDescription((value) => !value)} className={`flex h-7 w-7 items-center justify-center rounded ${round.description ? "text-[#71E0DC]" : "text-zinc-500"} hover:text-white`} title={round.description ? "Edit round note" : "Add round note"} aria-label="Round note"><MessageSquare size={14} /></button>
+        <button type="button" onClick={() => setEditingDescription((value) => !value)} className={`flex h-7 w-7 items-center justify-center rounded ${activeRound.description ? "text-[#71E0DC]" : "text-zinc-500"} hover:text-white`} title={activeRound.description ? "Edit round note" : "Add round note"} aria-label="Round note"><MessageSquare size={14} /></button>
         <button type="button" onClick={onWriteQuestion} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white" title="Write a question for this round" aria-label="Write question"><Pencil size={14} /></button>
         <button type="button" onClick={onAddFromLibrary} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white" title="Add from library" aria-label="Add from library"><List size={14} /></button>
-        <button type="button" onClick={onMoveUp} disabled={!canMoveUp} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white disabled:opacity-30" aria-label="Move round up"><ChevronUp size={15} /></button>
-        <button type="button" onClick={onMoveDown} disabled={!canMoveDown} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white disabled:opacity-30" aria-label="Move round down"><ChevronDown size={15} /></button>
-        <button type="button" onClick={onDelete} disabled={!canDelete} title={canDelete ? "Delete round" : "Keep at least one round"} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-rose-300 disabled:opacity-30" aria-label="Delete round"><Trash2 size={14} /></button>
       </div>
     </div>
     {editingDescription && <div className="flex items-start gap-2 border-t border-white/5 px-3 py-2">
@@ -2467,6 +2448,102 @@ const RoundHeader = ({ round, canMoveUp, canMoveDown, canDelete, onRename, onDes
         placeholder="Optional note read out before this round starts..."
         className="min-h-16 flex-1 resize-none rounded-md border border-white/10 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-200 outline-none focus:border-[#71E0DC]/60"
       />
+      <div className="flex flex-col gap-1.5 pt-1">
+        <button type="button" onClick={commitDescription} className="text-emerald-300 hover:text-emerald-200" aria-label="Save round note"><Check size={15} /></button>
+        <button type="button" onClick={() => { setDescriptionDraft(activeRound.description || ""); setEditingDescription(false); }} className="text-zinc-500 hover:text-white" aria-label="Cancel note"><X size={15} /></button>
+      </div>
+    </div>}
+  </div>;
+};
+
+// Trigger + dropdown: "R{n}: {name}", a list of every round (name, position,
+// question count) to jump to, and a "Manage Rounds" entry for structural
+// changes. Matches the reference's round picker instead of stacking every
+// round's full question list on one page.
+const RoundSwitcher = ({ rounds, activeRound, activeIndex, onSelect, onManage }) => {
+  const [open, setOpen] = useState(false);
+  return <div className="relative">
+    <button type="button" onClick={() => setOpen((value) => !value)} className="flex h-7 items-center gap-1.5 rounded-md border border-[#71E0DC]/30 bg-[#71E0DC]/10 px-2.5 text-sm font-bold text-[#71E0DC]">
+      R{activeIndex + 1}: {activeRound.name}<ChevronDown size={14} className={`transition-transform ${open ? "rotate-180" : ""}`} />
+    </button>
+    {open && <>
+      <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+      <div className="absolute left-0 top-full z-20 mt-1 w-64 overflow-hidden rounded-lg border border-white/10 bg-zinc-950 shadow-xl shadow-black/60">
+        <p className="px-3 pb-1 pt-3 text-xs font-bold uppercase tracking-wide text-zinc-500">Rounds</p>
+        <div className="max-h-72 overflow-y-auto py-1">
+          {rounds.map((round, index) => <button key={round.key} type="button" onClick={() => { onSelect(round.key); setOpen(false); }} className={`flex w-full items-center justify-between px-3 py-2 text-left hover:bg-zinc-900 ${round.key === activeRound.key ? "bg-zinc-900/70" : ""}`}>
+            <span>
+              <span className={`block text-sm font-semibold ${round.key === activeRound.key ? "text-[#71E0DC]" : "text-white"}`}>{round.name}</span>
+              <span className="block text-xs text-zinc-500">Round {index + 1}</span>
+            </span>
+            <span className="text-xs text-zinc-500">({round.questions.length})</span>
+          </button>)}
+        </div>
+        <button type="button" onClick={() => { onManage(); setOpen(false); }} className="flex w-full items-center gap-2 border-t border-white/10 px-3 py-2.5 text-left hover:bg-zinc-900">
+          <Pencil size={14} className="text-zinc-400" />
+          <span>
+            <span className="block text-sm font-semibold text-white">Manage Rounds</span>
+            <span className="block text-xs text-zinc-500">Manage the rounds in the event.</span>
+          </span>
+        </button>
+      </div>
+    </>}
+  </div>;
+};
+
+// The structural surface for rounds -- rename/reorder/delete/add, all in one
+// place since seeing every round next to its siblings is what makes those
+// operations legible when only one round shows on the main screen at a time.
+const RoundManagerModal = ({ rounds, onRename, onDescribe, onMoveRound, onDelete, onAddRound, onClose }) => <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 pt-8 md:pt-14 overflow-y-auto">
+  <div className="w-full max-w-xl rounded-xl border border-white/10 bg-[#17181c] p-5 shadow-2xl shadow-black/60 relative">
+    <button type="button" onClick={onClose} className="absolute right-4 top-4 text-zinc-400 hover:text-white" aria-label="Close"><X size={18} /></button>
+    <h2 className="mb-4 text-xl font-bold text-white">Manage Rounds</h2>
+    <div className="space-y-2">
+      {rounds.map((round, index) => <RoundManagerRow
+        key={round.key}
+        round={round}
+        canMoveUp={index > 0}
+        canMoveDown={index < rounds.length - 1}
+        canDelete={rounds.length > 1}
+        onRename={(name) => onRename(round, name)}
+        onDescribe={(description) => onDescribe(round, description)}
+        onMoveUp={() => onMoveRound(round, -1)}
+        onMoveDown={() => onMoveRound(round, 1)}
+        onDelete={() => onDelete(round)}
+      />)}
+    </div>
+    <Button type="button" variant="outline" onClick={onAddRound} className="mt-4 w-full border-dashed border-white/15 text-zinc-300 hover:text-white"><Plus size={14} className="mr-1.5" />Add Round</Button>
+  </div>
+</div>;
+
+const RoundManagerRow = ({ round, canMoveUp, canMoveDown, canDelete, onRename, onDescribe, onMoveUp, onMoveDown, onDelete }) => {
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(round.name);
+  const [editingDescription, setEditingDescription] = useState(false);
+  const [descriptionDraft, setDescriptionDraft] = useState(round.description || "");
+
+  const commitName = () => { onRename(nameDraft); setEditingName(false); };
+  const commitDescription = () => { onDescribe(descriptionDraft.trim()); setEditingDescription(false); };
+
+  return <div className="rounded-lg border border-white/10 bg-zinc-950/40 p-2.5">
+    <div className="flex items-center gap-2">
+      {editingName ? <div className="flex flex-1 items-center gap-1.5">
+        <input autoFocus value={nameDraft} onChange={(event) => setNameDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") commitName(); if (event.key === "Escape") { setNameDraft(round.name); setEditingName(false); } }} className="h-8 flex-1 rounded border border-[#71E0DC]/40 bg-zinc-900 px-2 text-sm font-bold text-white outline-none" />
+        <button type="button" onClick={commitName} className="text-emerald-300 hover:text-emerald-200" aria-label="Save round name"><Check size={15} /></button>
+        <button type="button" onClick={() => { setNameDraft(round.name); setEditingName(false); }} className="text-zinc-500 hover:text-white" aria-label="Cancel rename"><X size={15} /></button>
+      </div> : <button type="button" onClick={() => { setNameDraft(round.name); setEditingName(true); }} className="flex flex-1 items-center gap-1.5 text-left text-sm font-bold text-white hover:text-[#71E0DC]" title="Rename round">
+        {round.name}<Pencil size={11} className="shrink-0 text-zinc-500" />
+        <span className="ml-1 text-xs font-normal text-zinc-500">{round.questions.length} question{round.questions.length === 1 ? "" : "s"}</span>
+      </button>}
+      <div className="flex shrink-0 items-center gap-1">
+        <button type="button" onClick={() => setEditingDescription((value) => !value)} className={`flex h-7 w-7 items-center justify-center rounded ${round.description ? "text-[#71E0DC]" : "text-zinc-500"} hover:text-white`} title={round.description ? "Edit round note" : "Add round note"} aria-label="Round note"><MessageSquare size={14} /></button>
+        <button type="button" onClick={onMoveUp} disabled={!canMoveUp} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white disabled:opacity-30" aria-label="Move round up"><ChevronUp size={15} /></button>
+        <button type="button" onClick={onMoveDown} disabled={!canMoveDown} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white disabled:opacity-30" aria-label="Move round down"><ChevronDown size={15} /></button>
+        <button type="button" onClick={onDelete} disabled={!canDelete} title={canDelete ? "Delete round" : "Keep at least one round"} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-rose-300 disabled:opacity-30" aria-label="Delete round"><Trash2 size={14} /></button>
+      </div>
+    </div>
+    {editingDescription && <div className="mt-2 flex items-start gap-2 border-t border-white/5 pt-2">
+      <textarea autoFocus value={descriptionDraft} onChange={(event) => setDescriptionDraft(event.target.value)} placeholder="Optional note read out before this round starts..." className="min-h-16 flex-1 resize-none rounded-md border border-white/10 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-200 outline-none focus:border-[#71E0DC]/60" />
       <div className="flex flex-col gap-1.5 pt-1">
         <button type="button" onClick={commitDescription} className="text-emerald-300 hover:text-emerald-200" aria-label="Save round note"><Check size={15} /></button>
         <button type="button" onClick={() => { setDescriptionDraft(round.description || ""); setEditingDescription(false); }} className="text-zinc-500 hover:text-white" aria-label="Cancel note"><X size={15} /></button>
@@ -2483,6 +2560,35 @@ const QuestionListView = ({
   onUpdateSettings, renameRound, describeRound, moveRound, deleteRound, createRound, moveQuestionToRound, addQuestionToRound, addLibraryQuestionToRound, updateQuestionContent, branding, markAnswer, addManualAnswer, editWager, releaseMode,
   hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion,
 }) => {
+  // Only one round is shown at a time (see RoundHeader/RoundSwitcher) --
+  // defaults to whichever round the live/reviewed question is in, and
+  // re-syncs to that whenever hostIndex moves (Ask Question / Review), so
+  // the view doesn't sit stale on a round nothing is happening in. A host
+  // who deliberately picks a different round via the switcher stays there
+  // until hostIndex itself changes next.
+  const [activeRoundKey, setActiveRoundKey] = useState(() => {
+    const liveRound = rounds.find((round) => hostIndex >= round.startIndex && hostIndex < round.startIndex + round.questions.length);
+    return (liveRound || rounds[0])?.key || null;
+  });
+  useEffect(() => {
+    const liveRound = rounds.find((round) => hostIndex >= round.startIndex && hostIndex < round.startIndex + round.questions.length);
+    if (liveRound) setActiveRoundKey(liveRound.key);
+    // Only hostIndex should trigger this -- re-running on every `rounds`
+    // change would fight the round-created effect below and the switcher's
+    // own manual selection.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hostIndex]);
+  // A freshly created round always lands last (see createRound) -- jump to
+  // it so the host sees the round they just named/wrote a question for.
+  const prevRoundCountRef = useRef(rounds.length);
+  useEffect(() => {
+    if (rounds.length > prevRoundCountRef.current) setActiveRoundKey(rounds[rounds.length - 1].key);
+    prevRoundCountRef.current = rounds.length;
+  }, [rounds]);
+  const activeRound = rounds.find((round) => round.key === activeRoundKey) || rounds[0];
+  const activeIndex = rounds.findIndex((round) => round.key === activeRound.key);
+
+  const [manageRoundsOpen, setManageRoundsOpen] = useState(false);
   const [addRoundOpen, setAddRoundOpen] = useState(false);
   const [writeQuestionRoundKey, setWriteQuestionRoundKey] = useState(null);
   const writeQuestionRound = rounds.find((round) => round.key === writeQuestionRoundKey) || null;
@@ -2506,27 +2612,21 @@ const QuestionListView = ({
     });
   };
   const existingQuestionTexts = new Set(questions.map((question) => String(question.questionText || "").trim().toLowerCase()).filter(Boolean));
-  return <div className="space-y-6">
-    <div className="flex justify-end">
-      <Button size="sm" variant="outline" onClick={() => setAddRoundOpen(true)} className="h-8 border-white/10 text-zinc-300 hover:text-white"><Plus size={14} className="mr-1.5" />Add Round</Button>
-    </div>
-    {rounds.map((round, roundIndex) => <section key={round.key}>
+  return <div className="space-y-3">
+    <section>
       <RoundHeader
-        round={round}
-        canMoveUp={roundIndex > 0}
-        canMoveDown={roundIndex < rounds.length - 1}
-        canDelete={rounds.length > 1}
-        onRename={(name) => renameRound(round, name)}
-        onDescribe={(description) => describeRound(round, description)}
-        onMoveUp={() => moveRound(round, -1)}
-        onMoveDown={() => moveRound(round, 1)}
-        onDelete={() => deleteRound(round)}
-        onWriteQuestion={() => setWriteQuestionRoundKey(round.key)}
-        onAddFromLibrary={() => openLibrary(round.key)}
+        rounds={rounds}
+        activeRound={activeRound}
+        activeIndex={activeIndex}
+        onSelectRound={setActiveRoundKey}
+        onManageRounds={() => setManageRoundsOpen(true)}
+        onDescribe={(description) => describeRound(activeRound, description)}
+        onWriteQuestion={() => setWriteQuestionRoundKey(activeRound.key)}
+        onAddFromLibrary={() => openLibrary(activeRound.key)}
       />
       <div className="space-y-3">
-        {round.questions.map((question, localIndex) => {
-          const index = round.startIndex + localIndex;
+        {activeRound.questions.map((question, localIndex) => {
+          const index = activeRound.startIndex + localIndex;
           if (index === hostIndex) {
             return <QuestionStage key={question.id} question={displayedQuestion} index={hostIndex} total={questions.length} showAnswer={showAnswer} showFunFact={showFunFact} pointsPerQuestion={viewPointsPerQuestion} timerSeconds={viewTimerSeconds} timeRemaining={timeRemaining} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} wagerTiming={viewWagerTiming} onUpdateSettings={onUpdateSettings} onUpdateContent={(patch) => updateQuestionContent(displayedQuestion, patch)} branding={branding} players={players} answers={hostAnswers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} setMode={releaseMode} isReviewing={isReviewing} hasRevealExtra={hasRevealExtra} hasFunFact={hasFunFact} hasAudio={hasAudio} isPlayingAudio={isPlayingAudio} onToggleAudio={onToggleAudio} onRevealAnswer={onRevealAnswer} onShowFunFact={onShowFunFact} startTimer={startTimer} resetTimer={resetTimer} resetQuestion={resetQuestion} onBackToLive={onBackToLive} onGoLiveWithThis={onGoLiveWithThis} />;
           }
@@ -2546,13 +2646,22 @@ const QuestionListView = ({
             eventOpen={eventOpen}
             onAsk={() => goToQuestion(index, { startTimer: true })}
             onReview={isLiveElsewhere ? onBackToLive : () => reviewQuestion(index)}
-            otherRounds={rounds.filter((item) => item.key !== round.key)}
+            otherRounds={rounds.filter((item) => item.key !== activeRound.key)}
             onMoveToRound={(targetRound) => moveQuestionToRound(question, targetRound)}
             onUpdateContent={(patch) => updateQuestionContent(question, patch)}
           />;
         })}
       </div>
-    </section>)}
+    </section>
+    {manageRoundsOpen && <RoundManagerModal
+      rounds={rounds}
+      onRename={renameRound}
+      onDescribe={describeRound}
+      onMoveRound={moveRound}
+      onDelete={deleteRound}
+      onAddRound={() => setAddRoundOpen(true)}
+      onClose={() => setManageRoundsOpen(false)}
+    />}
     {addRoundOpen && <AddRoundModal onCreate={createRound} onClose={() => setAddRoundOpen(false)} />}
     {writeQuestionRound && <WriteQuestionModal round={writeQuestionRound} onCreate={(draft) => addQuestionToRound(writeQuestionRound, draft)} onClose={() => setWriteQuestionRoundKey(null)} />}
     {libraryRound && <LibraryPickerModal round={libraryRound} libraryQuestions={libraryQuestions} loading={libraryLoading} existingTexts={existingQuestionTexts} onInsert={(question) => addLibraryQuestionToRound(libraryRound, question)} onClose={() => setLibraryRoundKey(null)} />}
