@@ -573,6 +573,8 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [reviewIndex, setReviewIndex] = useState(null);
   const [emptyStateAddRoundOpen, setEmptyStateAddRoundOpen] = useState(false);
+  const [emptyStateWriteRoundKey, setEmptyStateWriteRoundKey] = useState(null);
+  const [emptyStateManageRoundsOpen, setEmptyStateManageRoundsOpen] = useState(false);
   const [emergencyOverride, setEmergencyOverride] = useState(null);
   const [generatedEmergency, setGeneratedEmergency] = useState(null);
   const [emergencyLoading, setEmergencyLoading] = useState(false);
@@ -2319,11 +2321,10 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   }, [currentAnswers, displayedQuestion, gradedAnswers, wagerMode, wagerTiming, showAnswer]);
 
   if (loading) return <div className={`${embedded ? "h-full" : "min-h-screen"} bg-[#09090B] flex items-center justify-center`}><Loader2 className="text-[#71E0DC] animate-spin" size={34} /></div>;
-  if (!session || !displayedQuestion) {
-    // A brand-new event (see NewEventModal) lands here with zero questions --
-    // this used to be a dead end pointing back to the old builder page; now
-    // Add Round works from an empty session too, since a round only becomes
-    // real once it has its first question.
+  if (!session || (!displayedQuestion && !rounds.length)) {
+    // A brand-new event (see NewEventModal) lands here with zero questions
+    // and zero rounds -- this used to be a dead end pointing back to the old
+    // builder page; now Add Round works from an empty session too.
     return <div className={`${embedded ? "h-full" : "min-h-screen"} bg-[#09090B] flex items-center justify-center p-6 text-center`}>
       <div>
         <p className="text-white text-2xl font-bold mb-2">{session ? "No questions yet" : "Session not found"}</p>
@@ -2332,6 +2333,48 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
         {!embedded && <Button variant="outline" onClick={() => navigate(`/session/${id}`)} className="ml-2 border-white/10 text-zinc-300 hover:text-white">Back to Session</Button>}
       </div>
       {session && emptyStateAddRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} onClose={() => setEmptyStateAddRoundOpen(false)} />}
+    </div>;
+  }
+  if (!displayedQuestion) {
+    // Round(s) exist (createEmptyRound) but none has a real question yet --
+    // the rest of this page is built around a live/displayed real question
+    // (goToQuestion, QuestionStage, the live-hosting toolbar...), so this is
+    // a minimal bootstrap screen rather than trying to make all of that
+    // tolerate "no question exists anywhere." The moment any round gets its
+    // first question, currentIndex (already 0) points at it and the normal
+    // workspace below takes over on the next render.
+    const emptyStateWriteRound = rounds.find((round) => round.key === emptyStateWriteRoundKey);
+    return <div className={`${embedded ? "h-full" : "min-h-screen"} bg-[#09090B] p-6`}>
+      <div className="mx-auto max-w-2xl">
+        <p className="mb-1 text-center text-2xl font-bold text-white">Let's build this event</p>
+        <p className="mb-6 text-center text-zinc-500">Add a question to a round to get it started.</p>
+        <div className="space-y-3">
+          {rounds.map((round) => <div key={round.key} className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-zinc-950/40 p-4">
+            <div>
+              <p className="font-bold text-white">{round.name}</p>
+              <p className="text-xs text-zinc-500">{round.questions.length} question{round.questions.length === 1 ? "" : "s"}</p>
+            </div>
+            <Button size="sm" onClick={() => setEmptyStateWriteRoundKey(round.key)} className="gradient-btn"><Pencil size={13} className="mr-1.5" />Write Question</Button>
+          </div>)}
+        </div>
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+          <Button variant="outline" onClick={() => setEmptyStateAddRoundOpen(true)} className="border-white/10 text-zinc-300 hover:text-white"><Plus size={14} className="mr-1.5" />Add Round</Button>
+          <Button variant="outline" onClick={() => setEmptyStateManageRoundsOpen(true)} className="border-white/10 text-zinc-300 hover:text-white">Manage Rounds</Button>
+          {!embedded && <Button variant="outline" onClick={() => navigate(`/session/${id}`)} className="border-white/10 text-zinc-300 hover:text-white">Back to Session</Button>}
+        </div>
+      </div>
+      {emptyStateAddRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} onClose={() => setEmptyStateAddRoundOpen(false)} />}
+      {emptyStateWriteRound && <WriteQuestionModal round={emptyStateWriteRound} onCreate={(draft) => addQuestionToRound(emptyStateWriteRound, draft)} onClose={() => setEmptyStateWriteRoundKey(null)} />}
+      {emptyStateManageRoundsOpen && <RoundManagerModal
+        rounds={rounds}
+        onRename={renameRound}
+        onDescribe={describeRound}
+        onSetRoundSettings={(round, settings) => (round.isEmpty ? setEmptyRoundSettings(round, settings) : updateQuestionSettings({ points: settings.points, timerSeconds: settings.timerSeconds }, "round", round.questions[0]))}
+        onMoveRound={moveRound}
+        onDelete={deleteRound}
+        onAddRound={() => setEmptyStateAddRoundOpen(true)}
+        onClose={() => setEmptyStateManageRoundsOpen(false)}
+      />}
     </div>;
   }
 
