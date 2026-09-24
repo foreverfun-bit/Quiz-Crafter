@@ -756,6 +756,12 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
         // here so a host reload mid-event doesn't silently flip phones back
         // on (or off) behind the host's back.
         if (typeof hostedResultsRef.current?.liveState?.answersPaused === "boolean") setAnswersPaused(hostedResultsRef.current.liveState.answersPaused);
+        // Also restored here, not just in the endedAt-only branch below --
+        // without this, a host reloading mid-event (still on question 1,
+        // say) would see gameStarted reset to false and that question would
+        // wrongly render as "not yet asked" again instead of picking the
+        // live hosting view back up where the reload left off.
+        if (typeof hostedResultsRef.current?.liveState?.gameStarted === "boolean") setGameStarted(hostedResultsRef.current.liveState.gameStarted);
         applyStoredLiveEvents(hostedResultsRef.current);
         setBranding(readStoredBranding(id, data));
         const savedTeamHeadcounts = data?.attendance?.teamHeadcounts && typeof data.attendance.teamHeadcounts === "object" ? data.attendance.teamHeadcounts : {};
@@ -2257,6 +2263,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
             currentIndex={currentIndex}
             hostIndex={hostIndex}
             isReviewing={isReviewing}
+            gameStarted={gameStarted}
             eventOpen={eventOpen}
             displayedQuestion={displayedQuestion}
             goToQuestion={goToQuestion}
@@ -2625,7 +2632,7 @@ const RoundManagerRow = ({ round, canMoveUp, canMoveDown, canDelete, onRename, o
 };
 
 const QuestionListView = ({
-  rounds, questions, currentIndex, hostIndex, isReviewing, eventOpen,
+  rounds, questions, currentIndex, hostIndex, isReviewing, gameStarted, eventOpen,
   displayedQuestion, goToQuestion, reviewQuestion, onBackToLive, onGoLiveWithThis,
   answersForQuestionIndex, gradedAnswers, players, hostAnswers, fairPlayStats,
   showAnswer, showFunFact, timeRemaining, viewPointsPerQuestion, viewTimerSeconds, viewWagerMode, viewWagerLimit, viewWagerTiming,
@@ -2699,7 +2706,7 @@ const QuestionListView = ({
       <div className="space-y-3">
         {activeRound.questions.map((question, localIndex) => {
           const index = activeRound.startIndex + localIndex;
-          if (index === hostIndex) {
+          if (index === hostIndex && (isReviewing || gameStarted)) {
             return <QuestionStage key={question.id} question={displayedQuestion} index={hostIndex} total={questions.length} showAnswer={showAnswer} showFunFact={showFunFact} pointsPerQuestion={viewPointsPerQuestion} timerSeconds={viewTimerSeconds} timeRemaining={timeRemaining} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} wagerTiming={viewWagerTiming} onUpdateSettings={onUpdateSettings} onUpdateContent={(patch) => updateQuestionContent(displayedQuestion, patch)} onDuplicate={() => duplicateQuestion(displayedQuestion)} branding={branding} players={players} answers={hostAnswers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} setMode={releaseMode} isReviewing={isReviewing} hasRevealExtra={hasRevealExtra} hasFunFact={hasFunFact} hasAudio={hasAudio} isPlayingAudio={isPlayingAudio} onToggleAudio={onToggleAudio} onRevealAnswer={onRevealAnswer} onShowFunFact={onShowFunFact} startTimer={startTimer} resetTimer={resetTimer} resetQuestion={resetQuestion} onBackToLive={onBackToLive} onGoLiveWithThis={onGoLiveWithThis} />;
           }
           const isLiveElsewhere = index === currentIndex && isReviewing;
