@@ -10,9 +10,12 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import {
   AlertTriangle,
   ArrowLeft,
+  Check,
   CheckCircle,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Clock,
   Copy,
   Eye,
@@ -48,6 +51,7 @@ import {
   UserX,
   Users,
   Wifi,
+  X,
   XCircle,
   Zap,
 } from "lucide-react";
@@ -1747,6 +1751,144 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     }
   };
 
+  // Shared by every round-header action below: writes the same patch onto
+  // every question in `roundQuestions`, across whichever real arrays they
+  // live in, mirroring updateQuestionSettings's per-array patch/commit.
+  const commitQuestionPatch = async (roundQuestions, dbPatch) => {
+    const affectedIndicesByKey = new Map();
+    roundQuestions.forEach((question) => {
+      const match = String(question.id || "").match(/^(.+)-(\d+)$/);
+      if (!match) return;
+      const [, key, indexStr] = match;
+      if (!affectedIndicesByKey.has(key)) affectedIndicesByKey.set(key, new Set());
+      affectedIndicesByKey.get(key).add(Number(indexStr));
+    });
+    const updatedArrays = {};
+    affectedIndicesByKey.forEach((indices, key) => {
+      const current = Array.isArray(session[key]) ? session[key] : [];
+      updatedArrays[key] = current.map((question, index) => (indices.has(index) ? { ...question, ...dbPatch } : question));
+    });
+    setSession((current) => ({ ...current, ...updatedArrays }));
+    if (isTestRun) return;
+    try {
+      const { error } = await supabase.from("sessions").update(updatedArrays).eq("id", id);
+      if (error) throw error;
+    } catch (error) {
+      console.warn("Round update save unavailable:", error);
+      toast.error("Saved for this session, but couldn't sync to the database");
+    }
+  };
+
+  const renameRound = (round, name) => {
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === round.name) return;
+    commitQuestionPatch(round.questions, { round_name: trimmed });
+  };
+
+  const describeRound = (round, description) => {
+    if ((round.description || "") === description) return;
+    commitQuestionPatch(round.questions, { round_description: description });
+  };
+
+  // Adjacent-swap only (mirrors BuildSession's handleMoveRound). Renaming a
+  // round doesn't change its position in `questions` (sort key is roundOrder,
+  // not name) so it's inherently safe, but swapping round_order does move
+  // every one of that round's questions to new absolute indices -- and
+  // currentIndex/reviewIndex are raw positions into that same array. Without
+  // remapping them here, a live or reviewed question would silently become a
+  // *different* question the instant its round moved.
+  const moveRound = (round, direction) => {
+    const index = rounds.findIndex((item) => item.key === round.key);
+    const targetIndex = index + direction;
+    if (index === -1 || targetIndex < 0 || targetIndex >= rounds.length) return;
+    const other = rounds[targetIndex];
+    const roundOrderValue = round.questions[0]?.roundOrder;
+    const otherOrderValue = other.questions[0]?.roundOrder;
+    if (roundOrderValue === undefined || otherOrderValue === undefined || roundOrderValue === otherOrderValue) return;
+
+    const affectedIndicesByKey = new Map();
+    const queueOrder = (roundQuestions, order) => {
+      roundQuestions.forEach((question) => {
+        const match = String(question.id || "").match(/^(.+)-(\d+)$/);
+        if (!match) return;
+        const [, key, indexStr] = match;
+        if (!affectedIndicesByKey.has(key)) affectedIndicesByKey.set(key, new Map());
+        affectedIndicesByKey.get(key).set(Number(indexStr), order);
+      });
+    };
+    queueOrder(round.questions, otherOrderValue);
+    queueOrder(other.questions, roundOrderValue);
+
+    const updatedArrays = {};
+    affectedIndicesByKey.forEach((indexOrderMap, key) => {
+      const current = Array.isArray(session[key]) ? session[key] : [];
+      updatedArrays[key] = current.map((question, i) => (indexOrderMap.has(i) ? { ...question, round_order: indexOrderMap.get(i) } : question));
+    });
+
+    const [first, second] = round.startIndex < other.startIndex ? [round, other] : [other, round];
+    const remap = (position) => {
+      const firstLen = first.questions.length;
+      const secondLen = second.questions.length;
+      if (position >= first.startIndex && position < first.startIndex + firstLen) return second.startIndex + (position - first.startIndex);
+      if (position >= second.startIndex && position < second.startIndex + secondLen) return first.startIndex + (position - second.startIndex);
+      return position;
+    };
+
+    setSession((current) => ({ ...current, ...updatedArrays }));
+    setCurrentIndex((value) => remap(value));
+    setReviewIndex((value) => (value === null ? value : remap(value)));
+
+    if (isTestRun) return;
+    supabase.from("sessions").update(updatedArrays).eq("id", id).then(({ error }) => {
+      if (error) {
+        console.warn("Round reorder save unavailable:", error);
+        toast.error("Saved for this session, but couldn't sync to the database");
+      }
+    });
+  };
+
+  const deleteRound = (round) => {
+    if (rounds.length <= 1) return toast.error("Keep at least one round");
+    const removedCount = round.questions.length;
+    if (eventOpen && hostIndex >= round.startIndex && hostIndex < round.startIndex + removedCount) {
+      return toast.error("Can't delete the round that's currently live or being reviewed");
+    }
+    if (!window.confirm(`Delete "${round.name}" and its ${removedCount} question${removedCount === 1 ? "" : "s"}? This can't be undone.`)) return;
+
+    const affectedIndicesByKey = new Map();
+    round.questions.forEach((question) => {
+      const match = String(question.id || "").match(/^(.+)-(\d+)$/);
+      if (!match) return;
+      const [, key, indexStr] = match;
+      if (!affectedIndicesByKey.has(key)) affectedIndicesByKey.set(key, new Set());
+      affectedIndicesByKey.get(key).add(Number(indexStr));
+    });
+    const updatedArrays = {};
+    affectedIndicesByKey.forEach((indices, key) => {
+      const current = Array.isArray(session[key]) ? session[key] : [];
+      updatedArrays[key] = current.filter((_, index) => !indices.has(index));
+    });
+
+    const newLength = questions.length - removedCount;
+    const remap = (position) => {
+      if (position >= round.startIndex + removedCount) return position - removedCount;
+      if (position >= round.startIndex) return Math.min(round.startIndex, Math.max(0, newLength - 1));
+      return position;
+    };
+
+    setSession((current) => ({ ...current, ...updatedArrays }));
+    setCurrentIndex((value) => remap(value));
+    setReviewIndex((value) => (value === null ? value : newLength > 0 ? remap(value) : null));
+
+    if (isTestRun) return;
+    supabase.from("sessions").update(updatedArrays).eq("id", id).then(({ error }) => {
+      if (error) {
+        console.warn("Round delete save unavailable:", error);
+        toast.error("Saved for this session, but couldn't sync to the database");
+      }
+    });
+  };
+
   useEffect(() => {
     if (!displayedQuestion || !showAnswer) return;
     currentAnswers.forEach((answer) => {
@@ -1855,6 +1997,10 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
             viewWagerLimit={viewWagerLimit}
             viewWagerTiming={viewWagerTiming}
             onUpdateSettings={isReviewing ? () => {} : updateQuestionSettings}
+            renameRound={renameRound}
+            describeRound={describeRound}
+            moveRound={moveRound}
+            deleteRound={deleteRound}
             branding={branding}
             markAnswer={markAnswer}
             addManualAnswer={addManualAnswer}
@@ -1896,19 +2042,91 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
 // actions. The true live question always gets a small pulsing indicator even
 // while a different one is being reviewed, mirroring the old nav strip's
 // "LIVE: Q#" badge.
+// Existing rounds only -- no "+ Add Round" here yet (that's a later merge
+// phase, since creating a round with zero questions doesn't survive a
+// reload today; see flattenSession/makeRounds above). Rename/describe never
+// touch round_order, so they can't shift which question is live or being
+// reviewed; move does, and compensates for it in moveRound itself.
+const RoundHeader = ({ round, canMoveUp, canMoveDown, canDelete, onRename, onDescribe, onMoveUp, onMoveDown, onDelete }) => {
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(round.name);
+  const [editingDescription, setEditingDescription] = useState(false);
+  const [descriptionDraft, setDescriptionDraft] = useState(round.description || "");
+
+  const commitName = () => {
+    onRename(nameDraft);
+    setEditingName(false);
+  };
+  const commitDescription = () => {
+    onDescribe(descriptionDraft.trim());
+    setEditingDescription(false);
+  };
+
+  return <div className="sticky top-0 z-[5] mb-3 rounded-lg border border-white/10 bg-zinc-950/95 backdrop-blur">
+    <div className="flex items-center gap-2 px-3 py-2">
+      {editingName ? (
+        <div className="flex flex-1 items-center gap-1.5">
+          <input
+            autoFocus
+            value={nameDraft}
+            onChange={(event) => setNameDraft(event.target.value)}
+            onKeyDown={(event) => { if (event.key === "Enter") commitName(); if (event.key === "Escape") { setNameDraft(round.name); setEditingName(false); } }}
+            className="h-7 flex-1 rounded border border-[#71E0DC]/40 bg-zinc-900 px-2 text-sm font-bold text-white outline-none"
+          />
+          <button type="button" onClick={commitName} className="text-emerald-300 hover:text-emerald-200" aria-label="Save round name"><Check size={15} /></button>
+          <button type="button" onClick={() => { setNameDraft(round.name); setEditingName(false); }} className="text-zinc-500 hover:text-white" aria-label="Cancel rename"><X size={15} /></button>
+        </div>
+      ) : (
+        <button type="button" onClick={() => { setNameDraft(round.name); setEditingName(true); }} className="flex items-center gap-1.5 text-sm font-bold text-white hover:text-[#71E0DC]" title="Rename round">
+          {round.name}<Pencil size={11} className="text-zinc-500" />
+        </button>
+      )}
+      <span className="text-xs text-zinc-500">{round.questions.length} question{round.questions.length === 1 ? "" : "s"}</span>
+      <div className="ml-auto flex items-center gap-1">
+        <button type="button" onClick={() => setEditingDescription((value) => !value)} className={`flex h-7 items-center gap-1 rounded px-2 text-xs font-semibold ${round.description ? "text-[#71E0DC]" : "text-zinc-500"} hover:text-white`} title="Round description">
+          <MessageSquare size={13} />{round.description ? "Edit note" : "Add note"}
+        </button>
+        <button type="button" onClick={onMoveUp} disabled={!canMoveUp} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white disabled:opacity-30" aria-label="Move round up"><ChevronUp size={15} /></button>
+        <button type="button" onClick={onMoveDown} disabled={!canMoveDown} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white disabled:opacity-30" aria-label="Move round down"><ChevronDown size={15} /></button>
+        <button type="button" onClick={onDelete} disabled={!canDelete} title={canDelete ? "Delete round" : "Keep at least one round"} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-rose-300 disabled:opacity-30" aria-label="Delete round"><Trash2 size={14} /></button>
+      </div>
+    </div>
+    {editingDescription && <div className="flex items-start gap-2 border-t border-white/5 px-3 py-2">
+      <textarea
+        autoFocus
+        value={descriptionDraft}
+        onChange={(event) => setDescriptionDraft(event.target.value)}
+        placeholder="Optional note read out before this round starts..."
+        className="min-h-16 flex-1 resize-none rounded-md border border-white/10 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-200 outline-none focus:border-[#71E0DC]/60"
+      />
+      <div className="flex flex-col gap-1.5 pt-1">
+        <button type="button" onClick={commitDescription} className="text-emerald-300 hover:text-emerald-200" aria-label="Save round note"><Check size={15} /></button>
+        <button type="button" onClick={() => { setDescriptionDraft(round.description || ""); setEditingDescription(false); }} className="text-zinc-500 hover:text-white" aria-label="Cancel note"><X size={15} /></button>
+      </div>
+    </div>}
+  </div>;
+};
+
 const QuestionListView = ({
   rounds, questions, currentIndex, hostIndex, isReviewing, eventOpen,
   displayedQuestion, goToQuestion, reviewQuestion, onBackToLive, onGoLiveWithThis,
   answersForQuestionIndex, gradedAnswers, players, hostAnswers, fairPlayStats,
   showAnswer, showFunFact, timeRemaining, viewPointsPerQuestion, viewTimerSeconds, viewWagerMode, viewWagerLimit, viewWagerTiming,
-  onUpdateSettings, branding, markAnswer, addManualAnswer, editWager, releaseMode,
+  onUpdateSettings, renameRound, describeRound, moveRound, deleteRound, branding, markAnswer, addManualAnswer, editWager, releaseMode,
   hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion,
 }) => <div className="space-y-6">
-  {rounds.map((round) => <section key={round.key}>
-    <div className="sticky top-0 z-[5] mb-3 flex items-center gap-2 rounded-lg border border-white/10 bg-zinc-950/95 px-3 py-2 backdrop-blur">
-      <span className="text-sm font-bold text-white">{round.name}</span>
-      <span className="text-xs text-zinc-500">{round.questions.length} question{round.questions.length === 1 ? "" : "s"}</span>
-    </div>
+  {rounds.map((round, roundIndex) => <section key={round.key}>
+    <RoundHeader
+      round={round}
+      canMoveUp={roundIndex > 0}
+      canMoveDown={roundIndex < rounds.length - 1}
+      canDelete={rounds.length > 1}
+      onRename={(name) => renameRound(round, name)}
+      onDescribe={(description) => describeRound(round, description)}
+      onMoveUp={() => moveRound(round, -1)}
+      onMoveDown={() => moveRound(round, 1)}
+      onDelete={() => deleteRound(round)}
+    />
     <div className="space-y-3">
       {round.questions.map((question, localIndex) => {
         const index = round.startIndex + localIndex;
