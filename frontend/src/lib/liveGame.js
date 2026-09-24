@@ -102,6 +102,11 @@ export const setLivePlayerName = (playerId, name) => callLiveGame("setPlayerName
 
 export const removeLivePlayer = (playerId) => callAuthedLiveGame("removeLivePlayer", { playerId });
 
+// Marks a game's live_games row finished -- call this when a real hosted
+// session actually ends, so anything checking "is this session live right
+// now" (findLiveGame, the merged event workspace) stops seeing it as live.
+export const endLiveGame = (gameId) => callAuthedLiveGame("endLiveGame", { gameId });
+
 // Roster/leaderboard changes ride their own realtime subscription on
 // live_game_players instead of the host_state broadcast, so a player
 // joining or a score changing no longer forces a full question-object

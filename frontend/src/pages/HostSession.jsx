@@ -1,24 +1,32 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
-import { uploadQuestionMedia } from "../lib/mediaUpload";
-import { ensureLiveGame, fetchLivePlayers, subscribeLivePlayers, upsertLivePlayer, removeLivePlayer, resetTestGame } from "../lib/liveGame";
+import { uploadQuestionMedia, uploadQuestionAudio } from "../lib/mediaUpload";
+import { canonicalCategory, categoryKey, dedupeCategories, loadLocalCategoryPrefs } from "../lib/categories";
+import { ensureLiveGame, fetchLivePlayers, subscribeLivePlayers, upsertLivePlayer, removeLivePlayer, resetTestGame, endLiveGame } from "../lib/liveGame";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent } from "../components/ui/card";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
+import { Popover, PopoverTrigger, PopoverContent } from "../components/ui/popover";
 import {
   AlertTriangle,
   ArrowLeft,
+  ArrowRightLeft,
+  Bot,
+  Check,
   CheckCircle,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Clock,
   Copy,
   Eye,
   EyeOff,
   ExternalLink,
   Image,
+  Link,
   List,
   Loader2,
   Lock,
@@ -26,6 +34,7 @@ import {
   MessageSquare,
   MonitorPlay,
   MoreHorizontal,
+  MoreVertical,
   Music,
   Palette,
   Pause,
@@ -36,6 +45,7 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
+  SlidersHorizontal,
   Sparkles,
   Tags,
   ThumbsDown,
@@ -48,11 +58,13 @@ import {
   UserX,
   Users,
   Wifi,
+  X,
   XCircle,
   Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 import { hostToolsStorageKey, loadHostSetupSettings, loadHostToolsSessionState, loadProfileValue, profileKeys, readCurrentProjectSessionId, resetHostToolsSessionState, saveHostSetupSettings, saveHostToolsSessionState, updateUserMetadata, writeCurrentProjectSessionId } from "../lib/profileState";
+import { readHostStyleProfile } from "../lib/hostStyleMemory";
 
 const STORAGE_BASE = process.env.REACT_APP_SUPABASE_URL ? `${process.env.REACT_APP_SUPABASE_URL}/storage/v1/object/public/` : "";
 const PRODUCTION_HOSTNAMES = new Set(["quizcrafter.fun", "www.quizcrafter.fun", "quiz-crafter-foreverfun-bits-projects.vercel.app"]);
@@ -266,7 +278,10 @@ const normalizeType = (question, fallbackType = "written") => {
 
 const getRoundOrder = (question, fallbackOrder = 1) => Number(question?.round_order || question?.round_number || question?.round || fallbackOrder) || fallbackOrder;
 const getSourceOrder = (question, fallbackOrder = 1) => Number(question?.import_order || question?.source_order || question?.question_order || question?.order || fallbackOrder) || fallbackOrder;
-const normalizeWagerTiming = (value) => value === "after_answer" || value === "after" ? "after_answer" : "before_answer";
+// After-answer is the default going forward -- only a question explicitly
+// saved with "before_answer" keeps that behavior; anything unset (including
+// every question saved before this default flip) normalizes to after_answer.
+const normalizeWagerTiming = (value) => value === "before_answer" || value === "before" ? "before_answer" : "after_answer";
 // Headcounts used to be a single number; treat an old plain number as the
 // adults count so a session tracked before the adults/kids split isn't lost.
 const normalizeHeadcount = (value) => {
@@ -313,6 +328,7 @@ const flattenSession = (session) => {
         funFact: question.fun_fact || "",
         imageUrl: firstQuestionImageUrl(question),
         imageTiming: normalizeImageTiming(question.image_timing || question.image_display_timing || question.media_timing || question.mediaTiming),
+        audioUrl: question.audio_url || question.audioUrl || "",
         options: buildAnswerOptions(question, questionType),
         type: questionType,
         roundName: getRoundName(question, roundOrder),
@@ -334,7 +350,7 @@ const makeRounds = (questions) => {
   const groups = new Map();
   questions.forEach((question, index) => {
     const key = `${question.roundOrder}-${question.roundName}`;
-    if (!groups.has(key)) groups.set(key, { key, name: question.roundName, description: question.roundDescription || "", startIndex: index, questions: [] });
+    if (!groups.has(key)) groups.set(key, { key, name: question.roundName, description: question.roundDescription || "", startIndex: index, questions: [], roundOrder: question.roundOrder });
     groups.get(key).questions.push(question);
   });
   return [...groups.values()];
@@ -430,11 +446,36 @@ const mergePlayerProfiles = (current, incoming) => {
 };
 const normalizeAnswerText = (value) => String(value || "").trim().toLowerCase().replace(/[’']/g, "'").replace(/[^a-z0-9]+/g, " ").trim();
 const isCorrectSubmission = (answer, question) => Boolean(question?.answer) && normalizeAnswerText(answer?.answer) === normalizeAnswerText(question.answer);
-const serializeRoundIntro = (round) => round ? { key: round.key, name: round.name, description: round.description || "", categories: [...new Set((round.questions || []).map((question) => question.category).filter(Boolean))], questionCount: round.questions?.length || 0, startIndex: round.startIndex } : null;
+const serializeRoundIntro = (round) => {
+  if (!round) return null;
+  const firstQuestion = round.questions?.[0];
+  // An empty round (createEmptyRound) has no first question to read type/
+  // points/timer off of -- fall back to the defaults stored with the round
+  // itself, so its Round Intro still carries them.
+  const uniformType = firstQuestion
+    ? (round.questions.every((question) => question.type === firstQuestion.type) ? firstQuestion.type : null)
+    : (round.questionType && round.questionType !== "mixed" ? round.questionType : null);
+  return {
+    key: round.key,
+    name: round.name,
+    description: round.description || "",
+    categories: [...new Set((round.questions || []).map((question) => question.category).filter(Boolean))],
+    questionCount: round.questions?.length || 0,
+    startIndex: round.startIndex,
+    questionType: uniformType,
+    points: firstQuestion ? getQuestionPoints(firstQuestion) : (round.points ?? null),
+    timerSeconds: firstQuestion?.timerSeconds || round.timerSeconds || null,
+  };
+};
 const getTeamScore = (leaderboard, teamId) => Number(leaderboard.find((team) => team.id === teamId)?.score || 0);
 const isLateSubmission = (answer) => answer?.secondsRemainingAtSubmit !== null && answer?.secondsRemainingAtSubmit !== undefined && Number(answer.secondsRemainingAtSubmit) <= 5;
 const hasSubmittedWager = (answer) => Boolean(answer?.wagerMode) && (answer?.wagerSubmitted === true || answer?.wagerTiming !== "after_answer" || Number(answer?.wagerAmount || 0) > 0);
-const getWagerAward = (answer, leaderboard, wagerLimit, previousPoints = 0) => {
+// There is no host-configured wager ceiling anymore -- wagering is a plain
+// on/off switch per question (wagerLimit > 0 just means "on"), and the only
+// real cap is whatever the team actually had to stake, snapshotted at
+// submit time (wagerCap/scoreAtWager) and re-derived here from the
+// leaderboard as a fallback.
+const getWagerAward = (answer, leaderboard, previousPoints = 0) => {
   const requested = Math.max(0, Number(answer?.wagerAmount || 0));
   if (!requested) return 0;
   const currentScore = getTeamScore(leaderboard, answer.playerId);
@@ -442,8 +483,7 @@ const getWagerAward = (answer, leaderboard, wagerLimit, previousPoints = 0) => {
     ? Math.max(0, Number(answer.scoreAtWager))
     : Math.max(0, currentScore - Number(previousPoints || 0));
   const submittedCap = Number.isFinite(Number(answer?.wagerCap)) ? Number(answer.wagerCap) : Number.POSITIVE_INFINITY;
-  const configuredCap = Number(wagerLimit || 0) > 0 ? Number(wagerLimit) : Number.POSITIVE_INFINITY;
-  return Math.min(requested, configuredCap, submittedCap, scoreAtWager);
+  return Math.min(requested, submittedCap, scoreAtWager);
 };
 const buildFairPlayStats = (players, answers, gradedAnswers) => {
   const teamIds = new Set([...players.map((player) => player.id), ...answers.map((answer) => answer.playerId)]);
@@ -490,8 +530,25 @@ const sendLiveBroadcast = (channel, message, attempt = 0) => {
   });
 };
 
-const HostSession = () => {
-  const { id } = useParams();
+// sessionIdProp/onEditBuild let this render embedded inside EventWorkspace.jsx's
+// merged popout (id passed as a prop, the Emergency panel's "editBuild" link
+// flips the popout's own mode back to the editor instead of navigating to a
+// different page) while leaving the standalone /host-session/:id route's
+// behavior -- reading the id from the URL, navigating to /build/:id --
+// completely unchanged.
+const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {}) => {
+  const { id: idParam } = useParams();
+  const id = sessionIdProp || idParam;
+  const embedded = Boolean(sessionIdProp);
+  // Whether the host has actually opened this event yet. Defaults to true
+  // (today's always-on behavior) at the standalone /host-session/:id route;
+  // EventWorkspace passes an explicit value for the embedded, unified view,
+  // where this component now mounts before the host is ready to go live so
+  // they can review/arrange questions first. Gates ensureLiveGame and the
+  // live-state broadcast/persist effect below -- without that gate, simply
+  // opening the workspace to look at questions would silently create a
+  // live_games row and start broadcasting live state before "Open Event".
+  const [eventOpen, setEventOpen] = useState(initialEventOpen);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const isTestRun = searchParams.get("mode") === "test";
@@ -514,10 +571,15 @@ const HostSession = () => {
   const liveStateSaveKeyRef = useRef("");
   const liveRosterSyncKeyRef = useRef("");
   const [session, setSession] = useState(null);
+  const [approvedCategories, setApprovedCategories] = useState([]);
   const [liveGameId, setLiveGameId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [reviewIndex, setReviewIndex] = useState(null);
+  const [emptyStateAddRoundOpen, setEmptyStateAddRoundOpen] = useState(false);
+  const [emptyStateWriteRoundKey, setEmptyStateWriteRoundKey] = useState(null);
+  const [emptyStateGenerateRoundKey, setEmptyStateGenerateRoundKey] = useState(null);
+  const [emptyStateManageRoundsOpen, setEmptyStateManageRoundsOpen] = useState(false);
   const [emergencyOverride, setEmergencyOverride] = useState(null);
   const [generatedEmergency, setGeneratedEmergency] = useState(null);
   const [emergencyLoading, setEmergencyLoading] = useState(false);
@@ -556,7 +618,7 @@ const HostSession = () => {
   const [pointsPerQuestion, setPointsPerQuestion] = useState(25);
   const [wagerMode, setWagerMode] = useState(false);
   const [wagerLimit, setWagerLimit] = useState(0);
-  const [wagerTiming, setWagerTiming] = useState("before_answer");
+  const [wagerTiming, setWagerTiming] = useState("after_answer");
   const [timerSeconds, setTimerSeconds] = useState(30);
   const [timerEndAt, setTimerEndAt] = useState(null);
   const [now, setNow] = useState(Date.now());
@@ -709,6 +771,30 @@ const HostSession = () => {
     return () => window.clearInterval(interval);
   }, []);
 
+  // Same "approved categories" the standalone builder page cycles through --
+  // the host's saved approve/reject prefs (quiz-crafter-category-preferences,
+  // shared via lib/categories so approving one from either screen shows up
+  // in both) layered onto every category actually seen in the question
+  // library, minus anything rejected. Fetched once; a category approved
+  // mid-event elsewhere won't retroactively appear here without a reload,
+  // same tradeoff BuildSession already accepts.
+  useEffect(() => {
+    let cancelled = false;
+    supabase.from("questions").select("category").then(({ data, error }) => {
+      if (cancelled) return;
+      if (error) { console.warn("Category list unavailable:", error); return; }
+      const prefs = loadLocalCategoryPrefs();
+      const approved = new Set(prefs.approved);
+      const rejectedKeys = new Set(prefs.rejected.map(categoryKey));
+      (data || []).forEach((row) => {
+        const category = canonicalCategory(row.category, [...approved]);
+        if (category && !rejectedKeys.has(categoryKey(category))) approved.add(category);
+      });
+      setApprovedCategories(dedupeCategories([...approved]).sort((a, b) => a.localeCompare(b)));
+    });
+    return () => { cancelled = true; };
+  }, []);
+
   useEffect(() => {
     const loadSession = async () => {
       setLoading(true);
@@ -722,6 +808,12 @@ const HostSession = () => {
         // here so a host reload mid-event doesn't silently flip phones back
         // on (or off) behind the host's back.
         if (typeof hostedResultsRef.current?.liveState?.answersPaused === "boolean") setAnswersPaused(hostedResultsRef.current.liveState.answersPaused);
+        // Also restored here, not just in the endedAt-only branch below --
+        // without this, a host reloading mid-event (still on question 1,
+        // say) would see gameStarted reset to false and that question would
+        // wrongly render as "not yet asked" again instead of picking the
+        // live hosting view back up where the reload left off.
+        if (typeof hostedResultsRef.current?.liveState?.gameStarted === "boolean") setGameStarted(hostedResultsRef.current.liveState.gameStarted);
         applyStoredLiveEvents(hostedResultsRef.current);
         setBranding(readStoredBranding(id, data));
         const savedTeamHeadcounts = data?.attendance?.teamHeadcounts && typeof data.attendance.teamHeadcounts === "object" ? data.attendance.teamHeadcounts : {};
@@ -765,7 +857,7 @@ const HostSession = () => {
   // Retries with backoff, and surfaces a toast if it's still failing after
   // a few attempts instead of staying silent forever.
   useEffect(() => {
-    if (!session) return undefined;
+    if (!session || !eventOpen) return undefined;
     let cancelled = false;
     let timeoutId = null;
     let attempt = 0;
@@ -782,7 +874,7 @@ const HostSession = () => {
     };
     tryEnsure();
     return () => { cancelled = true; window.clearTimeout(timeoutId); };
-  }, [id, session, isTestRun]);
+  }, [id, session, isTestRun, eventOpen]);
 
   useEffect(() => {
     if (!liveGameId) return undefined;
@@ -943,7 +1035,38 @@ const HostSession = () => {
   }, [applyLivePlayerEvent, id]);
 
   const questions = useMemo(() => flattenSession(session), [session]);
-  const rounds = useMemo(() => makeRounds(questions), [questions]);
+  // A round can now exist before it has any questions -- "Create Round"
+  // without writing a first question yet (createEmptyRound below) stores a
+  // shell in session.round_descriptions (name/description/order plus the
+  // question-type/points/timer defaults for whatever gets added to it
+  // later). Once it has real questions, its identity moves onto them
+  // (round_name/round_order, same as always) and this shell is just ignored
+  // -- filtered out here because a real group with the same order+name
+  // already exists, never deleted, since the fallback description lookup
+  // still reads it (see getRoundDescription).
+  const rounds = useMemo(() => {
+    const built = makeRounds(questions);
+    // A round_descriptions entry can go stale against a real round (e.g. an
+    // older save wrote it, then the round was renamed or reordered here --
+    // renameRound/moveRound only patch it for a round that's still empty).
+    // Matching on order-or-name against every real round, not just the exact
+    // pair, keeps a stale entry from resurfacing as a bogus duplicate round.
+    const realNames = new Set(built.map((round) => round.name));
+    const realOrders = new Set(built.map((round) => round.roundOrder));
+    const emptyRounds = getRoundMetadata(session)
+      .map((entry) => ({
+        name: entry.name || entry.round_name || "",
+        description: entry.description || entry.round_description || "",
+        order: Number(entry.order ?? entry.round_order) || 0,
+        questionType: entry.question_type || "mixed",
+        points: entry.points ?? null,
+        timerSeconds: Number(entry.timer_seconds) || 30,
+      }))
+      .filter((entry) => entry.name && !realNames.has(entry.name) && !realOrders.has(entry.order))
+      .map((entry) => ({ key: `${entry.order}-${entry.name}`, name: entry.name, description: entry.description, startIndex: questions.length, questions: [], roundOrder: entry.order, isEmpty: true, questionType: entry.questionType, points: entry.points, timerSeconds: entry.timerSeconds }));
+    return [...built, ...emptyRounds].sort((a, b) => a.roundOrder - b.roundOrder);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [questions, session?.round_descriptions]);
   const isReviewing = reviewIndex !== null;
   const hostIndex = isReviewing ? reviewIndex : currentIndex;
   // Stop and rewind whenever the displayed question changes -- there are
@@ -1120,7 +1243,9 @@ const HostSession = () => {
   }, [id, attendance, isTestRun]);
 
   useEffect(() => {
-    if (!session || !questions.length || !liveDisplayedQuestion) return;
+    // Pre-open, nothing should be broadcasting/persisting as "live" yet --
+    // see the eventOpen comment near this component's state declarations.
+    if (!eventOpen || !session || !questions.length || !liveDisplayedQuestion) return;
     const state = buildLiveState({
       question: liveDisplayedQuestion,
       index: currentIndex,
@@ -1129,7 +1254,7 @@ const HostSession = () => {
     if (state) persistLiveState(state);
   // The live snapshot helpers intentionally read the latest host state in this render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, session, sessionName, questions.length, liveDisplayedQuestion, currentIndex, pendingBonusIndex, rounds, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerSeconds, timerEndAt, acceptingAnswers, answersPaused, branding, players, leaderboard]);
+  }, [id, session, sessionName, questions.length, liveDisplayedQuestion, currentIndex, pendingBonusIndex, rounds, introRound, showAnswer, showFunFact, presentMode, gameStarted, joinUrl, pointsPerQuestion, wagerMode, wagerLimit, wagerTiming, timerSeconds, timerEndAt, acceptingAnswers, answersPaused, branding, players, leaderboard, eventOpen]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -1212,6 +1337,11 @@ const HostSession = () => {
     if (!isReviewing) return;
     goToQuestion(reviewIndex, { startTimer: false, pauseBeforeBonus: false });
   };
+  // The one-time transition out of "still arranging questions" -- flips the
+  // gate on ensureLiveGame/persistLiveState above. Nothing else needs to
+  // happen here: goToQuestion (via each card's own Ask Question button)
+  // still owns actually starting a question.
+  const openEvent = () => setEventOpen(true);
 
   const releaseMode = (mode, roundKey = null) => {
     if (mode === "categories") setIntroRoundKey(roundKey || introRound?.key || currentRound?.key || null);
@@ -1227,7 +1357,14 @@ const HostSession = () => {
 
   const toggleAnswer = () => {
     if (isReviewing) return;
-    setShowAnswer((value) => !value);
+    setShowAnswer((value) => {
+      const next = !value;
+      // Revealing settles the question -- a countdown still ticking
+      // underneath the revealed answer doesn't mean anything anymore, and
+      // leaving it running was confusing (looked like more time to answer).
+      if (next) setTimerEndAt(null);
+      return next;
+    });
     setGameStarted(true);
     setPresentMode("question");
   };
@@ -1261,19 +1398,43 @@ const HostSession = () => {
     setGameStarted(true);
     setPresentMode("question");
   };
-  const startTriviaIntro = () => {
-    setIntroRoundKey(introRound?.key || currentRound?.key || null);
-    setShowAnswer(false);
-    setShowFunFact(false);
-    setTimerEndAt(null);
-    setPresentMode("categories");
-    setGameStarted(true);
-  };
-  const startIntroQuestion = () => {
-    const targetIndex = Number(introRound?.startIndex ?? currentIndex);
-    goToQuestion(targetIndex, { startTimer: true, pauseBeforeBonus: false });
-  };
   const resetTimer = () => setTimerEndAt(null);
+  // For the true "I clicked Ask Question by mistake" or "let's redo this one"
+  // case -- clears this question's submissions and grading so it can be asked
+  // fresh. Any points already awarded from grading must be reversed through
+  // adjustScore (the normal scoring path), not just dropped, or the
+  // leaderboard would silently keep points for answers that no longer exist.
+  // Parameterized by index (defaulting to the live question) so this can
+  // also run from a completed question's own overflow menu, not just the
+  // currently-live one -- only the live UI flags (timer/reveal state) reset
+  // when the target actually is the live question.
+  const resetQuestion = (targetIndex = currentIndex) => {
+    const existingAnswers = answers.filter((answer) => Number(answer.questionIndex) === targetIndex);
+    if (existingAnswers.length > 0 && !window.confirm(`Reset this question? This clears ${existingAnswers.length} submitted answer${existingAnswers.length === 1 ? "" : "s"}, undoes any points already awarded for it, and lets you ask it fresh.`)) return;
+    existingAnswers.forEach((answer) => {
+      const grade = gradedAnswers[answerKey(answer)];
+      if (grade?.scoreApplied && Number(grade.points || 0)) adjustScore(answer.playerId, -Number(grade.points));
+    });
+    const removedKeys = new Set(existingAnswers.map((answer) => answerKey(answer)));
+    setAnswers((current) => {
+      const next = current.filter((answer) => Number(answer.questionIndex) !== targetIndex);
+      writeStoredList(hostToolsStorageKey(id, "answers"), next);
+      persistHostToolsPatch({ answers: next }, "Reset question");
+      return next;
+    });
+    setGradedAnswers((current) => {
+      const next = Object.fromEntries(Object.entries(current).filter(([key]) => !removedKeys.has(key)));
+      writeStoredObject(hostToolsStorageKey(id, "graded-answers"), next);
+      persistHostToolsPatch({ gradedAnswers: next }, "Reset question");
+      return next;
+    });
+    if (targetIndex === currentIndex) {
+      setShowAnswer(false);
+      setShowFunFact(false);
+      setTimerEndAt(null);
+    }
+    toast.success("Question reset -- ready to ask again");
+  };
   const startTimerOnly = (seconds = 60) => {
     setTimerSeconds(seconds);
     setTimerEndAt(Date.now() + Math.max(1, Number(seconds) || 60) * 1000);
@@ -1294,7 +1455,7 @@ const HostSession = () => {
     points: pointsPerQuestion || 25,
     timerSeconds: timerSeconds || 30,
     wagerLimit: 0,
-    wagerTiming: "before_answer",
+    wagerTiming: "after_answer",
   });
   const generateEmergencyQuestion = async (kind = "replacement") => {
     setEmergencyLoading(true);
@@ -1378,7 +1539,8 @@ const HostSession = () => {
         console.warn("Test run cleanup unavailable:", error);
       }
       toast.success("Test run ended. Nothing was saved.");
-      navigate(`/session/${id}`);
+      if (onEditBuild) onEditBuild();
+      else navigate(`/session/${id}`);
       return;
     }
     if (!window.confirm("End this hosted session and save the live results?")) return;
@@ -1414,6 +1576,7 @@ const HostSession = () => {
     persistHostToolsPatch({ endedAt, currentIndex, presentMode: "winners" }, "End session marker");
     hostedResultsRef.current = { ...results, liveState: liveStateRef.current, liveStateUpdatedAt: new Date().toISOString() };
     const { error } = await supabase.from("sessions").update({ hosted_at: endedAt, hosted_results: hostedResultsRef.current, is_past: true }).eq("id", id);
+    if (liveGameId) endLiveGame(liveGameId).catch((endError) => console.warn("Marking live game finished unavailable:", endError));
     if (error) {
       console.error("End session database save failed:", error);
       toast.error("Session ended, but saving the results failed. Results are kept on this device -- try again before closing this tab.");
@@ -1429,7 +1592,7 @@ const HostSession = () => {
     // showing winners) is redundant. Leave host mode once the save is confirmed;
     // stay put on a failed save so the "try again before closing this tab" advice
     // above still makes sense.
-    if (!error) navigate(`/session/${id}`);
+    if (!error) { if (onEditBuild) onEditBuild(); else navigate(`/session/${id}`); }
   };
   const openPresentation = () => window.open(`/present-session/${id}`, "_blank", "noopener,noreferrer");
   const copyJoinLink = async () => {
@@ -1600,14 +1763,13 @@ const HostSession = () => {
     const key = answerKey(answer);
     const answerQuestion = questions[Number(answer.questionIndex)] || displayedQuestion;
     const answerPoints = Number(answer.points || 0) || Number(answerQuestion?.points || 0) || getDefaultPoints(answerQuestion);
-    const answerWagerLimit = Number(answer.wagerLimit || 0) || Number(answerQuestion?.wagerLimit || 0) || wagerLimit;
     const answerUsesWager = Boolean(answer.wagerMode) || Number(answerQuestion?.wagerLimit || 0) > 0 || hasSubmittedWager(answer) || Number(answer.wagerAmount || 0) > 0;
     let toastMessage = null;
     setGradedAnswers((current) => {
       const previous = current[key];
       const previousPoints = previous?.scoreApplied === false ? 0 : Number(previous?.points || 0);
-      const award = answerUsesWager ? getWagerAward(answer, leaderboard, answerWagerLimit, previousPoints) : answerPoints;
-      const wagerPenalty = answerUsesWager ? getWagerAward(answer, leaderboard, answerWagerLimit, previousPoints) : 0;
+      const award = answerUsesWager ? getWagerAward(answer, leaderboard, previousPoints) : answerPoints;
+      const wagerPenalty = answerUsesWager ? getWagerAward(answer, leaderboard, previousPoints) : 0;
       const nextPoints = status === "correct" ? award : status === "incorrect" && wagerPenalty > 0 ? -wagerPenalty : 0;
       const scoreApplied = Boolean(showAnswer || options.applyScore || previous?.scoreApplied === true);
       const delta = scoreApplied ? nextPoints - previousPoints : 0;
@@ -1659,6 +1821,9 @@ const HostSession = () => {
     if (patch.timerSeconds !== undefined) dbPatch.timer_seconds = patch.timerSeconds;
     if (patch.wagerLimit !== undefined) dbPatch.wager_limit = patch.wagerLimit;
     if (patch.wagerTiming !== undefined) dbPatch.wager_timing = patch.wagerTiming;
+    if (patch.imageUrl !== undefined) dbPatch.image_url = patch.imageUrl;
+    if (patch.imageTiming !== undefined) dbPatch.image_timing = patch.imageTiming;
+    if (patch.audioUrl !== undefined) dbPatch.audio_url = patch.audioUrl;
 
     const affectedIndicesByKey = new Map();
     scopedQuestions.forEach((question) => {
@@ -1695,6 +1860,656 @@ const HostSession = () => {
     }
   };
 
+  // Inline content editing, right on the card a question is hosted from --
+  // this is what replaces needing to jump to Advanced Edit just to fix a
+  // typo or tighten an answer. Unlike updateQuestionSettings there's no
+  // scope selector (editing one question's own text/answer never applies to
+  // a whole round) and no index remap needed (content edits never change
+  // round_order/source_order, so the question's position in the flattened
+  // list is untouched). Changing question TYPE stays out of scope here --
+  // that would mean moving the question to a different array entirely.
+  const updateQuestionContent = async (question, patch) => {
+    const match = String(question.id || "").match(/^(.+)-(\d+)$/);
+    if (!match) return false;
+    const [, key, indexStr] = match;
+    const index = Number(indexStr);
+    const dbPatch = {};
+    if (patch.category !== undefined) dbPatch.category = patch.category;
+    if (patch.questionText !== undefined) dbPatch.question_text = patch.questionText;
+    if (patch.answer !== undefined) dbPatch.correct_answer = patch.answer;
+    if (patch.incorrectAnswers !== undefined) dbPatch.incorrect_answers = patch.incorrectAnswers;
+    if (patch.funFact !== undefined) dbPatch.fun_fact = patch.funFact;
+    if (patch.imageUrl !== undefined) dbPatch.image_url = patch.imageUrl;
+    if (patch.imageTiming !== undefined) dbPatch.image_timing = patch.imageTiming;
+    if (patch.audioUrl !== undefined) dbPatch.audio_url = patch.audioUrl;
+    const current = Array.isArray(session[key]) ? session[key] : [];
+    const updatedArrays = { [key]: current.map((item, i) => (i === index ? { ...item, ...dbPatch } : item)) };
+    setSession((prevSession) => ({ ...prevSession, ...updatedArrays }));
+    if (isTestRun) return true;
+    try {
+      const { error } = await supabase.from("sessions").update(updatedArrays).eq("id", id);
+      if (error) throw error;
+    } catch (error) {
+      console.warn("Question edit save unavailable:", error);
+      toast.error("Saved for this session, but couldn't sync to the database");
+    }
+    return true;
+  };
+
+  // Reuses BuildSession's host-assistant.js "question_edit" mode unchanged --
+  // one question in, one rewritten candidate back, never auto-committed.
+  // AiEditQuestionModal shows the result and only calls updateQuestionContent
+  // (via onApply) once the host explicitly clicks Apply.
+  const editQuestionWithAi = async (question, instruction) => {
+    const request = instruction.trim();
+    if (!request) { toast.error("Tell the AI what to change"); return null; }
+    try {
+      const response = await fetch("/api/host-assistant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "question_edit",
+          request,
+          context: {
+            session: { name: sessionName },
+            questions: [{
+              category: question.category,
+              question_text: question.questionText,
+              correct_answer: question.answer,
+              question_type: question.type,
+              incorrect_answers: question.type === "multiple_choice" ? question.options.filter((option) => option !== question.answer) : [],
+              fun_fact: question.funFact,
+            }],
+          },
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data?.candidate) throw new Error(data?.error || "AI did not return a usable edit");
+      return { answer: data.answer, candidate: data.candidate };
+    } catch (error) {
+      console.error("AI question edit error:", error);
+      toast.error(error.message || "Failed to edit question with AI");
+      return null;
+    }
+  };
+
+  // Third piece of AI tooling, after per-question edit and one-shot Generate
+  // -- a multi-turn chat, reusing host-assistant.js's "build_cohost" mode.
+  // That mode already existed and was fully tested server-side, but its only
+  // caller in BuildSession.jsx (CoHostModal) was dead code, never actually
+  // rendered -- this is its first real, live caller. Conversation history is
+  // round-scoped and lives in CoHostChatModal's own state, not persisted, the
+  // same as BuildSession's version.
+  const askCoHost = async (round, conversation, request) => {
+    try {
+      const response = await fetch("/api/host-assistant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "build_cohost",
+          request,
+          context: {
+            session: { name: sessionName, activeRound: round.name },
+            conversation,
+            questions: round.questions.map((question) => ({
+              category: question.category,
+              question_text: question.questionText,
+              correct_answer: question.answer,
+              question_type: question.type,
+            })),
+            hostStyleProfile: readHostStyleProfile(),
+          },
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || "The co-host couldn't finish that request");
+      return { answer: data.answer, candidates: Array.isArray(data.candidates) ? data.candidates : [] };
+    } catch (error) {
+      console.error("AI co-host error:", error);
+      toast.error(error.message || "Failed to ask the co-host");
+      return null;
+    }
+  };
+
+  // "I like this question but don't want to use it this round" -- saves a
+  // copy into the user's permanent question library (the `questions` table),
+  // completely independent of this session/round. Accepts either a flattened
+  // session question (questionText/answer/type/options/funFact/imageUrl) or a
+  // raw AI candidate (question_text/correct_answer/question_type/
+  // incorrect_answers/fun_fact/image_url), so the same action works from an
+  // existing round card and from an unreviewed Generate/Co-Host candidate.
+  const saveQuestionToLibrary = async (question) => {
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+    const userId = sessionData?.session?.user?.id;
+    if (sessionError || !userId) { toast.error("You must be signed in to save to your library"); return false; }
+    const answer = question.answer || question.correct_answer || "";
+    const questionText = question.questionText || question.question_text || question.question || "";
+    if (!questionText.trim() || !answer.trim()) { toast.error("Question and answer can't be empty"); return false; }
+    const incorrectAnswers = Array.isArray(question.options) && question.options.length
+      ? question.options.filter((option) => option !== answer).join("; ")
+      : Array.isArray(question.incorrect_answers) ? question.incorrect_answers.join("; ") : (question.incorrect_answers || null);
+    const payload = {
+      user_id: userId,
+      question_text: questionText,
+      correct_answer: answer,
+      question_type: question.type || question.question_type || "written",
+      category: question.category || "",
+      incorrect_answers: incorrectAnswers,
+      fun_fact: question.funFact || question.fun_fact || null,
+      image_url: question.imageUrl || question.image_url || null,
+    };
+    try {
+      const { error } = await supabase.from("questions").insert(payload);
+      if (error) throw error;
+      toast.success("Saved to library");
+      return true;
+    } catch (error) {
+      console.error("Save to library error:", error);
+      toast.error(error.message || "Failed to save to library");
+      return false;
+    }
+  };
+
+  // Shared by every round-header action below: writes the same patch onto
+  // every question in `roundQuestions`, across whichever real arrays they
+  // live in, mirroring updateQuestionSettings's per-array patch/commit.
+  const commitQuestionPatch = async (roundQuestions, dbPatch) => {
+    const affectedIndicesByKey = new Map();
+    roundQuestions.forEach((question) => {
+      const match = String(question.id || "").match(/^(.+)-(\d+)$/);
+      if (!match) return;
+      const [, key, indexStr] = match;
+      if (!affectedIndicesByKey.has(key)) affectedIndicesByKey.set(key, new Set());
+      affectedIndicesByKey.get(key).add(Number(indexStr));
+    });
+    const updatedArrays = {};
+    affectedIndicesByKey.forEach((indices, key) => {
+      const current = Array.isArray(session[key]) ? session[key] : [];
+      updatedArrays[key] = current.map((question, index) => (indices.has(index) ? { ...question, ...dbPatch } : question));
+    });
+    setSession((current) => ({ ...current, ...updatedArrays }));
+    if (isTestRun) return;
+    try {
+      const { error } = await supabase.from("sessions").update(updatedArrays).eq("id", id);
+      if (error) throw error;
+    } catch (error) {
+      console.warn("Round update save unavailable:", error);
+      toast.error("Saved for this session, but couldn't sync to the database");
+    }
+  };
+
+  // Empty rounds (createEmptyRound below) have no questions to patch -- their
+  // whole identity lives in this one round_descriptions entry instead.
+  const matchesRoundMetadata = (entry, round) => Number(entry.order ?? entry.round_order) === round.roundOrder && (entry.name || entry.round_name) === round.name;
+  const writeRoundMetadata = async (entries) => {
+    const updatedArrays = { round_descriptions: entries };
+    setSession((current) => ({ ...current, ...updatedArrays }));
+    if (isTestRun) return;
+    const { error } = await supabase.from("sessions").update(updatedArrays).eq("id", id);
+    if (error) {
+      console.warn("Round metadata save unavailable:", error);
+      toast.error("Saved for this session, but couldn't sync to the database");
+    }
+  };
+
+  const renameRound = (round, name) => {
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === round.name) return;
+    if (round.isEmpty) {
+      writeRoundMetadata(getRoundMetadata(session).map((entry) => (matchesRoundMetadata(entry, round) ? { ...entry, name: trimmed } : entry)));
+      return;
+    }
+    commitQuestionPatch(round.questions, { round_name: trimmed });
+  };
+
+  const describeRound = (round, description) => {
+    if ((round.description || "") === description) return;
+    if (round.isEmpty) {
+      writeRoundMetadata(getRoundMetadata(session).map((entry) => (matchesRoundMetadata(entry, round) ? { ...entry, description } : entry)));
+      return;
+    }
+    commitQuestionPatch(round.questions, { round_description: description });
+  };
+
+  const setEmptyRoundSettings = (round, settings) => {
+    writeRoundMetadata(getRoundMetadata(session).map((entry) => (matchesRoundMetadata(entry, round) ? { ...entry, points: settings.points, timer_seconds: settings.timerSeconds, question_type: settings.questionType || entry.question_type } : entry)));
+  };
+
+  // Adjacent-swap only (mirrors BuildSession's handleMoveRound). Renaming a
+  // round doesn't change its position in `questions` (sort key is roundOrder,
+  // not name) so it's inherently safe, but swapping round_order does move
+  // every one of that round's questions to new absolute indices -- and
+  // currentIndex/reviewIndex are raw positions into that same array. Without
+  // remapping them here, a live or reviewed question would silently become a
+  // *different* question the instant its round moved.
+  const moveRound = (round, direction) => {
+    const index = rounds.findIndex((item) => item.key === round.key);
+    const targetIndex = index + direction;
+    if (index === -1 || targetIndex < 0 || targetIndex >= rounds.length) return;
+    const other = rounds[targetIndex];
+    const roundOrderValue = round.roundOrder;
+    const otherOrderValue = other.roundOrder;
+    if (roundOrderValue === undefined || otherOrderValue === undefined || roundOrderValue === otherOrderValue) return;
+
+    const affectedIndicesByKey = new Map();
+    const queueOrder = (roundQuestions, order) => {
+      roundQuestions.forEach((question) => {
+        const match = String(question.id || "").match(/^(.+)-(\d+)$/);
+        if (!match) return;
+        const [, key, indexStr] = match;
+        if (!affectedIndicesByKey.has(key)) affectedIndicesByKey.set(key, new Map());
+        affectedIndicesByKey.get(key).set(Number(indexStr), order);
+      });
+    };
+    queueOrder(round.questions, otherOrderValue);
+    queueOrder(other.questions, roundOrderValue);
+
+    const updatedArrays = {};
+    affectedIndicesByKey.forEach((indexOrderMap, key) => {
+      const current = Array.isArray(session[key]) ? session[key] : [];
+      updatedArrays[key] = current.map((question, i) => (indexOrderMap.has(i) ? { ...question, round_order: indexOrderMap.get(i) } : question));
+    });
+
+    // An empty side has no questions for queueOrder to have touched above --
+    // its new position only exists in the round_descriptions shell, so patch
+    // that entry's order directly instead.
+    let metadataEntries = getRoundMetadata(session);
+    let metadataChanged = false;
+    const patchEmptySide = (side, newOrder) => {
+      if (!side.isEmpty) return;
+      metadataEntries = metadataEntries.map((entry) => {
+        if (!matchesRoundMetadata(entry, side)) return entry;
+        metadataChanged = true;
+        return { ...entry, order: newOrder };
+      });
+    };
+    patchEmptySide(round, otherOrderValue);
+    patchEmptySide(other, roundOrderValue);
+    if (metadataChanged) updatedArrays.round_descriptions = metadataEntries;
+
+    const [first, second] = round.startIndex < other.startIndex ? [round, other] : [other, round];
+    const remap = (position) => {
+      const firstLen = first.questions.length;
+      const secondLen = second.questions.length;
+      if (position >= first.startIndex && position < first.startIndex + firstLen) return second.startIndex + (position - first.startIndex);
+      if (position >= second.startIndex && position < second.startIndex + secondLen) return first.startIndex + (position - second.startIndex);
+      return position;
+    };
+
+    setSession((current) => ({ ...current, ...updatedArrays }));
+    setCurrentIndex((value) => remap(value));
+    setReviewIndex((value) => (value === null ? value : remap(value)));
+
+    if (isTestRun) return;
+    supabase.from("sessions").update(updatedArrays).eq("id", id).then(({ error }) => {
+      if (error) {
+        console.warn("Round reorder save unavailable:", error);
+        toast.error("Saved for this session, but couldn't sync to the database");
+      }
+    });
+  };
+
+  const deleteRound = (round) => {
+    if (rounds.length <= 1) return toast.error("Keep at least one round");
+    if (round.isEmpty) {
+      if (!window.confirm(`Delete "${round.name}"? This can't be undone.`)) return;
+      writeRoundMetadata(getRoundMetadata(session).filter((entry) => !matchesRoundMetadata(entry, round)));
+      return;
+    }
+    const removedCount = round.questions.length;
+    if (eventOpen && hostIndex >= round.startIndex && hostIndex < round.startIndex + removedCount) {
+      return toast.error("Can't delete the round that's currently live or being reviewed");
+    }
+    if (!window.confirm(`Delete "${round.name}" and its ${removedCount} question${removedCount === 1 ? "" : "s"}? This can't be undone.`)) return;
+
+    const affectedIndicesByKey = new Map();
+    round.questions.forEach((question) => {
+      const match = String(question.id || "").match(/^(.+)-(\d+)$/);
+      if (!match) return;
+      const [, key, indexStr] = match;
+      if (!affectedIndicesByKey.has(key)) affectedIndicesByKey.set(key, new Set());
+      affectedIndicesByKey.get(key).add(Number(indexStr));
+    });
+    const updatedArrays = {};
+    affectedIndicesByKey.forEach((indices, key) => {
+      const current = Array.isArray(session[key]) ? session[key] : [];
+      updatedArrays[key] = current.filter((_, index) => !indices.has(index));
+    });
+
+    const newLength = questions.length - removedCount;
+    const remap = (position) => {
+      if (position >= round.startIndex + removedCount) return position - removedCount;
+      if (position >= round.startIndex) return Math.min(round.startIndex, Math.max(0, newLength - 1));
+      return position;
+    };
+
+    setSession((current) => ({ ...current, ...updatedArrays }));
+    setCurrentIndex((value) => remap(value));
+    setReviewIndex((value) => (value === null ? value : newLength > 0 ? remap(value) : null));
+
+    if (isTestRun) return;
+    supabase.from("sessions").update(updatedArrays).eq("id", id).then(({ error }) => {
+      if (error) {
+        console.warn("Round delete save unavailable:", error);
+        toast.error("Saved for this session, but couldn't sync to the database");
+      }
+    });
+  };
+
+  // Shared validation/shaping for the cut-down manual write-question form --
+  // used both to seed a brand new round (createRound) and to add a question
+  // to one that already exists (addQuestionToRound). toast.error(...) returns
+  // a truthy id, not a success flag, so every caller here returns an
+  // explicit boolean rather than the toast call itself.
+  const buildQuestionFromDraft = (draft) => {
+    const questionText = draft.question_text.trim();
+    const correctAnswer = draft.correct_answer.trim();
+    if (!questionText || !correctAnswer) { toast.error("Write the question and its answer"); return null; }
+    const wrongAnswers = draft.incorrect_answers.map((answer) => answer.trim()).filter(Boolean);
+    if (draft.question_type === "multiple_choice" && wrongAnswers.length < 2) { toast.error("Add at least two wrong answers for multiple choice"); return null; }
+    const key = draft.question_type === "true_false" ? "true_false_questions" : draft.question_type === "multiple_choice" ? "multiple_choice_questions" : "written_questions";
+    const question = {
+      question_type: draft.question_type,
+      category: draft.category.trim() || "General",
+      question_text: questionText,
+      correct_answer: draft.question_type === "true_false" ? (correctAnswer.toLowerCase() === "false" ? "False" : "True") : correctAnswer,
+      incorrect_answers: draft.question_type === "multiple_choice" ? wrongAnswers.join("; ") : null,
+      fun_fact: draft.fun_fact.trim(),
+      timer_seconds: Number(draft.timer_seconds) || 30,
+      points: draft.points === "" || draft.points === null || draft.points === undefined ? null : Number(draft.points) || null,
+      image_url: (draft.image_url || "").trim(),
+      image_timing: draft.image_timing || "initial",
+      audio_url: (draft.audio_url || "").trim(),
+      wager_limit: 0,
+      wager_timing: "after_answer",
+    };
+    return { key, question };
+  };
+
+  // A round with real questions gets its identity from them (round_name/
+  // round_order on each one, via makeRounds); an empty round gets it from a
+  // session.round_descriptions shell instead (see createEmptyRound). This is
+  // the "write a first question right away" path -- a fresh, always-highest
+  // round_order guarantees the new round -- and its one question -- lands at
+  // the very end of the sorted `questions` list, after every existing
+  // currentIndex/reviewIndex position, so nothing needs remapping the way
+  // move/delete do.
+  const createRound = async (name, draft, description = "") => {
+    const roundName = name.trim();
+    if (!roundName) { toast.error("Give the round a name"); return false; }
+    const built = buildQuestionFromDraft(draft);
+    if (!built) return false;
+    const { key, question } = built;
+    const roundOrder = rounds.reduce((max, round) => Math.max(max, Number(round.roundOrder) || 0), 0) + 1;
+    question.round_name = roundName;
+    question.round_order = roundOrder;
+    question.round_description = description.trim();
+    const current = Array.isArray(session[key]) ? session[key] : [];
+    const updatedArrays = { [key]: [...current, question] };
+    setSession((prevSession) => ({ ...prevSession, ...updatedArrays }));
+    if (!isTestRun) {
+      const { error } = await supabase.from("sessions").update(updatedArrays).eq("id", id);
+      if (error) {
+        console.warn("Round create save unavailable:", error);
+        toast.error("Saved for this session, but couldn't sync to the database");
+      }
+    }
+    return true;
+  };
+
+  // The no-question path: just a name (plus optional description/type/points/
+  // timer defaults) saved into session.round_descriptions -- see the `rounds`
+  // useMemo above for how this shell surfaces as a real, selectable round with
+  // zero questions until something gets written or added to it.
+  const createEmptyRound = async (name, description, settings) => {
+    const roundName = name.trim();
+    if (!roundName) { toast.error("Give the round a name"); return false; }
+    const roundOrder = rounds.reduce((max, round) => Math.max(max, Number(round.roundOrder) || 0), 0) + 1;
+    const entries = [...getRoundMetadata(session), {
+      name: roundName,
+      description: (description || "").trim(),
+      order: roundOrder,
+      question_type: settings?.questionType && settings.questionType !== "mixed" ? settings.questionType : "mixed",
+      points: settings?.points === "" || settings?.points == null ? null : Number(settings.points) || null,
+      timer_seconds: Number(settings?.timerSeconds) || 30,
+    }];
+    await writeRoundMetadata(entries);
+    return true;
+  };
+
+  // Appending to an existing round, unlike createRound, can't rely on a
+  // fresh top-level round_order to land safely at the very end of the whole
+  // list -- it only needs to land at the end of *this* round, ahead of
+  // every later round, which does shift every question after this round's
+  // insertion point (including a live/reviewed one in a later round). Same
+  // "flatten the hypothetical, look up by id" fix as moveQuestionToRound.
+  // Shared by addQuestionToRound and addLibraryQuestionToRound (Phase 4):
+  // stamps a fully-built question onto the end of `round`, remaps
+  // currentIndex/reviewIndex by id the same way moveQuestionToRound does
+  // (appending inside an *existing* round shifts every later round by one),
+  // and saves.
+  const appendQuestionToRound = async (round, key, question) => {
+    const roundOrder = round.roundOrder;
+    const sourceOrder = round.questions.reduce((max, item) => Math.max(max, Number(item.sourceOrder) || 0), 0) + 1;
+    question.round_name = round.name;
+    question.round_order = roundOrder;
+    question.source_order = sourceOrder;
+    const current = Array.isArray(session[key]) ? session[key] : [];
+    const updatedArrays = { [key]: [...current, question] };
+
+    const pinnedLiveId = questions[currentIndex]?.id;
+    const pinnedReviewId = isReviewing ? questions[reviewIndex]?.id : null;
+    const remappedQuestions = flattenSession({ ...session, ...updatedArrays });
+    const newCurrentIndex = remappedQuestions.findIndex((item) => item.id === pinnedLiveId);
+    const newReviewIndex = pinnedReviewId ? remappedQuestions.findIndex((item) => item.id === pinnedReviewId) : -1;
+
+    setSession((prevSession) => ({ ...prevSession, ...updatedArrays }));
+    if (newCurrentIndex !== -1) setCurrentIndex(newCurrentIndex);
+    if (isReviewing) setReviewIndex(newReviewIndex !== -1 ? newReviewIndex : null);
+
+    if (!isTestRun) {
+      const { error } = await supabase.from("sessions").update(updatedArrays).eq("id", id);
+      if (error) {
+        console.warn("Add question save unavailable:", error);
+        toast.error("Saved for this session, but couldn't sync to the database");
+      }
+    }
+    return true;
+  };
+
+  const addQuestionToRound = async (round, draft) => {
+    const built = buildQuestionFromDraft(draft);
+    if (!built) return false;
+    return appendQuestionToRound(round, built.key, built.question);
+  };
+
+  // Library questions come from the questions table already valid/saved, so
+  // this skips buildQuestionFromDraft's manual-form validation and just
+  // reshapes the row into the same embedded-question shape createRound/
+  // addQuestionToRound write, media fields included (the manual write form
+  // doesn't support media yet, but a library question often already has it).
+  const addLibraryQuestionToRound = async (round, libraryQuestion) => {
+    const type = libraryQuestion.question_type === "true_false" || libraryQuestion.question_type === "multiple_choice" ? libraryQuestion.question_type : "written";
+    const key = type === "true_false" ? "true_false_questions" : type === "multiple_choice" ? "multiple_choice_questions" : "written_questions";
+    const question = {
+      question_type: type,
+      category: libraryQuestion.category || "General",
+      question_text: libraryQuestion.question_text || libraryQuestion.question || "",
+      correct_answer: libraryQuestion.correct_answer || libraryQuestion.answer || "",
+      incorrect_answers: libraryQuestion.incorrect_answers ?? null,
+      fun_fact: libraryQuestion.fun_fact || "",
+      image_url: libraryQuestion.image_url || "",
+      image_timing: libraryQuestion.image_timing || libraryQuestion.image_display_timing || "initial",
+      timer_seconds: 30,
+      wager_limit: 0,
+      wager_timing: "after_answer",
+    };
+    return appendQuestionToRound(round, key, question);
+  };
+
+  // Shapes one AI-generated candidate (from /api/generate-session-candidates)
+  // into the same embedded-question form every other add path writes,
+  // inheriting the round's points/timer defaults the same way
+  // WriteQuestionModal's prefill does.
+  const buildQuestionFromCandidate = (candidate, roundDefaults) => {
+    const type = candidate.question_type === "true_false" || candidate.question_type === "multiple_choice" ? candidate.question_type : "written";
+    const key = type === "true_false" ? "true_false_questions" : type === "multiple_choice" ? "multiple_choice_questions" : "written_questions";
+    const question = {
+      question_type: type,
+      category: candidate.category || "General",
+      question_text: candidate.question_text || candidate.question || "",
+      correct_answer: type === "true_false" ? (String(candidate.correct_answer || "").toLowerCase() === "false" ? "False" : "True") : (candidate.correct_answer || candidate.answer || ""),
+      incorrect_answers: type === "multiple_choice" ? (Array.isArray(candidate.incorrect_answers) ? candidate.incorrect_answers.join("; ") : candidate.incorrect_answers || "") : null,
+      fun_fact: candidate.fun_fact || "",
+      timer_seconds: Number(roundDefaults?.timerSeconds) || 30,
+      points: roundDefaults?.points ?? null,
+      wager_limit: 0,
+      wager_timing: "after_answer",
+    };
+    return { key, question };
+  };
+
+  // Batched sibling of appendQuestionToRound for "Add All"/"Add Selected"
+  // from AI generation -- one supabase.update for the whole batch instead of
+  // N sequential ones (per the workspace-merge plan's explicit call-out for
+  // this exact path), but the same "flatten the hypothetical session, look
+  // up the pinned live/reviewed question by id" remap safety.
+  const addGeneratedQuestionsToRound = async (round, candidates) => {
+    if (!candidates.length) return false;
+    const roundDefaults = round.questions[0] || { timerSeconds: round.timerSeconds, points: round.points };
+    let sourceOrderCounter = round.questions.reduce((max, item) => Math.max(max, Number(item.sourceOrder) || 0), 0);
+    const built = candidates.map((candidate) => {
+      const { key, question } = buildQuestionFromCandidate(candidate, roundDefaults);
+      sourceOrderCounter += 1;
+      question.round_name = round.name;
+      question.round_order = round.roundOrder;
+      question.source_order = sourceOrderCounter;
+      return { key, question };
+    });
+
+    const updatedArrays = {};
+    built.forEach(({ key, question }) => {
+      if (!updatedArrays[key]) updatedArrays[key] = Array.isArray(session[key]) ? [...session[key]] : [];
+      updatedArrays[key].push(question);
+    });
+
+    const pinnedLiveId = questions[currentIndex]?.id;
+    const pinnedReviewId = isReviewing ? questions[reviewIndex]?.id : null;
+    const remappedQuestions = flattenSession({ ...session, ...updatedArrays });
+    const newCurrentIndex = remappedQuestions.findIndex((item) => item.id === pinnedLiveId);
+    const newReviewIndex = pinnedReviewId ? remappedQuestions.findIndex((item) => item.id === pinnedReviewId) : -1;
+
+    setSession((prevSession) => ({ ...prevSession, ...updatedArrays }));
+    if (newCurrentIndex !== -1) setCurrentIndex(newCurrentIndex);
+    if (isReviewing) setReviewIndex(newReviewIndex !== -1 ? newReviewIndex : null);
+
+    if (!isTestRun) {
+      const { error } = await supabase.from("sessions").update(updatedArrays).eq("id", id);
+      if (error) {
+        console.warn("Generated questions save unavailable:", error);
+        toast.error("Saved for this session, but couldn't sync to the database");
+      }
+    }
+    return true;
+  };
+
+  // Unlike moveRound's whole-round swap, moving a single question can shift
+  // an arbitrary number of other questions' positions in between its old and
+  // new spot. Rather than hand-deriving that arithmetic, just flatten the
+  // hypothetical post-move session the same way the real one gets flattened,
+  // then look up where the previously-live/-reviewed question ended up by id.
+  const moveQuestionToRound = async (question, targetRound) => {
+    const match = String(question.id || "").match(/^(.+)-(\d+)$/);
+    if (!match) return;
+    const [, key, indexStr] = match;
+    const targetRoundOrder = targetRound.roundOrder;
+    if (targetRoundOrder === undefined) return;
+    const index = Number(indexStr);
+    const current = Array.isArray(session[key]) ? session[key] : [];
+    const updatedArrays = { [key]: current.map((item, i) => (i === index ? { ...item, round_name: targetRound.name, round_order: targetRoundOrder } : item)) };
+
+    const pinnedLiveId = questions[currentIndex]?.id;
+    const pinnedReviewId = isReviewing ? questions[reviewIndex]?.id : null;
+    const remappedQuestions = flattenSession({ ...session, ...updatedArrays });
+    const newCurrentIndex = remappedQuestions.findIndex((item) => item.id === pinnedLiveId);
+    const newReviewIndex = pinnedReviewId ? remappedQuestions.findIndex((item) => item.id === pinnedReviewId) : -1;
+
+    setSession((prevSession) => ({ ...prevSession, ...updatedArrays }));
+    if (newCurrentIndex !== -1) setCurrentIndex(newCurrentIndex);
+    if (isReviewing) setReviewIndex(newReviewIndex !== -1 ? newReviewIndex : null);
+
+    if (isTestRun) return;
+    const { error } = await supabase.from("sessions").update(updatedArrays).eq("id", id);
+    if (error) {
+      console.warn("Move question save unavailable:", error);
+      toast.error("Saved for this session, but couldn't sync to the database");
+    }
+  };
+
+  // A straight copy, appended to the end of the same round it was
+  // duplicated from -- reuses appendQuestionToRound, so it lands after
+  // everything else in that round with the same index-remap safety as
+  // Write Question/Add from Library.
+  const duplicateQuestion = async (question) => {
+    const round = rounds.find((item) => item.questions.some((q) => q.id === question.id));
+    if (!round) return;
+    const key = question.type === "true_false" ? "true_false_questions" : question.type === "multiple_choice" ? "multiple_choice_questions" : "written_questions";
+    const wrongAnswers = (question.options || []).filter((option) => option !== question.answer);
+    const dup = {
+      question_type: question.type,
+      category: question.category,
+      question_text: question.questionText,
+      correct_answer: question.answer,
+      incorrect_answers: question.type === "multiple_choice" ? wrongAnswers.join("; ") : null,
+      fun_fact: question.funFact || "",
+      image_url: question.imageUrl || "",
+      image_timing: question.imageTiming || "initial",
+      audio_url: question.audioUrl || "",
+      points: question.points,
+      timer_seconds: Number(question.timerSeconds || 30),
+      wager_limit: Number(question.wagerLimit || 0),
+      wager_timing: question.wagerTiming || "after_answer",
+    };
+    await appendQuestionToRound(round, key, dup);
+    toast.success("Question duplicated");
+  };
+
+  // Removes exactly one question -- unlike deleteRound, everything else in
+  // its round (and every later round) keeps its round, so this is a plain
+  // single-position removal + remap, no per-round batching needed.
+  const discardQuestion = (question) => {
+    const match = String(question.id || "").match(/^(.+)-(\d+)$/);
+    if (!match) return;
+    const [, key, indexStr] = match;
+    const index = Number(indexStr);
+    const baseIndex = questions.findIndex((item) => item.id === question.id);
+    if (baseIndex === -1) return;
+    if (eventOpen && baseIndex === hostIndex) return toast.error("Can't discard the question that's currently live or being reviewed");
+    const round = rounds.find((item) => item.questions.some((q) => q.id === question.id));
+    if (round && round.questions.length <= 1) return toast.error("A round needs at least one question -- delete the round instead");
+    if (!window.confirm("Discard this question? This can't be undone.")) return;
+
+    const current = Array.isArray(session[key]) ? session[key] : [];
+    const updatedArrays = { [key]: current.filter((_, i) => i !== index) };
+    const remap = (position) => {
+      if (position > baseIndex) return position - 1;
+      if (position === baseIndex) return Math.max(0, baseIndex - 1);
+      return position;
+    };
+
+    setSession((prevSession) => ({ ...prevSession, ...updatedArrays }));
+    setCurrentIndex((value) => remap(value));
+    setReviewIndex((value) => (value === null ? value : remap(value)));
+
+    if (isTestRun) return;
+    supabase.from("sessions").update(updatedArrays).eq("id", id).then(({ error }) => {
+      if (error) {
+        console.warn("Discard question save unavailable:", error);
+        toast.error("Saved for this session, but couldn't sync to the database");
+      }
+    });
+  };
+
   useEffect(() => {
     if (!displayedQuestion || !showAnswer) return;
     currentAnswers.forEach((answer) => {
@@ -1720,9 +2535,67 @@ const HostSession = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentAnswers, displayedQuestion, gradedAnswers, wagerMode, wagerTiming, showAnswer]);
 
-  if (loading) return <div className="min-h-screen bg-[#09090B] flex items-center justify-center"><Loader2 className="text-[#71E0DC] animate-spin" size={34} /></div>;
-  if (!session || !displayedQuestion) {
-    return <div className="min-h-screen bg-[#09090B] flex items-center justify-center p-6 text-center"><div><p className="text-white text-2xl font-bold mb-2">No questions to host</p><p className="text-zinc-500 mb-4">Add questions to this session first.</p><Button onClick={() => navigate(`/session/${id}`)} className="gradient-btn">Back to Session</Button></div></div>;
+  if (loading) return <div className={`${embedded ? "h-full" : "min-h-screen"} bg-[#09090B] flex items-center justify-center`}><Loader2 className="text-[#71E0DC] animate-spin" size={34} /></div>;
+  if (!session || (!displayedQuestion && !rounds.length)) {
+    // A brand-new event (see NewEventModal) lands here with zero questions
+    // and zero rounds -- this used to be a dead end pointing back to the old
+    // builder page; now Add Round works from an empty session too.
+    return <div className={`${embedded ? "h-full" : "min-h-screen"} bg-[#09090B] flex items-center justify-center p-6 text-center`}>
+      <div>
+        <p className="text-white text-2xl font-bold mb-2">{session ? "No questions yet" : "Session not found"}</p>
+        <p className="text-zinc-500 mb-4">{session ? "Add a round to get this event started." : "This session may have been removed."}</p>
+        {session && <Button onClick={() => setEmptyStateAddRoundOpen(true)} className="gradient-btn"><Plus size={16} className="mr-2" />Add Round</Button>}
+        {!embedded && <Button variant="outline" onClick={() => navigate(`/session/${id}`)} className="ml-2 border-white/10 text-zinc-300 hover:text-white">Back to Session</Button>}
+      </div>
+      {session && emptyStateAddRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} onSaveToLibrary={saveQuestionToLibrary} approvedCategories={approvedCategories} onClose={() => setEmptyStateAddRoundOpen(false)} />}
+    </div>;
+  }
+  if (!displayedQuestion) {
+    // Round(s) exist (createEmptyRound) but none has a real question yet --
+    // the rest of this page is built around a live/displayed real question
+    // (goToQuestion, QuestionStage, the live-hosting toolbar...), so this is
+    // a minimal bootstrap screen rather than trying to make all of that
+    // tolerate "no question exists anywhere." The moment any round gets its
+    // first question, currentIndex (already 0) points at it and the normal
+    // workspace below takes over on the next render.
+    const emptyStateWriteRound = rounds.find((round) => round.key === emptyStateWriteRoundKey);
+    const emptyStateGenerateRound = rounds.find((round) => round.key === emptyStateGenerateRoundKey);
+    return <div className={`${embedded ? "h-full" : "min-h-screen"} bg-[#09090B] p-6`}>
+      <div className="mx-auto max-w-2xl">
+        <p className="mb-1 text-center text-2xl font-bold text-white">Let's build this event</p>
+        <p className="mb-6 text-center text-zinc-500">Add a question to a round to get it started.</p>
+        <div className="space-y-3">
+          {rounds.map((round) => <div key={round.key} className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-zinc-950/40 p-4">
+            <div>
+              <p className="font-bold text-white">{round.name}</p>
+              <p className="text-xs text-zinc-500">{round.questions.length} question{round.questions.length === 1 ? "" : "s"}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" onClick={() => setEmptyStateGenerateRoundKey(round.key)} className="border-white/10 text-zinc-300 hover:text-white"><Sparkles size={13} className="mr-1.5" />Generate</Button>
+              <Button size="sm" onClick={() => setEmptyStateWriteRoundKey(round.key)} className="gradient-btn"><Pencil size={13} className="mr-1.5" />Write Question</Button>
+            </div>
+          </div>)}
+        </div>
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+          <Button variant="outline" onClick={() => setEmptyStateAddRoundOpen(true)} className="border-white/10 text-zinc-300 hover:text-white"><Plus size={14} className="mr-1.5" />Add Round</Button>
+          <Button variant="outline" onClick={() => setEmptyStateManageRoundsOpen(true)} className="border-white/10 text-zinc-300 hover:text-white">Manage Rounds</Button>
+          {!embedded && <Button variant="outline" onClick={() => navigate(`/session/${id}`)} className="border-white/10 text-zinc-300 hover:text-white">Back to Session</Button>}
+        </div>
+      </div>
+      {emptyStateAddRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} onSaveToLibrary={saveQuestionToLibrary} approvedCategories={approvedCategories} onClose={() => setEmptyStateAddRoundOpen(false)} />}
+      {emptyStateWriteRound && <WriteQuestionModal round={emptyStateWriteRound} onCreate={(draft) => addQuestionToRound(emptyStateWriteRound, draft)} onSaveToLibrary={saveQuestionToLibrary} approvedCategories={approvedCategories} onClose={() => setEmptyStateWriteRoundKey(null)} />}
+      {emptyStateGenerateRound && <GenerateRoundModal round={emptyStateGenerateRound} venueId={session?.venue_id} existingQuestionTexts={new Set()} onAddAll={(candidates) => addGeneratedQuestionsToRound(emptyStateGenerateRound, candidates)} onSaveToLibrary={saveQuestionToLibrary} onClose={() => setEmptyStateGenerateRoundKey(null)} />}
+      {emptyStateManageRoundsOpen && <RoundManagerModal
+        rounds={rounds}
+        onRename={renameRound}
+        onDescribe={describeRound}
+        onSetRoundSettings={(round, settings) => (round.isEmpty ? setEmptyRoundSettings(round, settings) : updateQuestionSettings({ points: settings.points, timerSeconds: settings.timerSeconds }, "round", round.questions[0]))}
+        onMoveRound={moveRound}
+        onDelete={deleteRound}
+        onAddRound={() => setEmptyStateAddRoundOpen(true)}
+        onClose={() => setEmptyStateManageRoundsOpen(false)}
+      />}
+    </div>;
   }
 
   const viewPointsPerQuestion = isReviewing ? getQuestionPoints(displayedQuestion) : pointsPerQuestion;
@@ -1755,89 +2628,1404 @@ const HostSession = () => {
   const droppedTeamIds = new Set(leaderboard.filter((team) => team.dropped).map((team) => team.id));
   const playingPlayers = activePlayers.filter((player) => !droppedTeamIds.has(player.id));
   const activeCurrentAnswers = currentAnswers.filter((answer) => activeTeamIds.has(answer.playerId));
+  // Same shape as activeCurrentAnswers above, parameterized by question index
+  // instead of hardcoded to hostIndex -- the card list needs every question's
+  // own answers at once (for the completed-card correct-count summary), not
+  // just whichever one is currently displayed.
+  const answersForQuestionIndex = (index) => answers.filter((answer) => Number(answer.questionIndex) === index && activeTeamIds.has(answer.playerId));
   const selectedIntroKey = introRoundKey || currentRound?.key || rounds[0]?.key || "";
   const chooseIntroRound = (roundKey) => {
     setIntroRoundKey(roundKey);
     if (presentMode === "categories") releaseMode("categories", roundKey);
   };
-  return <div className="min-h-screen bg-[#09090B] text-white" data-testid="host-session-page" style={brandStyle}>
-    {displayedQuestion?.audio_url && <audio ref={audioRef} src={displayedQuestion.audio_url} preload="none" onPlay={() => setIsPlayingAudio(true)} onPause={() => setIsPlayingAudio(false)} onEnded={() => setIsPlayingAudio(false)} className="hidden" />}
+  return <div className={`${embedded ? "h-full" : "min-h-screen"} bg-[#09090B] text-white`} data-testid="host-session-page" style={brandStyle}>
+    {displayedQuestion?.audioUrl && <audio ref={audioRef} src={displayedQuestion.audioUrl} preload="none" onPlay={() => setIsPlayingAudio(true)} onPause={() => setIsPlayingAudio(false)} onEnded={() => setIsPlayingAudio(false)} className="hidden" />}
     {isTestRun && !focusMode && <div className="bg-amber-400/15 border-b border-amber-400/30 text-amber-200 text-sm px-4 py-2 flex items-center justify-center gap-2" data-testid="test-mode-banner">
       <AlertTriangle size={14} />
       Test Run -- teams and scores here won't count. Starting the real event clears this out automatically.
     </div>}
-    {!focusMode && <TopBar navigate={navigate} id={id} sessionName={sessionName} venueName={session?.venue_name || session?.venueName || session?.venue || ""} questions={questions} players={players} currentIndex={currentIndex} liveStatus={liveStatus} openPresentation={openPresentation} setFocusMode={setFocusMode} progress={progress} branding={branding} customizeOpen={customizeOpen} setCustomizeOpen={setCustomizeOpen} endSession={endSession} collapsed={topbarCollapsed} onToggleCollapse={() => setTopbarCollapsed((value) => !value)} answersPaused={answersPaused} onToggleAnswersPaused={toggleAnswersPaused} />}
-    <div className={`max-w-[1680px] mx-auto p-4 lg:p-8 ${focusMode ? "min-h-screen flex flex-col" : ""}`}>
+    {!focusMode && <TopBar navigate={navigate} id={id} embedded={embedded} sessionName={sessionName} venueName={session?.venue_name || session?.venueName || session?.venue || ""} questions={questions} players={players} currentIndex={currentIndex} liveStatus={liveStatus} openPresentation={openPresentation} setFocusMode={setFocusMode} progress={progress} branding={branding} customizeOpen={customizeOpen} setCustomizeOpen={setCustomizeOpen} endSession={endSession} collapsed={topbarCollapsed} onToggleCollapse={() => setTopbarCollapsed((value) => !value)} answersPaused={answersPaused} onToggleAnswersPaused={toggleAnswersPaused} />}
+    <div className={`max-w-[1680px] mx-auto p-4 lg:p-8 ${focusMode ? `${embedded ? "h-full" : "min-h-screen"} flex flex-col` : ""}`}>
       {focusMode && <div className="flex justify-between items-center mb-4"><Badge className="bg-zinc-800 text-zinc-300">{currentRound?.name || "Round"} - {currentIndex + 1} / {questions.length}</Badge><Button variant="outline" onClick={() => setFocusMode(false)} className="border-white/10 text-zinc-300 hover:text-white">Exit Focus</Button></div>}
-      {!focusMode && <QuestionNavStrip questions={questions} rounds={rounds} currentIndex={currentIndex} hostIndex={hostIndex} isReviewing={isReviewing} currentRound={currentRound} onSelectPill={reviewQuestion} onPrev={() => reviewQuestion(hostIndex - 1)} onNext={() => reviewQuestion(hostIndex + 1)} onBackToLive={returnToLiveQuestion} onGoLive={releaseReviewedQuestion} onSelectRoundIntro={(roundKey) => releaseMode("categories", roundKey)} />}
       <div className={focusMode ? "flex-1 flex items-center" : "grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-7"}>
-        <main className="w-full">
+        <main className="w-full min-w-0">
           {!focusMode && customizeOpen && <HostCustomizePanel branding={branding} defaultBranding={readDefaultBranding()} onSave={saveBranding} onSaveDefault={saveBrandingAsDefault} onUseDefault={useDefaultBranding} onClose={() => setCustomizeOpen(false)} />}
-          {!gameStarted && !isReviewing ? <LobbyStage playerCount={players.length} onStartTrivia={startTriviaIntro} /> : presentMode === "categories" && !isReviewing ? <RoundIntroStage round={introRound} gameStarted={gameStarted} onStartIntro={startTriviaIntro} onStartQuestion={startIntroQuestion} /> : presentMode === "bonus_pause" && !isReviewing ? <BonusPauseStage round={rounds.find((round) => pendingBonusIndex >= round.startIndex && pendingBonusIndex < round.startIndex + round.questions.length)} leaderboard={leaderboard} /> : presentMode === "winners" && !isReviewing ? <WinnersStage leaderboard={leaderboard} /> : presentMode === "feedback" && !isReviewing ? <FeedbackStage ideas={playerIdeas} /> : <QuestionStage question={displayedQuestion} index={hostIndex} total={questions.length} showAnswer={isReviewing ? true : showAnswer} showFunFact={isReviewing ? false : showFunFact} focusMode={focusMode} pointsPerQuestion={viewPointsPerQuestion} timerSeconds={viewTimerSeconds} timeRemaining={isReviewing ? null : timeRemaining} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} wagerTiming={viewWagerTiming} onUpdateSettings={isReviewing ? () => {} : updateQuestionSettings} branding={branding} players={playingPlayers} answers={activeCurrentAnswers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} setMode={releaseMode} isReviewing={isReviewing} />}
+          <QuestionListView
+            rounds={rounds}
+            questions={questions}
+            currentIndex={currentIndex}
+            hostIndex={hostIndex}
+            isReviewing={isReviewing}
+            gameStarted={gameStarted}
+            eventOpen={eventOpen}
+            displayedQuestion={displayedQuestion}
+            goToQuestion={goToQuestion}
+            reviewQuestion={reviewQuestion}
+            onBackToLive={returnToLiveQuestion}
+            onGoLiveWithThis={releaseReviewedQuestion}
+            answersForQuestionIndex={answersForQuestionIndex}
+            gradedAnswers={gradedAnswers}
+            players={playingPlayers}
+            hostAnswers={activeCurrentAnswers}
+            fairPlayStats={fairPlayStats}
+            showAnswer={isReviewing ? true : showAnswer}
+            showFunFact={isReviewing ? false : showFunFact}
+            timeRemaining={isReviewing ? null : timeRemaining}
+            viewPointsPerQuestion={viewPointsPerQuestion}
+            viewTimerSeconds={viewTimerSeconds}
+            viewWagerMode={viewWagerMode}
+            viewWagerLimit={viewWagerLimit}
+            viewWagerTiming={viewWagerTiming}
+            onUpdateSettings={isReviewing ? () => {} : updateQuestionSettings}
+            renameRound={renameRound}
+            describeRound={describeRound}
+            setEmptyRoundSettings={setEmptyRoundSettings}
+            moveRound={moveRound}
+            deleteRound={deleteRound}
+            createRound={createRound}
+            createEmptyRound={createEmptyRound}
+            moveQuestionToRound={moveQuestionToRound}
+            duplicateQuestion={duplicateQuestion}
+            discardQuestion={discardQuestion}
+            addQuestionToRound={addQuestionToRound}
+            addLibraryQuestionToRound={addLibraryQuestionToRound}
+            updateQuestionContent={updateQuestionContent}
+            editQuestionWithAi={editQuestionWithAi}
+            askCoHost={askCoHost}
+            saveQuestionToLibrary={saveQuestionToLibrary}
+            approvedCategories={approvedCategories}
+            addGeneratedQuestionsToRound={addGeneratedQuestionsToRound}
+            venueId={session?.venue_id}
+            branding={branding}
+            markAnswer={markAnswer}
+            addManualAnswer={addManualAnswer}
+            editWager={editWager}
+            releaseMode={releaseMode}
+            hasRevealExtra={hasRevealExtra}
+            hasFunFact={Boolean(displayedQuestion.funFact)}
+            hasAudio={Boolean(displayedQuestion.audioUrl)}
+            isPlayingAudio={isPlayingAudio}
+            onToggleAudio={toggleAudioPlayback}
+            onRevealAnswer={toggleAnswer}
+            onShowFunFact={toggleFunFact}
+            startTimer={startTimer}
+            resetTimer={isReviewing ? () => {} : resetTimer}
+            resetQuestion={() => resetQuestion(hostIndex)}
+            resetQuestionAt={resetQuestion}
+          />
         </main>
-        {!focusMode && <PlaybackRail mode={presentMode} setMode={releaseMode} rounds={rounds} introRoundKey={selectedIntroKey} chooseIntroRound={chooseIntroRound} isReviewing={isReviewing} showAnswer={isReviewing ? true : showAnswer} onRevealAnswer={toggleAnswer} showFunFact={isReviewing ? false : showFunFact} onShowFunFact={toggleFunFact} hasRevealExtra={hasRevealExtra} hasFunFact={Boolean(displayedQuestion.funFact)} hasAudio={Boolean(displayedQuestion.audio_url)} isPlayingAudio={isPlayingAudio} onToggleAudio={toggleAudioPlayback} timeRemaining={isReviewing ? null : timeRemaining} timerSeconds={viewTimerSeconds} startTimer={startTimer} resetTimer={isReviewing ? () => {} : resetTimer} currentIndex={currentIndex} total={questions.length} onPrev={() => goToQuestion(currentIndex - 1, { startTimer: false })} onNext={() => {
-          if (!gameStarted) return startTriviaIntro();
-          if (presentMode === "categories") return startIntroQuestion();
-          if (presentMode === "bonus_pause" && pendingBonusIndex !== null) return goToQuestion(pendingBonusIndex, { startTimer: true, pauseBeforeBonus: false });
-          const liveRoundNow = rounds.find((round) => currentIndex >= round.startIndex && currentIndex < round.startIndex + round.questions.length);
-          const isLastQuestionOfRound = liveRoundNow && currentIndex === liveRoundNow.startIndex + liveRoundNow.questions.length - 1;
-          const nextRoundNow = isLastQuestionOfRound ? rounds[rounds.findIndex((round) => round.key === liveRoundNow.key) + 1] : null;
-          if (nextRoundNow) return releaseMode("categories", nextRoundNow.key);
-          return goToQuestion(currentIndex + 1, { startTimer: true });
-        }} onOpenDrawer={setActiveDrawer} flaggedTeamCount={flaggedTeamCount} currentQuestionLabel={`Q${currentIndex + 1}`} />}
+        {!focusMode && <PlaybackRail eventOpen={eventOpen} onOpenEvent={openEvent} mode={presentMode} setMode={releaseMode} rounds={rounds} introRoundKey={selectedIntroKey} chooseIntroRound={chooseIntroRound} onOpenDrawer={setActiveDrawer} flaggedTeamCount={flaggedTeamCount} />}
       </div>
     </div>
     {scoreModal && <ScoreAdjustModal modal={scoreModal} setModal={setScoreModal} adjustScore={adjustScore} setScore={setScore} />}
     {!focusMode && <ToolDrawer activeDrawer={activeDrawer} onClose={() => setActiveDrawer(null)}>
       {activeDrawer === "teams" && <LeaderboardPanel leaderboard={leaderboard} teamName={teamName} teamScore={teamScore} setTeamName={setTeamName} setTeamScore={setTeamScore} addTeam={addTeam} openScoreModal={openScoreModal} removeTeam={removeTeam} toggleTeamDropped={toggleTeamDropped} showLeaderboard={() => releaseMode("leaderboard")} fairPlayStats={fairPlayStats} attendance={attendance} updateNonPlayers={updateNonPlayers} updateTeamHeadcount={updateTeamHeadcount} />}
-      {activeDrawer === "run" && <div className="space-y-4"><RunSheet rounds={rounds} currentIndex={hostIndex} goToQuestion={reviewQuestion} answers={answers} players={activePlayers} gradedAnswers={gradedAnswers} editBuild={() => navigate(`/build/${id}`)} /><AnswerHistoryPanel rounds={rounds} players={activePlayers} leaderboard={leaderboard} answers={answers} gradedAnswers={gradedAnswers} currentIndex={hostIndex} markAnswer={markAnswer} openScoreModal={openScoreModal} reviewQuestion={reviewQuestion} /></div>}
+      {activeDrawer === "run" && <div className="space-y-4"><RunSheet rounds={rounds} currentIndex={hostIndex} goToQuestion={reviewQuestion} answers={answers} players={activePlayers} gradedAnswers={gradedAnswers} editBuild={() => (onEditBuild ? onEditBuild() : navigate(`/build/${id}`))} /><AnswerHistoryPanel rounds={rounds} players={activePlayers} leaderboard={leaderboard} answers={answers} gradedAnswers={gradedAnswers} currentIndex={hostIndex} markAnswer={markAnswer} openScoreModal={openScoreModal} reviewQuestion={reviewQuestion} /></div>}
       {activeDrawer === "fairplay" && <FairPlayPanel leaderboard={leaderboard} fairPlayStats={fairPlayStats} openScoreModal={openScoreModal} />}
       {activeDrawer === "disputes" && <DisputesPanel currentIndex={currentIndex} addDisputeNote={addDisputeNote} disputeNotes={disputeNotes} />}
-      {activeDrawer === "emergency" && <EmergencyPanel currentIndex={currentIndex} emergencyOverride={emergencyOverride} generatedEmergency={generatedEmergency} emergencyLoading={emergencyLoading} generateEmergencyQuestion={generateEmergencyQuestion} activateEmergencyQuestion={activateEmergencyQuestion} clearEmergency={() => setEmergencyOverride(null)} startTimerOnly={startTimerOnly} goToQuestion={goToQuestion} editBuild={() => navigate(`/build/${id}`)} />}
+      {activeDrawer === "emergency" && <EmergencyPanel currentIndex={currentIndex} emergencyOverride={emergencyOverride} generatedEmergency={generatedEmergency} emergencyLoading={emergencyLoading} generateEmergencyQuestion={generateEmergencyQuestion} activateEmergencyQuestion={activateEmergencyQuestion} clearEmergency={() => setEmergencyOverride(null)} startTimerOnly={startTimerOnly} goToQuestion={goToQuestion} editBuild={() => (onEditBuild ? onEditBuild() : navigate(`/build/${id}`))} />}
       {activeDrawer === "feedback" && <LiveSignalsPanel feedback={feedback} categoryFeedback={categoryFeedback} ideas={playerIdeas} currentIndex={currentIndex} displayedQuestion={displayedQuestion} />}
     </ToolDrawer>}
   </div>;
 };
 
-const QuestionNavStrip = ({ questions, rounds, currentIndex, hostIndex, isReviewing, currentRound, onSelectPill, onPrev, onNext, onBackToLive, onGoLive, onSelectRoundIntro }) => {
-  const activeRound = currentRound || rounds[0];
-  const jumpToRound = (roundKey) => {
-    const round = rounds.find((item) => item.key === roundKey);
-    if (round) onSelectPill(round.startIndex);
+// The unified card list: replaces the old QuestionNavStrip pill-bar +
+// single-question QuestionStage split. Every question in every round renders
+// as its own card at all times -- whichever one is "displayed" (the live
+// question, or whatever's being reviewed) renders via QuestionStage's full
+// interactive body (unchanged, including AnswerRows/Manual Answer); every
+// other question renders as a compact summary card with Ask Question/Review
+// actions. The true live question always gets a small pulsing indicator even
+// while a different one is being reviewed, mirroring the old nav strip's
+// "LIVE: Q#" badge.
+// Existing rounds only -- no "+ Add Round" here yet (that's a later merge
+// phase, since creating a round with zero questions doesn't survive a
+// reload today; see flattenSession/makeRounds above). Rename/describe never
+// touch round_order, so they can't shift which question is live or being
+// reviewed; move does, and compensates for it in moveRound itself.
+const emptyRoundDraft = { question_type: "written", category: "", question_text: "", correct_answer: "", incorrect_answers: ["", "", ""], fun_fact: "", points: "", timer_seconds: 30, image_url: "", image_timing: "initial", audio_url: "" };
+
+// Shared by AddRoundModal and WriteQuestionModal -- a cut-down manual
+// question form. Mirrors BuildSession's FreeWriteForm AI-assist button
+// (Sparkles icon in the corner of the Question field): with no question
+// text yet, it drafts a whole new one from the category via
+// /api/generate-session-candidates; with a question already typed, it fills
+// in only whatever's missing (answer/wrong answers/fun fact) via
+// host-assistant.js's "question_edit" mode, explicitly told to leave the
+// question wording (and the answer, if already filled in) untouched. Media
+// attachment stays on the standalone builder page for now.
+const QuestionDraftFields = ({ draft, setDraft, approvedCategories = [] }) => {
+  const [assisting, setAssisting] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [uploadingAudio, setUploadingAudio] = useState(false);
+  const updateWrong = (index, value) => setDraft((prev) => ({ ...prev, incorrect_answers: prev.incorrect_answers.map((answer, i) => (i === index ? value : answer)) }));
+
+  // Mirrors BuildSession's randomizeCategory -- picks a different one each
+  // click rather than the same first-in-list every time.
+  const cycleCategory = () => {
+    const pool = approvedCategories.filter(Boolean);
+    if (!pool.length) return toast.error("No approved categories yet -- approve some from the Categories page");
+    const options = pool.length > 1 ? pool.filter((category) => category !== draft.category) : pool;
+    setDraft((prev) => ({ ...prev, category: options[Math.floor(Math.random() * options.length)] }));
   };
-  return <div className="glass-card rounded-xl mb-4 sticky top-[57px] z-10">
-    <div className="flex items-center gap-2 p-2.5">
-      <select aria-label="Jump to round" value={activeRound?.key || ""} onChange={(event) => jumpToRound(event.target.value)} className="h-9 shrink-0 rounded-md border border-white/10 bg-zinc-950 px-2.5 text-xs font-bold text-zinc-200 outline-none focus:border-[#71E0DC]/60">
-        {rounds.map((round) => <option key={round.key} value={round.key}>{round.name}</option>)}
+
+  const handleImageFile = async (file) => {
+    if (!file) return;
+    setUploadingImage(true);
+    try {
+      const url = await uploadQuestionMedia(file);
+      setDraft((prev) => ({ ...prev, image_url: url }));
+    } catch (error) {
+      console.error("Upload image error:", error);
+      toast.error(error.message || "Failed to upload image");
+    } finally {
+      setUploadingImage(false);
+    }
+  };
+
+  const handleAudioFile = async (file) => {
+    if (!file) return;
+    setUploadingAudio(true);
+    try {
+      const url = await uploadQuestionAudio(file);
+      setDraft((prev) => ({ ...prev, audio_url: url }));
+    } catch (error) {
+      console.error("Upload audio error:", error);
+      toast.error(error.message || "Failed to upload audio");
+    } finally {
+      setUploadingAudio(false);
+    }
+  };
+
+  const runAssist = async () => {
+    setAssisting(true);
+    try {
+      if (draft.question_text.trim()) {
+        const missing = [];
+        if (!draft.correct_answer.trim()) missing.push("the correct answer");
+        if (draft.question_type === "multiple_choice" && draft.incorrect_answers.filter((answer) => answer.trim()).length < 2) missing.push("three plausible, comparable wrong answers");
+        if (!draft.fun_fact.trim()) missing.push("a short fun fact");
+        if (!missing.length) { toast.info("This question already has everything filled in."); return; }
+        const keepUnchanged = ["the exact question wording"];
+        if (draft.correct_answer.trim()) keepUnchanged.push("the correct answer");
+        const response = await fetch("/api/host-assistant", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mode: "question_edit",
+            request: `Do not rewrite or replace ${keepUnchanged.join(" or ")} -- keep them exactly as given. Add only: ${missing.join("; ")}.`,
+            context: {
+              questions: [{
+                category: draft.category,
+                question_text: draft.question_text,
+                correct_answer: draft.correct_answer,
+                question_type: draft.question_type,
+                incorrect_answers: draft.incorrect_answers.filter(Boolean).join("; "),
+                fun_fact: draft.fun_fact,
+              }],
+              hostStyleProfile: readHostStyleProfile(),
+            },
+          }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data?.candidate) throw new Error(data?.error || "No AI draft came back");
+        const candidate = data.candidate;
+        setDraft((prev) => ({
+          ...prev,
+          correct_answer: prev.correct_answer.trim() || candidate.correct_answer || prev.correct_answer,
+          incorrect_answers: prev.question_type === "multiple_choice" && prev.incorrect_answers.filter((answer) => answer.trim()).length < 2 ? [...(candidate.incorrect_answers || []), "", "", ""].slice(0, 3) : prev.incorrect_answers,
+          fun_fact: prev.fun_fact.trim() || candidate.fun_fact || prev.fun_fact,
+        }));
+        toast.success("Filled in the missing pieces");
+      } else {
+        const response = await fetch("/api/generate-session-candidates", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: `write-${Date.now()}`,
+            questionType: draft.question_type,
+            count: 1,
+            theme: draft.category ? `Use category: ${draft.category}` : "",
+            excludeUsed: true,
+            avoidDuplicates: true,
+            hostStyleProfile: readHostStyleProfile(),
+          }),
+        });
+        const data = await response.json();
+        const candidate = Array.isArray(data?.candidates) ? data.candidates[0] : null;
+        if (!response.ok || !candidate) throw new Error(data?.error || "No AI draft came back. Try adding a category.");
+        setDraft((prev) => ({
+          ...prev,
+          category: candidate.category || prev.category,
+          question_text: candidate.question_text || prev.question_text,
+          correct_answer: candidate.correct_answer || prev.correct_answer,
+          incorrect_answers: prev.question_type === "multiple_choice" ? [...(candidate.incorrect_answers || []), "", "", ""].slice(0, 3) : prev.incorrect_answers,
+          fun_fact: candidate.fun_fact || prev.fun_fact,
+        }));
+        toast.success("AI draft added");
+      }
+    } catch (error) {
+      console.error("Question write AI assist error:", error);
+      toast.error(error.message || "Failed to draft with AI");
+    } finally {
+      setAssisting(false);
+    }
+  };
+
+  return <div className="space-y-3">
+    <div className="grid grid-cols-1 md:grid-cols-[160px_1fr] gap-3">
+      <select value={draft.question_type} onChange={(event) => setDraft((prev) => ({ ...prev, question_type: event.target.value }))} className="h-10 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white">
+        <option value="written">Free Response</option>
+        <option value="true_false">True/False</option>
+        <option value="multiple_choice">Multiple Choice</option>
       </select>
-      <button type="button" onClick={onPrev} disabled={hostIndex === 0} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-white/10 bg-zinc-950 text-zinc-300 hover:border-[#71E0DC]/40 hover:text-[#71E0DC] disabled:opacity-30" aria-label="Previous question"><ChevronLeft size={16} /></button>
-      <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto py-0.5">
-        <button type="button" onClick={() => onSelectRoundIntro(activeRound?.key)} title={`Show ${activeRound?.name || "round"} intro`} className="shrink-0 max-w-[12ch] truncate rounded-md border border-white/10 bg-zinc-900/60 px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-wide text-zinc-400 hover:border-[#71E0DC]/40 hover:text-[#71E0DC]">{activeRound?.name || "Round"}</button>
-        {(activeRound?.questions || []).map((question, localIndex) => {
-          const index = activeRound.startIndex + localIndex;
-          const isLive = index === currentIndex;
-          const isSelected = index === hostIndex;
-          const isDone = index < currentIndex;
-          return <button key={question.id} type="button" onClick={() => onSelectPill(index)} title={question.questionText} className={`relative flex h-8 min-w-8 shrink-0 items-center justify-center rounded-md px-2 text-xs font-bold transition ${isSelected ? "bg-[#71E0DC]/15 text-[#71E0DC] ring-1 ring-[#71E0DC]/50" : isDone ? "bg-zinc-900 text-zinc-400" : "bg-zinc-900/60 text-zinc-500 hover:text-zinc-300"}`}>
-            {index + 1}
-            {isBonusQuestion(question) && <span className="absolute -top-1.5 left-0.5 text-[9px] text-amber-300">&#9733;</span>}
-            {isLive && <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-rose-400 ring-2 ring-zinc-950 animate-pulse" />}
+      <div className="flex gap-2">
+        <input value={draft.category} onChange={(event) => setDraft((prev) => ({ ...prev, category: event.target.value }))} placeholder="Category" className="h-10 min-w-0 flex-1 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
+        <button type="button" onClick={cycleCategory} title="Cycle through your approved categories" aria-label="Cycle approved categories" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-white/10 bg-zinc-950/50 text-zinc-300 hover:bg-zinc-800 hover:text-white"><RefreshCw size={16} /></button>
+      </div>
+    </div>
+    <div className="relative">
+      <textarea value={draft.question_text} onChange={(event) => setDraft((prev) => ({ ...prev, question_text: event.target.value }))} placeholder="Question" className="min-h-[86px] w-full resize-none rounded-md border border-white/10 bg-zinc-950/50 px-3 py-2 pr-12 text-white outline-none focus:border-[#71E0DC]/60" />
+      <button type="button" title={draft.question_text.trim() ? "AI fill in the missing answer, wrong answers, or fun fact -- keeps your question as-is" : "AI draft a question from your category"} aria-label="AI assist" onClick={runAssist} disabled={assisting} className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-md border border-white/10 bg-zinc-950/70 text-zinc-300 hover:bg-zinc-800 hover:text-white disabled:opacity-60">
+        {assisting ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
+      </button>
+    </div>
+    <input value={draft.correct_answer} onChange={(event) => setDraft((prev) => ({ ...prev, correct_answer: event.target.value }))} placeholder="Correct answer" className="h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
+    {draft.question_type === "multiple_choice" && <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+      {draft.incorrect_answers.map((answer, index) => <input key={index} value={answer} onChange={(event) => updateWrong(index, event.target.value)} placeholder={`Wrong answer ${index + 1}`} className="h-10 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />)}
+    </div>}
+    <input value={draft.fun_fact} onChange={(event) => setDraft((prev) => ({ ...prev, fun_fact: event.target.value }))} placeholder="Fun fact (optional)" className="h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
+    <div className="rounded-md border border-white/10 bg-zinc-950/30 p-3 space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-500">Media (optional)</p>
+        {draft.image_url && <div className="inline-flex rounded-md border border-white/10 bg-zinc-950/70 p-0.5">
+          <button type="button" onClick={() => setDraft((prev) => ({ ...prev, image_timing: "initial" }))} className={`rounded px-2 py-1 text-[11px] font-semibold ${draft.image_timing !== "after_answer" ? "bg-[#71E0DC]/15 text-[#71E0DC]" : "text-zinc-400 hover:text-white"}`}>With question</button>
+          <button type="button" onClick={() => setDraft((prev) => ({ ...prev, image_timing: "after_answer" }))} className={`rounded px-2 py-1 text-[11px] font-semibold ${draft.image_timing === "after_answer" ? "bg-[#71E0DC]/15 text-[#71E0DC]" : "text-zinc-400 hover:text-white"}`}>After answer</button>
+        </div>}
+      </div>
+      <label className="flex h-16 cursor-pointer items-center gap-3 rounded-md border border-dashed border-white/15 bg-zinc-950/40 px-3 hover:border-[#71E0DC]/40">
+        {uploadingImage ? <Loader2 size={18} className="animate-spin text-[#71E0DC]" /> : draft.image_url ? <img src={draft.image_url} alt="Question media preview" className="h-12 w-12 rounded object-cover border border-white/10" /> : <Upload size={16} className="text-zinc-400" />}
+        <span className="text-xs text-zinc-400">{draft.image_url ? "Click to replace the image" : "Click to upload an image, or paste a URL below"}</span>
+        <input type="file" accept="image/*" className="hidden" disabled={uploadingImage} onChange={(event) => handleImageFile(event.target.files?.[0])} />
+      </label>
+      <div className="flex gap-2">
+        <div className="relative min-w-0 flex-1">
+          <Link className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+          <input value={draft.image_url} onChange={(event) => setDraft((prev) => ({ ...prev, image_url: event.target.value }))} placeholder="Image URL" className="h-9 w-full rounded-md border border-white/10 bg-zinc-950/50 pl-9 pr-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
+        </div>
+        {draft.image_url && <button type="button" onClick={() => setDraft((prev) => ({ ...prev, image_url: "" }))} className="shrink-0 text-xs text-zinc-500 hover:text-rose-300">Remove</button>}
+      </div>
+      <div className="flex gap-2">
+        <div className="relative min-w-0 flex-1">
+          <Music className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+          <input value={draft.audio_url} onChange={(event) => setDraft((prev) => ({ ...prev, audio_url: event.target.value }))} placeholder="Audio URL (optional)" className="h-9 w-full rounded-md border border-white/10 bg-zinc-950/50 pl-9 pr-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
+        </div>
+        <label className={`flex h-9 shrink-0 cursor-pointer items-center justify-center rounded-md border border-white/10 bg-zinc-950/50 px-3 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-white ${uploadingAudio ? "opacity-60" : ""}`}>
+          {uploadingAudio ? <Loader2 size={14} className="animate-spin" /> : "Upload"}
+          <input type="file" accept="audio/*" className="hidden" disabled={uploadingAudio} onChange={(event) => handleAudioFile(event.target.files?.[0])} />
+        </label>
+        {draft.audio_url && <button type="button" onClick={() => setDraft((prev) => ({ ...prev, audio_url: "" }))} className="shrink-0 text-xs text-zinc-500 hover:text-rose-300">Remove</button>}
+      </div>
+    </div>
+  </div>;
+};
+
+// Two steps, not one combined form: naming the round is round-specific and
+// belongs on its own screen; writing its first question is a separate
+// concern that happens to be required (a round only becomes real once it
+// has a question -- see flattenSession/makeRounds) but shouldn't visually
+// read as "the round's fields" alongside the name field.
+const AddRoundModal = ({ onCreate, onCreateEmpty, onSaveToLibrary, approvedCategories, onClose }) => {
+  const [step, setStep] = useState("name");
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [questionType, setQuestionType] = useState("mixed");
+  const [points, setPoints] = useState("");
+  const [timerSeconds, setTimerSeconds] = useState(30);
+  const [draft, setDraft] = useState(emptyRoundDraft);
+  const [saving, setSaving] = useState(false);
+  const [creatingEmpty, setCreatingEmpty] = useState(false);
+  const [savingToLibrary, setSavingToLibrary] = useState(false);
+
+  const goToQuestionStep = () => {
+    if (!name.trim()) return;
+    setDraft((prev) => ({ ...prev, question_type: questionType === "mixed" ? prev.question_type : questionType, points, timer_seconds: timerSeconds }));
+    setStep("question");
+  };
+
+  const handleCreate = async () => {
+    setSaving(true);
+    try {
+      const ok = await onCreate(name, draft, description);
+      if (ok) onClose();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleCreateEmpty = async () => {
+    if (!name.trim()) return;
+    setCreatingEmpty(true);
+    try {
+      const ok = await onCreateEmpty(name, description, { questionType, points, timerSeconds });
+      if (ok) onClose();
+    } finally {
+      setCreatingEmpty(false);
+    }
+  };
+
+  // Same as WriteQuestionModal's version -- save the drafted first question
+  // straight to the library without creating the round at all.
+  const handleSaveToLibrary = async () => {
+    if (!draft.question_text.trim() || !draft.correct_answer.trim()) return toast.error("Question and answer can't be empty");
+    setSavingToLibrary(true);
+    try {
+      await onSaveToLibrary({
+        question_text: draft.question_text.trim(),
+        correct_answer: draft.correct_answer.trim(),
+        question_type: draft.question_type,
+        category: draft.category.trim() || "General",
+        incorrect_answers: draft.question_type === "multiple_choice" ? draft.incorrect_answers.map((answer) => answer.trim()).filter(Boolean) : [],
+        fun_fact: draft.fun_fact.trim(),
+        image_url: draft.image_url.trim(),
+      });
+    } finally {
+      setSavingToLibrary(false);
+    }
+  };
+
+  return <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 pt-8 md:pt-14 overflow-y-auto">
+    <div className="w-full max-w-2xl rounded-xl bg-[#17181c] border border-white/10 shadow-2xl shadow-black/60 p-5 relative">
+      <button type="button" onClick={onClose} className="absolute right-4 top-4 text-zinc-400 hover:text-white" aria-label="Close"><X size={18} /></button>
+      {step === "name" ? <>
+        <h2 className="mb-1 text-xl font-bold text-white">Add Round</h2>
+        <p className="mb-5 text-sm text-zinc-500">Name the round and set its defaults -- these apply to the questions you add to it.</p>
+        <div className="space-y-3">
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="Round name"
+            className="h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60"
+            autoFocus
+          />
+          <textarea
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            placeholder="Description (optional) -- read out before this round starts"
+            className="min-h-16 w-full resize-none rounded-md border border-white/10 bg-zinc-950/50 px-3 py-2 text-sm text-white outline-none focus:border-[#71E0DC]/60"
+          />
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <label className="block text-xs text-zinc-500">Question type
+              <select value={questionType} onChange={(event) => setQuestionType(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60">
+                <option value="mixed">Mix</option>
+                <option value="true_false">True/False</option>
+                <option value="multiple_choice">Multiple Choice</option>
+                <option value="written">Written</option>
+              </select>
+            </label>
+            <label className="block text-xs text-zinc-500">Points
+              <input type="number" min="0" step="5" value={points} onChange={(event) => setPoints(event.target.value)} placeholder="Default for type" className="mt-1 h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
+            </label>
+            <label className="block text-xs text-zinc-500">Timer (seconds)
+              <input type="number" min="1" step="5" value={timerSeconds} onChange={(event) => setTimerSeconds(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
+            </label>
+          </div>
+        </div>
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+          <Button type="button" variant="outline" onClick={onClose} className="border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
+          <Button type="button" variant="outline" onClick={handleCreateEmpty} disabled={!name.trim() || creatingEmpty} className="border-white/10 text-zinc-300 hover:text-white">{creatingEmpty ? "Creating..." : "Create Round"}</Button>
+          <Button type="button" onClick={goToQuestionStep} disabled={!name.trim()} className="gradient-btn">Next: Write Question</Button>
+        </div>
+      </> : <>
+        <h2 className="mb-1 text-xl font-bold text-white">Write Question</h2>
+        <p className="mb-5 text-sm text-zinc-500">First question for <span className="text-zinc-300 font-semibold">{name}</span> (optional -- "Create Round" on the previous step skips this and adds questions later).</p>
+        <QuestionDraftFields draft={draft} setDraft={setDraft} approvedCategories={approvedCategories} />
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+          <Button type="button" variant="outline" onClick={() => setStep("name")} className="border-white/10 text-zinc-300 hover:text-white">Back</Button>
+          <Button type="button" variant="outline" onClick={handleSaveToLibrary} disabled={savingToLibrary} className="border-white/10 text-zinc-300 hover:text-white"><List size={14} className="mr-1.5" />{savingToLibrary ? "Saving..." : "Save to Library"}</Button>
+          <Button type="button" onClick={handleCreate} disabled={saving} className="gradient-btn">{saving ? "Creating..." : "Create Round"}</Button>
+        </div>
+      </>}
+    </div>
+  </div>;
+};
+
+// Adds one question to an existing round -- the generalized form of
+// AddRoundModal's first-question step, reachable from any round once it
+// already exists.
+const WriteQuestionModal = ({ round, onCreate, onSaveToLibrary, approvedCategories, onClose }) => {
+  // Prefills from the round's own first question, or (for a round created
+  // without one yet -- see createEmptyRound) from the defaults saved with it
+  // at creation -- either way, the closest thing this app has to a stored
+  // "round default" (rounds aren't first-class entities, see
+  // flattenSession/makeRounds), so a round's points/timer/type carry forward
+  // to every question added to it, while staying fully overridable here.
+  const roundDefaults = round.questions[0] || { type: round.questionType !== "mixed" ? round.questionType : null, points: round.points, timerSeconds: round.timerSeconds };
+  const [draft, setDraft] = useState(() => ({
+    ...emptyRoundDraft,
+    question_type: roundDefaults?.type || emptyRoundDraft.question_type,
+    points: roundDefaults?.points ?? "",
+    timer_seconds: roundDefaults?.timerSeconds ?? 30,
+  }));
+  const [saving, setSaving] = useState(false);
+  const [savingToLibrary, setSavingToLibrary] = useState(false);
+
+  const handleCreate = async () => {
+    setSaving(true);
+    try {
+      const ok = await onCreate(draft);
+      if (ok) onClose();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // "I like this question but don't want to use it this round" -- saves the
+  // draft straight to the library without ever adding it to this round, so
+  // there's no need to add it to the session first just to then save it.
+  const handleSaveToLibrary = async () => {
+    if (!draft.question_text.trim() || !draft.correct_answer.trim()) return toast.error("Question and answer can't be empty");
+    setSavingToLibrary(true);
+    try {
+      await onSaveToLibrary({
+        question_text: draft.question_text.trim(),
+        correct_answer: draft.correct_answer.trim(),
+        question_type: draft.question_type,
+        category: draft.category.trim() || "General",
+        incorrect_answers: draft.question_type === "multiple_choice" ? draft.incorrect_answers.map((answer) => answer.trim()).filter(Boolean) : [],
+        fun_fact: draft.fun_fact.trim(),
+        image_url: draft.image_url.trim(),
+      });
+    } finally {
+      setSavingToLibrary(false);
+    }
+  };
+
+  return <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 pt-8 md:pt-14 overflow-y-auto">
+    <div className="w-full max-w-2xl rounded-xl bg-[#17181c] border border-white/10 shadow-2xl shadow-black/60 p-5 relative">
+      <button type="button" onClick={onClose} className="absolute right-4 top-4 text-zinc-400 hover:text-white" aria-label="Close"><X size={18} /></button>
+      <h2 className="mb-1 text-xl font-bold text-white">Write Question</h2>
+      <p className="mb-5 text-sm text-zinc-500">Added to the end of <span className="text-zinc-300 font-semibold">{round.name}</span>.</p>
+      <QuestionDraftFields draft={draft} setDraft={setDraft} approvedCategories={approvedCategories} />
+      <div className="mt-5 flex flex-wrap justify-end gap-2">
+        <Button type="button" variant="outline" onClick={onClose} className="border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
+        <Button type="button" variant="outline" onClick={handleSaveToLibrary} disabled={savingToLibrary} className="border-white/10 text-zinc-300 hover:text-white"><List size={14} className="mr-1.5" />{savingToLibrary ? "Saving..." : "Save to Library"}</Button>
+        <Button type="button" onClick={handleCreate} disabled={saving} className="gradient-btn">{saving ? "Adding..." : "Add Question"}</Button>
+      </div>
+    </div>
+  </div>;
+};
+
+// First AI feature ported into the merged workspace (workspace-merge Phase
+// 6) -- reuses host-assistant.js's "question_edit" mode exactly as
+// BuildSession's handleChatEditQuestion already does. Never auto-commits:
+// the AI's rewrite is only a preview until the host clicks Apply, which maps
+// it onto updateQuestionContent (content fields only, same as manual Edit).
+// If the AI answers with a different question_type than the original, the
+// answer/wrong-answers aren't applied -- converting a question between
+// true_false/multiple_choice/written means moving it to a different array
+// entirely, which is a separate, riskier feature this doesn't attempt yet.
+const AiEditQuestionModal = ({ question, onEdit, onApply, onClose }) => {
+  const [instruction, setInstruction] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const ask = async () => {
+    if (!instruction.trim() || loading) return;
+    setLoading(true);
+    try {
+      const outcome = await onEdit(question, instruction);
+      if (outcome) setResult(outcome);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const typeMatches = result?.candidate && result.candidate.question_type === question.type;
+  const apply = async () => {
+    if (!result?.candidate) return;
+    setApplying(true);
+    try {
+      const patch = { category: result.candidate.category, questionText: result.candidate.question_text, funFact: result.candidate.fun_fact };
+      if (typeMatches) {
+        patch.answer = result.candidate.correct_answer;
+        if (question.type === "multiple_choice") patch.incorrectAnswers = result.candidate.incorrect_answers.join("; ");
+      }
+      const ok = await onApply(patch);
+      if (ok) onClose();
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  return <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 pt-8 md:pt-14 overflow-y-auto">
+    <div className="w-full max-w-xl rounded-xl bg-[#17181c] border border-white/10 shadow-2xl shadow-black/60 p-5 relative">
+      <button type="button" onClick={onClose} className="absolute right-4 top-4 text-zinc-400 hover:text-white" aria-label="Close"><X size={18} /></button>
+      <h2 className="mb-1 flex items-center gap-2 text-xl font-bold text-white"><Sparkles size={17} className="text-[#71E0DC]" />AI Edit</h2>
+      <p className="mb-4 text-sm text-zinc-500">Tell the AI what to change about this question.</p>
+      <div className="mb-3 rounded-lg border border-white/10 bg-zinc-950/50 p-3">
+        <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-500">Current</p>
+        <p className="mt-1 text-sm font-semibold text-white">{question.questionText}</p>
+        <p className="mt-1 text-sm text-[#71E0DC]">Answer: {question.answer}</p>
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          value={instruction}
+          onChange={(event) => setInstruction(event.target.value)}
+          onKeyDown={(event) => { if (event.key === "Enter") ask(); }}
+          placeholder="e.g. make it harder, fix the fun fact, tighten the wording..."
+          className="h-10 flex-1 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60"
+          autoFocus
+        />
+        <Button type="button" onClick={ask} disabled={loading || !instruction.trim()} className="h-10 gradient-btn">{loading ? <Loader2 size={15} className="animate-spin" /> : "Ask AI"}</Button>
+      </div>
+      {result && <div className="mt-4 rounded-lg border border-[#71E0DC]/20 bg-[#71E0DC]/5 p-3">
+        <p className="text-sm text-zinc-200">{result.answer}</p>
+        {result.candidate && <div className="mt-3 rounded-md border border-white/10 bg-zinc-950/60 p-3">
+          <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-500">{result.candidate.category}</p>
+          <p className="mt-1 text-sm font-semibold text-white">{result.candidate.question_text}</p>
+          {typeMatches && <p className="mt-1 text-sm text-[#71E0DC]">Answer: {result.candidate.correct_answer}</p>}
+          {typeMatches && result.candidate.question_type === "multiple_choice" && result.candidate.incorrect_answers.length > 0 && <p className="mt-1 text-xs text-zinc-500">Wrong answers: {result.candidate.incorrect_answers.join(", ")}</p>}
+          {result.candidate.fun_fact && <p className="mt-2 text-xs text-zinc-400">{result.candidate.fun_fact}</p>}
+          {!typeMatches && <p className="mt-2 text-xs text-amber-300">AI suggested making this a {typeMeta[result.candidate.question_type]?.label || result.candidate.question_type} question -- changing a question's type isn't supported here yet, so only the category/question/fun fact would be applied, not the answer.</p>}
+        </div>}
+        <div className="mt-3 flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={() => setResult(null)} className="border-white/10 text-zinc-300 hover:text-white">Try Again</Button>
+          {result.candidate && <Button type="button" onClick={apply} disabled={applying} className="gradient-btn">{applying ? "Applying..." : "Apply"}</Button>}
+        </div>
+      </div>}
+    </div>
+  </div>;
+};
+
+const GENERATE_DIFFICULTIES = [
+  { value: "easy", label: "Easy" },
+  { value: "medium", label: "Medium" },
+  { value: "hard", label: "Hard" },
+  { value: "host_hard", label: "Host Hard" },
+];
+
+// Second piece of AI tooling ported in (per-question AI edit was the
+// first) -- reuses /api/generate-session-candidates unchanged, the same
+// endpoint BuildSession's requestGeneratedQuestions calls, just with a
+// leaner request (no approved/rejected-category memory or venue history
+// yet -- those stay a BuildSession-only refinement for now). Candidates are
+// a review step, not an auto-add: the host picks which ones to keep, then
+// "Add to Round" commits the selection in one batch via
+// addGeneratedQuestionsToRound.
+const GenerateRoundModal = ({ round, venueId, existingQuestionTexts, onAddAll, onSaveToLibrary, onClose }) => {
+  const [questionType, setQuestionType] = useState(round.questions[0]?.type || (round.questionType && round.questionType !== "mixed" ? round.questionType : "written"));
+  const [difficulty, setDifficulty] = useState("medium");
+  const [count, setCount] = useState(5);
+  const [theme, setTheme] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [candidates, setCandidates] = useState([]);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [savedIds, setSavedIds] = useState(() => new Set());
+  const [adding, setAdding] = useState(false);
+
+  const saveCandidate = async (candidate) => {
+    const ok = await onSaveToLibrary(candidate);
+    if (ok) setSavedIds((prev) => new Set(prev).add(candidate._id));
+  };
+
+  const generate = async () => {
+    setLoading(true);
+    setCandidates([]);
+    try {
+      const response = await fetch("/api/generate-session-candidates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: `round-${round.key}`,
+          questionType,
+          count: Math.max(1, Math.min(12, Number(count) || 5)),
+          difficulty,
+          theme: theme.trim(),
+          excludeUsed: true,
+          avoidDuplicates: true,
+          rejectedQuestions: [...existingQuestionTexts],
+          hostStyleProfile: readHostStyleProfile(),
+          venueId: venueId || null,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || "Failed to generate questions");
+      const generated = (data.candidates || []).map((candidate, index) => ({ ...candidate, _id: `${Date.now()}-${index}` }));
+      setCandidates(generated);
+      setSelectedIds(new Set(generated.map((item) => item._id)));
+      if (!generated.length) toast.error("No questions came back -- try a different theme or type");
+    } catch (error) {
+      console.error("Generate round error:", error);
+      toast.error(error.message || "Failed to generate questions");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggle = (candidateId) => setSelectedIds((prev) => {
+    const next = new Set(prev);
+    if (next.has(candidateId)) next.delete(candidateId); else next.add(candidateId);
+    return next;
+  });
+
+  const addSelected = async () => {
+    const selected = candidates.filter((item) => selectedIds.has(item._id));
+    if (!selected.length) return;
+    setAdding(true);
+    try {
+      const ok = await onAddAll(selected);
+      if (ok) onClose();
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  return <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 pt-8 md:pt-14 overflow-y-auto">
+    <div className="w-full max-w-2xl rounded-xl bg-[#17181c] border border-white/10 shadow-2xl shadow-black/60 p-5 relative">
+      <button type="button" onClick={onClose} className="absolute right-4 top-4 text-zinc-400 hover:text-white" aria-label="Close"><X size={18} /></button>
+      <h2 className="mb-1 flex items-center gap-2 text-xl font-bold text-white"><Sparkles size={18} className="text-[#71E0DC]" />Generate Questions</h2>
+      <p className="mb-4 text-sm text-zinc-500">AI-write a batch of questions for <span className="text-zinc-300 font-semibold">{round.name}</span>, then pick which ones to keep.</p>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <label className="block text-xs text-zinc-500">Type
+          <select value={questionType} onChange={(event) => setQuestionType(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-2 text-white outline-none focus:border-[#71E0DC]/60">
+            <option value="true_false">True/False</option>
+            <option value="multiple_choice">Multiple Choice</option>
+            <option value="written">Written</option>
+          </select>
+        </label>
+        <label className="block text-xs text-zinc-500">Difficulty
+          <select value={difficulty} onChange={(event) => setDifficulty(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-2 text-white outline-none focus:border-[#71E0DC]/60">
+            {GENERATE_DIFFICULTIES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+          </select>
+        </label>
+        <label className="block text-xs text-zinc-500">Count
+          <input type="number" min="1" max="12" value={count} onChange={(event) => setCount(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-2 text-white outline-none focus:border-[#71E0DC]/60" />
+        </label>
+        <label className="col-span-2 block text-xs text-zinc-500 md:col-span-1">Theme (optional)
+          <input value={theme} onChange={(event) => setTheme(event.target.value)} placeholder="e.g. 90s movies" className="mt-1 h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-2 text-white outline-none focus:border-[#71E0DC]/60" />
+        </label>
+      </div>
+      <div className="mt-3 flex justify-end">
+        <Button type="button" onClick={generate} disabled={loading} className="gradient-btn">{loading ? <Loader2 size={15} className="mr-2 animate-spin" /> : <Sparkles size={14} className="mr-2" />}{loading ? "Generating..." : "Generate"}</Button>
+      </div>
+      {candidates.length > 0 && <div className="mt-4 max-h-[360px] space-y-2 overflow-y-auto pr-1">
+        {candidates.map((candidate) => {
+          const selected = selectedIds.has(candidate._id);
+          const saved = savedIds.has(candidate._id);
+          return <div key={candidate._id} role="button" tabIndex={0} onClick={() => toggle(candidate._id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") toggle(candidate._id); }} className={`block w-full cursor-pointer rounded-lg border p-3 text-left transition-colors ${selected ? "border-[#71E0DC]/40 bg-[#71E0DC]/5" : "border-white/10 bg-zinc-950/40 hover:border-white/20"}`}>
+            <div className="flex items-start gap-2">
+              <div className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border ${selected ? "border-[#71E0DC] bg-[#71E0DC]" : "border-white/20"}`}>{selected && <Check size={12} className="text-zinc-950" />}</div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-500">{candidate.category}</p>
+                  <button type="button" disabled={saved} onClick={(event) => { event.stopPropagation(); saveCandidate(candidate); }} className={`shrink-0 text-[11px] font-semibold ${saved ? "text-zinc-600" : "text-zinc-400 hover:text-[#71E0DC]"}`}>{saved ? "Saved" : "Save to Library"}</button>
+                </div>
+                <p className="mt-0.5 text-sm font-semibold text-white">{candidate.question_text}</p>
+                <p className="mt-1 text-sm text-[#71E0DC]">Answer: {candidate.correct_answer}</p>
+                {candidate.fun_fact && <p className="mt-1 text-xs text-zinc-400">{candidate.fun_fact}</p>}
+              </div>
+            </div>
+          </div>;
+        })}
+      </div>}
+      {candidates.length > 0 && <div className="mt-4 flex items-center justify-between">
+        <p className="text-xs text-zinc-500">{selectedIds.size} of {candidates.length} selected</p>
+        <div className="flex gap-2">
+          <Button type="button" variant="outline" onClick={onClose} className="border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
+          <Button type="button" onClick={addSelected} disabled={adding || !selectedIds.size} className="gradient-btn">{adding ? "Adding..." : `Add ${selectedIds.size || ""} to Round`}</Button>
+        </div>
+      </div>}
+    </div>
+  </div>;
+};
+
+// Third AI feature ported in (after per-question AI edit and one-shot
+// Generate) -- a multi-turn chat via host-assistant.js's "build_cohost"
+// mode. Unlike Generate (one request, one batch of candidates), this keeps
+// a conversation so the host can push back and refine ("no repeat
+// categories", "make these harder") instead of starting over each time.
+// Every reply's candidates stay addable individually and never disappear
+// when a new message comes in, so an earlier answer's suggestions aren't
+// lost by continuing the conversation.
+const CoHostChatModal = ({ round, onAsk, onAddCandidate, onSaveToLibrary, onClose }) => {
+  const [messages, setMessages] = useState([]);
+  const [prompt, setPrompt] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [candidatesByMessage, setCandidatesByMessage] = useState([]);
+  const [addedIds, setAddedIds] = useState(() => new Set());
+  const [savedIds, setSavedIds] = useState(() => new Set());
+
+  const send = async () => {
+    const request = prompt.trim();
+    if (!request || loading) return;
+    const nextMessages = [...messages, { role: "user", content: request }].slice(-10);
+    setMessages(nextMessages);
+    setPrompt("");
+    setLoading(true);
+    try {
+      const outcome = await onAsk(round, nextMessages, request);
+      if (!outcome) return;
+      setMessages((prev) => [...prev, { role: "assistant", content: outcome.answer }].slice(-12));
+      if (outcome.candidates.length) {
+        setCandidatesByMessage((prev) => [...prev, ...outcome.candidates.map((candidate, index) => ({ ...candidate, _id: `${Date.now()}-${index}` }))]);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const addCandidate = async (candidate) => {
+    const ok = await onAddCandidate(candidate);
+    if (ok) setAddedIds((prev) => new Set(prev).add(candidate._id));
+  };
+
+  const saveCandidate = async (candidate) => {
+    const ok = await onSaveToLibrary(candidate);
+    if (ok) setSavedIds((prev) => new Set(prev).add(candidate._id));
+  };
+
+  return <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 pt-8 md:pt-14 overflow-y-auto">
+    <div className="w-full max-w-4xl rounded-xl bg-[#17181c] border border-white/10 shadow-2xl shadow-black/60 p-5 relative">
+      <button type="button" onClick={onClose} className="absolute right-4 top-4 text-zinc-400 hover:text-white" aria-label="Close"><X size={18} /></button>
+      <h2 className="mb-1 flex items-center gap-2 text-xl font-bold text-white"><Bot size={18} className="text-[#71E0DC]" />AI Co-Host</h2>
+      <p className="mb-4 text-sm text-zinc-500">Chat about <span className="text-zinc-300 font-semibold">{round.name}</span> -- ask for a vibe, push back, and add only what you like.</p>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+        <div className="flex min-h-[420px] flex-col rounded-xl border border-white/10 bg-zinc-950/40 p-3">
+          <div className="flex-1 space-y-3 overflow-y-auto pr-1">
+            {messages.length ? messages.map((message, index) => <div key={`${message.role}-${index}`} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
+              <div className={`max-w-[88%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${message.role === "user" ? "border border-[#71E0DC]/25 bg-[#71E0DC]/15 text-white" : "border border-white/10 bg-zinc-900/90 text-zinc-200"}`}>{message.content}</div>
+            </div>) : <div className="flex h-full min-h-[260px] items-center justify-center text-center text-zinc-500">
+              <div>
+                <Bot className="mx-auto mb-3 h-7 w-7 text-[#71E0DC]" />
+                <p className="font-semibold text-zinc-300">Tell the co-host what you need.</p>
+                <p className="mt-1 text-sm">e.g. "give me 3 harder written questions, no repeat categories"</p>
+              </div>
+            </div>}
+            {loading && <div className="flex justify-start"><div className="rounded-2xl border border-white/10 bg-zinc-900/90 px-4 py-2.5 text-sm text-zinc-400"><Loader2 size={14} className="mr-2 inline animate-spin text-[#71E0DC]" />Thinking...</div></div>}
+          </div>
+          <div className="mt-3 flex items-center gap-2">
+            <input
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              onKeyDown={(event) => { if (event.key === "Enter") send(); }}
+              placeholder="Ask the co-host..."
+              className="h-10 flex-1 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60"
+              autoFocus
+            />
+            <Button type="button" onClick={send} disabled={loading || !prompt.trim()} className="h-10 gradient-btn">{loading ? <Loader2 size={15} className="animate-spin" /> : "Send"}</Button>
+          </div>
+        </div>
+        <div className="rounded-xl border border-white/10 bg-zinc-950/30 p-3">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-white">Usable Drafts</p>
+            <Badge className="bg-zinc-800 text-zinc-300">{candidatesByMessage.length}</Badge>
+          </div>
+          <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+            {candidatesByMessage.length ? candidatesByMessage.map((candidate) => {
+              const added = addedIds.has(candidate._id);
+              const saved = savedIds.has(candidate._id);
+              return <div key={candidate._id} className="rounded-lg border border-white/10 bg-zinc-950/60 p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-500">{candidate.category}</p>
+                  <button type="button" disabled={saved} onClick={() => saveCandidate(candidate)} className={`shrink-0 text-[11px] font-semibold ${saved ? "text-zinc-600" : "text-zinc-400 hover:text-[#71E0DC]"}`}>{saved ? "Saved" : "Save to Library"}</button>
+                </div>
+                <p className="mt-1 text-sm font-semibold text-white">{candidate.question_text}</p>
+                <p className="mt-1 text-sm text-[#71E0DC]">Answer: {candidate.correct_answer}</p>
+                {candidate.fun_fact && <p className="mt-1 text-xs text-zinc-400">{candidate.fun_fact}</p>}
+                <Button type="button" size="sm" disabled={added} onClick={() => addCandidate(candidate)} className={`mt-2 h-8 w-full ${added ? "bg-zinc-800 text-zinc-500" : "gradient-btn"}`}>{added ? "Added" : "Add to Round"}</Button>
+              </div>;
+            }) : <div className="rounded-lg border border-dashed border-white/10 bg-zinc-950/30 p-6 text-center text-xs text-zinc-500">When the co-host writes usable questions, they'll appear here.</div>}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>;
+};
+
+// Browses the user's saved question library (the `questions` table) and
+// inserts a pick straight into `round`. Fetched lazily and cached in
+// QuestionListView's state across round-picker opens for one page visit.
+// Deliberately narrower than BuildSession's LibraryModal for now: no
+// cross-session "used elsewhere" fingerprinting or question-memory
+// blocking -- just hides anything whose question text is already somewhere
+// in *this* session, which is the case that actually matters for avoiding
+// an accidental duplicate mid-event. The fuller usage-aware picker is a
+// possible later refinement.
+const LibraryPickerModal = ({ round, libraryQuestions, loading, existingTexts, onInsert, onClose }) => {
+  const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [addedIds, setAddedIds] = useState(() => new Set());
+
+  const filtered = (libraryQuestions || []).filter((question) => {
+    const type = normalizeType(question);
+    if (typeFilter !== "all" && type !== typeFilter) return false;
+    const text = String(question.question_text || question.question || "").trim();
+    if (!text) return false;
+    if (existingTexts.has(text.toLowerCase()) && !addedIds.has(String(question.id))) return false;
+    const query = search.trim().toLowerCase();
+    if (!query) return true;
+    return [question.question_text, question.correct_answer, question.category].filter(Boolean).some((value) => String(value).toLowerCase().includes(query));
+  });
+
+  const handlePick = async (question) => {
+    const ok = await onInsert(question);
+    if (ok) setAddedIds((prev) => new Set(prev).add(String(question.id)));
+  };
+
+  return <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 pt-8 md:pt-14 overflow-y-auto">
+    <div className="flex w-full max-w-3xl max-h-[85vh] flex-col overflow-hidden rounded-xl border border-white/10 bg-[#17181c] p-5 shadow-2xl shadow-black/60 relative">
+      <button type="button" onClick={onClose} className="absolute right-4 top-4 text-zinc-400 hover:text-white" aria-label="Close"><X size={18} /></button>
+      <h2 className="mb-1 text-xl font-bold text-white">Add from Library</h2>
+      <p className="mb-4 text-sm text-zinc-500">Adding to <span className="font-semibold text-zinc-300">{round.name}</span>. Questions already used in this event are hidden.</p>
+      <div className="mb-3 flex flex-col gap-2 md:flex-row">
+        <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)} className="h-10 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white">
+          <option value="all">All types</option>
+          <option value="written">Free Response</option>
+          <option value="true_false">True/False</option>
+          <option value="multiple_choice">Multiple Choice</option>
+        </select>
+        <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search your library..." className="h-10 flex-1 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
+      </div>
+      <div className="flex-1 space-y-2 overflow-y-auto pr-1">
+        {loading && <p className="py-10 text-center text-sm text-zinc-500">Loading your library...</p>}
+        {!loading && filtered.length === 0 && <p className="py-10 text-center text-sm text-zinc-500">No matching questions.</p>}
+        {!loading && filtered.map((question) => {
+          const added = addedIds.has(String(question.id));
+          const meta = typeMeta[normalizeType(question)] || typeMeta.written;
+          return <button key={question.id} type="button" onClick={() => !added && handlePick(question)} disabled={added} className={`w-full rounded-lg border p-3 text-left transition ${added ? "border-emerald-400/30 bg-emerald-400/5 opacity-60" : "border-white/10 bg-zinc-950/40 hover:border-[#71E0DC]/40"}`}>
+            <div className="mb-1 flex flex-wrap items-center gap-2">
+              <Badge variant="outline" className="border-zinc-700 text-xs text-zinc-400">{question.category || "General"}</Badge>
+              <Badge className="bg-zinc-800 text-xs text-zinc-300">{meta.short}</Badge>
+              {added && <Badge className="bg-emerald-500/15 text-xs text-emerald-300">Added</Badge>}
+            </div>
+            <p className="text-sm text-white">{question.question_text || question.question}</p>
           </button>;
         })}
       </div>
-      <button type="button" onClick={onNext} disabled={hostIndex >= questions.length - 1} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-white/10 bg-zinc-950 text-zinc-300 hover:border-[#71E0DC]/40 hover:text-[#71E0DC] disabled:opacity-30" aria-label="Next question"><ChevronRight size={16} /></button>
-      <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-rose-400/30 bg-rose-400/10 px-2.5 py-1.5 text-xs font-bold text-rose-200">
-        <span className="h-1.5 w-1.5 rounded-full bg-rose-400 animate-pulse" />
-        LIVE: Q{currentIndex + 1}
+    </div>
+  </div>;
+};
+
+// Only the active round's bar renders here now -- see QuestionListView.
+// Renaming/reordering/deleting moved into RoundManagerModal (opened via the
+// RoundSwitcher dropdown's "Manage Rounds" entry): with only one round
+// visible at a time, seeing it next to its siblings is what makes reorder
+// and delete-with-guard legible, the same reason BuildSession's original
+// round dropdown paired with a separate management surface.
+const RoundHeader = ({ rounds, activeRound, activeIndex, onSelectRound, onManageRounds, onDescribe, onWriteQuestion, onAddFromLibrary, onGenerate, onCoHost, onNextRound, hasNextRound }) => {
+  const [editingDescription, setEditingDescription] = useState(false);
+  const [descriptionDraft, setDescriptionDraft] = useState(activeRound.description || "");
+
+  const commitDescription = () => {
+    onDescribe(descriptionDraft.trim());
+    setEditingDescription(false);
+  };
+
+  return <div className="sticky top-0 z-[5] mb-3 rounded-lg border border-white/10 bg-zinc-950/95 backdrop-blur">
+    <div className="flex items-center gap-2 px-3 py-2">
+      <RoundSwitcher rounds={rounds} activeRound={activeRound} activeIndex={activeIndex} onSelect={onSelectRound} onManage={onManageRounds} />
+      <span className="text-xs text-zinc-500">{activeRound.questions.length} question{activeRound.questions.length === 1 ? "" : "s"}</span>
+      <div className="ml-auto flex items-center gap-1">
+        <button type="button" onClick={onNextRound} disabled={!hasNextRound} className="flex h-7 items-center gap-1 rounded px-2 text-xs font-medium text-zinc-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:text-zinc-400" title={hasNextRound ? "Go to next round" : "This is the last round"} aria-label="Next round">Next Round<ChevronRight size={14} /></button>
+        <div className="mx-0.5 h-4 w-px bg-white/10" />
+        <button type="button" onClick={() => setEditingDescription((value) => !value)} className={`flex h-7 w-7 items-center justify-center rounded ${activeRound.description ? "text-[#71E0DC]" : "text-zinc-500"} hover:text-white`} title={activeRound.description ? "Edit round note" : "Add round note"} aria-label="Round note"><MessageSquare size={14} /></button>
+        <button type="button" onClick={onCoHost} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white" title="Chat with the AI co-host" aria-label="AI co-host"><Bot size={14} /></button>
+        <button type="button" onClick={onGenerate} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white" title="Generate questions with AI" aria-label="Generate questions"><Sparkles size={14} /></button>
+        <button type="button" onClick={onWriteQuestion} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white" title="Write a question for this round" aria-label="Write question"><Pencil size={14} /></button>
+        <button type="button" onClick={onAddFromLibrary} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white" title="Add from library" aria-label="Add from library"><List size={14} /></button>
       </div>
     </div>
-    {isReviewing && <div className="flex flex-wrap items-center gap-2 border-t border-amber-400/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-100">
-      <Eye size={13} className="shrink-0 text-amber-300" />
-      <span className="flex-1">Reviewing Q{hostIndex + 1} &mdash; players and the presentation screen still see <b>Q{currentIndex + 1}</b>, live.</span>
-      <Button size="sm" variant="outline" onClick={onBackToLive} className="h-7 border-amber-300/30 text-amber-100 hover:text-white">Back to Live</Button>
-      <Button size="sm" onClick={onGoLive} className="h-7 bg-amber-300 text-zinc-950 hover:bg-amber-200">Go Live With This Question</Button>
+    {editingDescription && <div className="flex items-start gap-2 border-t border-white/5 px-3 py-2">
+      <textarea
+        autoFocus
+        value={descriptionDraft}
+        onChange={(event) => setDescriptionDraft(event.target.value)}
+        placeholder="Optional note read out before this round starts..."
+        className="min-h-16 flex-1 resize-none rounded-md border border-white/10 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-200 outline-none focus:border-[#71E0DC]/60"
+      />
+      <div className="flex flex-col gap-1.5 pt-1">
+        <button type="button" onClick={commitDescription} className="text-emerald-300 hover:text-emerald-200" aria-label="Save round note"><Check size={15} /></button>
+        <button type="button" onClick={() => { setDescriptionDraft(activeRound.description || ""); setEditingDescription(false); }} className="text-zinc-500 hover:text-white" aria-label="Cancel note"><X size={15} /></button>
+      </div>
     </div>}
   </div>;
+};
+
+// Trigger + dropdown: "R{n}: {name}", a list of every round (name, position,
+// question count) to jump to, and a "Manage Rounds" entry for structural
+// changes. Matches the reference's round picker instead of stacking every
+// round's full question list on one page.
+const RoundSwitcher = ({ rounds, activeRound, activeIndex, onSelect, onManage }) => {
+  const [open, setOpen] = useState(false);
+  return <div className="relative">
+    <button type="button" onClick={() => setOpen((value) => !value)} className="flex h-7 items-center gap-1.5 rounded-md border border-[#71E0DC]/30 bg-[#71E0DC]/10 px-2.5 text-sm font-bold text-[#71E0DC]">
+      R{activeIndex + 1}: {activeRound.name}<ChevronDown size={14} className={`transition-transform ${open ? "rotate-180" : ""}`} />
+    </button>
+    {open && <>
+      <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+      <div className="absolute left-0 top-full z-20 mt-1 w-64 overflow-hidden rounded-lg border border-white/10 bg-zinc-950 shadow-xl shadow-black/60">
+        <p className="px-3 pb-1 pt-3 text-xs font-bold uppercase tracking-wide text-zinc-500">Rounds</p>
+        <div className="max-h-72 overflow-y-auto py-1">
+          {rounds.map((round, index) => <button key={round.key} type="button" onClick={() => { onSelect(round.key); setOpen(false); }} className={`flex w-full items-center justify-between px-3 py-2 text-left hover:bg-zinc-900 ${round.key === activeRound.key ? "bg-zinc-900/70" : ""}`}>
+            <span>
+              <span className={`block text-sm font-semibold ${round.key === activeRound.key ? "text-[#71E0DC]" : "text-white"}`}>{round.name}</span>
+              <span className="block text-xs text-zinc-500">Round {index + 1}</span>
+            </span>
+            <span className="text-xs text-zinc-500">({round.questions.length})</span>
+          </button>)}
+        </div>
+        <button type="button" onClick={() => { onManage(); setOpen(false); }} className="flex w-full items-center gap-2 border-t border-white/10 px-3 py-2.5 text-left hover:bg-zinc-900">
+          <Pencil size={14} className="text-zinc-400" />
+          <span>
+            <span className="block text-sm font-semibold text-white">Manage Rounds</span>
+            <span className="block text-xs text-zinc-500">Manage the rounds in the event.</span>
+          </span>
+        </button>
+      </div>
+    </>}
+  </div>;
+};
+
+// The structural surface for rounds -- rename/reorder/delete/add, all in one
+// place since seeing every round next to its siblings is what makes those
+// operations legible when only one round shows on the main screen at a time.
+const RoundManagerModal = ({ rounds, onRename, onDescribe, onSetRoundSettings, onMoveRound, onDelete, onAddRound, onClose }) => <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 pt-8 md:pt-14 overflow-y-auto">
+  <div className="w-full max-w-xl rounded-xl border border-white/10 bg-[#17181c] p-5 shadow-2xl shadow-black/60 relative">
+    <button type="button" onClick={onClose} className="absolute right-4 top-4 text-zinc-400 hover:text-white" aria-label="Close"><X size={18} /></button>
+    <h2 className="mb-4 text-xl font-bold text-white">Manage Rounds</h2>
+    <div className="space-y-2">
+      {rounds.map((round, index) => <RoundManagerRow
+        key={round.key}
+        round={round}
+        canMoveUp={index > 0}
+        canMoveDown={index < rounds.length - 1}
+        canDelete={rounds.length > 1}
+        onRename={(name) => onRename(round, name)}
+        onDescribe={(description) => onDescribe(round, description)}
+        onSetSettings={(settings) => onSetRoundSettings(round, settings)}
+        onMoveUp={() => onMoveRound(round, -1)}
+        onMoveDown={() => onMoveRound(round, 1)}
+        onDelete={() => onDelete(round)}
+      />)}
+    </div>
+    <Button type="button" variant="outline" onClick={onAddRound} className="mt-4 w-full border-dashed border-white/15 text-zinc-300 hover:text-white"><Plus size={14} className="mr-1.5" />Add Round</Button>
+  </div>
+</div>;
+
+const RoundManagerRow = ({ round, canMoveUp, canMoveDown, canDelete, onRename, onDescribe, onSetSettings, onMoveUp, onMoveDown, onDelete }) => {
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(round.name);
+  const [editingDescription, setEditingDescription] = useState(false);
+  const [descriptionDraft, setDescriptionDraft] = useState(round.description || "");
+  const [editingSettings, setEditingSettings] = useState(false);
+  const roundPoints = round.questions[0]?.points ?? round.points;
+  const roundTimerSeconds = round.questions[0]?.timerSeconds ?? round.timerSeconds;
+  const [pointsDraft, setPointsDraft] = useState(roundPoints ?? "");
+  const [timerDraft, setTimerDraft] = useState(roundTimerSeconds ?? 30);
+  const [typeDraft, setTypeDraft] = useState(round.questionType || "mixed");
+
+  const commitName = () => { onRename(nameDraft); setEditingName(false); };
+  const commitDescription = () => { onDescribe(descriptionDraft.trim()); setEditingDescription(false); };
+  const commitSettings = () => {
+    onSetSettings({ points: pointsDraft === "" ? null : Number(pointsDraft) || 0, timerSeconds: Number(timerDraft) || 30, questionType: round.isEmpty ? typeDraft : undefined });
+    setEditingSettings(false);
+  };
+
+  return <div className="rounded-lg border border-white/10 bg-zinc-950/40 p-2.5">
+    <div className="flex items-center gap-2">
+      {editingName ? <div className="flex flex-1 items-center gap-1.5">
+        <input autoFocus value={nameDraft} onChange={(event) => setNameDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") commitName(); if (event.key === "Escape") { setNameDraft(round.name); setEditingName(false); } }} className="h-8 flex-1 rounded border border-[#71E0DC]/40 bg-zinc-900 px-2 text-sm font-bold text-white outline-none" />
+        <button type="button" onClick={commitName} className="text-emerald-300 hover:text-emerald-200" aria-label="Save round name"><Check size={15} /></button>
+        <button type="button" onClick={() => { setNameDraft(round.name); setEditingName(false); }} className="text-zinc-500 hover:text-white" aria-label="Cancel rename"><X size={15} /></button>
+      </div> : <button type="button" onClick={() => { setNameDraft(round.name); setEditingName(true); }} className="flex flex-1 items-center gap-1.5 text-left text-sm font-bold text-white hover:text-[#71E0DC]" title="Rename round">
+        {round.name}<Pencil size={11} className="shrink-0 text-zinc-500" />
+        <span className="ml-1 text-xs font-normal text-zinc-500">{round.questions.length} question{round.questions.length === 1 ? "" : "s"}</span>
+      </button>}
+      <div className="flex shrink-0 items-center gap-1">
+        <button type="button" onClick={() => { setPointsDraft(roundPoints ?? ""); setTimerDraft(roundTimerSeconds ?? 30); setTypeDraft(round.questionType || "mixed"); setEditingSettings((value) => !value); }} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white" title="Points &amp; timer for this round" aria-label="Round points and timer"><SlidersHorizontal size={14} /></button>
+        <button type="button" onClick={() => setEditingDescription((value) => !value)} className={`flex h-7 w-7 items-center justify-center rounded ${round.description ? "text-[#71E0DC]" : "text-zinc-500"} hover:text-white`} title={round.description ? "Edit round note" : "Add round note"} aria-label="Round note"><MessageSquare size={14} /></button>
+        <button type="button" onClick={onMoveUp} disabled={!canMoveUp} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white disabled:opacity-30" aria-label="Move round up"><ChevronUp size={15} /></button>
+        <button type="button" onClick={onMoveDown} disabled={!canMoveDown} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white disabled:opacity-30" aria-label="Move round down"><ChevronDown size={15} /></button>
+        <button type="button" onClick={onDelete} disabled={!canDelete} title={canDelete ? "Delete round" : "Keep at least one round"} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-rose-300 disabled:opacity-30" aria-label="Delete round"><Trash2 size={14} /></button>
+      </div>
+    </div>
+    {editingSettings && <div className="mt-2 flex items-end gap-2 border-t border-white/5 pt-2">
+      {round.isEmpty && <label className="block flex-1 text-xs text-zinc-500">Question type
+        <select value={typeDraft} onChange={(event) => setTypeDraft(event.target.value)} className="mt-1 h-8 w-full rounded border border-white/10 bg-zinc-900 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60">
+          <option value="mixed">Mix</option>
+          <option value="true_false">True/False</option>
+          <option value="multiple_choice">Multiple Choice</option>
+          <option value="written">Written</option>
+        </select>
+      </label>}
+      <label className="block flex-1 text-xs text-zinc-500">Points (whole round)
+        <input type="number" min="0" step="5" value={pointsDraft} onChange={(event) => setPointsDraft(event.target.value)} placeholder="Default for type" className="mt-1 h-8 w-full rounded border border-white/10 bg-zinc-900 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
+      </label>
+      <label className="block flex-1 text-xs text-zinc-500">Timer (seconds)
+        <input type="number" min="1" step="5" value={timerDraft} onChange={(event) => setTimerDraft(event.target.value)} className="mt-1 h-8 w-full rounded border border-white/10 bg-zinc-900 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
+      </label>
+      <button type="button" onClick={commitSettings} className="mb-0.5 text-emerald-300 hover:text-emerald-200" aria-label="Save round points and timer"><Check size={15} /></button>
+      <button type="button" onClick={() => setEditingSettings(false)} className="mb-0.5 text-zinc-500 hover:text-white" aria-label="Cancel points and timer edit"><X size={15} /></button>
+    </div>}
+    {editingDescription && <div className="mt-2 flex items-start gap-2 border-t border-white/5 pt-2">
+      <textarea autoFocus value={descriptionDraft} onChange={(event) => setDescriptionDraft(event.target.value)} placeholder="Optional note read out before this round starts..." className="min-h-16 flex-1 resize-none rounded-md border border-white/10 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-200 outline-none focus:border-[#71E0DC]/60" />
+      <div className="flex flex-col gap-1.5 pt-1">
+        <button type="button" onClick={commitDescription} className="text-emerald-300 hover:text-emerald-200" aria-label="Save round note"><Check size={15} /></button>
+        <button type="button" onClick={() => { setDescriptionDraft(round.description || ""); setEditingDescription(false); }} className="text-zinc-500 hover:text-white" aria-label="Cancel note"><X size={15} /></button>
+      </div>
+    </div>}
+  </div>;
+};
+
+const QuestionListView = ({
+  rounds, questions, currentIndex, hostIndex, isReviewing, gameStarted, eventOpen,
+  displayedQuestion, goToQuestion, reviewQuestion, onBackToLive, onGoLiveWithThis,
+  answersForQuestionIndex, gradedAnswers, players, hostAnswers, fairPlayStats,
+  showAnswer, showFunFact, timeRemaining, viewPointsPerQuestion, viewTimerSeconds, viewWagerMode, viewWagerLimit, viewWagerTiming,
+  onUpdateSettings, renameRound, describeRound, setEmptyRoundSettings, moveRound, deleteRound, createRound, createEmptyRound, moveQuestionToRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, addGeneratedQuestionsToRound, updateQuestionContent, editQuestionWithAi, askCoHost, saveQuestionToLibrary, venueId, approvedCategories, branding, markAnswer, addManualAnswer, editWager, releaseMode,
+  hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, resetQuestionAt,
+}) => {
+  // Only one round is shown at a time (see RoundHeader/RoundSwitcher) --
+  // defaults to whichever round the live/reviewed question is in, and
+  // re-syncs to that whenever hostIndex moves (Ask Question / Review), so
+  // the view doesn't sit stale on a round nothing is happening in. A host
+  // who deliberately picks a different round via the switcher stays there
+  // until hostIndex itself changes next.
+  const [activeRoundKey, setActiveRoundKey] = useState(() => {
+    const liveRound = rounds.find((round) => hostIndex >= round.startIndex && hostIndex < round.startIndex + round.questions.length);
+    return (liveRound || rounds[0])?.key || null;
+  });
+  useEffect(() => {
+    const liveRound = rounds.find((round) => hostIndex >= round.startIndex && hostIndex < round.startIndex + round.questions.length);
+    if (liveRound) setActiveRoundKey(liveRound.key);
+    // Only hostIndex should trigger this -- re-running on every `rounds`
+    // change would fight the round-created effect below and the switcher's
+    // own manual selection.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hostIndex]);
+  // A freshly created round always lands last (see createRound) -- jump to
+  // it so the host sees the round they just named/wrote a question for.
+  const prevRoundCountRef = useRef(rounds.length);
+  useEffect(() => {
+    if (rounds.length > prevRoundCountRef.current) setActiveRoundKey(rounds[rounds.length - 1].key);
+    prevRoundCountRef.current = rounds.length;
+  }, [rounds]);
+  const activeRound = rounds.find((round) => round.key === activeRoundKey) || rounds[0];
+  const activeIndex = rounds.findIndex((round) => round.key === activeRound.key);
+
+  const [manageRoundsOpen, setManageRoundsOpen] = useState(false);
+  const [addRoundOpen, setAddRoundOpen] = useState(false);
+  const [aiEditQuestionId, setAiEditQuestionId] = useState(null);
+  const aiEditQuestion = questions.find((item) => item.id === aiEditQuestionId) || null;
+  const [writeQuestionRoundKey, setWriteQuestionRoundKey] = useState(null);
+  const writeQuestionRound = rounds.find((round) => round.key === writeQuestionRoundKey) || null;
+  const [generateRoundKey, setGenerateRoundKey] = useState(null);
+  const generateRound = rounds.find((round) => round.key === generateRoundKey) || null;
+  const [coHostRoundKey, setCoHostRoundKey] = useState(null);
+  const coHostRound = rounds.find((round) => round.key === coHostRoundKey) || null;
+  const [libraryRoundKey, setLibraryRoundKey] = useState(null);
+  const libraryRound = rounds.find((round) => round.key === libraryRoundKey) || null;
+  const [libraryQuestions, setLibraryQuestions] = useState(null);
+  const [libraryLoading, setLibraryLoading] = useState(false);
+  const openLibrary = (roundKey) => {
+    setLibraryRoundKey(roundKey);
+    if (libraryQuestions !== null || libraryLoading) return;
+    setLibraryLoading(true);
+    supabase.from("questions").select("*").order("created_at", { ascending: false }).then(({ data, error }) => {
+      if (error) {
+        console.warn("Library fetch unavailable:", error);
+        toast.error("Couldn't load your question library");
+        setLibraryQuestions([]);
+      } else {
+        setLibraryQuestions(data || []);
+      }
+      setLibraryLoading(false);
+    });
+  };
+  const existingQuestionTexts = new Set(questions.map((question) => String(question.questionText || "").trim().toLowerCase()).filter(Boolean));
+  return <div className="space-y-3">
+    <section>
+      <RoundHeader
+        rounds={rounds}
+        activeRound={activeRound}
+        activeIndex={activeIndex}
+        onSelectRound={setActiveRoundKey}
+        onManageRounds={() => setManageRoundsOpen(true)}
+        onDescribe={(description) => describeRound(activeRound, description)}
+        onWriteQuestion={() => setWriteQuestionRoundKey(activeRound.key)}
+        onAddFromLibrary={() => openLibrary(activeRound.key)}
+        onGenerate={() => setGenerateRoundKey(activeRound.key)}
+        onCoHost={() => setCoHostRoundKey(activeRound.key)}
+        hasNextRound={activeIndex < rounds.length - 1}
+        onNextRound={() => { if (activeIndex < rounds.length - 1) setActiveRoundKey(rounds[activeIndex + 1].key); }}
+      />
+      <div className="space-y-3">
+        {activeRound.questions.map((question, localIndex) => {
+          const index = activeRound.startIndex + localIndex;
+          if (index === hostIndex && (isReviewing || gameStarted)) {
+            return <QuestionStage key={question.id} question={displayedQuestion} index={hostIndex} total={questions.length} showAnswer={showAnswer} showFunFact={showFunFact} pointsPerQuestion={viewPointsPerQuestion} timerSeconds={viewTimerSeconds} timeRemaining={timeRemaining} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} wagerTiming={viewWagerTiming} onUpdateSettings={onUpdateSettings} onUpdateContent={(patch) => updateQuestionContent(displayedQuestion, patch)} onDuplicate={() => duplicateQuestion(displayedQuestion)} onAiEdit={() => setAiEditQuestionId(displayedQuestion.id)} onSaveToLibrary={saveQuestionToLibrary} branding={branding} players={players} answers={hostAnswers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} setMode={releaseMode} isReviewing={isReviewing} hasRevealExtra={hasRevealExtra} hasFunFact={hasFunFact} hasAudio={hasAudio} isPlayingAudio={isPlayingAudio} onToggleAudio={onToggleAudio} onRevealAnswer={onRevealAnswer} onShowFunFact={onShowFunFact} startTimer={startTimer} resetTimer={resetTimer} resetQuestion={resetQuestion} onBackToLive={onBackToLive} onGoLiveWithThis={onGoLiveWithThis} />;
+          }
+          const isLiveElsewhere = index === currentIndex && isReviewing;
+          const state = isLiveElsewhere ? "live" : index < currentIndex ? "completed" : "upcoming";
+          const questionAnswers = answersForQuestionIndex(index);
+          const graded = questionAnswers.map((answer) => gradedAnswers[answerKey(answer)]).filter(Boolean);
+          const correctCount = graded.filter((item) => item.status === "correct").length;
+          return <CollapsedQuestionCard
+            key={question.id}
+            question={question}
+            index={index}
+            state={state}
+            submittedCount={questionAnswers.length}
+            playerCount={players.length}
+            correctCount={correctCount}
+            eventOpen={eventOpen}
+            onAsk={() => goToQuestion(index, { startTimer: true })}
+            onReview={isLiveElsewhere ? onBackToLive : () => reviewQuestion(index)}
+            currentRoundName={activeRound.name}
+            otherRounds={rounds.filter((item) => item.key !== activeRound.key)}
+            onMoveToRound={(targetRound) => moveQuestionToRound(question, targetRound)}
+            onUpdateContent={(patch) => updateQuestionContent(question, patch)}
+            onDuplicate={() => duplicateQuestion(question)}
+            onDiscard={() => discardQuestion(question)}
+            onResetQuestion={() => resetQuestionAt(index)}
+            onAiEdit={() => setAiEditQuestionId(question.id)}
+            onSaveToLibrary={saveQuestionToLibrary}
+          />;
+        })}
+        {!activeRound.questions.length && <div className="rounded-lg border border-dashed border-white/15 bg-zinc-950/40 p-6 text-center">
+          <p className="text-sm text-zinc-400">This round doesn't have any questions yet.</p>
+          <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+            <Button type="button" size="sm" onClick={() => setGenerateRoundKey(activeRound.key)} className="gradient-btn"><Sparkles size={13} className="mr-1.5" />Generate</Button>
+            <Button type="button" size="sm" variant="outline" onClick={() => setCoHostRoundKey(activeRound.key)} className="border-white/10 text-zinc-300 hover:text-white"><Bot size={13} className="mr-1.5" />AI Co-Host</Button>
+            <Button type="button" size="sm" variant="outline" onClick={() => setWriteQuestionRoundKey(activeRound.key)} className="border-white/10 text-zinc-300 hover:text-white"><Pencil size={13} className="mr-1.5" />Write Question</Button>
+            <Button type="button" size="sm" variant="outline" onClick={() => openLibrary(activeRound.key)} className="border-white/10 text-zinc-300 hover:text-white"><List size={13} className="mr-1.5" />Add from Library</Button>
+          </div>
+        </div>}
+      </div>
+    </section>
+    {manageRoundsOpen && <RoundManagerModal
+      rounds={rounds}
+      onRename={renameRound}
+      onDescribe={describeRound}
+      onSetRoundSettings={(round, settings) => (round.isEmpty ? setEmptyRoundSettings(round, settings) : onUpdateSettings({ points: settings.points, timerSeconds: settings.timerSeconds }, "round", round.questions[0]))}
+      onMoveRound={moveRound}
+      onDelete={deleteRound}
+      onAddRound={() => setAddRoundOpen(true)}
+      onClose={() => setManageRoundsOpen(false)}
+    />}
+    {addRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} onSaveToLibrary={saveQuestionToLibrary} approvedCategories={approvedCategories} onClose={() => setAddRoundOpen(false)} />}
+    {writeQuestionRound && <WriteQuestionModal round={writeQuestionRound} onCreate={(draft) => addQuestionToRound(writeQuestionRound, draft)} onSaveToLibrary={saveQuestionToLibrary} approvedCategories={approvedCategories} onClose={() => setWriteQuestionRoundKey(null)} />}
+    {libraryRound && <LibraryPickerModal round={libraryRound} libraryQuestions={libraryQuestions} loading={libraryLoading} existingTexts={existingQuestionTexts} onInsert={(question) => addLibraryQuestionToRound(libraryRound, question)} onClose={() => setLibraryRoundKey(null)} />}
+    {aiEditQuestion && <AiEditQuestionModal question={aiEditQuestion} onEdit={editQuestionWithAi} onApply={(patch) => updateQuestionContent(aiEditQuestion, patch)} onClose={() => setAiEditQuestionId(null)} />}
+    {generateRound && <GenerateRoundModal round={generateRound} venueId={venueId} existingQuestionTexts={existingQuestionTexts} onAddAll={(candidates) => addGeneratedQuestionsToRound(generateRound, candidates)} onSaveToLibrary={saveQuestionToLibrary} onClose={() => setGenerateRoundKey(null)} />}
+    {coHostRound && <CoHostChatModal round={coHostRound} onAsk={askCoHost} onAddCandidate={(candidate) => addGeneratedQuestionsToRound(coHostRound, [candidate])} onSaveToLibrary={saveQuestionToLibrary} onClose={() => setCoHostRoundKey(null)} />}
+  </div>;
+};
+
+// Shared by CollapsedQuestionCard and QuestionStage -- inline editing of a
+// question's actual content, right on the card it's hosted from, instead of
+// forcing a trip to the standalone builder for something this small. Type
+// conversion stays out of scope here (moving a question to a different
+// array is a bigger operation, see moveQuestionToRound/addLibraryQuestionToRound
+// for the established pattern) -- this edits the fields that don't require it.
+const QuestionEditFields = ({ type, draft, setDraft }) => {
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [uploadingAudio, setUploadingAudio] = useState(false);
+  const updateWrong = (index, value) => setDraft((prev) => ({ ...prev, incorrectAnswers: prev.incorrectAnswers.map((answer, i) => (i === index ? value : answer)) }));
+
+  const handleImageFile = async (file) => {
+    if (!file) return;
+    setUploadingImage(true);
+    try {
+      const url = await uploadQuestionMedia(file);
+      setDraft((prev) => ({ ...prev, imageUrl: url }));
+    } catch (error) {
+      console.error("Upload image error:", error);
+      toast.error(error.message || "Failed to upload image");
+    } finally {
+      setUploadingImage(false);
+    }
+  };
+
+  const handleAudioFile = async (file) => {
+    if (!file) return;
+    setUploadingAudio(true);
+    try {
+      const url = await uploadQuestionAudio(file);
+      setDraft((prev) => ({ ...prev, audioUrl: url }));
+    } catch (error) {
+      console.error("Upload audio error:", error);
+      toast.error(error.message || "Failed to upload audio");
+    } finally {
+      setUploadingAudio(false);
+    }
+  };
+
+  return <div className="space-y-2" onClick={(event) => event.stopPropagation()}>
+    <input value={draft.category} onChange={(event) => setDraft((prev) => ({ ...prev, category: event.target.value }))} placeholder="Category" className="h-9 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
+    <textarea value={draft.questionText} onChange={(event) => setDraft((prev) => ({ ...prev, questionText: event.target.value }))} placeholder="Question" className="min-h-[70px] w-full resize-none rounded-md border border-white/10 bg-zinc-950/50 px-3 py-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
+    {type === "true_false" ? <select value={draft.answer} onChange={(event) => setDraft((prev) => ({ ...prev, answer: event.target.value }))} className="h-9 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-sm text-white">
+      <option value="True">True</option>
+      <option value="False">False</option>
+    </select> : <input value={draft.answer} onChange={(event) => setDraft((prev) => ({ ...prev, answer: event.target.value }))} placeholder="Correct answer" className="h-9 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" />}
+    {type === "multiple_choice" && <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+      {draft.incorrectAnswers.map((answer, index) => <input key={index} value={answer} onChange={(event) => updateWrong(index, event.target.value)} placeholder={`Wrong answer ${index + 1}`} className="h-9 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" />)}
+    </div>}
+    <input value={draft.funFact} onChange={(event) => setDraft((prev) => ({ ...prev, funFact: event.target.value }))} placeholder="Fun fact (optional)" className="h-9 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
+    <div className="rounded-md border border-white/10 bg-zinc-950/30 p-2.5 space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-500">Media (optional)</p>
+        {draft.imageUrl && <div className="inline-flex rounded-md border border-white/10 bg-zinc-950/70 p-0.5">
+          <button type="button" onClick={() => setDraft((prev) => ({ ...prev, imageTiming: "initial" }))} className={`rounded px-2 py-1 text-[11px] font-semibold ${draft.imageTiming !== "after_answer" ? "bg-[#71E0DC]/15 text-[#71E0DC]" : "text-zinc-400 hover:text-white"}`}>With question</button>
+          <button type="button" onClick={() => setDraft((prev) => ({ ...prev, imageTiming: "after_answer" }))} className={`rounded px-2 py-1 text-[11px] font-semibold ${draft.imageTiming === "after_answer" ? "bg-[#71E0DC]/15 text-[#71E0DC]" : "text-zinc-400 hover:text-white"}`}>After answer</button>
+        </div>}
+      </div>
+      <label className="flex h-14 cursor-pointer items-center gap-3 rounded-md border border-dashed border-white/15 bg-zinc-950/40 px-3 hover:border-[#71E0DC]/40">
+        {uploadingImage ? <Loader2 size={16} className="animate-spin text-[#71E0DC]" /> : draft.imageUrl ? <img src={draft.imageUrl} alt="Question media preview" className="h-10 w-10 rounded object-cover border border-white/10" /> : <Upload size={14} className="text-zinc-400" />}
+        <span className="text-xs text-zinc-400">{draft.imageUrl ? "Click to replace the image" : "Click to upload an image, or paste a URL below"}</span>
+        <input type="file" accept="image/*" className="hidden" disabled={uploadingImage} onChange={(event) => handleImageFile(event.target.files?.[0])} />
+      </label>
+      <div className="flex gap-2">
+        <div className="relative min-w-0 flex-1">
+          <Link className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+          <input value={draft.imageUrl} onChange={(event) => setDraft((prev) => ({ ...prev, imageUrl: event.target.value }))} placeholder="Image URL" className="h-9 w-full rounded-md border border-white/10 bg-zinc-950/50 pl-9 pr-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
+        </div>
+        {draft.imageUrl && <button type="button" onClick={() => setDraft((prev) => ({ ...prev, imageUrl: "" }))} className="shrink-0 text-xs text-zinc-500 hover:text-rose-300">Remove</button>}
+      </div>
+      <div className="flex gap-2">
+        <div className="relative min-w-0 flex-1">
+          <Music className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+          <input value={draft.audioUrl} onChange={(event) => setDraft((prev) => ({ ...prev, audioUrl: event.target.value }))} placeholder="Audio URL (optional)" className="h-9 w-full rounded-md border border-white/10 bg-zinc-950/50 pl-9 pr-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
+        </div>
+        <label className={`flex h-9 shrink-0 cursor-pointer items-center justify-center rounded-md border border-white/10 bg-zinc-950/50 px-3 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-white ${uploadingAudio ? "opacity-60" : ""}`}>
+          {uploadingAudio ? <Loader2 size={14} className="animate-spin" /> : "Upload"}
+          <input type="file" accept="audio/*" className="hidden" disabled={uploadingAudio} onChange={(event) => handleAudioFile(event.target.files?.[0])} />
+        </label>
+        {draft.audioUrl && <button type="button" onClick={() => setDraft((prev) => ({ ...prev, audioUrl: "" }))} className="shrink-0 text-xs text-zinc-500 hover:text-rose-300">Remove</button>}
+      </div>
+    </div>
+  </div>;
+};
+
+const draftFromQuestion = (question) => ({
+  category: question.category || "",
+  questionText: question.questionText || "",
+  answer: question.answer || "",
+  incorrectAnswers: [0, 1, 2].map((index) => (question.options || []).filter((option) => option !== question.answer)[index] || ""),
+  funFact: question.funFact || "",
+  imageUrl: question.imageUrl || "",
+  imageTiming: normalizeImageTiming(question.imageTiming),
+  audioUrl: question.audioUrl || "",
+});
+
+// Static, non-interactive preview of a question's answer options -- every
+// card shows this at all times (see CollapsedQuestionCard), not just the
+// live one. True/False is always green/red regardless of which is actually
+// correct (a fixed convention, not a hint); multiple choice options are
+// neutral since which one's correct only matters once the question is live.
+const AnswerOptionPreview = ({ question }) => {
+  if (question.type === "true_false") return <div className="mt-2.5 flex gap-2">
+    <span className="flex items-center gap-1 rounded-full bg-emerald-500/15 px-3 py-1 text-xs font-bold text-emerald-300"><CheckCircle size={12} />True</span>
+    <span className="flex items-center gap-1 rounded-full bg-rose-500/15 px-3 py-1 text-xs font-bold text-rose-300"><XCircle size={12} />False</span>
+  </div>;
+  if (question.type === "multiple_choice" && question.options?.length) return <div className="mt-2.5 flex flex-wrap gap-1.5">
+    {question.options.map((option, i) => <span key={i} className="rounded-full bg-zinc-800 px-2.5 py-1 text-xs text-zinc-300">{option}</span>)}
+  </div>;
+  return null;
+};
+
+const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerCount, correctCount, eventOpen, onAsk, onReview, currentRoundName, otherRounds, onMoveToRound, onUpdateContent, onDuplicate, onDiscard, onResetQuestion, onAiEdit, onSaveToLibrary }) => {
+  const meta = typeMeta[question.type] || typeMeta.written;
+  const points = getQuestionPoints(question);
+  const wagerLimit = Number(question.wagerLimit || 0);
+  const timerSeconds = Number(question.timerSeconds || 30);
+  const imageUrl = buildStorageUrl(question.imageUrl);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(() => draftFromQuestion(question));
+  const [saving, setSaving] = useState(false);
+
+  const startEdit = () => { setDraft(draftFromQuestion(question)); setEditing(true); };
+  const handleSave = async () => {
+    if (!draft.questionText.trim() || !draft.answer.trim()) return toast.error("Question and answer can't be empty");
+    setSaving(true);
+    const ok = await onUpdateContent({
+      category: draft.category.trim() || "General",
+      questionText: draft.questionText.trim(),
+      answer: draft.answer.trim(),
+      incorrectAnswers: question.type === "multiple_choice" ? draft.incorrectAnswers.map((item) => item.trim()).filter(Boolean).join("; ") : undefined,
+      funFact: draft.funFact.trim(),
+      imageUrl: draft.imageUrl.trim(),
+      imageTiming: draft.imageTiming,
+      audioUrl: draft.audioUrl.trim(),
+    });
+    setSaving(false);
+    if (ok) setEditing(false);
+  };
+
+  const correctPct = state === "completed" && submittedCount > 0 ? Math.round((correctCount / submittedCount) * 100) : null;
+
+  if (editing) {
+    return <Card className="glass-card">
+      <CardContent className="p-3.5">
+        <QuestionEditFields type={question.type} draft={draft} setDraft={setDraft} />
+        <div className="mt-2 flex justify-end gap-2">
+          <Button size="sm" variant="outline" onClick={() => setEditing(false)} className="h-8 border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
+          <Button size="sm" onClick={handleSave} disabled={saving} className="h-8 gradient-btn">{saving ? "Saving..." : "Save"}</Button>
+        </div>
+      </CardContent>
+    </Card>;
+  }
+
+  return <Card className={`glass-card ${state === "live" ? "border-rose-400/40" : ""}`}>
+    <CardContent className="p-3.5">
+      <div className="flex items-start gap-3">
+        {imageUrl && <img src={imageUrl} alt="Question media" className="h-16 w-16 shrink-0 rounded-lg border border-white/10 object-cover" />}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-xs text-zinc-500">{meta.label}{isBonusQuestion(question) && <span className="ml-1.5 text-amber-300" title="Bonus question">&#9733;</span>}<br />#{index + 1} {question.category}</p>
+            <div className="flex shrink-0 items-center gap-2">
+              {correctPct !== null && <span className="text-xs font-bold text-zinc-400">{correctPct}%</span>}
+              {state === "live" && <span className="flex items-center gap-1.5 rounded-full border border-rose-400/30 bg-rose-400/10 px-2 py-0.5 text-[11px] font-bold text-rose-200"><span className="h-1.5 w-1.5 rounded-full bg-rose-400 animate-pulse" />LIVE</span>}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button type="button" title="More actions" aria-label="More actions" className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white"><MoreVertical size={15} /></button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56 border-white/10 bg-zinc-950 text-zinc-100">
+                  <div className="px-2 py-1.5"><span className="inline-flex items-center rounded-md bg-[#71E0DC]/15 px-2 py-1 text-xs font-bold text-[#71E0DC]">{currentRoundName}</span></div>
+                  {state !== "live" && otherRounds?.map((round) => <DropdownMenuItem key={round.key} onClick={() => onMoveToRound(round)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><ArrowRightLeft size={14} className="mr-2" />Move to {round.name}</DropdownMenuItem>)}
+                  <div className="my-1 h-px bg-white/10" />
+                  <p className="px-2 py-1 text-[11px] font-bold uppercase tracking-wide text-zinc-500">Options</p>
+                  <DropdownMenuItem onClick={startEdit} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Pencil size={14} className="mr-2" />Edit</DropdownMenuItem>
+                  <DropdownMenuItem onClick={onAiEdit} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Sparkles size={14} className="mr-2" />AI Edit</DropdownMenuItem>
+                  {state === "completed" && <DropdownMenuItem onClick={onResetQuestion} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><RotateCcw size={14} className="mr-2" />Reset Question</DropdownMenuItem>}
+                  {state === "completed" && <DropdownMenuItem onClick={onAsk} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><RefreshCw size={14} className="mr-2" />Reactivate Question</DropdownMenuItem>}
+                  <DropdownMenuItem onClick={onDuplicate} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Copy size={14} className="mr-2" />Clone</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => onSaveToLibrary(question)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><List size={14} className="mr-2" />Save to Library</DropdownMenuItem>
+                  {state !== "live" && <DropdownMenuItem onClick={onDiscard} className="cursor-pointer text-rose-300 focus:bg-zinc-900 focus:text-rose-200"><Trash2 size={14} className="mr-2" />Discard</DropdownMenuItem>}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </div>
+          <p className="mt-1.5 text-sm font-semibold text-white">{question.questionText}</p>
+          <AnswerOptionPreview question={question} />
+          {state === "completed" && question.funFact && <p className="mt-2 rounded-md border border-dashed border-white/10 bg-white/5 p-2 text-xs text-zinc-400"><b className="text-zinc-300">Fun fact:</b> {question.funFact}</p>}
+        </div>
+      </div>
+      <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-white/5 pt-2.5">
+        {state === "upcoming" && <Button size="sm" onClick={onAsk} disabled={!eventOpen} title={!eventOpen ? "Open the event to start asking questions" : undefined} className="h-8 gradient-btn text-xs disabled:opacity-40"><Play size={12} className="mr-1" />Ask Question</Button>}
+        {state === "completed" && <Button size="sm" variant="outline" onClick={onReview} className="h-8 border-white/10 text-xs text-zinc-300 hover:text-white"><Eye size={12} className="mr-1" />Review</Button>}
+        {state === "live" && <Button size="sm" variant="outline" onClick={onReview} className="h-8 border-rose-300/30 text-xs text-rose-200 hover:text-white">View Live</Button>}
+        <div className="flex items-center gap-3 text-xs text-zinc-500">
+          {state === "completed" && <span>{correctCount > 0 ? `${correctCount} correct` : "Asked"} &middot; {submittedCount}/{playerCount || 0}</span>}
+          <span className="flex items-center gap-1"><Tags size={12} />{points}pts</span>
+          <span className="flex items-center gap-1"><Clock size={12} />{timerSeconds}s</span>
+          {wagerLimit > 0 && <span className="text-purple-300">Wager</span>}
+        </div>
+      </div>
+    </CardContent>
+  </Card>;
 };
 
 const PLAYBACK_TOOLS = [
@@ -1849,13 +4037,13 @@ const PLAYBACK_TOOLS = [
   { key: "feedback", label: "Feedback", icon: ThumbsUp },
 ];
 
-const PlaybackRail = ({ mode, setMode, rounds, introRoundKey, chooseIntroRound, isReviewing, showAnswer, onRevealAnswer, showFunFact, onShowFunFact, hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, timeRemaining, timerSeconds, startTimer, resetTimer, currentIndex, total, onPrev, onNext, onOpenDrawer, flaggedTeamCount, currentQuestionLabel }) => {
-  const nonQuestionMode = mode === "bonus_pause" || mode === "winners" || mode === "feedback";
-  const liveRound = rounds.find((round) => currentIndex >= round.startIndex && currentIndex < round.startIndex + round.questions.length);
-  const liveRoundListIndex = rounds.findIndex((round) => round.key === liveRound?.key);
-  const nextRound = liveRoundListIndex >= 0 ? rounds[liveRoundListIndex + 1] : null;
-  const isLastQuestionOfRound = liveRound && currentIndex === liveRound.startIndex + liveRound.questions.length - 1;
-  const nextIsRoundIntro = mode === "question" && isLastQuestionOfRound && Boolean(nextRound);
+// Per-question controls (timer, reveal, audio) moved into QuestionStage's own
+// card -- see the unified card list above. What's left here is genuinely
+// global: the drawer-tool row, the viewer-screen scene switcher (gated behind
+// eventOpen -- none of those scenes have a real audience until the event is
+// open, since ensureLiveGame/persistLiveState don't run before then either),
+// and the Open Event action itself.
+const PlaybackRail = ({ eventOpen, onOpenEvent, mode, setMode, rounds, introRoundKey, chooseIntroRound, onOpenDrawer, flaggedTeamCount }) => {
   const sceneActive = (key) => mode === key;
   const sceneButtonClass = (active) => `h-14 rounded-lg text-[11px] font-bold flex flex-col items-center justify-center gap-1 transition ${active ? "text-zinc-950" : "border border-white/10 text-zinc-300 hover:bg-white/5 hover:text-white"}`;
   const sceneButtonStyle = (active) => active ? { background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" } : undefined;
@@ -1865,7 +4053,7 @@ const PlaybackRail = ({ mode, setMode, rounds, introRoundKey, chooseIntroRound, 
       <CardContent className="p-0">
         <div className="flex items-center justify-between gap-2 border-b border-white/10 px-4 py-3">
           <p className="text-xs font-bold uppercase tracking-wide text-zinc-500">Playback</p>
-          <p className="text-[11px] text-zinc-600">controls {currentQuestionLabel}, live</p>
+          {eventOpen && <p className="text-[11px] text-zinc-600">event is open</p>}
         </div>
         <div className="flex flex-wrap gap-2 border-b border-white/10 px-3 py-3">
           {PLAYBACK_TOOLS.map(({ key, label, icon: Icon }) => <button key={key} type="button" onClick={() => onOpenDrawer(key)} className="relative flex items-center gap-1.5 rounded-md border border-white/10 bg-zinc-950/60 px-2.5 py-1.5 text-xs font-bold text-zinc-300 hover:border-white/25 hover:text-white">
@@ -1873,29 +4061,14 @@ const PlaybackRail = ({ mode, setMode, rounds, introRoundKey, chooseIntroRound, 
             {key === "fairplay" && flaggedTeamCount > 0 && <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-rose-400 text-[9px] font-black text-zinc-950">{flaggedTeamCount}</span>}
           </button>)}
         </div>
-        <div className="space-y-2.5 p-3.5">
-          <div className="flex items-center justify-center gap-4 py-1">
-            <button type="button" onClick={onPrev} disabled={isReviewing || currentIndex <= 0} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-zinc-950 text-zinc-300 hover:border-[#71E0DC]/40 hover:text-[#71E0DC] disabled:opacity-30" aria-label="Previous question"><ChevronLeft size={17} /></button>
-            <div className="flex h-16 w-16 items-center justify-center rounded-full border-4 border-[#71E0DC]/25" style={{ borderTopColor: "var(--host-primary)" }}>
-              <span className="font-mono text-sm font-bold text-white">{timeRemaining !== null ? `${timeRemaining}s` : `${Number(timerSeconds) || 0}s`}</span>
-            </div>
-            <div className="flex shrink-0 flex-col items-center gap-1">
-              <button type="button" onClick={onNext} disabled={isReviewing || (currentIndex >= total - 1 && !nextIsRoundIntro)} title={nextIsRoundIntro ? `Go to ${nextRound.name} intro` : undefined} className={`flex h-9 w-9 items-center justify-center rounded-full border text-zinc-300 hover:text-[#71E0DC] disabled:opacity-30 ${nextIsRoundIntro ? "border-[#71E0DC]/50 bg-[#71E0DC]/10" : "border-white/10 bg-zinc-950 hover:border-[#71E0DC]/40"}`} aria-label={nextIsRoundIntro ? `Go to ${nextRound.name} intro` : "Next question"}><ChevronRight size={17} /></button>
-              {nextIsRoundIntro && <span className="max-w-[64px] truncate text-[9px] font-bold uppercase tracking-wide text-[#71E0DC]">Next: {nextRound.name}</span>}
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <Button size="sm" onClick={startTimer} disabled={isReviewing} className="h-10 gradient-btn disabled:opacity-40"><Play size={15} className="mr-1.5" />Start Timer</Button>
-            <Button size="sm" variant="outline" onClick={resetTimer} disabled={isReviewing} className="h-10 border-white/10 text-zinc-300 hover:text-white disabled:opacity-40"><RotateCcw size={15} className="mr-1.5" />Clear</Button>
-          </div>
-          <Button onClick={onRevealAnswer} disabled={isReviewing || nonQuestionMode} className={`w-full h-10 ${showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-40" : "gradient-btn disabled:opacity-40"}`}>{showAnswer ? <EyeOff size={16} className="mr-2" /> : <Eye size={16} className="mr-2" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button>
-          <Button onClick={onShowFunFact} disabled={isReviewing || nonQuestionMode || !hasRevealExtra} className="w-full h-10 bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-40"><Sparkles size={16} className="mr-2" />{showFunFact ? "Hide" : hasFunFact ? "Reveal Fun Fact" : "Reveal Media"}</Button>
-          {hasAudio && <Button onClick={onToggleAudio} disabled={isReviewing || nonQuestionMode} className={`w-full h-10 ${isPlayingAudio ? "bg-purple-500/20 text-purple-200 hover:bg-purple-500/30" : "bg-zinc-800 text-white hover:bg-zinc-700"} disabled:opacity-40`}>{isPlayingAudio ? <Pause size={16} className="mr-2" /> : <Music size={16} className="mr-2" />}{isPlayingAudio ? "Stop Audio" : "Play Audio"}</Button>}
+        <div className="p-3.5">
+          {eventOpen ? <p className="rounded-lg border border-white/10 bg-zinc-950/60 px-3 py-4 text-center text-xs text-zinc-500">Use each question card&apos;s <b className="text-zinc-300">Ask Question</b> button to go live, reveal the answer, and grade.</p>
+            : <Button onClick={onOpenEvent} className="w-full h-11 gradient-btn text-sm font-bold"><Play size={16} className="mr-2" />Open Event</Button>}
         </div>
       </CardContent>
     </Card>
 
-    <Card className="glass-card">
+    {eventOpen && <Card className="glass-card">
       <CardContent className="p-3.5">
         <div className="mb-2.5 flex items-center justify-between gap-2">
           <p className="text-xs font-bold uppercase tracking-wide text-zinc-500">Viewer Screen</p>
@@ -1912,11 +4085,11 @@ const PlaybackRail = ({ mode, setMode, rounds, introRoundKey, chooseIntroRound, 
           <button type="button" onClick={() => setMode("feedback")} className={sceneButtonClass(sceneActive("feedback"))} style={sceneButtonStyle(sceneActive("feedback"))}><MessageSquare size={16} /><span>Feedback</span></button>
         </div>
       </CardContent>
-    </Card>
+    </Card>}
   </aside>;
 };
 
-const TopBar = ({ navigate, id, sessionName, venueName, questions, players, currentIndex, liveStatus, openPresentation, setFocusMode, progress, branding, customizeOpen, setCustomizeOpen, endSession, collapsed, onToggleCollapse, answersPaused, onToggleAnswersPaused }) => <div className="border-b border-white/10 bg-zinc-950/85 sticky top-0 z-20 backdrop-blur"><div className={`max-w-[1680px] mx-auto px-4 lg:px-6 flex items-center gap-3 transition-[padding] ${collapsed ? "py-1.5" : "py-3"}`}>{!collapsed && <Button variant="ghost" onClick={() => navigate(`/session/${id}`)} className="text-zinc-400 hover:text-white h-9 w-9 p-0 shrink-0" aria-label="Back to session"><ArrowLeft size={18} /></Button>}{!collapsed && branding?.logoUrl && <img src={branding.logoUrl} alt={branding.name || "Host logo"} className="h-10 w-10 rounded-md bg-white object-contain p-1 shrink-0" />}<div className="min-w-0 flex-1">{!collapsed && <p className="text-xs font-bold uppercase tracking-wide truncate" style={{ color: "var(--host-primary)" }}>{venueName || branding?.name || "Live Trivia"}</p>}<h1 className={`font-bold truncate ${collapsed ? "text-sm" : ""}`}>{sessionName}</h1>{!collapsed && <p className="text-xs text-zinc-500">{players.length} player{players.length === 1 ? "" : "s"} connected</p>}</div>{!collapsed && <div className="flex items-center gap-2 flex-wrap justify-end"><Badge className={liveStatus === "live" ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/20" : "bg-zinc-800 text-zinc-300"}><Wifi size={13} className="mr-1" />{liveStatus === "live" ? "Live" : "Connecting"}</Badge><Badge className="bg-zinc-800 text-zinc-300">Question {currentIndex + 1} of {questions.length}</Badge><Button onClick={onToggleAnswersPaused} title="Session-wide -- stays on or off across every question until you flip it back. Join, feedback, and idea submission on phones are never affected." className={answersPaused ? "bg-amber-400/15 text-amber-300 border border-amber-400/30 hover:bg-amber-400/20" : "bg-transparent border border-white/10 text-zinc-300 hover:bg-white/5 hover:text-white"}>{answersPaused ? <Unlock size={16} className="mr-2" /> : <Lock size={16} className="mr-2" />}Phone Answers: {answersPaused ? "Paused" : "On"}</Button><Button onClick={endSession} className="bg-amber-300 text-zinc-950 hover:bg-amber-200"><Save size={16} className="mr-2" />End Session</Button><DropdownMenu><DropdownMenuTrigger asChild><Button variant="outline" className="h-10 w-10 border-white/10 p-0 text-zinc-300 hover:text-white" aria-label="Host screen options"><MoreHorizontal size={18} /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" className="border-white/10 bg-zinc-950 text-zinc-100"><DropdownMenuItem onClick={() => setCustomizeOpen((value) => !value)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Palette size={15} className="mr-2" />{customizeOpen ? "Hide Customize" : "Customize"}</DropdownMenuItem><DropdownMenuItem onClick={() => setFocusMode(true)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Maximize2 size={15} className="mr-2" />Focus Mode</DropdownMenuItem></DropdownMenuContent></DropdownMenu></div>}<Button variant="outline" onClick={onToggleCollapse} className="h-8 w-8 shrink-0 border-white/10 p-0 text-zinc-400 hover:text-white" aria-label={collapsed ? "Expand toolbar" : "Minimize toolbar"} title={collapsed ? "Expand toolbar" : "Minimize toolbar"}><ChevronLeft size={15} className={`transition-transform ${collapsed ? "-rotate-90" : "rotate-90"}`} /></Button><div className="w-px h-7 bg-white/10 shrink-0" /><Button onClick={openPresentation} className="shrink-0 text-zinc-950 font-bold shadow-lg shadow-[#71E0DC]/20" style={{ background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" }} title="Opens the audience screen in a new tab, for a TV or projector"><MonitorPlay size={16} className="mr-2" />Present<ExternalLink size={13} className="ml-2 opacity-70" /></Button></div>{!collapsed && <div className="h-1 bg-zinc-900"><div className="h-1 transition-all" style={{ width: `${progress}%`, background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" }} /></div>}</div>;
+const TopBar = ({ navigate, id, embedded, sessionName, venueName, questions, players, currentIndex, liveStatus, openPresentation, setFocusMode, progress, branding, customizeOpen, setCustomizeOpen, endSession, collapsed, onToggleCollapse, answersPaused, onToggleAnswersPaused }) => <div className="border-b border-white/10 bg-zinc-950/85 sticky top-0 z-20 backdrop-blur"><div className={`max-w-[1680px] mx-auto px-4 lg:px-6 flex items-center gap-3 transition-[padding] ${collapsed ? "py-1.5" : "py-3"}`}>{!collapsed && !embedded && <Button variant="ghost" onClick={() => navigate(`/session/${id}`)} className="text-zinc-400 hover:text-white h-9 w-9 p-0 shrink-0" aria-label="Back to session"><ArrowLeft size={18} /></Button>}{!collapsed && branding?.logoUrl && <img src={branding.logoUrl} alt={branding.name || "Host logo"} className="h-10 w-10 rounded-md bg-white object-contain p-1 shrink-0" />}<div className="min-w-0 flex-1">{!collapsed && <p className="text-xs font-bold uppercase tracking-wide truncate" style={{ color: "var(--host-primary)" }}>{venueName || branding?.name || "Live Trivia"}</p>}<h1 className={`font-bold truncate ${collapsed ? "text-sm" : ""}`}>{sessionName}</h1>{!collapsed && <p className="text-xs text-zinc-500">{players.length} player{players.length === 1 ? "" : "s"} connected</p>}</div>{!collapsed && <div className="flex items-center gap-2 flex-wrap justify-end"><Badge className={liveStatus === "live" ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/20" : "bg-zinc-800 text-zinc-300"}><Wifi size={13} className="mr-1" />{liveStatus === "live" ? "Live" : "Connecting"}</Badge><Badge className="bg-zinc-800 text-zinc-300">Question {currentIndex + 1} of {questions.length}</Badge><Button onClick={onToggleAnswersPaused} title="Session-wide -- stays on or off across every question until you flip it back. Join, feedback, and idea submission on phones are never affected." className={answersPaused ? "bg-amber-400/15 text-amber-300 border border-amber-400/30 hover:bg-amber-400/20" : "bg-transparent border border-white/10 text-zinc-300 hover:bg-white/5 hover:text-white"}>{answersPaused ? <Unlock size={16} className="mr-2" /> : <Lock size={16} className="mr-2" />}Phone Answers: {answersPaused ? "Paused" : "On"}</Button><Button onClick={endSession} className="bg-amber-300 text-zinc-950 hover:bg-amber-200"><Save size={16} className="mr-2" />End Session</Button><DropdownMenu><DropdownMenuTrigger asChild><Button variant="outline" className="h-10 w-10 border-white/10 p-0 text-zinc-300 hover:text-white" aria-label="Host screen options"><MoreHorizontal size={18} /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" className="border-white/10 bg-zinc-950 text-zinc-100"><DropdownMenuItem onClick={() => setCustomizeOpen((value) => !value)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Palette size={15} className="mr-2" />{customizeOpen ? "Hide Customize" : "Customize"}</DropdownMenuItem><DropdownMenuItem onClick={() => setFocusMode(true)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Maximize2 size={15} className="mr-2" />Focus Mode</DropdownMenuItem></DropdownMenuContent></DropdownMenu></div>}<Button variant="outline" onClick={onToggleCollapse} className="h-8 w-8 shrink-0 border-white/10 p-0 text-zinc-400 hover:text-white" aria-label={collapsed ? "Expand toolbar" : "Minimize toolbar"} title={collapsed ? "Expand toolbar" : "Minimize toolbar"}><ChevronLeft size={15} className={`transition-transform ${collapsed ? "-rotate-90" : "rotate-90"}`} /></Button><div className="w-px h-7 bg-white/10 shrink-0" /><Button onClick={openPresentation} className="shrink-0 text-zinc-950 font-bold shadow-lg shadow-[#71E0DC]/20" style={{ background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" }} title="Opens the audience screen in a new tab, for a TV or projector"><MonitorPlay size={16} className="mr-2" />Present<ExternalLink size={13} className="ml-2 opacity-70" /></Button></div>{!collapsed && <div className="h-1 bg-zinc-900"><div className="h-1 transition-all" style={{ width: `${progress}%`, background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" }} /></div>}</div>;
 
 const PresentationControls = ({ mode, setMode, rounds, currentIndex, currentRound, introRoundKey, setIntroRoundKey }) => {
   const nextRound = rounds.find((round) => round.startIndex > currentIndex);
@@ -2052,7 +4225,7 @@ const optionToneClasses = {
 
 // The grading UI for a question's answers, rendered as the same rows that
 // display the options -- there is no separate "answers submitted" section.
-const AnswerRows = ({ question, players, answers, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, editWager, wagerMode, wagerLimit, pointsPerQuestion, setMode, isReviewing, showAnswer }) => {
+const AnswerRows = ({ question, players, answers, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, editWager, wagerMode, pointsPerQuestion, setMode, isReviewing, showAnswer }) => {
   const [manualTeamIds, setManualTeamIds] = useState([]);
   const [manualAnswer, setManualAnswer] = useState("");
   const [manualWager, setManualWager] = useState("");
@@ -2158,7 +4331,7 @@ const AnswerRows = ({ question, players, answers, fairPlayStats, gradedAnswers, 
       </div>
       <div className={`grid gap-2 ${wagerMode ? "grid-cols-[1fr_76px]" : "grid-cols-1"}`}>
         <input value={manualAnswer} onChange={(event) => setManualAnswer(event.target.value)} onKeyDown={(event) => event.key === "Enter" && submitManual()} placeholder="Answer" className="h-9 min-w-0 rounded-md border border-white/10 bg-zinc-950 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
-        {wagerMode && <input value={manualWager} onChange={(event) => setManualWager(event.target.value)} onKeyDown={(event) => event.key === "Enter" && submitManual()} placeholder="Wager" type="number" min="0" max={Number(wagerLimit || 0) || undefined} className="h-9 min-w-0 rounded-md border border-white/10 bg-zinc-950 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" />}
+        {wagerMode && <input value={manualWager} onChange={(event) => setManualWager(event.target.value)} onKeyDown={(event) => event.key === "Enter" && submitManual()} placeholder="Wager" type="number" min="0" className="h-9 min-w-0 rounded-md border border-white/10 bg-zinc-950 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" />}
       </div>
       {quickAnswers.length > 0 && <div className="mt-2 flex flex-wrap gap-2">{quickAnswers.map((option) => <button key={option} type="button" onClick={() => { setManualAnswer(option); submitManual(option); }} className="rounded-full border border-white/10 bg-zinc-900 px-2.5 py-1 text-xs font-bold text-zinc-200 hover:border-[#71E0DC]/50">{option}</button>)}</div>}
       <Button size="sm" onClick={() => submitManual()} className="mt-2 h-8 w-full gradient-btn">{manualTeamIds.length > 1 ? `Add for ${manualTeamIds.length} Teams` : "Add Manual Answer"}</Button>
@@ -2182,28 +4355,6 @@ const LeaderboardPanel = ({ leaderboard, teamName, teamScore, setTeamName, setTe
   const playingTotals = sorted.reduce((sum, team) => { const hc = normalizeHeadcount(teamHeadcounts[team.id]); sum.adults += Number(hc.adults) || 0; sum.kids += Number(hc.kids) || 0; return sum; }, { adults: 0, kids: 0 });
   const barTotals = { adults: playingTotals.adults + (Number(nonPlayers.adults) || 0), kids: playingTotals.kids + (Number(nonPlayers.kids) || 0) };
   return <Card className="glass-card"><CardContent className="p-3"><div className="flex items-center justify-between gap-2 mb-3"><div className="flex items-center gap-2 text-white font-semibold"><Trophy size={18} className="text-amber-300" />Leaderboard</div><Button size="sm" variant="outline" onClick={showLeaderboard} className="h-8 border-white/10 text-zinc-300 hover:text-white">Show</Button></div><div className="mb-3 rounded-md border border-white/10 bg-zinc-950/60 px-3 py-2"><span className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-zinc-500 mb-2"><Users size={13} />Not playing (bar only)</span><div className="grid grid-cols-2 gap-2 mb-2"><label className="block text-[11px] text-zinc-500">Adults<input type="number" min="0" value={nonPlayers.adults} onChange={(event) => updateNonPlayers("adults", event.target.value)} placeholder="0" className="mt-1 h-8 w-full rounded-md border border-white/10 bg-zinc-900 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" /></label><label className="block text-[11px] text-zinc-500">Kids<input type="number" min="0" value={nonPlayers.kids} onChange={(event) => updateNonPlayers("kids", event.target.value)} placeholder="0" className="mt-1 h-8 w-full rounded-md border border-white/10 bg-zinc-900 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" /></label></div><div className="flex items-center justify-between gap-2 rounded-md border border-[#71E0DC]/20 bg-[#71E0DC]/5 px-2 py-1.5"><span className="text-[11px] font-bold uppercase tracking-wide text-zinc-500">Bar Total</span><span className="text-sm font-black text-[#71E0DC]">{barTotals.adults + barTotals.kids} <span className="text-[10px] font-semibold text-zinc-500">({barTotals.adults}A · {barTotals.kids}K)</span></span></div></div><div className="grid grid-cols-[1fr_76px_36px] gap-2 mb-3"><input value={teamName} onChange={(event) => setTeamName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && addTeam()} placeholder="Team name" className="h-9 rounded-md bg-zinc-950 border border-white/10 px-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" /><input value={teamScore} onChange={(event) => setTeamScore(event.target.value)} onKeyDown={(event) => event.key === "Enter" && addTeam()} placeholder="Score" type="number" className="h-9 rounded-md bg-zinc-950 border border-white/10 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" /><Button onClick={addTeam} className="h-9 w-9 p-0 gradient-btn" aria-label="Add team"><Plus size={16} /></Button></div><div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">{sorted.map((team) => { const stats = fairPlayStats.get(team.id) || {}; const hc = normalizeHeadcount(teamHeadcounts[team.id]); return <div key={team.id} className={`rounded-md border border-white/10 bg-zinc-950/60 p-2 ${team.dropped ? "opacity-60" : ""}`}><div className="flex items-center justify-between gap-2 mb-2"><span className="flex min-w-0 items-center gap-1.5"><span className="font-semibold text-sm truncate">{team.name}</span>{team.dropped && <span className="shrink-0 rounded-full bg-zinc-800 px-1.5 py-0.5 text-[10px] font-bold text-zinc-400">Dropped</span>}</span><span className="flex shrink-0 items-center gap-1.5"><input type="number" min="0" value={hc.adults} onChange={(event) => updateTeamHeadcount(team.id, "adults", event.target.value)} placeholder="0" title="Adults on this team" className="h-6 w-10 rounded border border-white/10 bg-zinc-900 px-1 text-center text-xs text-zinc-300 outline-none focus:border-[#71E0DC]/60" /><span className="text-[9px] text-zinc-600">A</span><input type="number" min="0" value={hc.kids} onChange={(event) => updateTeamHeadcount(team.id, "kids", event.target.value)} placeholder="0" title="Kids on this team" className="h-6 w-10 rounded border border-white/10 bg-zinc-900 px-1 text-center text-xs text-zinc-300 outline-none focus:border-[#71E0DC]/60" /><span className="text-[9px] text-zinc-600">K</span><span className="font-black text-[#71E0DC]">{Number(team.score || 0)}</span></span></div>{Boolean(stats.flags?.length) && <div className="mb-2 flex flex-wrap gap-1">{stats.flags.map((flag) => <span key={flag} className="rounded-full bg-red-400/15 px-2 py-0.5 text-[11px] font-bold text-red-200">{flag}</span>)}</div>}<div className="mb-2 grid grid-cols-2 gap-1 text-[11px] text-zinc-500"><span>Streak {stats.correctStreak || 0}</span><span>Late {stats.lateCorrect || 0}</span></div><div className="flex items-center justify-end gap-1"><Button size="sm" variant="outline" onClick={() => openScoreModal(team.id)} className="h-7 min-w-24 border-white/10 text-zinc-300 hover:text-white">Edit</Button><Button size="sm" variant="outline" onClick={() => toggleTeamDropped(team.id)} className="h-7 w-8 p-0 border-white/10 text-zinc-400 hover:text-amber-300" aria-label={team.dropped ? "Restore team" : "Mark team dropped"} title={team.dropped ? "Restore team" : "Mark team dropped"}>{team.dropped ? <RotateCcw size={13} /> : <UserX size={13} />}</Button><Button size="sm" variant="outline" onClick={() => removeTeam(team.id)} className="h-7 w-8 p-0 border-white/10 text-zinc-400 hover:text-red-300" aria-label="Remove team"><Trash2 size={13} /></Button></div></div>; })}{!sorted.length && <p className="text-xs text-zinc-500 text-center py-3">Teams will appear here when players join from their phones.</p>}</div></CardContent></Card>; };
-
-const LobbyStage = ({ playerCount, onStartTrivia }) => <Card className="glass-card overflow-hidden"><CardContent className="p-8 lg:p-12 text-center"><div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full border border-[#71E0DC]/30 bg-[#71E0DC]/10"><QrCode className="text-[#71E0DC]" size={34} /></div><p className="text-sm font-bold uppercase tracking-wide text-[#71E0DC]">Presentation is showing</p><h2 className="mt-2 text-4xl lg:text-6xl font-black text-white">Lobby / QR Code</h2><p className="mx-auto mt-4 max-w-2xl text-xl text-zinc-300">Players are scanning in from their phones. Start trivia when your room is ready.</p><div className="mx-auto mt-6 inline-flex items-center gap-2 rounded-full border border-white/10 bg-zinc-950/60 px-4 py-2 text-sm font-bold text-zinc-300"><Users size={15} className="text-[#71E0DC]" />{playerCount} {playerCount === 1 ? "team" : "teams"} joined</div><div className="mt-8"><Button onClick={onStartTrivia} className="h-12 px-8 text-base gradient-btn"><Play size={18} className="mr-2" />Start Trivia</Button></div></CardContent></Card>;
-
-const RoundIntroStage = ({ round, gameStarted, onStartIntro, onStartQuestion }) => {
-  const categories = [...new Set((round?.questions || []).map((question) => question.category).filter(Boolean))];
-  return <Card className="glass-card overflow-hidden"><CardContent className="p-8 lg:p-12 text-center"><div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full border border-[#71E0DC]/30 bg-[#71E0DC]/10"><Tags className="text-[#71E0DC]" size={34} /></div><p className="text-sm font-bold uppercase tracking-wide text-[#71E0DC]">Round Intro</p><h2 className="mt-2 text-4xl lg:text-6xl font-black text-white">{round?.name || "Round"}</h2>{round?.description && <p className="mx-auto mt-4 max-w-3xl text-xl text-zinc-300">{round.description}</p>}<div className="mx-auto mt-8 flex max-w-3xl flex-wrap justify-center gap-2">{categories.map((category) => <Badge key={category} className="border border-white/10 bg-zinc-900 px-4 py-2 text-base text-zinc-200">{category}</Badge>)}{!categories.length && <p className="rounded-lg border border-white/10 bg-zinc-950/70 p-5 text-zinc-500">Categories will appear here when this round has questions.</p>}</div><div className="mt-8 flex flex-wrap justify-center gap-3"><Button onClick={gameStarted ? onStartQuestion : onStartIntro} className="gradient-btn"><Play size={18} className="mr-2" />{gameStarted ? "Start Question" : "Start Trivia"}</Button>{gameStarted && <Button variant="outline" onClick={onStartIntro} className="border-white/10 text-zinc-300 hover:text-white">Show Intro Again</Button>}</div></CardContent></Card>;
-};
-
-const BonusPauseStage = ({ round, leaderboard }) => {
-  const sorted = [...leaderboard].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)).slice(0, 8);
-  return <Card className="glass-card overflow-hidden"><CardContent className="p-8 lg:p-10 text-center"><div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full border border-[#71E0DC]/30 bg-[#71E0DC]/10"><Loader2 className="animate-spin text-[#71E0DC]" size={30} /></div><p className="text-sm font-bold uppercase tracking-wide text-[#71E0DC]">Bonus question next</p><h2 className="mt-2 text-4xl lg:text-6xl font-black text-white">{round?.name || "Round"} Bonus</h2><p className="mt-3 text-zinc-400">Leaderboard pause before the final question of the round.</p><div className="mx-auto mt-8 max-w-3xl space-y-3 text-left">{sorted.map((team, index) => <div key={team.id || team.name} className="grid grid-cols-[44px_1fr_auto] items-center gap-3 rounded-lg border border-white/10 bg-zinc-950/70 px-4 py-3"><div className={`h-9 w-9 rounded-full flex items-center justify-center font-black ${index === 0 ? "bg-amber-300 text-zinc-950" : "bg-white/10 text-zinc-200"}`}>{index + 1}</div><span className="truncate text-lg font-bold text-white">{team.name}</span><span className="text-2xl font-black text-[#71E0DC]">{Number(team.score || 0)}</span></div>)}{!sorted.length && <p className="rounded-lg border border-white/10 bg-zinc-950/70 p-5 text-center text-zinc-500">Leaderboard will appear once teams join or are added.</p>}</div></CardContent></Card>;
-};
-
-const WinnersStage = ({ leaderboard }) => {
-  const sorted = [...leaderboard].sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
-  const winners = sorted.slice(0, 3);
-  const first = winners[0];
-  const runnersUp = winners.slice(1);
-  return <Card className="glass-card overflow-hidden"><CardContent className="p-8 lg:p-12 text-center"><div className="mx-auto mb-5 flex h-18 w-18 items-center justify-center rounded-full border border-amber-300/30 bg-amber-300/10"><Trophy className="text-amber-300" size={42} /></div><p className="text-sm font-bold uppercase tracking-wide text-[#71E0DC]">Final Scores</p><h2 className="mt-2 text-4xl lg:text-6xl font-black text-white">Tonight&apos;s Winners</h2>{first ? <div className="mx-auto mt-8 max-w-2xl rounded-xl border-2 border-amber-300/50 bg-amber-300/15 p-7 text-center shadow-xl shadow-amber-300/5"><div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-amber-300 text-xl font-black text-zinc-950">1</div><p className="mt-3 text-sm font-black uppercase tracking-[0.18em] text-amber-200">Champion</p><p className="mt-3 truncate text-3xl font-black text-white lg:text-5xl">{first.name}</p><p className="mt-2 text-5xl font-black text-amber-200 lg:text-6xl">{Number(first.score || 0)}</p></div> : <p className="mx-auto mt-8 max-w-2xl rounded-lg border border-white/10 bg-zinc-950/70 p-5 text-center text-zinc-500">Winners will appear once teams have scores.</p>}{runnersUp.length > 0 && <div className="mx-auto mt-4 grid max-w-3xl grid-cols-1 gap-4 text-left md:grid-cols-2">{runnersUp.map((team, index) => { const place = index + 2; return <div key={team.id || team.name} className={`rounded-xl border p-5 ${place === 2 ? "border-[#AEB2EF]/30 bg-[#AEB2EF]/10" : "border-[#71E0DC]/30 bg-[#71E0DC]/10"}`}><div className="flex items-center gap-3"><span className={`flex h-9 w-9 items-center justify-center rounded-full font-black text-zinc-950 ${place === 2 ? "bg-[#AEB2EF]" : "bg-[#71E0DC]"}`}>{place}</span><p className="text-sm font-bold uppercase tracking-wide text-zinc-400">{place === 2 ? "Second Place" : "Third Place"}</p></div><p className="mt-3 truncate text-2xl font-black text-white">{team.name}</p><p className="mt-2 text-4xl font-black" style={{ color: place === 2 ? "#AEB2EF" : "#71E0DC" }}>{Number(team.score || 0)}</p></div>; })}</div>}<p className="mt-8 text-xl font-bold text-zinc-300">Thanks for playing.</p></CardContent></Card>;
-};
-
-const FeedbackStage = ({ ideas }) => <Card className="glass-card overflow-hidden"><CardContent className="p-8 lg:p-12 text-center"><div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full border border-[#71E0DC]/30 bg-[#71E0DC]/10"><MessageSquare className="text-[#71E0DC]" size={34} /></div><p className="text-sm font-bold uppercase tracking-wide text-[#71E0DC]">Player Feedback</p><h2 className="mt-2 text-4xl lg:text-6xl font-black text-white">Send Category or Question Ideas</h2><p className="mx-auto mt-4 max-w-2xl text-xl text-zinc-300">Players can submit ideas from their phones now.</p><div className="mx-auto mt-8 max-w-3xl rounded-lg border border-white/10 bg-zinc-950/60 p-5"><p className="text-5xl font-black text-[#71E0DC]">{ideas.length}</p><p className="text-zinc-400">idea{ideas.length === 1 ? "" : "s"} submitted</p></div></CardContent></Card>;
 
 const IdeasPanel = ({ ideas }) => <Card className="glass-card"><CardContent className="p-4"><div className="flex items-center justify-between gap-2 mb-4"><div className="flex items-center gap-2 text-white font-semibold"><Sparkles size={18} className="text-[#71E0DC]" />Player Ideas</div><Badge className="bg-zinc-800 text-zinc-300">{ideas.length}</Badge></div><div className="space-y-3 max-h-[620px] overflow-y-auto pr-1">{ideas.map((idea, index) => <div key={`${idea.playerId}-${idea.submittedAt}-${index}`} className="rounded-md border border-white/10 bg-zinc-950/60 p-3"><div className="mb-2 flex items-center justify-between gap-2"><span className="text-sm font-bold text-white truncate">{idea.playerName || "Team"}</span><span className="text-[11px] text-zinc-600">{new Date(idea.submittedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span></div>{idea.category && <p className="text-sm text-[#71E0DC]"><span className="text-zinc-500">Category:</span> {idea.category}</p>}{idea.question && <p className="mt-2 text-sm text-zinc-200 whitespace-pre-wrap">{idea.question}</p>}</div>)}{!ideas.length && <p className="text-xs text-zinc-500 text-center py-6">Ideas will appear here after players submit them.</p>}</div></CardContent></Card>;
 
@@ -2240,18 +4391,18 @@ const EDIT_SCOPE_LABEL = { question: "this question", round: "the rest of this r
 // resets from the question's own stored value on every navigation -- so an
 // edit "stuck" only until you left and came back. This calls onSave(value,
 // scope), which persists into the question data itself.
+// Uses the Radix-backed Popover (portal-rendered) rather than a plain
+// absolutely-positioned div -- this badge lives inside a "glass-card" tile,
+// and stacking a plain div's z-index doesn't actually escape a card's own
+// stacking context (its backdrop-blur/opacity creates one), so a later
+// sibling card in the list was painting over the popover no matter how
+// high its z-index went. Rendering through a portal to the document body
+// sidesteps that entirely, the same way the other dropdown menus already do.
 const EditableStatBadge = ({ label, value, unit, suffix, tone, onSave, step = 5 }) => {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(value);
   const [scope, setScope] = useState("question");
-  const ref = useRef(null);
-  useEffect(() => { if (open) setDraft(value); }, [open, value]);
-  useEffect(() => {
-    if (!open) return undefined;
-    const onDocClick = (event) => { if (ref.current && !ref.current.contains(event.target)) setOpen(false); };
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, [open]);
+  useEffect(() => { if (open) { setDraft(value); setScope("question"); } }, [open, value]);
   const toneClass = {
     amber: "border-amber-400/20 bg-amber-400/15 text-amber-200 hover:border-amber-300/50",
     teal: "border-[#71E0DC]/25 bg-[#71E0DC]/12 text-[#71E0DC] hover:border-[#71E0DC]/60",
@@ -2263,9 +4414,11 @@ const EditableStatBadge = ({ label, value, unit, suffix, tone, onSave, step = 5 
     setOpen(false);
     toast.success(`${label} set to ${Math.max(0, Number(draft) || 0)}${suffix || ""} for ${EDIT_SCOPE_LABEL[scope]}`);
   };
-  return <div className="relative" ref={ref}>
-    <button type="button" onClick={() => setOpen((current) => !current)} className={`rounded-full border px-3 py-1.5 text-sm font-bold transition ${toneClass}`}>{label}: {value}{suffix || ""}</button>
-    {open && <div className="absolute left-0 top-full z-30 mt-2 w-64 rounded-xl border border-white/10 bg-zinc-950 p-3 shadow-2xl">
+  return <Popover open={open} onOpenChange={setOpen}>
+    <PopoverTrigger asChild>
+      <button type="button" className={`rounded-full border px-3 py-1.5 text-sm font-bold transition ${toneClass}`}>{label}: {value}{suffix || ""}</button>
+    </PopoverTrigger>
+    <PopoverContent align="start" className="w-64 border-white/10 bg-zinc-950 p-3 text-white shadow-2xl">
       <p className="mb-2 text-[11px] font-bold uppercase tracking-wide text-zinc-500">{label}{unit ? ` (${unit})` : ""}</p>
       <div className="mb-2.5 flex items-center gap-2">
         <button type="button" onClick={() => setDraft((current) => Math.max(0, Number(current || 0) - step))} className="h-8 w-8 shrink-0 rounded-md border border-white/10 bg-zinc-900 text-zinc-300 hover:text-white">&minus;</button>
@@ -2281,8 +4434,8 @@ const EditableStatBadge = ({ label, value, unit, suffix, tone, onSave, step = 5 
         <Button size="sm" variant="outline" onClick={() => setOpen(false)} className="h-8 flex-1 border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
         <Button size="sm" onClick={save} className="h-8 flex-1 gradient-btn">Save</Button>
       </div>
-    </div>}
-  </div>;
+    </PopoverContent>
+  </Popover>;
 };
 // A per-team click-to-edit wager amount -- corrects a submitted wager
 // (mis-heard over the mic, fat-fingered manual entry) without touching the
@@ -2311,26 +4464,189 @@ const WagerChip = ({ answer, disabled, onSave }) => {
   return <button type="button" disabled={disabled} onClick={() => setEditing(true)} className="rounded-full border border-purple-400/30 bg-purple-400/10 px-2.5 py-1 text-[11px] font-bold text-purple-200 transition disabled:cursor-default disabled:opacity-70 enabled:hover:border-purple-300/60">{answer.playerName || "Team"}: {Number(answer.wagerAmount || 0)}</button>;
 };
 
-const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusMode, pointsPerQuestion, timerSeconds, timeRemaining, wagerMode, wagerLimit, wagerTiming, onUpdateSettings, branding, players, answers, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, editWager, setMode, isReviewing }) => {
+const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusMode, pointsPerQuestion, timerSeconds, timeRemaining, wagerMode, wagerTiming, onUpdateSettings, onUpdateContent, onDuplicate, onAiEdit, onSaveToLibrary, branding, players, answers, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, editWager, setMode, isReviewing, hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, onBackToLive, onGoLiveWithThis }) => {
+  const [mediaModalOpen, setMediaModalOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(() => draftFromQuestion(question));
+  const [savingEdit, setSavingEdit] = useState(false);
   const meta = typeMeta[question.type] || typeMeta.written;
-  const Icon = meta.icon;
   const imageUrl = buildStorageUrl(question.imageUrl);
   const revealTiming = normalizeImageTiming(question.imageTiming || question.image_timing);
-  const shouldShowImage = Boolean(imageUrl) && revealTiming !== "after_answer";
-  const shouldShowFunFactImage = Boolean(imageUrl) && revealTiming === "after_answer" && showFunFact;
-  const submittedCount = new Set(answers.map((answer) => answer.playerId)).size;
-  const playerCount = players.length;
-  const allSubmitted = playerCount > 0 && submittedCount >= playerCount;
-  const submittedPct = playerCount > 0 ? Math.min(100, Math.round((submittedCount / playerCount) * 100)) : 0;
   const accentColor = branding?.accentColor || DEFAULT_BRANDING.accentColor;
+  // This remounts (new `question.id` key) every time a different question
+  // becomes live or gets reviewed -- Ask Question/Review otherwise leave the
+  // scroll position wherever it was, so the card that just went live could
+  // land off-screen, above or below the viewport, with no indication it
+  // moved. Scroll it into view once on that mount instead of leaving the
+  // host to go hunt for it.
+  const cardRef = useRef(null);
+  useEffect(() => { cardRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }); }, []);
 
-  const answerRows = <AnswerRows question={question} players={players} answers={answers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} wagerMode={wagerMode} wagerLimit={wagerLimit} pointsPerQuestion={Number(pointsPerQuestion) || getDefaultPoints(question)} setMode={setMode} isReviewing={isReviewing} showAnswer={showAnswer} />;
-  // Visible to the host as soon as the question is live -- not gated behind
-  // "Reveal Fun Fact", which only controls what players/the presentation see.
-  const funFactBox = question.funFact && <div className="mt-4 flex items-start gap-2.5 rounded-lg border border-dashed p-3.5 text-sm leading-relaxed transition-opacity" style={{ borderColor: `${accentColor}59`, backgroundColor: `${accentColor}0F`, color: "#C7C9F5", opacity: showFunFact ? 1 : 0.65 }}><Sparkles size={15} className="mt-0.5 shrink-0" style={{ color: accentColor }} /><div><b style={{ color: accentColor }}>Fun fact:</b> {question.funFact}</div></div>;
-  const answerColumn = <div>{answerRows}{funFactBox}</div>;
+  const startEdit = () => { setDraft(draftFromQuestion(question)); setEditing(true); };
+  const handleSaveEdit = async () => {
+    if (!draft.questionText.trim() || !draft.answer.trim()) return toast.error("Question and answer can't be empty");
+    setSavingEdit(true);
+    const ok = await onUpdateContent({
+      category: draft.category.trim() || "General",
+      questionText: draft.questionText.trim(),
+      answer: draft.answer.trim(),
+      incorrectAnswers: question.type === "multiple_choice" ? draft.incorrectAnswers.map((item) => item.trim()).filter(Boolean).join("; ") : undefined,
+      funFact: draft.funFact.trim(),
+      imageUrl: draft.imageUrl.trim(),
+      imageTiming: draft.imageTiming,
+      audioUrl: draft.audioUrl.trim(),
+    });
+    setSavingEdit(false);
+    if (ok) setEditing(false);
+  };
 
-  return <Card className={`glass-card overflow-hidden ${focusMode ? "w-full" : ""}`}><CardContent className={focusMode ? "p-8 lg:p-12" : "p-5 lg:p-7"}><div className="flex items-start justify-between gap-3 mb-1"><div className="flex items-center gap-2 flex-wrap">{branding?.logoUrl && <img src={branding.logoUrl} alt={branding.name || "Host logo"} className="h-8 w-8 rounded bg-white object-contain p-1" />}</div><span className="text-zinc-500 font-mono text-sm">{index + 1} / {total}</span></div><div className="mb-8 flex items-center gap-2 flex-wrap"><Badge variant="outline" className="border-zinc-700 text-zinc-300">{question.category}</Badge><Badge className="border" style={{ backgroundColor: `${accentColor}1F`, borderColor: `${accentColor}00`, color: accentColor }}><Icon size={13} className="mr-1" />{meta.label}</Badge><span className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-zinc-700 bg-zinc-900/60 px-3 py-1.5 text-xs font-bold text-zinc-400" title="Only visible on this screen -- players and the presentation screen don't see this until you reveal"><EyeOff size={12} />Answer: {question.answer || "Not set"}</span>{wagerMode ? <EditableStatBadge label="Wager" value={Number(wagerLimit) || 0} unit="points, 0 = off" suffix=" pts" tone="purple" step={10} onSave={(value, scope) => onUpdateSettings({ wagerLimit: value }, scope, question)} /> : <EditableStatBadge label="Points" value={Number(pointsPerQuestion) || getDefaultPoints(question)} tone="amber" step={5} onSave={(value, scope) => onUpdateSettings({ points: value }, scope, question)} />}<button type="button" onClick={() => onUpdateSettings({ wagerLimit: wagerMode ? 0 : Math.max(20, Number(pointsPerQuestion) || getDefaultPoints(question)) }, "question", question)} className="rounded-full border border-purple-500/30 bg-purple-500/10 px-3 py-1.5 text-xs font-bold text-purple-200 hover:border-purple-400/60">{wagerMode ? "Turn Off Wager" : "Enable Wager"}</button><EditableStatBadge label="Timer" value={Number(timerSeconds) || 0} unit="seconds" suffix="s" tone="teal" step={5} onSave={(value, scope) => onUpdateSettings({ timerSeconds: value }, scope, question)} />{timeRemaining !== null && <span className="rounded-full border border-[#71E0DC]/25 bg-[#71E0DC]/10 px-3 py-1.5 text-sm font-bold text-[#71E0DC]">{timeRemaining}s left</span>}{wagerMode && <button type="button" onClick={() => onUpdateSettings({ wagerTiming: wagerTiming === "after_answer" ? "before_answer" : "after_answer" }, "question", question)} className="rounded-full border border-purple-500/30 bg-purple-500/10 px-3 py-1.5 text-sm font-bold text-purple-200 hover:border-purple-400/60">{wagerTiming === "after_answer" ? "After Answer" : "Before Answer"}</button>}{imageUrl && <Badge className="bg-amber-400/15 text-amber-200 border border-amber-400/20">{question.imageTiming === "after_answer" ? "Reveal Media" : "Media"}</Badge>}{playerCount > 0 && <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-bold ${allSubmitted ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-400/15 text-amber-200"}`}><span className="h-1.5 w-12 overflow-hidden rounded-full bg-white/15"><span className="block h-full rounded-full bg-current" style={{ width: `${submittedPct}%` }} /></span>{submittedCount}/{playerCount} in</span>}</div><h2 className={`${focusMode ? "text-4xl lg:text-6xl" : "text-2xl lg:text-4xl"} font-black leading-tight text-white text-center mb-6`}>{question.questionText}</h2>{shouldShowImage ? <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_220px] items-start gap-5 mb-6">{answerColumn}<div className="overflow-hidden rounded-xl border border-white/10 bg-zinc-950 aspect-[4/3]"><img src={imageUrl} alt="Question" className="h-full w-full object-cover" /></div></div> : <div className="mx-auto mb-6 w-full max-w-2xl">{answerColumn}</div>}{shouldShowFunFactImage && <div className="mt-5 max-h-[42vh] overflow-y-auto rounded-lg border p-5 text-center" style={{ backgroundColor: `${accentColor}18`, borderColor: `${accentColor}55` }}><div className="mb-4 flex justify-center"><img src={imageUrl} alt="Reveal media" className="max-h-[28vh] max-w-full rounded-lg border border-white/10 object-contain" /></div><div className="flex items-center justify-center gap-2 font-bold mb-2" style={{ color: accentColor }}><Sparkles size={18} />Media</div></div>}</CardContent></Card>;
+  // Fun fact renders directly under the question now (not off in its own
+  // block elsewhere) -- always visible to the host once a question has one,
+  // dimmed until actually revealed to players/presentation.
+  const funFactBox = question.funFact && <div className="mt-2 flex items-start gap-2 rounded-md border border-dashed p-2.5 text-xs leading-relaxed transition-opacity" style={{ borderColor: `${accentColor}59`, backgroundColor: `${accentColor}0F`, color: "#C7C9F5", opacity: showFunFact ? 1 : 0.6 }}><Sparkles size={13} className="mt-0.5 shrink-0" style={{ color: accentColor }} /><div><b style={{ color: accentColor }}>Fun fact:</b> {question.funFact}</div></div>;
+
+  return <>
+  <Card ref={cardRef} className={`glass-card ${isReviewing ? "border-amber-400/40" : "border-rose-400/40"} ${focusMode ? "w-full" : ""}`}>
+    <CardContent className={focusMode ? "p-6 lg:p-8" : "p-3.5"}>
+      {isReviewing && <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-100"><Eye size={13} className="shrink-0 text-amber-300" /><span className="flex-1">Reviewing this question &mdash; players and the presentation screen still see the live question.</span>{onBackToLive && <Button size="sm" variant="outline" onClick={onBackToLive} className="h-7 border-amber-300/30 text-amber-100 hover:text-white">Back to Live</Button>}{onGoLiveWithThis && <Button size="sm" onClick={onGoLiveWithThis} className="h-7 bg-amber-300 text-zinc-950 hover:bg-amber-200">Go Live With This Question</Button>}</div>}
+      {editing ? <>
+        <QuestionEditFields type={question.type} draft={draft} setDraft={setDraft} />
+        <div className="mt-2 flex justify-end gap-2">
+          <Button size="sm" variant="outline" onClick={() => setEditing(false)} className="h-8 border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
+          <Button size="sm" onClick={handleSaveEdit} disabled={savingEdit} className="h-8 gradient-btn">{savingEdit ? "Saving..." : "Save"}</Button>
+        </div>
+      </> : <>
+        <div className="flex items-start gap-3">
+          {imageUrl && revealTiming !== "after_answer" && <img src={imageUrl} alt="Question media" className={`shrink-0 rounded-lg border border-white/10 object-cover ${focusMode ? "h-28 w-28" : "h-16 w-16"}`} />}
+          <div className="min-w-0 flex-1">
+            <div className="flex items-start justify-between gap-2">
+              <p className="text-xs text-zinc-500">{meta.label}{isBonusQuestion(question) && <span className="ml-1.5 text-amber-300" title="Bonus question">&#9733;</span>}<br />#{index + 1} / {total} &middot; {question.category}</p>
+              <div className="flex shrink-0 items-center gap-2">
+                {wagerMode && <button type="button" onClick={() => onUpdateSettings({ wagerTiming: wagerTiming === "after_answer" ? "before_answer" : "after_answer" }, "question", question)} className="rounded-full border border-purple-500/30 bg-purple-500/10 px-2 py-0.5 text-[11px] font-bold text-purple-200 hover:border-purple-400/60" title="Wager timing">{wagerTiming === "after_answer" ? "After Answer" : "Before Answer"}</button>}
+                {!isReviewing && <span className="flex items-center gap-1.5 rounded-full border border-rose-400/30 bg-rose-400/10 px-2 py-0.5 text-[11px] font-bold text-rose-200"><span className="h-1.5 w-1.5 rounded-full bg-rose-400 animate-pulse" />LIVE</span>}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button type="button" title="More actions" aria-label="More actions" className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white"><MoreVertical size={15} /></button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="border-white/10 bg-zinc-950 text-zinc-100">
+                    <DropdownMenuItem onClick={startEdit} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Pencil size={14} className="mr-2" />Edit</DropdownMenuItem>
+                    <DropdownMenuItem onClick={onAiEdit} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Sparkles size={14} className="mr-2" />AI Edit</DropdownMenuItem>
+                    {!isReviewing && <DropdownMenuItem onClick={resetTimer} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><RotateCcw size={14} className="mr-2" />Clear Timer</DropdownMenuItem>}
+                    <DropdownMenuItem onClick={() => setMediaModalOpen(true)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Image size={14} className="mr-2" />Media</DropdownMenuItem>
+                    <DropdownMenuItem onClick={onDuplicate} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Copy size={14} className="mr-2" />Clone</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => onSaveToLibrary(question)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><List size={14} className="mr-2" />Save to Library</DropdownMenuItem>
+                    {resetQuestion && <DropdownMenuItem onClick={resetQuestion} className="cursor-pointer text-amber-300 focus:bg-zinc-900 focus:text-amber-200"><RefreshCw size={14} className="mr-2" />Reset Question</DropdownMenuItem>}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </div>
+            <h2 className={`mt-1.5 font-bold leading-snug text-white ${focusMode ? "text-2xl lg:text-4xl" : "text-sm"}`}>{question.questionText}</h2>
+            <p className="mt-1 flex items-center gap-1 text-[11px] text-zinc-500" title="Only visible on this screen -- players and the presentation screen don't see this until you reveal"><EyeOff size={11} />Answer: {question.answer || "Not set"}</p>
+            <AnswerOptionPreview question={question} />
+            {funFactBox}
+          </div>
+        </div>
+        {imageUrl && revealTiming === "after_answer" && showFunFact && <div className="mt-3 overflow-hidden rounded-lg border border-white/10 bg-zinc-950"><img src={imageUrl} alt="Reveal media" className="max-h-64 w-full object-contain" /></div>}
+        <div className="mt-2.5 border-t border-white/5 pt-2.5">
+          <AnswerRows question={question} players={players} answers={answers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} wagerMode={wagerMode} pointsPerQuestion={Number(pointsPerQuestion) || getDefaultPoints(question)} setMode={setMode} isReviewing={isReviewing} showAnswer={showAnswer} />
+        </div>
+        {!isReviewing && <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-white/5 pt-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            {timeRemaining !== null ? (
+              <button type="button" onClick={startTimer} title="Restart timer" className="flex h-8 items-center gap-1.5 rounded-md border border-[#71E0DC]/40 bg-[#71E0DC]/15 px-3 text-xs font-bold text-[#71E0DC] hover:bg-[#71E0DC]/25"><Timer size={12} />{timeRemaining}s left</button>
+            ) : (
+              <Button size="sm" onClick={startTimer} className="h-8 gradient-btn text-xs"><Play size={12} className="mr-1" />Start Timer</Button>
+            )}
+            <Button size="sm" onClick={onRevealAnswer} className={`h-8 text-xs ${showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700" : "gradient-btn"}`}>{showAnswer ? <EyeOff size={12} className="mr-1" /> : <Eye size={12} className="mr-1" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button>
+            <Button size="sm" variant="outline" onClick={onShowFunFact} disabled={!hasRevealExtra} className="h-7 border-white/10 text-[11px] text-zinc-300 hover:text-white disabled:opacity-40"><Sparkles size={11} className="mr-1" />{showFunFact ? "Hide" : hasFunFact ? "Fun Fact" : "Media"}</Button>
+            {hasAudio && <Button size="sm" onClick={onToggleAudio} className={`h-8 text-xs ${isPlayingAudio ? "bg-purple-500/20 text-purple-200 hover:bg-purple-500/30" : "bg-zinc-800 text-white hover:bg-zinc-700"}`}>{isPlayingAudio ? <Pause size={12} className="mr-1" /> : <Music size={12} className="mr-1" />}{isPlayingAudio ? "Stop Audio" : "Play Audio"}</Button>}
+          </div>
+          <div className="flex items-center gap-2">
+            <EditableStatBadge label="Points" value={Number(pointsPerQuestion) || getDefaultPoints(question)} tone="amber" step={5} onSave={(value, scope) => onUpdateSettings({ points: value }, scope, question)} />
+            <button type="button" onClick={() => onUpdateSettings({ wagerLimit: wagerMode ? 0 : 1 }, "question", question)} className={`rounded-full border px-3 py-1.5 text-xs font-bold ${wagerMode ? "border-purple-400/50 bg-purple-500/20 text-purple-100" : "border-purple-500/30 bg-purple-500/10 text-purple-200 hover:border-purple-400/60"}`} title="Teams can wager up to whatever points they currently have -- there's no separate host-set limit">{wagerMode ? "Wager: On" : "Wager: Off"}</button>
+            <EditableStatBadge label="Timer" value={Number(timerSeconds) || 0} unit="seconds" suffix="s" tone="teal" step={5} onSave={(value, scope) => onUpdateSettings({ timerSeconds: value }, scope, question)} />
+          </div>
+        </div>}
+      </>}
+    </CardContent>
+  </Card>
+  {mediaModalOpen && <MediaEditModal question={question} onSave={(patch) => { onUpdateSettings(patch, "question", question); setMediaModalOpen(false); }} onClose={() => setMediaModalOpen(false)} />}
+  </>;
+};
+
+// Full workspace merge Phase 5. A cut-down version of BuildSession's
+// MediaModal -- image URL/upload + before/after timing, audio upload/
+// remove -- without its AI image-generation panel (that's part of the AI
+// surface a later merge phase ports in alongside per-question AI edit).
+// Always commits with scope "question" only: unlike points/timer, "apply
+// this image to the rest of the round" is never what a host wants.
+const MediaEditModal = ({ question, onSave, onClose }) => {
+  const [imageUrl, setImageUrl] = useState(question.imageUrl || "");
+  const [imageTiming, setImageTiming] = useState(normalizeImageTiming(question.imageTiming));
+  const [audioUrl, setAudioUrl] = useState(question.audioUrl || "");
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [uploadingAudio, setUploadingAudio] = useState(false);
+
+  const handleImageFile = async (file) => {
+    if (!file) return;
+    setUploadingImage(true);
+    try {
+      setImageUrl(await uploadQuestionMedia(file));
+    } catch (error) {
+      console.error("Upload image error:", error);
+      toast.error(error.message || "Failed to upload image");
+    } finally {
+      setUploadingImage(false);
+    }
+  };
+
+  const handleAudioFile = async (file) => {
+    if (!file) return;
+    setUploadingAudio(true);
+    try {
+      setAudioUrl(await uploadQuestionAudio(file));
+    } catch (error) {
+      console.error("Upload audio error:", error);
+      toast.error(error.message || "Failed to upload audio");
+    } finally {
+      setUploadingAudio(false);
+    }
+  };
+
+  const handleSave = () => onSave({ imageUrl: imageUrl.trim(), imageTiming, audioUrl: audioUrl.trim() });
+
+  return <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 pt-8 md:pt-14 overflow-y-auto">
+    <div className="w-full max-w-lg rounded-xl border border-white/10 bg-[#17181c] p-6 shadow-2xl shadow-black/60 relative">
+      <button type="button" onClick={onClose} className="absolute right-4 top-4 text-zinc-400 hover:text-white" aria-label="Close media"><X size={18} /></button>
+      <h2 className="mb-5 text-xl font-bold text-white">Media</h2>
+      <div className="mb-4 flex gap-2">
+        <button type="button" onClick={() => setImageTiming("initial")} className={`h-9 flex-1 rounded-md border text-sm font-semibold ${imageTiming !== "after_answer" ? "border-[#71E0DC]/50 bg-[#71E0DC]/15 text-[#71E0DC]" : "border-white/10 text-zinc-400 hover:text-white"}`}>Show with question</button>
+        <button type="button" onClick={() => setImageTiming("after_answer")} className={`h-9 flex-1 rounded-md border text-sm font-semibold ${imageTiming === "after_answer" ? "border-[#71E0DC]/50 bg-[#71E0DC]/15 text-[#71E0DC]" : "border-white/10 text-zinc-400 hover:text-white"}`}>Show after answer</button>
+      </div>
+      <div className="mb-4 flex gap-2">
+        <div className="relative flex-1">
+          <Link className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+          <input value={imageUrl} onChange={(event) => setImageUrl(event.target.value)} placeholder="Image URL" className="h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 pl-9 pr-3 text-white outline-none focus:border-[#71E0DC]/60" />
+        </div>
+      </div>
+      <label className={`mb-2 flex h-40 cursor-pointer flex-col items-center justify-center rounded-md border-2 border-dashed transition-colors ${uploadingImage ? "border-zinc-600 bg-zinc-950/20" : "border-zinc-600 bg-zinc-950/20 hover:border-[#71E0DC]"}`}>
+        {uploadingImage ? <Loader2 size={22} className="animate-spin text-[#71E0DC]" /> : imageUrl ? <img src={imageUrl} alt="Question media preview" className="max-h-32 max-w-full rounded object-contain" /> : <><Upload size={22} className="mb-2 text-white" /><p className="text-sm font-medium text-white">Drop an image or click to upload</p></>}
+        <input type="file" accept="image/*" className="hidden" disabled={uploadingImage} onChange={(event) => handleImageFile(event.target.files?.[0])} />
+      </label>
+      {imageUrl && <Button type="button" variant="ghost" onClick={() => setImageUrl("")} className="mb-4 text-zinc-400 hover:text-white">Remove image</Button>}
+      <div className="my-5 h-px bg-white/10" />
+      <label className="mb-3 flex items-center gap-2 text-zinc-300"><Music size={16} />Audio clip</label>
+      <label className={`flex h-16 cursor-pointer items-center justify-center gap-2 rounded-md border-2 border-dashed transition-colors ${uploadingAudio ? "border-zinc-600 bg-zinc-950/20" : "border-zinc-600 bg-zinc-950/20 hover:border-[#71E0DC]"}`}>
+        {uploadingAudio ? <Loader2 size={18} className="animate-spin text-[#71E0DC]" /> : <><Upload size={16} className="text-white" /><p className="text-sm font-medium text-white">{audioUrl ? "Replace audio clip" : "Click to upload an audio clip"}</p></>}
+        <input type="file" accept="audio/*" className="hidden" disabled={uploadingAudio} onChange={(event) => handleAudioFile(event.target.files?.[0])} />
+      </label>
+      {audioUrl && <div className="mt-3"><audio controls src={audioUrl} className="h-10 w-full" /><Button type="button" variant="ghost" onClick={() => setAudioUrl("")} className="mt-2 text-zinc-400 hover:text-white">Remove audio</Button></div>}
+      <div className="mt-6 flex justify-end gap-2">
+        <Button type="button" variant="outline" onClick={onClose} className="border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
+        <Button type="button" onClick={handleSave} disabled={uploadingImage || uploadingAudio} className="gradient-btn">Save</Button>
+      </div>
+    </div>
+  </div>;
 };
 
 export default HostSession;
