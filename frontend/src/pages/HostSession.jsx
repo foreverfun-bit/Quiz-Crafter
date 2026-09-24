@@ -3322,6 +3322,14 @@ const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusM
   const imageUrl = buildStorageUrl(question.imageUrl);
   const revealTiming = normalizeImageTiming(question.imageTiming || question.image_timing);
   const accentColor = branding?.accentColor || DEFAULT_BRANDING.accentColor;
+  // This remounts (new `question.id` key) every time a different question
+  // becomes live or gets reviewed -- Ask Question/Review otherwise leave the
+  // scroll position wherever it was, so the card that just went live could
+  // land off-screen, above or below the viewport, with no indication it
+  // moved. Scroll it into view once on that mount instead of leaving the
+  // host to go hunt for it.
+  const cardRef = useRef(null);
+  useEffect(() => { cardRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }); }, []);
 
   const startEdit = () => { setDraft(draftFromQuestion(question)); setEditing(true); };
   const handleSaveEdit = async () => {
@@ -3344,7 +3352,7 @@ const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusM
   const funFactBox = question.funFact && <div className="mt-2 flex items-start gap-2 rounded-md border border-dashed p-2.5 text-xs leading-relaxed transition-opacity" style={{ borderColor: `${accentColor}59`, backgroundColor: `${accentColor}0F`, color: "#C7C9F5", opacity: showFunFact ? 1 : 0.6 }}><Sparkles size={13} className="mt-0.5 shrink-0" style={{ color: accentColor }} /><div><b style={{ color: accentColor }}>Fun fact:</b> {question.funFact}</div></div>;
 
   return <>
-  <Card className={`glass-card ${isReviewing ? "border-amber-400/40" : "border-rose-400/40"} ${focusMode ? "w-full" : ""}`}>
+  <Card ref={cardRef} className={`glass-card ${isReviewing ? "border-amber-400/40" : "border-rose-400/40"} ${focusMode ? "w-full" : ""}`}>
     <CardContent className={focusMode ? "p-6 lg:p-8" : "p-3.5"}>
       {isReviewing && <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-100"><Eye size={13} className="shrink-0 text-amber-300" /><span className="flex-1">Reviewing this question &mdash; players and the presentation screen still see the live question.</span>{onBackToLive && <Button size="sm" variant="outline" onClick={onBackToLive} className="h-7 border-amber-300/30 text-amber-100 hover:text-white">Back to Live</Button>}{onGoLiveWithThis && <Button size="sm" onClick={onGoLiveWithThis} className="h-7 bg-amber-300 text-zinc-950 hover:bg-amber-200">Go Live With This Question</Button>}</div>}
       {editing ? <>
@@ -3388,13 +3396,16 @@ const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusM
         </div>
         {!isReviewing && <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-white/5 pt-2.5">
           <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" onClick={startTimer} className="h-8 gradient-btn text-xs"><Play size={12} className="mr-1" />Start Timer</Button>
+            {timeRemaining !== null ? (
+              <button type="button" onClick={startTimer} title="Restart timer" className="flex h-8 items-center gap-1.5 rounded-md border border-[#71E0DC]/40 bg-[#71E0DC]/15 px-3 text-xs font-bold text-[#71E0DC] hover:bg-[#71E0DC]/25"><Timer size={12} />{timeRemaining}s left</button>
+            ) : (
+              <Button size="sm" onClick={startTimer} className="h-8 gradient-btn text-xs"><Play size={12} className="mr-1" />Start Timer</Button>
+            )}
             <Button size="sm" onClick={onRevealAnswer} className={`h-8 text-xs ${showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700" : "gradient-btn"}`}>{showAnswer ? <EyeOff size={12} className="mr-1" /> : <Eye size={12} className="mr-1" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button>
             <Button size="sm" variant="outline" onClick={onShowFunFact} disabled={!hasRevealExtra} className="h-7 border-white/10 text-[11px] text-zinc-300 hover:text-white disabled:opacity-40"><Sparkles size={11} className="mr-1" />{showFunFact ? "Hide" : hasFunFact ? "Fun Fact" : "Media"}</Button>
             {hasAudio && <Button size="sm" onClick={onToggleAudio} className={`h-8 text-xs ${isPlayingAudio ? "bg-purple-500/20 text-purple-200 hover:bg-purple-500/30" : "bg-zinc-800 text-white hover:bg-zinc-700"}`}>{isPlayingAudio ? <Pause size={12} className="mr-1" /> : <Music size={12} className="mr-1" />}{isPlayingAudio ? "Stop Audio" : "Play Audio"}</Button>}
           </div>
           <div className="flex items-center gap-2">
-            {timeRemaining !== null && <span className="rounded-full border border-[#71E0DC]/25 bg-[#71E0DC]/10 px-2.5 py-1 text-xs font-bold text-[#71E0DC]">{timeRemaining}s left</span>}
             <EditableStatBadge label="Points" value={Number(pointsPerQuestion) || getDefaultPoints(question)} tone="amber" step={5} onSave={(value, scope) => onUpdateSettings({ points: value }, scope, question)} />
             <button type="button" onClick={() => onUpdateSettings({ wagerLimit: wagerMode ? 0 : 1 }, "question", question)} className={`rounded-full border px-3 py-1.5 text-xs font-bold ${wagerMode ? "border-purple-400/50 bg-purple-500/20 text-purple-100" : "border-purple-500/30 bg-purple-500/10 text-purple-200 hover:border-purple-400/60"}`} title="Teams can wager up to whatever points they currently have -- there's no separate host-set limit">{wagerMode ? "Wager: On" : "Wager: Off"}</button>
             <EditableStatBadge label="Timer" value={Number(timerSeconds) || 0} unit="seconds" suffix="s" tone="teal" step={5} onSave={(value, scope) => onUpdateSettings({ timerSeconds: value }, scope, question)} />
