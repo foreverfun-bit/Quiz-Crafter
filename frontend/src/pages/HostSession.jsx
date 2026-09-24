@@ -1864,6 +1864,43 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     return true;
   };
 
+  // Reuses BuildSession's host-assistant.js "question_edit" mode unchanged --
+  // one question in, one rewritten candidate back, never auto-committed.
+  // AiEditQuestionModal shows the result and only calls updateQuestionContent
+  // (via onApply) once the host explicitly clicks Apply.
+  const editQuestionWithAi = async (question, instruction) => {
+    const request = instruction.trim();
+    if (!request) { toast.error("Tell the AI what to change"); return null; }
+    try {
+      const response = await fetch("/api/host-assistant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "question_edit",
+          request,
+          context: {
+            session: { name: sessionName },
+            questions: [{
+              category: question.category,
+              question_text: question.questionText,
+              correct_answer: question.answer,
+              question_type: question.type,
+              incorrect_answers: question.type === "multiple_choice" ? question.options.filter((option) => option !== question.answer) : [],
+              fun_fact: question.funFact,
+            }],
+          },
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data?.candidate) throw new Error(data?.error || "AI did not return a usable edit");
+      return { answer: data.answer, candidate: data.candidate };
+    } catch (error) {
+      console.error("AI question edit error:", error);
+      toast.error(error.message || "Failed to edit question with AI");
+      return null;
+    }
+  };
+
   // Shared by every round-header action below: writes the same patch onto
   // every question in `roundQuestions`, across whichever real arrays they
   // live in, mirroring updateQuestionSettings's per-array patch/commit.
@@ -2470,6 +2507,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
             addQuestionToRound={addQuestionToRound}
             addLibraryQuestionToRound={addLibraryQuestionToRound}
             updateQuestionContent={updateQuestionContent}
+            editQuestionWithAi={editQuestionWithAi}
             branding={branding}
             markAnswer={markAnswer}
             addManualAnswer={addManualAnswer}
@@ -2679,6 +2717,89 @@ const WriteQuestionModal = ({ round, onCreate, onClose }) => {
         <Button type="button" variant="outline" onClick={onClose} className="border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
         <Button type="button" onClick={handleCreate} disabled={saving} className="gradient-btn">{saving ? "Adding..." : "Add Question"}</Button>
       </div>
+    </div>
+  </div>;
+};
+
+// First AI feature ported into the merged workspace (workspace-merge Phase
+// 6) -- reuses host-assistant.js's "question_edit" mode exactly as
+// BuildSession's handleChatEditQuestion already does. Never auto-commits:
+// the AI's rewrite is only a preview until the host clicks Apply, which maps
+// it onto updateQuestionContent (content fields only, same as manual Edit).
+// If the AI answers with a different question_type than the original, the
+// answer/wrong-answers aren't applied -- converting a question between
+// true_false/multiple_choice/written means moving it to a different array
+// entirely, which is a separate, riskier feature this doesn't attempt yet.
+const AiEditQuestionModal = ({ question, onEdit, onApply, onClose }) => {
+  const [instruction, setInstruction] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const ask = async () => {
+    if (!instruction.trim() || loading) return;
+    setLoading(true);
+    try {
+      const outcome = await onEdit(question, instruction);
+      if (outcome) setResult(outcome);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const typeMatches = result?.candidate && result.candidate.question_type === question.type;
+  const apply = async () => {
+    if (!result?.candidate) return;
+    setApplying(true);
+    try {
+      const patch = { category: result.candidate.category, questionText: result.candidate.question_text, funFact: result.candidate.fun_fact };
+      if (typeMatches) {
+        patch.answer = result.candidate.correct_answer;
+        if (question.type === "multiple_choice") patch.incorrectAnswers = result.candidate.incorrect_answers.join("; ");
+      }
+      const ok = await onApply(patch);
+      if (ok) onClose();
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  return <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 pt-8 md:pt-14 overflow-y-auto">
+    <div className="w-full max-w-xl rounded-xl bg-[#17181c] border border-white/10 shadow-2xl shadow-black/60 p-5 relative">
+      <button type="button" onClick={onClose} className="absolute right-4 top-4 text-zinc-400 hover:text-white" aria-label="Close"><X size={18} /></button>
+      <h2 className="mb-1 flex items-center gap-2 text-xl font-bold text-white"><Sparkles size={17} className="text-[#71E0DC]" />AI Edit</h2>
+      <p className="mb-4 text-sm text-zinc-500">Tell the AI what to change about this question.</p>
+      <div className="mb-3 rounded-lg border border-white/10 bg-zinc-950/50 p-3">
+        <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-500">Current</p>
+        <p className="mt-1 text-sm font-semibold text-white">{question.questionText}</p>
+        <p className="mt-1 text-sm text-[#71E0DC]">Answer: {question.answer}</p>
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          value={instruction}
+          onChange={(event) => setInstruction(event.target.value)}
+          onKeyDown={(event) => { if (event.key === "Enter") ask(); }}
+          placeholder="e.g. make it harder, fix the fun fact, tighten the wording..."
+          className="h-10 flex-1 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60"
+          autoFocus
+        />
+        <Button type="button" onClick={ask} disabled={loading || !instruction.trim()} className="h-10 gradient-btn">{loading ? <Loader2 size={15} className="animate-spin" /> : "Ask AI"}</Button>
+      </div>
+      {result && <div className="mt-4 rounded-lg border border-[#71E0DC]/20 bg-[#71E0DC]/5 p-3">
+        <p className="text-sm text-zinc-200">{result.answer}</p>
+        {result.candidate && <div className="mt-3 rounded-md border border-white/10 bg-zinc-950/60 p-3">
+          <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-500">{result.candidate.category}</p>
+          <p className="mt-1 text-sm font-semibold text-white">{result.candidate.question_text}</p>
+          {typeMatches && <p className="mt-1 text-sm text-[#71E0DC]">Answer: {result.candidate.correct_answer}</p>}
+          {typeMatches && result.candidate.question_type === "multiple_choice" && result.candidate.incorrect_answers.length > 0 && <p className="mt-1 text-xs text-zinc-500">Wrong answers: {result.candidate.incorrect_answers.join(", ")}</p>}
+          {result.candidate.fun_fact && <p className="mt-2 text-xs text-zinc-400">{result.candidate.fun_fact}</p>}
+          {!typeMatches && <p className="mt-2 text-xs text-amber-300">AI suggested making this a {typeMeta[result.candidate.question_type]?.label || result.candidate.question_type} question -- changing a question's type isn't supported here yet, so only the category/question/fun fact would be applied, not the answer.</p>}
+        </div>}
+        <div className="mt-3 flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={() => setResult(null)} className="border-white/10 text-zinc-300 hover:text-white">Try Again</Button>
+          {result.candidate && <Button type="button" onClick={apply} disabled={applying} className="gradient-btn">{applying ? "Applying..." : "Apply"}</Button>}
+        </div>
+      </div>}
     </div>
   </div>;
 };
@@ -2921,7 +3042,7 @@ const QuestionListView = ({
   displayedQuestion, goToQuestion, reviewQuestion, onBackToLive, onGoLiveWithThis,
   answersForQuestionIndex, gradedAnswers, players, hostAnswers, fairPlayStats,
   showAnswer, showFunFact, timeRemaining, viewPointsPerQuestion, viewTimerSeconds, viewWagerMode, viewWagerLimit, viewWagerTiming,
-  onUpdateSettings, renameRound, describeRound, setEmptyRoundSettings, moveRound, deleteRound, createRound, createEmptyRound, moveQuestionToRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, updateQuestionContent, branding, markAnswer, addManualAnswer, editWager, releaseMode,
+  onUpdateSettings, renameRound, describeRound, setEmptyRoundSettings, moveRound, deleteRound, createRound, createEmptyRound, moveQuestionToRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, updateQuestionContent, editQuestionWithAi, branding, markAnswer, addManualAnswer, editWager, releaseMode,
   hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, resetQuestionAt,
 }) => {
   // Only one round is shown at a time (see RoundHeader/RoundSwitcher) --
@@ -2954,6 +3075,8 @@ const QuestionListView = ({
 
   const [manageRoundsOpen, setManageRoundsOpen] = useState(false);
   const [addRoundOpen, setAddRoundOpen] = useState(false);
+  const [aiEditQuestionId, setAiEditQuestionId] = useState(null);
+  const aiEditQuestion = questions.find((item) => item.id === aiEditQuestionId) || null;
   const [writeQuestionRoundKey, setWriteQuestionRoundKey] = useState(null);
   const writeQuestionRound = rounds.find((round) => round.key === writeQuestionRoundKey) || null;
   const [libraryRoundKey, setLibraryRoundKey] = useState(null);
@@ -2994,7 +3117,7 @@ const QuestionListView = ({
         {activeRound.questions.map((question, localIndex) => {
           const index = activeRound.startIndex + localIndex;
           if (index === hostIndex && (isReviewing || gameStarted)) {
-            return <QuestionStage key={question.id} question={displayedQuestion} index={hostIndex} total={questions.length} showAnswer={showAnswer} showFunFact={showFunFact} pointsPerQuestion={viewPointsPerQuestion} timerSeconds={viewTimerSeconds} timeRemaining={timeRemaining} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} wagerTiming={viewWagerTiming} onUpdateSettings={onUpdateSettings} onUpdateContent={(patch) => updateQuestionContent(displayedQuestion, patch)} onDuplicate={() => duplicateQuestion(displayedQuestion)} branding={branding} players={players} answers={hostAnswers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} setMode={releaseMode} isReviewing={isReviewing} hasRevealExtra={hasRevealExtra} hasFunFact={hasFunFact} hasAudio={hasAudio} isPlayingAudio={isPlayingAudio} onToggleAudio={onToggleAudio} onRevealAnswer={onRevealAnswer} onShowFunFact={onShowFunFact} startTimer={startTimer} resetTimer={resetTimer} resetQuestion={resetQuestion} onBackToLive={onBackToLive} onGoLiveWithThis={onGoLiveWithThis} />;
+            return <QuestionStage key={question.id} question={displayedQuestion} index={hostIndex} total={questions.length} showAnswer={showAnswer} showFunFact={showFunFact} pointsPerQuestion={viewPointsPerQuestion} timerSeconds={viewTimerSeconds} timeRemaining={timeRemaining} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} wagerTiming={viewWagerTiming} onUpdateSettings={onUpdateSettings} onUpdateContent={(patch) => updateQuestionContent(displayedQuestion, patch)} onDuplicate={() => duplicateQuestion(displayedQuestion)} onAiEdit={() => setAiEditQuestionId(displayedQuestion.id)} branding={branding} players={players} answers={hostAnswers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} setMode={releaseMode} isReviewing={isReviewing} hasRevealExtra={hasRevealExtra} hasFunFact={hasFunFact} hasAudio={hasAudio} isPlayingAudio={isPlayingAudio} onToggleAudio={onToggleAudio} onRevealAnswer={onRevealAnswer} onShowFunFact={onShowFunFact} startTimer={startTimer} resetTimer={resetTimer} resetQuestion={resetQuestion} onBackToLive={onBackToLive} onGoLiveWithThis={onGoLiveWithThis} />;
           }
           const isLiveElsewhere = index === currentIndex && isReviewing;
           const state = isLiveElsewhere ? "live" : index < currentIndex ? "completed" : "upcoming";
@@ -3019,6 +3142,7 @@ const QuestionListView = ({
             onDuplicate={() => duplicateQuestion(question)}
             onDiscard={() => discardQuestion(question)}
             onResetQuestion={() => resetQuestionAt(index)}
+            onAiEdit={() => setAiEditQuestionId(question.id)}
           />;
         })}
         {!activeRound.questions.length && <div className="rounded-lg border border-dashed border-white/15 bg-zinc-950/40 p-6 text-center">
@@ -3043,6 +3167,7 @@ const QuestionListView = ({
     {addRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} onClose={() => setAddRoundOpen(false)} />}
     {writeQuestionRound && <WriteQuestionModal round={writeQuestionRound} onCreate={(draft) => addQuestionToRound(writeQuestionRound, draft)} onClose={() => setWriteQuestionRoundKey(null)} />}
     {libraryRound && <LibraryPickerModal round={libraryRound} libraryQuestions={libraryQuestions} loading={libraryLoading} existingTexts={existingQuestionTexts} onInsert={(question) => addLibraryQuestionToRound(libraryRound, question)} onClose={() => setLibraryRoundKey(null)} />}
+    {aiEditQuestion && <AiEditQuestionModal question={aiEditQuestion} onEdit={editQuestionWithAi} onApply={(patch) => updateQuestionContent(aiEditQuestion, patch)} onClose={() => setAiEditQuestionId(null)} />}
   </div>;
 };
 
@@ -3092,7 +3217,7 @@ const AnswerOptionPreview = ({ question }) => {
   return null;
 };
 
-const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerCount, correctCount, eventOpen, onAsk, onReview, currentRoundName, otherRounds, onMoveToRound, onUpdateContent, onDuplicate, onDiscard, onResetQuestion }) => {
+const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerCount, correctCount, eventOpen, onAsk, onReview, currentRoundName, otherRounds, onMoveToRound, onUpdateContent, onDuplicate, onDiscard, onResetQuestion, onAiEdit }) => {
   const meta = typeMeta[question.type] || typeMeta.written;
   const points = getQuestionPoints(question);
   const wagerLimit = Number(question.wagerLimit || 0);
@@ -3151,6 +3276,7 @@ const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerC
                   <div className="my-1 h-px bg-white/10" />
                   <p className="px-2 py-1 text-[11px] font-bold uppercase tracking-wide text-zinc-500">Options</p>
                   <DropdownMenuItem onClick={startEdit} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Pencil size={14} className="mr-2" />Edit</DropdownMenuItem>
+                  <DropdownMenuItem onClick={onAiEdit} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Sparkles size={14} className="mr-2" />AI Edit</DropdownMenuItem>
                   {state === "completed" && <DropdownMenuItem onClick={onResetQuestion} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><RotateCcw size={14} className="mr-2" />Reset Question</DropdownMenuItem>}
                   {state === "completed" && <DropdownMenuItem onClick={onAsk} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><RefreshCw size={14} className="mr-2" />Reactivate Question</DropdownMenuItem>}
                   <DropdownMenuItem onClick={onDuplicate} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Copy size={14} className="mr-2" />Clone</DropdownMenuItem>
@@ -3615,7 +3741,7 @@ const WagerChip = ({ answer, disabled, onSave }) => {
   return <button type="button" disabled={disabled} onClick={() => setEditing(true)} className="rounded-full border border-purple-400/30 bg-purple-400/10 px-2.5 py-1 text-[11px] font-bold text-purple-200 transition disabled:cursor-default disabled:opacity-70 enabled:hover:border-purple-300/60">{answer.playerName || "Team"}: {Number(answer.wagerAmount || 0)}</button>;
 };
 
-const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusMode, pointsPerQuestion, timerSeconds, timeRemaining, wagerMode, wagerTiming, onUpdateSettings, onUpdateContent, onDuplicate, branding, players, answers, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, editWager, setMode, isReviewing, hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, onBackToLive, onGoLiveWithThis }) => {
+const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusMode, pointsPerQuestion, timerSeconds, timeRemaining, wagerMode, wagerTiming, onUpdateSettings, onUpdateContent, onDuplicate, onAiEdit, branding, players, answers, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, editWager, setMode, isReviewing, hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, onBackToLive, onGoLiveWithThis }) => {
   const [mediaModalOpen, setMediaModalOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(() => draftFromQuestion(question));
@@ -3678,6 +3804,7 @@ const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusM
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="border-white/10 bg-zinc-950 text-zinc-100">
                     <DropdownMenuItem onClick={startEdit} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Pencil size={14} className="mr-2" />Edit</DropdownMenuItem>
+                    <DropdownMenuItem onClick={onAiEdit} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Sparkles size={14} className="mr-2" />AI Edit</DropdownMenuItem>
                     {!isReviewing && <DropdownMenuItem onClick={resetTimer} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><RotateCcw size={14} className="mr-2" />Clear Timer</DropdownMenuItem>}
                     <DropdownMenuItem onClick={() => setMediaModalOpen(true)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Image size={14} className="mr-2" />Media</DropdownMenuItem>
                     <DropdownMenuItem onClick={onDuplicate} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Copy size={14} className="mr-2" />Clone</DropdownMenuItem>
