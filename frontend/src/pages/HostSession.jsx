@@ -31,6 +31,7 @@ import {
   MessageSquare,
   MonitorPlay,
   MoreHorizontal,
+  MoreVertical,
   Music,
   Palette,
   Pause,
@@ -2414,7 +2415,7 @@ const LibraryPickerModal = ({ round, libraryQuestions, loading, existingTexts, o
   </div>;
 };
 
-const RoundHeader = ({ round, canMoveUp, canMoveDown, canDelete, onRename, onDescribe, onMoveUp, onMoveDown, onDelete }) => {
+const RoundHeader = ({ round, canMoveUp, canMoveDown, canDelete, onRename, onDescribe, onMoveUp, onMoveDown, onDelete, onWriteQuestion, onAddFromLibrary }) => {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(round.name);
   const [editingDescription, setEditingDescription] = useState(false);
@@ -2450,9 +2451,9 @@ const RoundHeader = ({ round, canMoveUp, canMoveDown, canDelete, onRename, onDes
       )}
       <span className="text-xs text-zinc-500">{round.questions.length} question{round.questions.length === 1 ? "" : "s"}</span>
       <div className="ml-auto flex items-center gap-1">
-        <button type="button" onClick={() => setEditingDescription((value) => !value)} className={`flex h-7 items-center gap-1 rounded px-2 text-xs font-semibold ${round.description ? "text-[#71E0DC]" : "text-zinc-500"} hover:text-white`} title="Round description">
-          <MessageSquare size={13} />{round.description ? "Edit note" : "Add note"}
-        </button>
+        <button type="button" onClick={() => setEditingDescription((value) => !value)} className={`flex h-7 w-7 items-center justify-center rounded ${round.description ? "text-[#71E0DC]" : "text-zinc-500"} hover:text-white`} title={round.description ? "Edit round note" : "Add round note"} aria-label="Round note"><MessageSquare size={14} /></button>
+        <button type="button" onClick={onWriteQuestion} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white" title="Write a question for this round" aria-label="Write question"><Pencil size={14} /></button>
+        <button type="button" onClick={onAddFromLibrary} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white" title="Add from library" aria-label="Add from library"><List size={14} /></button>
         <button type="button" onClick={onMoveUp} disabled={!canMoveUp} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white disabled:opacity-30" aria-label="Move round up"><ChevronUp size={15} /></button>
         <button type="button" onClick={onMoveDown} disabled={!canMoveDown} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white disabled:opacity-30" aria-label="Move round down"><ChevronDown size={15} /></button>
         <button type="button" onClick={onDelete} disabled={!canDelete} title={canDelete ? "Delete round" : "Keep at least one round"} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-rose-300 disabled:opacity-30" aria-label="Delete round"><Trash2 size={14} /></button>
@@ -2520,6 +2521,8 @@ const QuestionListView = ({
         onMoveUp={() => moveRound(round, -1)}
         onMoveDown={() => moveRound(round, 1)}
         onDelete={() => deleteRound(round)}
+        onWriteQuestion={() => setWriteQuestionRoundKey(round.key)}
+        onAddFromLibrary={() => openLibrary(round.key)}
       />
       <div className="space-y-3">
         {round.questions.map((question, localIndex) => {
@@ -2548,10 +2551,6 @@ const QuestionListView = ({
             onUpdateContent={(patch) => updateQuestionContent(question, patch)}
           />;
         })}
-        <div className="flex gap-2">
-          <Button size="sm" variant="outline" onClick={() => setWriteQuestionRoundKey(round.key)} className="h-8 border-dashed border-white/15 text-zinc-400 hover:text-white"><Plus size={14} className="mr-1.5" />Write Question</Button>
-          <Button size="sm" variant="outline" onClick={() => openLibrary(round.key)} className="h-8 border-dashed border-white/15 text-zinc-400 hover:text-white"><List size={14} className="mr-1.5" />Add from Library</Button>
-        </div>
       </div>
     </section>)}
     {addRoundOpen && <AddRoundModal onCreate={createRound} onClose={() => setAddRoundOpen(false)} />}
@@ -2592,7 +2591,6 @@ const draftFromQuestion = (question) => ({
 
 const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerCount, correctCount, eventOpen, onAsk, onReview, otherRounds, onMoveToRound, onUpdateContent }) => {
   const meta = typeMeta[question.type] || typeMeta.written;
-  const Icon = meta.icon;
   const points = getQuestionPoints(question);
   const wagerLimit = Number(question.wagerLimit || 0);
   const timerSeconds = Number(question.timerSeconds || 30);
@@ -2615,40 +2613,45 @@ const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerC
     if (ok) setEditing(false);
   };
 
-  return <Card className={`glass-card ${state === "live" ? "border-rose-400/40" : ""}`}>
-    <CardContent className="flex flex-wrap items-center gap-3 p-3.5">
-      <span className="text-xs font-mono text-zinc-500 shrink-0">Q{index + 1}</span>
-      <Badge className="bg-zinc-800 text-zinc-300 text-[11px] shrink-0"><Icon size={11} className={`mr-1 ${meta.color}`} />{meta.short}</Badge>
-      {isBonusQuestion(question) && <span className="shrink-0 text-amber-300" title="Bonus question">&#9733;</span>}
-      {editing ? <div className="w-full basis-full"><QuestionEditFields type={question.type} draft={draft} setDraft={setDraft} /></div> : <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-semibold text-white">{question.questionText}</p>
-        <p className="truncate text-xs text-zinc-500">{question.category}</p>
-      </div>}
-      {!editing && <span className="shrink-0 rounded-full border border-amber-400/20 bg-amber-400/10 px-2.5 py-1 text-xs font-bold text-amber-200">{points} pts</span>}
-      {!editing && wagerLimit > 0 && <span className="shrink-0 rounded-full border border-purple-400/30 bg-purple-500/10 px-2.5 py-1 text-xs font-bold text-purple-200">Wager</span>}
-      {!editing && <span className="shrink-0 rounded-full border border-[#71E0DC]/20 bg-[#71E0DC]/10 px-2.5 py-1 text-xs font-bold text-[#71E0DC]">{timerSeconds}s</span>}
-      {!editing && state === "live" && <span className="flex shrink-0 items-center gap-1.5 rounded-full border border-rose-400/30 bg-rose-400/10 px-2.5 py-1 text-xs font-bold text-rose-200"><span className="h-1.5 w-1.5 rounded-full bg-rose-400 animate-pulse" />LIVE</span>}
-      {!editing && state === "completed" && <span className="shrink-0 rounded-full bg-zinc-800 px-2.5 py-1 text-xs font-bold text-zinc-300">{correctCount > 0 ? `${correctCount} correct` : "Asked"} &middot; {submittedCount}/{playerCount || 0}</span>}
-      <div className="flex shrink-0 items-center gap-2">
-        {editing ? <>
+  const correctPct = state === "completed" && submittedCount > 0 ? Math.round((correctCount / submittedCount) * 100) : null;
+  const metaBits = [`${points} pts`, `${timerSeconds}s`, wagerLimit > 0 ? "Wager" : null].filter(Boolean).join(" · ");
+
+  if (editing) {
+    return <Card className="glass-card">
+      <CardContent className="p-3.5">
+        <QuestionEditFields type={question.type} draft={draft} setDraft={setDraft} />
+        <div className="mt-2 flex justify-end gap-2">
           <Button size="sm" variant="outline" onClick={() => setEditing(false)} className="h-8 border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
           <Button size="sm" onClick={handleSave} disabled={saving} className="h-8 gradient-btn">{saving ? "Saving..." : "Save"}</Button>
-        </> : <>
-          <button type="button" onClick={startEdit} title="Edit question" aria-label="Edit question" className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 text-zinc-400 hover:text-white"><Pencil size={13} /></button>
-          {state !== "live" && otherRounds?.length > 0 && <DropdownMenu>
+        </div>
+      </CardContent>
+    </Card>;
+  }
+
+  return <Card className={`glass-card ${state === "live" ? "border-rose-400/40" : ""}`}>
+    <CardContent className="p-3.5">
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-xs text-zinc-500">{meta.label}{isBonusQuestion(question) && <span className="ml-1.5 text-amber-300" title="Bonus question">&#9733;</span>}<br />#{index + 1} {question.category}</p>
+        <div className="flex shrink-0 items-center gap-2">
+          {correctPct !== null && <span className="text-xs font-bold text-zinc-400">{correctPct}%</span>}
+          {state === "live" && <span className="flex items-center gap-1.5 rounded-full border border-rose-400/30 bg-rose-400/10 px-2 py-0.5 text-[11px] font-bold text-rose-200"><span className="h-1.5 w-1.5 rounded-full bg-rose-400 animate-pulse" />LIVE</span>}
+          <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button type="button" title="Move to another round" aria-label="Move to another round" className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 text-zinc-400 hover:text-white">
-                <ArrowRightLeft size={13} />
-              </button>
+              <button type="button" title="More actions" aria-label="More actions" className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white"><MoreVertical size={15} /></button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="border-white/10 bg-zinc-950 text-zinc-100">
-              {otherRounds.map((round) => <DropdownMenuItem key={round.key} onClick={() => onMoveToRound(round)} className="cursor-pointer focus:bg-zinc-900 focus:text-white">Move to {round.name}</DropdownMenuItem>)}
+              <DropdownMenuItem onClick={startEdit} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Pencil size={14} className="mr-2" />Edit</DropdownMenuItem>
+              {state !== "live" && otherRounds?.map((round) => <DropdownMenuItem key={round.key} onClick={() => onMoveToRound(round)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><ArrowRightLeft size={14} className="mr-2" />Move to {round.name}</DropdownMenuItem>)}
             </DropdownMenuContent>
-          </DropdownMenu>}
-          {state !== "live" && <Button size="sm" variant="outline" onClick={onReview} className="h-8 border-white/10 text-zinc-300 hover:text-white"><Eye size={13} className="mr-1.5" />{state === "completed" ? "Review" : "Preview"}</Button>}
-          {state === "upcoming" && <Button size="sm" onClick={onAsk} disabled={!eventOpen} title={!eventOpen ? "Open the event to start asking questions" : undefined} className="h-8 gradient-btn disabled:opacity-40"><Play size={13} className="mr-1.5" />Ask Question</Button>}
-          {state === "live" && <Button size="sm" variant="outline" onClick={onReview} className="h-8 border-rose-300/30 text-rose-200 hover:text-white">View Live</Button>}
-        </>}
+          </DropdownMenu>
+        </div>
+      </div>
+      <p className="mt-1.5 text-sm font-semibold text-white">{question.questionText}</p>
+      <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-zinc-500">{state === "completed" ? `${correctCount > 0 ? `${correctCount} correct` : "Asked"} · ${submittedCount}/${playerCount || 0} · ${metaBits}` : metaBits}</p>
+        {state !== "live" && <Button size="sm" variant="outline" onClick={onReview} className="h-7 border-white/10 text-xs text-zinc-300 hover:text-white"><Eye size={12} className="mr-1" />{state === "completed" ? "Review" : "Preview"}</Button>}
+        {state === "upcoming" && <Button size="sm" onClick={onAsk} disabled={!eventOpen} title={!eventOpen ? "Open the event to start asking questions" : undefined} className="h-7 gradient-btn text-xs disabled:opacity-40"><Play size={12} className="mr-1" />Ask Question</Button>}
+        {state === "live" && <Button size="sm" variant="outline" onClick={onReview} className="h-7 border-rose-300/30 text-xs text-rose-200 hover:text-white">View Live</Button>}
       </div>
     </CardContent>
   </Card>;
@@ -3128,7 +3131,7 @@ const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusM
 
   return <>
   <Card className={`glass-card overflow-hidden ${isReviewing ? "border-amber-400/40" : "border-rose-400/30"} ${focusMode ? "w-full" : ""}`}><CardContent className={focusMode ? "p-8 lg:p-12" : "p-5 lg:p-7"}>{isReviewing && <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-100"><Eye size={13} className="shrink-0 text-amber-300" /><span className="flex-1">Reviewing this question &mdash; players and the presentation screen still see the live question.</span>{onBackToLive && <Button size="sm" variant="outline" onClick={onBackToLive} className="h-7 border-amber-300/30 text-amber-100 hover:text-white">Back to Live</Button>}{onGoLiveWithThis && <Button size="sm" onClick={onGoLiveWithThis} className="h-7 bg-amber-300 text-zinc-950 hover:bg-amber-200">Go Live With This Question</Button>}</div>}<div className="flex items-start justify-between gap-3 mb-1"><div className="flex items-center gap-2 flex-wrap">{branding?.logoUrl && <img src={branding.logoUrl} alt={branding.name || "Host logo"} className="h-8 w-8 rounded bg-white object-contain p-1" />}</div><div className="flex items-center gap-2">{!editing && <button type="button" onClick={startEdit} title="Edit question" aria-label="Edit question" className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 text-zinc-400 hover:text-white"><Pencil size={13} /></button>}<span className="text-zinc-500 font-mono text-sm">{index + 1} / {total}</span></div></div>{editing ? <div className="mb-6 space-y-3"><QuestionEditFields type={question.type} draft={draft} setDraft={setDraft} /><div className="flex justify-end gap-2"><Button size="sm" variant="outline" onClick={() => setEditing(false)} className="border-white/10 text-zinc-300 hover:text-white">Cancel</Button><Button size="sm" onClick={handleSaveEdit} disabled={savingEdit} className="gradient-btn">{savingEdit ? "Saving..." : "Save"}</Button></div></div> : <>
-    <div className="mb-8 flex items-center gap-2 flex-wrap"><Badge variant="outline" className="border-zinc-700 text-zinc-300">{question.category}</Badge><Badge className="border" style={{ backgroundColor: `${accentColor}1F`, borderColor: `${accentColor}00`, color: accentColor }}><Icon size={13} className="mr-1" />{meta.label}</Badge><span className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-zinc-700 bg-zinc-900/60 px-3 py-1.5 text-xs font-bold text-zinc-400" title="Only visible on this screen -- players and the presentation screen don't see this until you reveal"><EyeOff size={12} />Answer: {question.answer || "Not set"}</span><EditableStatBadge label="Points" value={Number(pointsPerQuestion) || getDefaultPoints(question)} tone="amber" step={5} onSave={(value, scope) => onUpdateSettings({ points: value }, scope, question)} /><button type="button" onClick={() => onUpdateSettings({ wagerLimit: wagerMode ? 0 : 1 }, "question", question)} className={`rounded-full border px-3 py-1.5 text-xs font-bold ${wagerMode ? "border-purple-400/50 bg-purple-500/20 text-purple-100" : "border-purple-500/30 bg-purple-500/10 text-purple-200 hover:border-purple-400/60"}`} title="Teams can wager up to whatever points they currently have -- there's no separate host-set limit">{wagerMode ? "Wager: On" : "Wager: Off"}</button><EditableStatBadge label="Timer" value={Number(timerSeconds) || 0} unit="seconds" suffix="s" tone="teal" step={5} onSave={(value, scope) => onUpdateSettings({ timerSeconds: value }, scope, question)} />{timeRemaining !== null && <span className="rounded-full border border-[#71E0DC]/25 bg-[#71E0DC]/10 px-3 py-1.5 text-sm font-bold text-[#71E0DC]">{timeRemaining}s left</span>}{wagerMode && <button type="button" onClick={() => onUpdateSettings({ wagerTiming: wagerTiming === "after_answer" ? "before_answer" : "after_answer" }, "question", question)} className="rounded-full border border-purple-500/30 bg-purple-500/10 px-3 py-1.5 text-sm font-bold text-purple-200 hover:border-purple-400/60">{wagerTiming === "after_answer" ? "After Answer" : "Before Answer"}</button>}{imageUrl && <Badge className="bg-amber-400/15 text-amber-200 border border-amber-400/20">{question.imageTiming === "after_answer" ? "Reveal Media" : "Media"}</Badge>}{playerCount > 0 && <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-bold ${allSubmitted ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-400/15 text-amber-200"}`}><span className="h-1.5 w-12 overflow-hidden rounded-full bg-white/15"><span className="block h-full rounded-full bg-current" style={{ width: `${submittedPct}%` }} /></span>{submittedCount}/{playerCount} in</span>}</div>{!isReviewing && <div className="mb-6 flex flex-wrap items-center gap-2"><Button size="sm" onClick={startTimer} className="h-9 gradient-btn"><Play size={14} className="mr-1.5" />Start Timer</Button><Button size="sm" variant="outline" onClick={resetTimer} className="h-9 border-white/10 text-zinc-300 hover:text-white"><RotateCcw size={14} className="mr-1.5" />Clear Timer</Button><Button size="sm" onClick={onRevealAnswer} className={`h-9 ${showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700" : "gradient-btn"}`}>{showAnswer ? <EyeOff size={14} className="mr-1.5" /> : <Eye size={14} className="mr-1.5" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button><Button size="sm" onClick={onShowFunFact} disabled={!hasRevealExtra} className="h-9 bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-40"><Sparkles size={14} className="mr-1.5" />{showFunFact ? "Hide" : hasFunFact ? "Reveal Fun Fact" : "Reveal Media"}</Button>{hasAudio && <Button size="sm" onClick={onToggleAudio} className={`h-9 ${isPlayingAudio ? "bg-purple-500/20 text-purple-200 hover:bg-purple-500/30" : "bg-zinc-800 text-white hover:bg-zinc-700"}`}>{isPlayingAudio ? <Pause size={14} className="mr-1.5" /> : <Music size={14} className="mr-1.5" />}{isPlayingAudio ? "Stop Audio" : "Play Audio"}</Button>}{resetQuestion && <Button size="sm" variant="outline" onClick={resetQuestion} className="h-9 border-white/10 text-zinc-400 hover:text-amber-300" title="Clears submissions and grading for this question so it can be asked fresh"><RefreshCw size={14} className="mr-1.5" />Reset Question</Button>}<Button size="sm" variant="outline" onClick={() => setMediaModalOpen(true)} className="h-9 border-white/10 text-zinc-300 hover:text-white"><Image size={14} className="mr-1.5" />Media</Button></div>}<h2 className={`${focusMode ? "text-4xl lg:text-6xl" : "text-2xl lg:text-4xl"} font-black leading-tight text-white text-center mb-6`}>{question.questionText}</h2>{shouldShowImage ? <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_220px] items-start gap-5 mb-6">{answerColumn}<div className="overflow-hidden rounded-xl border border-white/10 bg-zinc-950 aspect-[4/3]"><img src={imageUrl} alt="Question" className="h-full w-full object-cover" /></div></div> : <div className="mx-auto mb-6 w-full max-w-2xl">{answerColumn}</div>}{shouldShowFunFactImage && <div className="mt-5 max-h-[42vh] overflow-y-auto rounded-lg border p-5 text-center" style={{ backgroundColor: `${accentColor}18`, borderColor: `${accentColor}55` }}><div className="mb-4 flex justify-center"><img src={imageUrl} alt="Reveal media" className="max-h-[28vh] max-w-full rounded-lg border border-white/10 object-contain" /></div><div className="flex items-center justify-center gap-2 font-bold mb-2" style={{ color: accentColor }}><Sparkles size={18} />Media</div></div>}
+    <div className="mb-8 flex items-center gap-2 flex-wrap"><Badge variant="outline" className="border-zinc-700 text-zinc-300">{question.category}</Badge><Badge className="border" style={{ backgroundColor: `${accentColor}1F`, borderColor: `${accentColor}00`, color: accentColor }}><Icon size={13} className="mr-1" />{meta.label}</Badge><span className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-zinc-700 bg-zinc-900/60 px-3 py-1.5 text-xs font-bold text-zinc-400" title="Only visible on this screen -- players and the presentation screen don't see this until you reveal"><EyeOff size={12} />Answer: {question.answer || "Not set"}</span><EditableStatBadge label="Points" value={Number(pointsPerQuestion) || getDefaultPoints(question)} tone="amber" step={5} onSave={(value, scope) => onUpdateSettings({ points: value }, scope, question)} /><button type="button" onClick={() => onUpdateSettings({ wagerLimit: wagerMode ? 0 : 1 }, "question", question)} className={`rounded-full border px-3 py-1.5 text-xs font-bold ${wagerMode ? "border-purple-400/50 bg-purple-500/20 text-purple-100" : "border-purple-500/30 bg-purple-500/10 text-purple-200 hover:border-purple-400/60"}`} title="Teams can wager up to whatever points they currently have -- there's no separate host-set limit">{wagerMode ? "Wager: On" : "Wager: Off"}</button><EditableStatBadge label="Timer" value={Number(timerSeconds) || 0} unit="seconds" suffix="s" tone="teal" step={5} onSave={(value, scope) => onUpdateSettings({ timerSeconds: value }, scope, question)} />{timeRemaining !== null && <span className="rounded-full border border-[#71E0DC]/25 bg-[#71E0DC]/10 px-3 py-1.5 text-sm font-bold text-[#71E0DC]">{timeRemaining}s left</span>}{wagerMode && <button type="button" onClick={() => onUpdateSettings({ wagerTiming: wagerTiming === "after_answer" ? "before_answer" : "after_answer" }, "question", question)} className="rounded-full border border-purple-500/30 bg-purple-500/10 px-3 py-1.5 text-sm font-bold text-purple-200 hover:border-purple-400/60">{wagerTiming === "after_answer" ? "After Answer" : "Before Answer"}</button>}{imageUrl && <Badge className="bg-amber-400/15 text-amber-200 border border-amber-400/20">{question.imageTiming === "after_answer" ? "Reveal Media" : "Media"}</Badge>}{playerCount > 0 && <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-bold ${allSubmitted ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-400/15 text-amber-200"}`}><span className="h-1.5 w-12 overflow-hidden rounded-full bg-white/15"><span className="block h-full rounded-full bg-current" style={{ width: `${submittedPct}%` }} /></span>{submittedCount}/{playerCount} in</span>}</div>{!isReviewing && <div className="mb-6 flex flex-wrap items-center gap-2"><Button size="sm" onClick={startTimer} className="h-9 gradient-btn"><Play size={14} className="mr-1.5" />Start Timer</Button><Button size="sm" onClick={onRevealAnswer} className={`h-9 ${showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700" : "gradient-btn"}`}>{showAnswer ? <EyeOff size={14} className="mr-1.5" /> : <Eye size={14} className="mr-1.5" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button><Button size="sm" onClick={onShowFunFact} disabled={!hasRevealExtra} className="h-9 bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-40"><Sparkles size={14} className="mr-1.5" />{showFunFact ? "Hide" : hasFunFact ? "Reveal Fun Fact" : "Reveal Media"}</Button>{hasAudio && <Button size="sm" onClick={onToggleAudio} className={`h-9 ${isPlayingAudio ? "bg-purple-500/20 text-purple-200 hover:bg-purple-500/30" : "bg-zinc-800 text-white hover:bg-zinc-700"}`}>{isPlayingAudio ? <Pause size={14} className="mr-1.5" /> : <Music size={14} className="mr-1.5" />}{isPlayingAudio ? "Stop Audio" : "Play Audio"}</Button>}<DropdownMenu><DropdownMenuTrigger asChild><button type="button" title="More actions" aria-label="More actions" className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 text-zinc-400 hover:text-white"><MoreVertical size={16} /></button></DropdownMenuTrigger><DropdownMenuContent align="start" className="border-white/10 bg-zinc-950 text-zinc-100"><DropdownMenuItem onClick={resetTimer} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><RotateCcw size={14} className="mr-2" />Clear Timer</DropdownMenuItem><DropdownMenuItem onClick={() => setMediaModalOpen(true)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Image size={14} className="mr-2" />Media</DropdownMenuItem>{resetQuestion && <DropdownMenuItem onClick={resetQuestion} className="cursor-pointer text-amber-300 focus:bg-zinc-900 focus:text-amber-200"><RefreshCw size={14} className="mr-2" />Reset Question</DropdownMenuItem>}</DropdownMenuContent></DropdownMenu></div>}<h2 className={`${focusMode ? "text-4xl lg:text-6xl" : "text-2xl lg:text-4xl"} font-black leading-tight text-white text-center mb-6`}>{question.questionText}</h2>{shouldShowImage ? <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_220px] items-start gap-5 mb-6">{answerColumn}<div className="overflow-hidden rounded-xl border border-white/10 bg-zinc-950 aspect-[4/3]"><img src={imageUrl} alt="Question" className="h-full w-full object-cover" /></div></div> : <div className="mx-auto mb-6 w-full max-w-2xl">{answerColumn}</div>}{shouldShowFunFactImage && <div className="mt-5 max-h-[42vh] overflow-y-auto rounded-lg border p-5 text-center" style={{ backgroundColor: `${accentColor}18`, borderColor: `${accentColor}55` }}><div className="mb-4 flex justify-center"><img src={imageUrl} alt="Reveal media" className="max-h-[28vh] max-w-full rounded-lg border border-white/10 object-contain" /></div><div className="flex items-center justify-center gap-2 font-bold mb-2" style={{ color: accentColor }}><Sparkles size={18} />Media</div></div>}
   </>}</CardContent></Card>
   {mediaModalOpen && <MediaEditModal question={question} onSave={(patch) => { onUpdateSettings(patch, "question", question); setMediaModalOpen(false); }} onClose={() => setMediaModalOpen(false)} />}
   </>;
