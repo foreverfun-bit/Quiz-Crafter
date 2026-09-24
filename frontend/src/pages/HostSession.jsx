@@ -12,6 +12,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   ArrowRightLeft,
+  Bot,
   Check,
   CheckCircle,
   ChevronDown,
@@ -1903,6 +1904,44 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     }
   };
 
+  // Third piece of AI tooling, after per-question edit and one-shot Generate
+  // -- a multi-turn chat, reusing host-assistant.js's "build_cohost" mode.
+  // That mode already existed and was fully tested server-side, but its only
+  // caller in BuildSession.jsx (CoHostModal) was dead code, never actually
+  // rendered -- this is its first real, live caller. Conversation history is
+  // round-scoped and lives in CoHostChatModal's own state, not persisted, the
+  // same as BuildSession's version.
+  const askCoHost = async (round, conversation, request) => {
+    try {
+      const response = await fetch("/api/host-assistant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "build_cohost",
+          request,
+          context: {
+            session: { name: sessionName, activeRound: round.name },
+            conversation,
+            questions: round.questions.map((question) => ({
+              category: question.category,
+              question_text: question.questionText,
+              correct_answer: question.answer,
+              question_type: question.type,
+            })),
+            hostStyleProfile: readHostStyleProfile(),
+          },
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || "The co-host couldn't finish that request");
+      return { answer: data.answer, candidates: Array.isArray(data.candidates) ? data.candidates : [] };
+    } catch (error) {
+      console.error("AI co-host error:", error);
+      toast.error(error.message || "Failed to ask the co-host");
+      return null;
+    }
+  };
+
   // Shared by every round-header action below: writes the same patch onto
   // every question in `roundQuestions`, across whichever real arrays they
   // live in, mirroring updateQuestionSettings's per-array patch/commit.
@@ -2581,6 +2620,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
             addLibraryQuestionToRound={addLibraryQuestionToRound}
             updateQuestionContent={updateQuestionContent}
             editQuestionWithAi={editQuestionWithAi}
+            askCoHost={askCoHost}
             addGeneratedQuestionsToRound={addGeneratedQuestionsToRound}
             venueId={session?.venue_id}
             branding={branding}
@@ -3011,6 +3051,99 @@ const GenerateRoundModal = ({ round, venueId, existingQuestionTexts, onAddAll, o
   </div>;
 };
 
+// Third AI feature ported in (after per-question AI edit and one-shot
+// Generate) -- a multi-turn chat via host-assistant.js's "build_cohost"
+// mode. Unlike Generate (one request, one batch of candidates), this keeps
+// a conversation so the host can push back and refine ("no repeat
+// categories", "make these harder") instead of starting over each time.
+// Every reply's candidates stay addable individually and never disappear
+// when a new message comes in, so an earlier answer's suggestions aren't
+// lost by continuing the conversation.
+const CoHostChatModal = ({ round, onAsk, onAddCandidate, onClose }) => {
+  const [messages, setMessages] = useState([]);
+  const [prompt, setPrompt] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [candidatesByMessage, setCandidatesByMessage] = useState([]);
+  const [addedIds, setAddedIds] = useState(() => new Set());
+
+  const send = async () => {
+    const request = prompt.trim();
+    if (!request || loading) return;
+    const nextMessages = [...messages, { role: "user", content: request }].slice(-10);
+    setMessages(nextMessages);
+    setPrompt("");
+    setLoading(true);
+    try {
+      const outcome = await onAsk(round, nextMessages, request);
+      if (!outcome) return;
+      setMessages((prev) => [...prev, { role: "assistant", content: outcome.answer }].slice(-12));
+      if (outcome.candidates.length) {
+        setCandidatesByMessage((prev) => [...prev, ...outcome.candidates.map((candidate, index) => ({ ...candidate, _id: `${Date.now()}-${index}` }))]);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const addCandidate = async (candidate) => {
+    const ok = await onAddCandidate(candidate);
+    if (ok) setAddedIds((prev) => new Set(prev).add(candidate._id));
+  };
+
+  return <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 pt-8 md:pt-14 overflow-y-auto">
+    <div className="w-full max-w-4xl rounded-xl bg-[#17181c] border border-white/10 shadow-2xl shadow-black/60 p-5 relative">
+      <button type="button" onClick={onClose} className="absolute right-4 top-4 text-zinc-400 hover:text-white" aria-label="Close"><X size={18} /></button>
+      <h2 className="mb-1 flex items-center gap-2 text-xl font-bold text-white"><Bot size={18} className="text-[#71E0DC]" />AI Co-Host</h2>
+      <p className="mb-4 text-sm text-zinc-500">Chat about <span className="text-zinc-300 font-semibold">{round.name}</span> -- ask for a vibe, push back, and add only what you like.</p>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+        <div className="flex min-h-[420px] flex-col rounded-xl border border-white/10 bg-zinc-950/40 p-3">
+          <div className="flex-1 space-y-3 overflow-y-auto pr-1">
+            {messages.length ? messages.map((message, index) => <div key={`${message.role}-${index}`} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
+              <div className={`max-w-[88%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${message.role === "user" ? "border border-[#71E0DC]/25 bg-[#71E0DC]/15 text-white" : "border border-white/10 bg-zinc-900/90 text-zinc-200"}`}>{message.content}</div>
+            </div>) : <div className="flex h-full min-h-[260px] items-center justify-center text-center text-zinc-500">
+              <div>
+                <Bot className="mx-auto mb-3 h-7 w-7 text-[#71E0DC]" />
+                <p className="font-semibold text-zinc-300">Tell the co-host what you need.</p>
+                <p className="mt-1 text-sm">e.g. "give me 3 harder written questions, no repeat categories"</p>
+              </div>
+            </div>}
+            {loading && <div className="flex justify-start"><div className="rounded-2xl border border-white/10 bg-zinc-900/90 px-4 py-2.5 text-sm text-zinc-400"><Loader2 size={14} className="mr-2 inline animate-spin text-[#71E0DC]" />Thinking...</div></div>}
+          </div>
+          <div className="mt-3 flex items-center gap-2">
+            <input
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              onKeyDown={(event) => { if (event.key === "Enter") send(); }}
+              placeholder="Ask the co-host..."
+              className="h-10 flex-1 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60"
+              autoFocus
+            />
+            <Button type="button" onClick={send} disabled={loading || !prompt.trim()} className="h-10 gradient-btn">{loading ? <Loader2 size={15} className="animate-spin" /> : "Send"}</Button>
+          </div>
+        </div>
+        <div className="rounded-xl border border-white/10 bg-zinc-950/30 p-3">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-white">Usable Drafts</p>
+            <Badge className="bg-zinc-800 text-zinc-300">{candidatesByMessage.length}</Badge>
+          </div>
+          <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+            {candidatesByMessage.length ? candidatesByMessage.map((candidate) => {
+              const added = addedIds.has(candidate._id);
+              return <div key={candidate._id} className="rounded-lg border border-white/10 bg-zinc-950/60 p-3">
+                <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-500">{candidate.category}</p>
+                <p className="mt-1 text-sm font-semibold text-white">{candidate.question_text}</p>
+                <p className="mt-1 text-sm text-[#71E0DC]">Answer: {candidate.correct_answer}</p>
+                {candidate.fun_fact && <p className="mt-1 text-xs text-zinc-400">{candidate.fun_fact}</p>}
+                <Button type="button" size="sm" disabled={added} onClick={() => addCandidate(candidate)} className={`mt-2 h-8 w-full ${added ? "bg-zinc-800 text-zinc-500" : "gradient-btn"}`}>{added ? "Added" : "Add to Round"}</Button>
+              </div>;
+            }) : <div className="rounded-lg border border-dashed border-white/10 bg-zinc-950/30 p-6 text-center text-xs text-zinc-500">When the co-host writes usable questions, they'll appear here.</div>}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>;
+};
+
 // Browses the user's saved question library (the `questions` table) and
 // inserts a pick straight into `round`. Fetched lazily and cached in
 // QuestionListView's state across round-picker opens for one page visit.
@@ -3081,7 +3214,7 @@ const LibraryPickerModal = ({ round, libraryQuestions, loading, existingTexts, o
 // visible at a time, seeing it next to its siblings is what makes reorder
 // and delete-with-guard legible, the same reason BuildSession's original
 // round dropdown paired with a separate management surface.
-const RoundHeader = ({ rounds, activeRound, activeIndex, onSelectRound, onManageRounds, onDescribe, onWriteQuestion, onAddFromLibrary, onGenerate, onNextRound, hasNextRound }) => {
+const RoundHeader = ({ rounds, activeRound, activeIndex, onSelectRound, onManageRounds, onDescribe, onWriteQuestion, onAddFromLibrary, onGenerate, onCoHost, onNextRound, hasNextRound }) => {
   const [editingDescription, setEditingDescription] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState(activeRound.description || "");
 
@@ -3098,6 +3231,7 @@ const RoundHeader = ({ rounds, activeRound, activeIndex, onSelectRound, onManage
         <button type="button" onClick={onNextRound} disabled={!hasNextRound} className="flex h-7 items-center gap-1 rounded px-2 text-xs font-medium text-zinc-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:text-zinc-400" title={hasNextRound ? "Go to next round" : "This is the last round"} aria-label="Next round">Next Round<ChevronRight size={14} /></button>
         <div className="mx-0.5 h-4 w-px bg-white/10" />
         <button type="button" onClick={() => setEditingDescription((value) => !value)} className={`flex h-7 w-7 items-center justify-center rounded ${activeRound.description ? "text-[#71E0DC]" : "text-zinc-500"} hover:text-white`} title={activeRound.description ? "Edit round note" : "Add round note"} aria-label="Round note"><MessageSquare size={14} /></button>
+        <button type="button" onClick={onCoHost} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white" title="Chat with the AI co-host" aria-label="AI co-host"><Bot size={14} /></button>
         <button type="button" onClick={onGenerate} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white" title="Generate questions with AI" aria-label="Generate questions"><Sparkles size={14} /></button>
         <button type="button" onClick={onWriteQuestion} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white" title="Write a question for this round" aria-label="Write question"><Pencil size={14} /></button>
         <button type="button" onClick={onAddFromLibrary} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white" title="Add from library" aria-label="Add from library"><List size={14} /></button>
@@ -3250,7 +3384,7 @@ const QuestionListView = ({
   displayedQuestion, goToQuestion, reviewQuestion, onBackToLive, onGoLiveWithThis,
   answersForQuestionIndex, gradedAnswers, players, hostAnswers, fairPlayStats,
   showAnswer, showFunFact, timeRemaining, viewPointsPerQuestion, viewTimerSeconds, viewWagerMode, viewWagerLimit, viewWagerTiming,
-  onUpdateSettings, renameRound, describeRound, setEmptyRoundSettings, moveRound, deleteRound, createRound, createEmptyRound, moveQuestionToRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, addGeneratedQuestionsToRound, updateQuestionContent, editQuestionWithAi, venueId, branding, markAnswer, addManualAnswer, editWager, releaseMode,
+  onUpdateSettings, renameRound, describeRound, setEmptyRoundSettings, moveRound, deleteRound, createRound, createEmptyRound, moveQuestionToRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, addGeneratedQuestionsToRound, updateQuestionContent, editQuestionWithAi, askCoHost, venueId, branding, markAnswer, addManualAnswer, editWager, releaseMode,
   hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, resetQuestionAt,
 }) => {
   // Only one round is shown at a time (see RoundHeader/RoundSwitcher) --
@@ -3289,6 +3423,8 @@ const QuestionListView = ({
   const writeQuestionRound = rounds.find((round) => round.key === writeQuestionRoundKey) || null;
   const [generateRoundKey, setGenerateRoundKey] = useState(null);
   const generateRound = rounds.find((round) => round.key === generateRoundKey) || null;
+  const [coHostRoundKey, setCoHostRoundKey] = useState(null);
+  const coHostRound = rounds.find((round) => round.key === coHostRoundKey) || null;
   const [libraryRoundKey, setLibraryRoundKey] = useState(null);
   const libraryRound = rounds.find((round) => round.key === libraryRoundKey) || null;
   const [libraryQuestions, setLibraryQuestions] = useState(null);
@@ -3321,6 +3457,7 @@ const QuestionListView = ({
         onWriteQuestion={() => setWriteQuestionRoundKey(activeRound.key)}
         onAddFromLibrary={() => openLibrary(activeRound.key)}
         onGenerate={() => setGenerateRoundKey(activeRound.key)}
+        onCoHost={() => setCoHostRoundKey(activeRound.key)}
         hasNextRound={activeIndex < rounds.length - 1}
         onNextRound={() => { if (activeIndex < rounds.length - 1) setActiveRoundKey(rounds[activeIndex + 1].key); }}
       />
@@ -3360,6 +3497,7 @@ const QuestionListView = ({
           <p className="text-sm text-zinc-400">This round doesn't have any questions yet.</p>
           <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
             <Button type="button" size="sm" onClick={() => setGenerateRoundKey(activeRound.key)} className="gradient-btn"><Sparkles size={13} className="mr-1.5" />Generate</Button>
+            <Button type="button" size="sm" variant="outline" onClick={() => setCoHostRoundKey(activeRound.key)} className="border-white/10 text-zinc-300 hover:text-white"><Bot size={13} className="mr-1.5" />AI Co-Host</Button>
             <Button type="button" size="sm" variant="outline" onClick={() => setWriteQuestionRoundKey(activeRound.key)} className="border-white/10 text-zinc-300 hover:text-white"><Pencil size={13} className="mr-1.5" />Write Question</Button>
             <Button type="button" size="sm" variant="outline" onClick={() => openLibrary(activeRound.key)} className="border-white/10 text-zinc-300 hover:text-white"><List size={13} className="mr-1.5" />Add from Library</Button>
           </div>
@@ -3381,6 +3519,7 @@ const QuestionListView = ({
     {libraryRound && <LibraryPickerModal round={libraryRound} libraryQuestions={libraryQuestions} loading={libraryLoading} existingTexts={existingQuestionTexts} onInsert={(question) => addLibraryQuestionToRound(libraryRound, question)} onClose={() => setLibraryRoundKey(null)} />}
     {aiEditQuestion && <AiEditQuestionModal question={aiEditQuestion} onEdit={editQuestionWithAi} onApply={(patch) => updateQuestionContent(aiEditQuestion, patch)} onClose={() => setAiEditQuestionId(null)} />}
     {generateRound && <GenerateRoundModal round={generateRound} venueId={venueId} existingQuestionTexts={existingQuestionTexts} onAddAll={(candidates) => addGeneratedQuestionsToRound(generateRound, candidates)} onClose={() => setGenerateRoundKey(null)} />}
+    {coHostRound && <CoHostChatModal round={coHostRound} onAsk={askCoHost} onAddCandidate={(candidate) => addGeneratedQuestionsToRound(coHostRound, [candidate])} onClose={() => setCoHostRoundKey(null)} />}
   </div>;
 };
 
