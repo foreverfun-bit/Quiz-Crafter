@@ -2,6 +2,7 @@
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { uploadQuestionMedia, uploadQuestionAudio } from "../lib/mediaUpload";
+import { canonicalCategory, categoryKey, dedupeCategories, loadLocalCategoryPrefs } from "../lib/categories";
 import { ensureLiveGame, fetchLivePlayers, subscribeLivePlayers, upsertLivePlayer, removeLivePlayer, resetTestGame, endLiveGame } from "../lib/liveGame";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
@@ -570,6 +571,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   const liveStateSaveKeyRef = useRef("");
   const liveRosterSyncKeyRef = useRef("");
   const [session, setSession] = useState(null);
+  const [approvedCategories, setApprovedCategories] = useState([]);
   const [liveGameId, setLiveGameId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -767,6 +769,30 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 500);
     return () => window.clearInterval(interval);
+  }, []);
+
+  // Same "approved categories" the standalone builder page cycles through --
+  // the host's saved approve/reject prefs (quiz-crafter-category-preferences,
+  // shared via lib/categories so approving one from either screen shows up
+  // in both) layered onto every category actually seen in the question
+  // library, minus anything rejected. Fetched once; a category approved
+  // mid-event elsewhere won't retroactively appear here without a reload,
+  // same tradeoff BuildSession already accepts.
+  useEffect(() => {
+    let cancelled = false;
+    supabase.from("questions").select("category").then(({ data, error }) => {
+      if (cancelled) return;
+      if (error) { console.warn("Category list unavailable:", error); return; }
+      const prefs = loadLocalCategoryPrefs();
+      const approved = new Set(prefs.approved);
+      const rejectedKeys = new Set(prefs.rejected.map(categoryKey));
+      (data || []).forEach((row) => {
+        const category = canonicalCategory(row.category, [...approved]);
+        if (category && !rejectedKeys.has(categoryKey(category))) approved.add(category);
+      });
+      setApprovedCategories(dedupeCategories([...approved]).sort((a, b) => a.localeCompare(b)));
+    });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -2149,6 +2175,9 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
       fun_fact: draft.fun_fact.trim(),
       timer_seconds: Number(draft.timer_seconds) || 30,
       points: draft.points === "" || draft.points === null || draft.points === undefined ? null : Number(draft.points) || null,
+      image_url: (draft.image_url || "").trim(),
+      image_timing: draft.image_timing || "initial",
+      audio_url: (draft.audio_url || "").trim(),
       wager_limit: 0,
       wager_timing: "after_answer",
     };
@@ -2476,7 +2505,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
         {session && <Button onClick={() => setEmptyStateAddRoundOpen(true)} className="gradient-btn"><Plus size={16} className="mr-2" />Add Round</Button>}
         {!embedded && <Button variant="outline" onClick={() => navigate(`/session/${id}`)} className="ml-2 border-white/10 text-zinc-300 hover:text-white">Back to Session</Button>}
       </div>
-      {session && emptyStateAddRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} onClose={() => setEmptyStateAddRoundOpen(false)} />}
+      {session && emptyStateAddRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} approvedCategories={approvedCategories} onClose={() => setEmptyStateAddRoundOpen(false)} />}
     </div>;
   }
   if (!displayedQuestion) {
@@ -2511,8 +2540,8 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
           {!embedded && <Button variant="outline" onClick={() => navigate(`/session/${id}`)} className="border-white/10 text-zinc-300 hover:text-white">Back to Session</Button>}
         </div>
       </div>
-      {emptyStateAddRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} onClose={() => setEmptyStateAddRoundOpen(false)} />}
-      {emptyStateWriteRound && <WriteQuestionModal round={emptyStateWriteRound} onCreate={(draft) => addQuestionToRound(emptyStateWriteRound, draft)} onClose={() => setEmptyStateWriteRoundKey(null)} />}
+      {emptyStateAddRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} approvedCategories={approvedCategories} onClose={() => setEmptyStateAddRoundOpen(false)} />}
+      {emptyStateWriteRound && <WriteQuestionModal round={emptyStateWriteRound} onCreate={(draft) => addQuestionToRound(emptyStateWriteRound, draft)} approvedCategories={approvedCategories} onClose={() => setEmptyStateWriteRoundKey(null)} />}
       {emptyStateGenerateRound && <GenerateRoundModal round={emptyStateGenerateRound} venueId={session?.venue_id} existingQuestionTexts={new Set()} onAddAll={(candidates) => addGeneratedQuestionsToRound(emptyStateGenerateRound, candidates)} onClose={() => setEmptyStateGenerateRoundKey(null)} />}
       {emptyStateManageRoundsOpen && <RoundManagerModal
         rounds={rounds}
@@ -2621,6 +2650,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
             updateQuestionContent={updateQuestionContent}
             editQuestionWithAi={editQuestionWithAi}
             askCoHost={askCoHost}
+            approvedCategories={approvedCategories}
             addGeneratedQuestionsToRound={addGeneratedQuestionsToRound}
             venueId={session?.venue_id}
             branding={branding}
@@ -2670,7 +2700,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
 // reload today; see flattenSession/makeRounds above). Rename/describe never
 // touch round_order, so they can't shift which question is live or being
 // reviewed; move does, and compensates for it in moveRound itself.
-const emptyRoundDraft = { question_type: "written", category: "", question_text: "", correct_answer: "", incorrect_answers: ["", "", ""], fun_fact: "", points: "", timer_seconds: 30 };
+const emptyRoundDraft = { question_type: "written", category: "", question_text: "", correct_answer: "", incorrect_answers: ["", "", ""], fun_fact: "", points: "", timer_seconds: 30, image_url: "", image_timing: "initial", audio_url: "" };
 
 // Shared by AddRoundModal and WriteQuestionModal -- a cut-down manual
 // question form. Mirrors BuildSession's FreeWriteForm AI-assist button
@@ -2681,9 +2711,48 @@ const emptyRoundDraft = { question_type: "written", category: "", question_text:
 // host-assistant.js's "question_edit" mode, explicitly told to leave the
 // question wording (and the answer, if already filled in) untouched. Media
 // attachment stays on the standalone builder page for now.
-const QuestionDraftFields = ({ draft, setDraft }) => {
+const QuestionDraftFields = ({ draft, setDraft, approvedCategories = [] }) => {
   const [assisting, setAssisting] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [uploadingAudio, setUploadingAudio] = useState(false);
   const updateWrong = (index, value) => setDraft((prev) => ({ ...prev, incorrect_answers: prev.incorrect_answers.map((answer, i) => (i === index ? value : answer)) }));
+
+  // Mirrors BuildSession's randomizeCategory -- picks a different one each
+  // click rather than the same first-in-list every time.
+  const cycleCategory = () => {
+    const pool = approvedCategories.filter(Boolean);
+    if (!pool.length) return toast.error("No approved categories yet -- approve some from the Categories page");
+    const options = pool.length > 1 ? pool.filter((category) => category !== draft.category) : pool;
+    setDraft((prev) => ({ ...prev, category: options[Math.floor(Math.random() * options.length)] }));
+  };
+
+  const handleImageFile = async (file) => {
+    if (!file) return;
+    setUploadingImage(true);
+    try {
+      const url = await uploadQuestionMedia(file);
+      setDraft((prev) => ({ ...prev, image_url: url }));
+    } catch (error) {
+      console.error("Upload image error:", error);
+      toast.error(error.message || "Failed to upload image");
+    } finally {
+      setUploadingImage(false);
+    }
+  };
+
+  const handleAudioFile = async (file) => {
+    if (!file) return;
+    setUploadingAudio(true);
+    try {
+      const url = await uploadQuestionAudio(file);
+      setDraft((prev) => ({ ...prev, audio_url: url }));
+    } catch (error) {
+      console.error("Upload audio error:", error);
+      toast.error(error.message || "Failed to upload audio");
+    } finally {
+      setUploadingAudio(false);
+    }
+  };
 
   const runAssist = async () => {
     setAssisting(true);
@@ -2767,7 +2836,10 @@ const QuestionDraftFields = ({ draft, setDraft }) => {
         <option value="true_false">True/False</option>
         <option value="multiple_choice">Multiple Choice</option>
       </select>
-      <input value={draft.category} onChange={(event) => setDraft((prev) => ({ ...prev, category: event.target.value }))} placeholder="Category" className="h-10 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
+      <div className="flex gap-2">
+        <input value={draft.category} onChange={(event) => setDraft((prev) => ({ ...prev, category: event.target.value }))} placeholder="Category" className="h-10 min-w-0 flex-1 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
+        <button type="button" onClick={cycleCategory} title="Cycle through your approved categories" aria-label="Cycle approved categories" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-white/10 bg-zinc-950/50 text-zinc-300 hover:bg-zinc-800 hover:text-white"><RefreshCw size={16} /></button>
+      </div>
     </div>
     <div className="relative">
       <textarea value={draft.question_text} onChange={(event) => setDraft((prev) => ({ ...prev, question_text: event.target.value }))} placeholder="Question" className="min-h-[86px] w-full resize-none rounded-md border border-white/10 bg-zinc-950/50 px-3 py-2 pr-12 text-white outline-none focus:border-[#71E0DC]/60" />
@@ -2780,6 +2852,38 @@ const QuestionDraftFields = ({ draft, setDraft }) => {
       {draft.incorrect_answers.map((answer, index) => <input key={index} value={answer} onChange={(event) => updateWrong(index, event.target.value)} placeholder={`Wrong answer ${index + 1}`} className="h-10 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />)}
     </div>}
     <input value={draft.fun_fact} onChange={(event) => setDraft((prev) => ({ ...prev, fun_fact: event.target.value }))} placeholder="Fun fact (optional)" className="h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
+    <div className="rounded-md border border-white/10 bg-zinc-950/30 p-3 space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-500">Media (optional)</p>
+        {draft.image_url && <div className="inline-flex rounded-md border border-white/10 bg-zinc-950/70 p-0.5">
+          <button type="button" onClick={() => setDraft((prev) => ({ ...prev, image_timing: "initial" }))} className={`rounded px-2 py-1 text-[11px] font-semibold ${draft.image_timing !== "after_answer" ? "bg-[#71E0DC]/15 text-[#71E0DC]" : "text-zinc-400 hover:text-white"}`}>With question</button>
+          <button type="button" onClick={() => setDraft((prev) => ({ ...prev, image_timing: "after_answer" }))} className={`rounded px-2 py-1 text-[11px] font-semibold ${draft.image_timing === "after_answer" ? "bg-[#71E0DC]/15 text-[#71E0DC]" : "text-zinc-400 hover:text-white"}`}>After answer</button>
+        </div>}
+      </div>
+      <label className="flex h-16 cursor-pointer items-center gap-3 rounded-md border border-dashed border-white/15 bg-zinc-950/40 px-3 hover:border-[#71E0DC]/40">
+        {uploadingImage ? <Loader2 size={18} className="animate-spin text-[#71E0DC]" /> : draft.image_url ? <img src={draft.image_url} alt="Question media preview" className="h-12 w-12 rounded object-cover border border-white/10" /> : <Upload size={16} className="text-zinc-400" />}
+        <span className="text-xs text-zinc-400">{draft.image_url ? "Click to replace the image" : "Click to upload an image, or paste a URL below"}</span>
+        <input type="file" accept="image/*" className="hidden" disabled={uploadingImage} onChange={(event) => handleImageFile(event.target.files?.[0])} />
+      </label>
+      <div className="flex gap-2">
+        <div className="relative min-w-0 flex-1">
+          <Link className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+          <input value={draft.image_url} onChange={(event) => setDraft((prev) => ({ ...prev, image_url: event.target.value }))} placeholder="Image URL" className="h-9 w-full rounded-md border border-white/10 bg-zinc-950/50 pl-9 pr-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
+        </div>
+        {draft.image_url && <button type="button" onClick={() => setDraft((prev) => ({ ...prev, image_url: "" }))} className="shrink-0 text-xs text-zinc-500 hover:text-rose-300">Remove</button>}
+      </div>
+      <div className="flex gap-2">
+        <div className="relative min-w-0 flex-1">
+          <Music className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+          <input value={draft.audio_url} onChange={(event) => setDraft((prev) => ({ ...prev, audio_url: event.target.value }))} placeholder="Audio URL (optional)" className="h-9 w-full rounded-md border border-white/10 bg-zinc-950/50 pl-9 pr-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
+        </div>
+        <label className={`flex h-9 shrink-0 cursor-pointer items-center justify-center rounded-md border border-white/10 bg-zinc-950/50 px-3 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-white ${uploadingAudio ? "opacity-60" : ""}`}>
+          {uploadingAudio ? <Loader2 size={14} className="animate-spin" /> : "Upload"}
+          <input type="file" accept="audio/*" className="hidden" disabled={uploadingAudio} onChange={(event) => handleAudioFile(event.target.files?.[0])} />
+        </label>
+        {draft.audio_url && <button type="button" onClick={() => setDraft((prev) => ({ ...prev, audio_url: "" }))} className="shrink-0 text-xs text-zinc-500 hover:text-rose-300">Remove</button>}
+      </div>
+    </div>
   </div>;
 };
 
@@ -2788,7 +2892,7 @@ const QuestionDraftFields = ({ draft, setDraft }) => {
 // concern that happens to be required (a round only becomes real once it
 // has a question -- see flattenSession/makeRounds) but shouldn't visually
 // read as "the round's fields" alongside the name field.
-const AddRoundModal = ({ onCreate, onCreateEmpty, onClose }) => {
+const AddRoundModal = ({ onCreate, onCreateEmpty, approvedCategories, onClose }) => {
   const [step, setStep] = useState("name");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -2871,7 +2975,7 @@ const AddRoundModal = ({ onCreate, onCreateEmpty, onClose }) => {
       </> : <>
         <h2 className="mb-1 text-xl font-bold text-white">Write Question</h2>
         <p className="mb-5 text-sm text-zinc-500">First question for <span className="text-zinc-300 font-semibold">{name}</span> (optional -- "Create Round" on the previous step skips this and adds questions later).</p>
-        <QuestionDraftFields draft={draft} setDraft={setDraft} />
+        <QuestionDraftFields draft={draft} setDraft={setDraft} approvedCategories={approvedCategories} />
         <div className="mt-5 flex justify-end gap-2">
           <Button type="button" variant="outline" onClick={() => setStep("name")} className="border-white/10 text-zinc-300 hover:text-white">Back</Button>
           <Button type="button" onClick={handleCreate} disabled={saving} className="gradient-btn">{saving ? "Creating..." : "Create Round"}</Button>
@@ -2884,7 +2988,7 @@ const AddRoundModal = ({ onCreate, onCreateEmpty, onClose }) => {
 // Adds one question to an existing round -- the generalized form of
 // AddRoundModal's first-question step, reachable from any round once it
 // already exists.
-const WriteQuestionModal = ({ round, onCreate, onClose }) => {
+const WriteQuestionModal = ({ round, onCreate, approvedCategories, onClose }) => {
   // Prefills from the round's own first question, or (for a round created
   // without one yet -- see createEmptyRound) from the defaults saved with it
   // at creation -- either way, the closest thing this app has to a stored
@@ -2915,7 +3019,7 @@ const WriteQuestionModal = ({ round, onCreate, onClose }) => {
       <button type="button" onClick={onClose} className="absolute right-4 top-4 text-zinc-400 hover:text-white" aria-label="Close"><X size={18} /></button>
       <h2 className="mb-1 text-xl font-bold text-white">Write Question</h2>
       <p className="mb-5 text-sm text-zinc-500">Added to the end of <span className="text-zinc-300 font-semibold">{round.name}</span>.</p>
-      <QuestionDraftFields draft={draft} setDraft={setDraft} />
+      <QuestionDraftFields draft={draft} setDraft={setDraft} approvedCategories={approvedCategories} />
       <div className="mt-5 flex justify-end gap-2">
         <Button type="button" variant="outline" onClick={onClose} className="border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
         <Button type="button" onClick={handleCreate} disabled={saving} className="gradient-btn">{saving ? "Adding..." : "Add Question"}</Button>
@@ -3472,7 +3576,7 @@ const QuestionListView = ({
   displayedQuestion, goToQuestion, reviewQuestion, onBackToLive, onGoLiveWithThis,
   answersForQuestionIndex, gradedAnswers, players, hostAnswers, fairPlayStats,
   showAnswer, showFunFact, timeRemaining, viewPointsPerQuestion, viewTimerSeconds, viewWagerMode, viewWagerLimit, viewWagerTiming,
-  onUpdateSettings, renameRound, describeRound, setEmptyRoundSettings, moveRound, deleteRound, createRound, createEmptyRound, moveQuestionToRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, addGeneratedQuestionsToRound, updateQuestionContent, editQuestionWithAi, askCoHost, venueId, branding, markAnswer, addManualAnswer, editWager, releaseMode,
+  onUpdateSettings, renameRound, describeRound, setEmptyRoundSettings, moveRound, deleteRound, createRound, createEmptyRound, moveQuestionToRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, addGeneratedQuestionsToRound, updateQuestionContent, editQuestionWithAi, askCoHost, venueId, approvedCategories, branding, markAnswer, addManualAnswer, editWager, releaseMode,
   hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, resetQuestionAt,
 }) => {
   // Only one round is shown at a time (see RoundHeader/RoundSwitcher) --
@@ -3602,8 +3706,8 @@ const QuestionListView = ({
       onAddRound={() => setAddRoundOpen(true)}
       onClose={() => setManageRoundsOpen(false)}
     />}
-    {addRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} onClose={() => setAddRoundOpen(false)} />}
-    {writeQuestionRound && <WriteQuestionModal round={writeQuestionRound} onCreate={(draft) => addQuestionToRound(writeQuestionRound, draft)} onClose={() => setWriteQuestionRoundKey(null)} />}
+    {addRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} approvedCategories={approvedCategories} onClose={() => setAddRoundOpen(false)} />}
+    {writeQuestionRound && <WriteQuestionModal round={writeQuestionRound} onCreate={(draft) => addQuestionToRound(writeQuestionRound, draft)} approvedCategories={approvedCategories} onClose={() => setWriteQuestionRoundKey(null)} />}
     {libraryRound && <LibraryPickerModal round={libraryRound} libraryQuestions={libraryQuestions} loading={libraryLoading} existingTexts={existingQuestionTexts} onInsert={(question) => addLibraryQuestionToRound(libraryRound, question)} onClose={() => setLibraryRoundKey(null)} />}
     {aiEditQuestion && <AiEditQuestionModal question={aiEditQuestion} onEdit={editQuestionWithAi} onApply={(patch) => updateQuestionContent(aiEditQuestion, patch)} onClose={() => setAiEditQuestionId(null)} />}
     {generateRound && <GenerateRoundModal round={generateRound} venueId={venueId} existingQuestionTexts={existingQuestionTexts} onAddAll={(candidates) => addGeneratedQuestionsToRound(generateRound, candidates)} onClose={() => setGenerateRoundKey(null)} />}

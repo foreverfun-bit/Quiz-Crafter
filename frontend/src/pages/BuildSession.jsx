@@ -14,7 +14,7 @@ import { Badge } from "../components/ui/badge";
 import { ArrowDown, ArrowUp, Ban, Check, CheckCircle, ChevronDown, Clock, Coins, CopyPlus, Database, Image, Layers, Link, List, Loader2, MapPin, MessageSquare, Minus, MoreHorizontal, Music, Pencil, Plus, RefreshCw, Save, Search, Settings, Sparkles, Tag, ThumbsDown, ThumbsUp, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
-import { canonicalCategory, categoryKey, dedupeCategories } from "../lib/categories";
+import { canonicalCategory, categoryKey, dedupeCategories, CATEGORY_PREF_KEY, loadLocalCategoryPrefs } from "../lib/categories";
 import { PROFILE_SHOW_TEMPLATES_KEY, PROFILE_VENUES_KEY, hasSavedLocalTemplates, makeTemplateBuildDraft, mergeProfileRecords, normalizeTemplate, normalizeVenue, readActiveVenueId, readLocalTemplates, readLocalVenues, readVenueBuildDraft, recordsChanged, VENUE_BUILD_DRAFT_KEY, writeLocalTemplates, writeLocalVenues, writeTemplateBuildDraft } from "../lib/venues";
 import { isMemoryBlocked, memoryRejectedQuestionTexts, readQuestionMemory, saveQuestionMemoryToProfile, syncQuestionMemoryFromProfile, upsertQuestionMemory } from "../lib/questionMemory";
 import { loadHostSetupSettings, loadProfileValue, profileKeys, readCurrentProjectSessionId, saveHostSetupSettings, saveProfileValue, syncProfileJson, updateUserMetadata } from "../lib/profileState";
@@ -62,7 +62,6 @@ const defaultRounds = [{ id: "round-1", name: "Round 1", description: "", questi
 const BUILD_STORAGE_KEY = "trivia-flex-round-builder-state-v5";
 const metadataBuildKey = "quiz_crafter_active_build_v1";
 const metadataBuildClearedKey = "quiz_crafter_active_build_cleared_at_v1";
-const CATEGORY_PREF_KEY = "quiz-crafter-category-preferences";
 const REJECTED_AI_KEY = "quiz-crafter-rejected-ai-questions";
 const USED_QUESTIONS_KEY = "quiz-crafter-used-question-ids";
 const UNUSED_QUESTIONS_KEY = "quiz-crafter-unused-question-ids";
@@ -242,7 +241,6 @@ const mergeTemplateRoundsWithExisting = (templateRounds, currentRounds) => {
   }
   return merged;
 };
-const loadLocalCategoryPrefs = () => { try { const parsed = JSON.parse(localStorage.getItem(CATEGORY_PREF_KEY) || "{}"); return { approved: uniqueCategories(Array.isArray(parsed.approved) ? parsed.approved : []), rejected: uniqueCategories(Array.isArray(parsed.rejected) ? parsed.rejected : []) }; } catch { return { approved: [], rejected: [] }; } };
 const saveLocalCategoryPrefs = (approved, rejected) => {
   const prefs = { approved: uniqueCategories([...approved]), rejected: uniqueCategories([...rejected]) };
   localStorage.setItem(CATEGORY_PREF_KEY, JSON.stringify(prefs));
