@@ -62,6 +62,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { hostToolsStorageKey, loadHostSetupSettings, loadHostToolsSessionState, loadProfileValue, profileKeys, readCurrentProjectSessionId, resetHostToolsSessionState, saveHostSetupSettings, saveHostToolsSessionState, updateUserMetadata, writeCurrentProjectSessionId } from "../lib/profileState";
+import { readHostStyleProfile } from "../lib/hostStyleMemory";
 
 const STORAGE_BASE = process.env.REACT_APP_SUPABASE_URL ? `${process.env.REACT_APP_SUPABASE_URL}/storage/v1/object/public/` : "";
 const PRODUCTION_HOSTNAMES = new Set(["quizcrafter.fun", "www.quizcrafter.fun", "quiz-crafter-foreverfun-bits-projects.vercel.app"]);
@@ -574,6 +575,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   const [reviewIndex, setReviewIndex] = useState(null);
   const [emptyStateAddRoundOpen, setEmptyStateAddRoundOpen] = useState(false);
   const [emptyStateWriteRoundKey, setEmptyStateWriteRoundKey] = useState(null);
+  const [emptyStateGenerateRoundKey, setEmptyStateGenerateRoundKey] = useState(null);
   const [emptyStateManageRoundsOpen, setEmptyStateManageRoundsOpen] = useState(false);
   const [emergencyOverride, setEmergencyOverride] = useState(null);
   const [generatedEmergency, setGeneratedEmergency] = useState(null);
@@ -2235,6 +2237,72 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     return appendQuestionToRound(round, key, question);
   };
 
+  // Shapes one AI-generated candidate (from /api/generate-session-candidates)
+  // into the same embedded-question form every other add path writes,
+  // inheriting the round's points/timer defaults the same way
+  // WriteQuestionModal's prefill does.
+  const buildQuestionFromCandidate = (candidate, roundDefaults) => {
+    const type = candidate.question_type === "true_false" || candidate.question_type === "multiple_choice" ? candidate.question_type : "written";
+    const key = type === "true_false" ? "true_false_questions" : type === "multiple_choice" ? "multiple_choice_questions" : "written_questions";
+    const question = {
+      question_type: type,
+      category: candidate.category || "General",
+      question_text: candidate.question_text || candidate.question || "",
+      correct_answer: type === "true_false" ? (String(candidate.correct_answer || "").toLowerCase() === "false" ? "False" : "True") : (candidate.correct_answer || candidate.answer || ""),
+      incorrect_answers: type === "multiple_choice" ? (Array.isArray(candidate.incorrect_answers) ? candidate.incorrect_answers.join("; ") : candidate.incorrect_answers || "") : null,
+      fun_fact: candidate.fun_fact || "",
+      timer_seconds: Number(roundDefaults?.timerSeconds) || 30,
+      points: roundDefaults?.points ?? null,
+      wager_limit: 0,
+      wager_timing: "after_answer",
+    };
+    return { key, question };
+  };
+
+  // Batched sibling of appendQuestionToRound for "Add All"/"Add Selected"
+  // from AI generation -- one supabase.update for the whole batch instead of
+  // N sequential ones (per the workspace-merge plan's explicit call-out for
+  // this exact path), but the same "flatten the hypothetical session, look
+  // up the pinned live/reviewed question by id" remap safety.
+  const addGeneratedQuestionsToRound = async (round, candidates) => {
+    if (!candidates.length) return false;
+    const roundDefaults = round.questions[0] || { timerSeconds: round.timerSeconds, points: round.points };
+    let sourceOrderCounter = round.questions.reduce((max, item) => Math.max(max, Number(item.sourceOrder) || 0), 0);
+    const built = candidates.map((candidate) => {
+      const { key, question } = buildQuestionFromCandidate(candidate, roundDefaults);
+      sourceOrderCounter += 1;
+      question.round_name = round.name;
+      question.round_order = round.roundOrder;
+      question.source_order = sourceOrderCounter;
+      return { key, question };
+    });
+
+    const updatedArrays = {};
+    built.forEach(({ key, question }) => {
+      if (!updatedArrays[key]) updatedArrays[key] = Array.isArray(session[key]) ? [...session[key]] : [];
+      updatedArrays[key].push(question);
+    });
+
+    const pinnedLiveId = questions[currentIndex]?.id;
+    const pinnedReviewId = isReviewing ? questions[reviewIndex]?.id : null;
+    const remappedQuestions = flattenSession({ ...session, ...updatedArrays });
+    const newCurrentIndex = remappedQuestions.findIndex((item) => item.id === pinnedLiveId);
+    const newReviewIndex = pinnedReviewId ? remappedQuestions.findIndex((item) => item.id === pinnedReviewId) : -1;
+
+    setSession((prevSession) => ({ ...prevSession, ...updatedArrays }));
+    if (newCurrentIndex !== -1) setCurrentIndex(newCurrentIndex);
+    if (isReviewing) setReviewIndex(newReviewIndex !== -1 ? newReviewIndex : null);
+
+    if (!isTestRun) {
+      const { error } = await supabase.from("sessions").update(updatedArrays).eq("id", id);
+      if (error) {
+        console.warn("Generated questions save unavailable:", error);
+        toast.error("Saved for this session, but couldn't sync to the database");
+      }
+    }
+    return true;
+  };
+
   // Unlike moveRound's whole-round swap, moving a single question can shift
   // an arbitrary number of other questions' positions in between its old and
   // new spot. Rather than hand-deriving that arithmetic, just flatten the
@@ -2381,6 +2449,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     // first question, currentIndex (already 0) points at it and the normal
     // workspace below takes over on the next render.
     const emptyStateWriteRound = rounds.find((round) => round.key === emptyStateWriteRoundKey);
+    const emptyStateGenerateRound = rounds.find((round) => round.key === emptyStateGenerateRoundKey);
     return <div className={`${embedded ? "h-full" : "min-h-screen"} bg-[#09090B] p-6`}>
       <div className="mx-auto max-w-2xl">
         <p className="mb-1 text-center text-2xl font-bold text-white">Let's build this event</p>
@@ -2391,7 +2460,10 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
               <p className="font-bold text-white">{round.name}</p>
               <p className="text-xs text-zinc-500">{round.questions.length} question{round.questions.length === 1 ? "" : "s"}</p>
             </div>
-            <Button size="sm" onClick={() => setEmptyStateWriteRoundKey(round.key)} className="gradient-btn"><Pencil size={13} className="mr-1.5" />Write Question</Button>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" onClick={() => setEmptyStateGenerateRoundKey(round.key)} className="border-white/10 text-zinc-300 hover:text-white"><Sparkles size={13} className="mr-1.5" />Generate</Button>
+              <Button size="sm" onClick={() => setEmptyStateWriteRoundKey(round.key)} className="gradient-btn"><Pencil size={13} className="mr-1.5" />Write Question</Button>
+            </div>
           </div>)}
         </div>
         <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
@@ -2402,6 +2474,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
       </div>
       {emptyStateAddRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} onClose={() => setEmptyStateAddRoundOpen(false)} />}
       {emptyStateWriteRound && <WriteQuestionModal round={emptyStateWriteRound} onCreate={(draft) => addQuestionToRound(emptyStateWriteRound, draft)} onClose={() => setEmptyStateWriteRoundKey(null)} />}
+      {emptyStateGenerateRound && <GenerateRoundModal round={emptyStateGenerateRound} venueId={session?.venue_id} existingQuestionTexts={new Set()} onAddAll={(candidates) => addGeneratedQuestionsToRound(emptyStateGenerateRound, candidates)} onClose={() => setEmptyStateGenerateRoundKey(null)} />}
       {emptyStateManageRoundsOpen && <RoundManagerModal
         rounds={rounds}
         onRename={renameRound}
@@ -2508,6 +2581,8 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
             addLibraryQuestionToRound={addLibraryQuestionToRound}
             updateQuestionContent={updateQuestionContent}
             editQuestionWithAi={editQuestionWithAi}
+            addGeneratedQuestionsToRound={addGeneratedQuestionsToRound}
+            venueId={session?.venue_id}
             branding={branding}
             markAnswer={markAnswer}
             addManualAnswer={addManualAnswer}
@@ -2804,15 +2879,147 @@ const AiEditQuestionModal = ({ question, onEdit, onApply, onClose }) => {
   </div>;
 };
 
+const GENERATE_DIFFICULTIES = [
+  { value: "easy", label: "Easy" },
+  { value: "medium", label: "Medium" },
+  { value: "hard", label: "Hard" },
+  { value: "host_hard", label: "Host Hard" },
+];
+
+// Second piece of AI tooling ported in (per-question AI edit was the
+// first) -- reuses /api/generate-session-candidates unchanged, the same
+// endpoint BuildSession's requestGeneratedQuestions calls, just with a
+// leaner request (no approved/rejected-category memory or venue history
+// yet -- those stay a BuildSession-only refinement for now). Candidates are
+// a review step, not an auto-add: the host picks which ones to keep, then
+// "Add to Round" commits the selection in one batch via
+// addGeneratedQuestionsToRound.
+const GenerateRoundModal = ({ round, venueId, existingQuestionTexts, onAddAll, onClose }) => {
+  const [questionType, setQuestionType] = useState(round.questions[0]?.type || (round.questionType && round.questionType !== "mixed" ? round.questionType : "written"));
+  const [difficulty, setDifficulty] = useState("medium");
+  const [count, setCount] = useState(5);
+  const [theme, setTheme] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [candidates, setCandidates] = useState([]);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [adding, setAdding] = useState(false);
+
+  const generate = async () => {
+    setLoading(true);
+    setCandidates([]);
+    try {
+      const response = await fetch("/api/generate-session-candidates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: `round-${round.key}`,
+          questionType,
+          count: Math.max(1, Math.min(12, Number(count) || 5)),
+          difficulty,
+          theme: theme.trim(),
+          excludeUsed: true,
+          avoidDuplicates: true,
+          rejectedQuestions: [...existingQuestionTexts],
+          hostStyleProfile: readHostStyleProfile(),
+          venueId: venueId || null,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || "Failed to generate questions");
+      const generated = (data.candidates || []).map((candidate, index) => ({ ...candidate, _id: `${Date.now()}-${index}` }));
+      setCandidates(generated);
+      setSelectedIds(new Set(generated.map((item) => item._id)));
+      if (!generated.length) toast.error("No questions came back -- try a different theme or type");
+    } catch (error) {
+      console.error("Generate round error:", error);
+      toast.error(error.message || "Failed to generate questions");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggle = (candidateId) => setSelectedIds((prev) => {
+    const next = new Set(prev);
+    if (next.has(candidateId)) next.delete(candidateId); else next.add(candidateId);
+    return next;
+  });
+
+  const addSelected = async () => {
+    const selected = candidates.filter((item) => selectedIds.has(item._id));
+    if (!selected.length) return;
+    setAdding(true);
+    try {
+      const ok = await onAddAll(selected);
+      if (ok) onClose();
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  return <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 pt-8 md:pt-14 overflow-y-auto">
+    <div className="w-full max-w-2xl rounded-xl bg-[#17181c] border border-white/10 shadow-2xl shadow-black/60 p-5 relative">
+      <button type="button" onClick={onClose} className="absolute right-4 top-4 text-zinc-400 hover:text-white" aria-label="Close"><X size={18} /></button>
+      <h2 className="mb-1 flex items-center gap-2 text-xl font-bold text-white"><Sparkles size={18} className="text-[#71E0DC]" />Generate Questions</h2>
+      <p className="mb-4 text-sm text-zinc-500">AI-write a batch of questions for <span className="text-zinc-300 font-semibold">{round.name}</span>, then pick which ones to keep.</p>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <label className="block text-xs text-zinc-500">Type
+          <select value={questionType} onChange={(event) => setQuestionType(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-2 text-white outline-none focus:border-[#71E0DC]/60">
+            <option value="true_false">True/False</option>
+            <option value="multiple_choice">Multiple Choice</option>
+            <option value="written">Written</option>
+          </select>
+        </label>
+        <label className="block text-xs text-zinc-500">Difficulty
+          <select value={difficulty} onChange={(event) => setDifficulty(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-2 text-white outline-none focus:border-[#71E0DC]/60">
+            {GENERATE_DIFFICULTIES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+          </select>
+        </label>
+        <label className="block text-xs text-zinc-500">Count
+          <input type="number" min="1" max="12" value={count} onChange={(event) => setCount(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-2 text-white outline-none focus:border-[#71E0DC]/60" />
+        </label>
+        <label className="col-span-2 block text-xs text-zinc-500 md:col-span-1">Theme (optional)
+          <input value={theme} onChange={(event) => setTheme(event.target.value)} placeholder="e.g. 90s movies" className="mt-1 h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-2 text-white outline-none focus:border-[#71E0DC]/60" />
+        </label>
+      </div>
+      <div className="mt-3 flex justify-end">
+        <Button type="button" onClick={generate} disabled={loading} className="gradient-btn">{loading ? <Loader2 size={15} className="mr-2 animate-spin" /> : <Sparkles size={14} className="mr-2" />}{loading ? "Generating..." : "Generate"}</Button>
+      </div>
+      {candidates.length > 0 && <div className="mt-4 max-h-[360px] space-y-2 overflow-y-auto pr-1">
+        {candidates.map((candidate) => {
+          const selected = selectedIds.has(candidate._id);
+          return <button key={candidate._id} type="button" onClick={() => toggle(candidate._id)} className={`block w-full rounded-lg border p-3 text-left transition-colors ${selected ? "border-[#71E0DC]/40 bg-[#71E0DC]/5" : "border-white/10 bg-zinc-950/40 hover:border-white/20"}`}>
+            <div className="flex items-start gap-2">
+              <div className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border ${selected ? "border-[#71E0DC] bg-[#71E0DC]" : "border-white/20"}`}>{selected && <Check size={12} className="text-zinc-950" />}</div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-500">{candidate.category}</p>
+                <p className="mt-0.5 text-sm font-semibold text-white">{candidate.question_text}</p>
+                <p className="mt-1 text-sm text-[#71E0DC]">Answer: {candidate.correct_answer}</p>
+                {candidate.fun_fact && <p className="mt-1 text-xs text-zinc-400">{candidate.fun_fact}</p>}
+              </div>
+            </div>
+          </button>;
+        })}
+      </div>}
+      {candidates.length > 0 && <div className="mt-4 flex items-center justify-between">
+        <p className="text-xs text-zinc-500">{selectedIds.size} of {candidates.length} selected</p>
+        <div className="flex gap-2">
+          <Button type="button" variant="outline" onClick={onClose} className="border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
+          <Button type="button" onClick={addSelected} disabled={adding || !selectedIds.size} className="gradient-btn">{adding ? "Adding..." : `Add ${selectedIds.size || ""} to Round`}</Button>
+        </div>
+      </div>}
+    </div>
+  </div>;
+};
+
 // Browses the user's saved question library (the `questions` table) and
 // inserts a pick straight into `round`. Fetched lazily and cached in
 // QuestionListView's state across round-picker opens for one page visit.
 // Deliberately narrower than BuildSession's LibraryModal for now: no
-// cross-session "used elsewhere" fingerprinting, question-memory blocking,
-// or Generate-when-empty AI trigger -- just hides anything whose question
-// text is already somewhere in *this* session, which is the case that
-// actually matters for avoiding an accidental duplicate mid-event. The
-// fuller usage-aware picker and AI generation land in later merge phases.
+// cross-session "used elsewhere" fingerprinting or question-memory
+// blocking -- just hides anything whose question text is already somewhere
+// in *this* session, which is the case that actually matters for avoiding
+// an accidental duplicate mid-event. The fuller usage-aware picker is a
+// possible later refinement.
 const LibraryPickerModal = ({ round, libraryQuestions, loading, existingTexts, onInsert, onClose }) => {
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
@@ -2874,7 +3081,7 @@ const LibraryPickerModal = ({ round, libraryQuestions, loading, existingTexts, o
 // visible at a time, seeing it next to its siblings is what makes reorder
 // and delete-with-guard legible, the same reason BuildSession's original
 // round dropdown paired with a separate management surface.
-const RoundHeader = ({ rounds, activeRound, activeIndex, onSelectRound, onManageRounds, onDescribe, onWriteQuestion, onAddFromLibrary, onNextRound, hasNextRound }) => {
+const RoundHeader = ({ rounds, activeRound, activeIndex, onSelectRound, onManageRounds, onDescribe, onWriteQuestion, onAddFromLibrary, onGenerate, onNextRound, hasNextRound }) => {
   const [editingDescription, setEditingDescription] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState(activeRound.description || "");
 
@@ -2891,6 +3098,7 @@ const RoundHeader = ({ rounds, activeRound, activeIndex, onSelectRound, onManage
         <button type="button" onClick={onNextRound} disabled={!hasNextRound} className="flex h-7 items-center gap-1 rounded px-2 text-xs font-medium text-zinc-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:text-zinc-400" title={hasNextRound ? "Go to next round" : "This is the last round"} aria-label="Next round">Next Round<ChevronRight size={14} /></button>
         <div className="mx-0.5 h-4 w-px bg-white/10" />
         <button type="button" onClick={() => setEditingDescription((value) => !value)} className={`flex h-7 w-7 items-center justify-center rounded ${activeRound.description ? "text-[#71E0DC]" : "text-zinc-500"} hover:text-white`} title={activeRound.description ? "Edit round note" : "Add round note"} aria-label="Round note"><MessageSquare size={14} /></button>
+        <button type="button" onClick={onGenerate} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white" title="Generate questions with AI" aria-label="Generate questions"><Sparkles size={14} /></button>
         <button type="button" onClick={onWriteQuestion} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white" title="Write a question for this round" aria-label="Write question"><Pencil size={14} /></button>
         <button type="button" onClick={onAddFromLibrary} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white" title="Add from library" aria-label="Add from library"><List size={14} /></button>
       </div>
@@ -3042,7 +3250,7 @@ const QuestionListView = ({
   displayedQuestion, goToQuestion, reviewQuestion, onBackToLive, onGoLiveWithThis,
   answersForQuestionIndex, gradedAnswers, players, hostAnswers, fairPlayStats,
   showAnswer, showFunFact, timeRemaining, viewPointsPerQuestion, viewTimerSeconds, viewWagerMode, viewWagerLimit, viewWagerTiming,
-  onUpdateSettings, renameRound, describeRound, setEmptyRoundSettings, moveRound, deleteRound, createRound, createEmptyRound, moveQuestionToRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, updateQuestionContent, editQuestionWithAi, branding, markAnswer, addManualAnswer, editWager, releaseMode,
+  onUpdateSettings, renameRound, describeRound, setEmptyRoundSettings, moveRound, deleteRound, createRound, createEmptyRound, moveQuestionToRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, addGeneratedQuestionsToRound, updateQuestionContent, editQuestionWithAi, venueId, branding, markAnswer, addManualAnswer, editWager, releaseMode,
   hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, resetQuestionAt,
 }) => {
   // Only one round is shown at a time (see RoundHeader/RoundSwitcher) --
@@ -3079,6 +3287,8 @@ const QuestionListView = ({
   const aiEditQuestion = questions.find((item) => item.id === aiEditQuestionId) || null;
   const [writeQuestionRoundKey, setWriteQuestionRoundKey] = useState(null);
   const writeQuestionRound = rounds.find((round) => round.key === writeQuestionRoundKey) || null;
+  const [generateRoundKey, setGenerateRoundKey] = useState(null);
+  const generateRound = rounds.find((round) => round.key === generateRoundKey) || null;
   const [libraryRoundKey, setLibraryRoundKey] = useState(null);
   const libraryRound = rounds.find((round) => round.key === libraryRoundKey) || null;
   const [libraryQuestions, setLibraryQuestions] = useState(null);
@@ -3110,6 +3320,7 @@ const QuestionListView = ({
         onDescribe={(description) => describeRound(activeRound, description)}
         onWriteQuestion={() => setWriteQuestionRoundKey(activeRound.key)}
         onAddFromLibrary={() => openLibrary(activeRound.key)}
+        onGenerate={() => setGenerateRoundKey(activeRound.key)}
         hasNextRound={activeIndex < rounds.length - 1}
         onNextRound={() => { if (activeIndex < rounds.length - 1) setActiveRoundKey(rounds[activeIndex + 1].key); }}
       />
@@ -3147,8 +3358,9 @@ const QuestionListView = ({
         })}
         {!activeRound.questions.length && <div className="rounded-lg border border-dashed border-white/15 bg-zinc-950/40 p-6 text-center">
           <p className="text-sm text-zinc-400">This round doesn't have any questions yet.</p>
-          <div className="mt-3 flex items-center justify-center gap-2">
-            <Button type="button" size="sm" onClick={() => setWriteQuestionRoundKey(activeRound.key)} className="gradient-btn"><Pencil size={13} className="mr-1.5" />Write Question</Button>
+          <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+            <Button type="button" size="sm" onClick={() => setGenerateRoundKey(activeRound.key)} className="gradient-btn"><Sparkles size={13} className="mr-1.5" />Generate</Button>
+            <Button type="button" size="sm" variant="outline" onClick={() => setWriteQuestionRoundKey(activeRound.key)} className="border-white/10 text-zinc-300 hover:text-white"><Pencil size={13} className="mr-1.5" />Write Question</Button>
             <Button type="button" size="sm" variant="outline" onClick={() => openLibrary(activeRound.key)} className="border-white/10 text-zinc-300 hover:text-white"><List size={13} className="mr-1.5" />Add from Library</Button>
           </div>
         </div>}
@@ -3168,6 +3380,7 @@ const QuestionListView = ({
     {writeQuestionRound && <WriteQuestionModal round={writeQuestionRound} onCreate={(draft) => addQuestionToRound(writeQuestionRound, draft)} onClose={() => setWriteQuestionRoundKey(null)} />}
     {libraryRound && <LibraryPickerModal round={libraryRound} libraryQuestions={libraryQuestions} loading={libraryLoading} existingTexts={existingQuestionTexts} onInsert={(question) => addLibraryQuestionToRound(libraryRound, question)} onClose={() => setLibraryRoundKey(null)} />}
     {aiEditQuestion && <AiEditQuestionModal question={aiEditQuestion} onEdit={editQuestionWithAi} onApply={(patch) => updateQuestionContent(aiEditQuestion, patch)} onClose={() => setAiEditQuestionId(null)} />}
+    {generateRound && <GenerateRoundModal round={generateRound} venueId={venueId} existingQuestionTexts={existingQuestionTexts} onAddAll={(candidates) => addGeneratedQuestionsToRound(generateRound, candidates)} onClose={() => setGenerateRoundKey(null)} />}
   </div>;
 };
 
