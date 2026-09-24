@@ -2673,10 +2673,93 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
 const emptyRoundDraft = { question_type: "written", category: "", question_text: "", correct_answer: "", incorrect_answers: ["", "", ""], fun_fact: "", points: "", timer_seconds: 30 };
 
 // Shared by AddRoundModal and WriteQuestionModal -- a cut-down manual
-// question form. AI-assisted drafting and media attachment stay on the
-// standalone builder page for now (a later merge phase ports those in).
+// question form. Mirrors BuildSession's FreeWriteForm AI-assist button
+// (Sparkles icon in the corner of the Question field): with no question
+// text yet, it drafts a whole new one from the category via
+// /api/generate-session-candidates; with a question already typed, it fills
+// in only whatever's missing (answer/wrong answers/fun fact) via
+// host-assistant.js's "question_edit" mode, explicitly told to leave the
+// question wording (and the answer, if already filled in) untouched. Media
+// attachment stays on the standalone builder page for now.
 const QuestionDraftFields = ({ draft, setDraft }) => {
+  const [assisting, setAssisting] = useState(false);
   const updateWrong = (index, value) => setDraft((prev) => ({ ...prev, incorrect_answers: prev.incorrect_answers.map((answer, i) => (i === index ? value : answer)) }));
+
+  const runAssist = async () => {
+    setAssisting(true);
+    try {
+      if (draft.question_text.trim()) {
+        const missing = [];
+        if (!draft.correct_answer.trim()) missing.push("the correct answer");
+        if (draft.question_type === "multiple_choice" && draft.incorrect_answers.filter((answer) => answer.trim()).length < 2) missing.push("three plausible, comparable wrong answers");
+        if (!draft.fun_fact.trim()) missing.push("a short fun fact");
+        if (!missing.length) { toast.info("This question already has everything filled in."); return; }
+        const keepUnchanged = ["the exact question wording"];
+        if (draft.correct_answer.trim()) keepUnchanged.push("the correct answer");
+        const response = await fetch("/api/host-assistant", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mode: "question_edit",
+            request: `Do not rewrite or replace ${keepUnchanged.join(" or ")} -- keep them exactly as given. Add only: ${missing.join("; ")}.`,
+            context: {
+              questions: [{
+                category: draft.category,
+                question_text: draft.question_text,
+                correct_answer: draft.correct_answer,
+                question_type: draft.question_type,
+                incorrect_answers: draft.incorrect_answers.filter(Boolean).join("; "),
+                fun_fact: draft.fun_fact,
+              }],
+              hostStyleProfile: readHostStyleProfile(),
+            },
+          }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data?.candidate) throw new Error(data?.error || "No AI draft came back");
+        const candidate = data.candidate;
+        setDraft((prev) => ({
+          ...prev,
+          correct_answer: prev.correct_answer.trim() || candidate.correct_answer || prev.correct_answer,
+          incorrect_answers: prev.question_type === "multiple_choice" && prev.incorrect_answers.filter((answer) => answer.trim()).length < 2 ? [...(candidate.incorrect_answers || []), "", "", ""].slice(0, 3) : prev.incorrect_answers,
+          fun_fact: prev.fun_fact.trim() || candidate.fun_fact || prev.fun_fact,
+        }));
+        toast.success("Filled in the missing pieces");
+      } else {
+        const response = await fetch("/api/generate-session-candidates", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: `write-${Date.now()}`,
+            questionType: draft.question_type,
+            count: 1,
+            theme: draft.category ? `Use category: ${draft.category}` : "",
+            excludeUsed: true,
+            avoidDuplicates: true,
+            hostStyleProfile: readHostStyleProfile(),
+          }),
+        });
+        const data = await response.json();
+        const candidate = Array.isArray(data?.candidates) ? data.candidates[0] : null;
+        if (!response.ok || !candidate) throw new Error(data?.error || "No AI draft came back. Try adding a category.");
+        setDraft((prev) => ({
+          ...prev,
+          category: candidate.category || prev.category,
+          question_text: candidate.question_text || prev.question_text,
+          correct_answer: candidate.correct_answer || prev.correct_answer,
+          incorrect_answers: prev.question_type === "multiple_choice" ? [...(candidate.incorrect_answers || []), "", "", ""].slice(0, 3) : prev.incorrect_answers,
+          fun_fact: candidate.fun_fact || prev.fun_fact,
+        }));
+        toast.success("AI draft added");
+      }
+    } catch (error) {
+      console.error("Question write AI assist error:", error);
+      toast.error(error.message || "Failed to draft with AI");
+    } finally {
+      setAssisting(false);
+    }
+  };
+
   return <div className="space-y-3">
     <div className="grid grid-cols-1 md:grid-cols-[160px_1fr] gap-3">
       <select value={draft.question_type} onChange={(event) => setDraft((prev) => ({ ...prev, question_type: event.target.value }))} className="h-10 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white">
@@ -2686,7 +2769,12 @@ const QuestionDraftFields = ({ draft, setDraft }) => {
       </select>
       <input value={draft.category} onChange={(event) => setDraft((prev) => ({ ...prev, category: event.target.value }))} placeholder="Category" className="h-10 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
     </div>
-    <textarea value={draft.question_text} onChange={(event) => setDraft((prev) => ({ ...prev, question_text: event.target.value }))} placeholder="Question" className="min-h-[86px] w-full resize-none rounded-md border border-white/10 bg-zinc-950/50 px-3 py-2 text-white outline-none focus:border-[#71E0DC]/60" />
+    <div className="relative">
+      <textarea value={draft.question_text} onChange={(event) => setDraft((prev) => ({ ...prev, question_text: event.target.value }))} placeholder="Question" className="min-h-[86px] w-full resize-none rounded-md border border-white/10 bg-zinc-950/50 px-3 py-2 pr-12 text-white outline-none focus:border-[#71E0DC]/60" />
+      <button type="button" title={draft.question_text.trim() ? "AI fill in the missing answer, wrong answers, or fun fact -- keeps your question as-is" : "AI draft a question from your category"} aria-label="AI assist" onClick={runAssist} disabled={assisting} className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-md border border-white/10 bg-zinc-950/70 text-zinc-300 hover:bg-zinc-800 hover:text-white disabled:opacity-60">
+        {assisting ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
+      </button>
+    </div>
     <input value={draft.correct_answer} onChange={(event) => setDraft((prev) => ({ ...prev, correct_answer: event.target.value }))} placeholder="Correct answer" className="h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
     {draft.question_type === "multiple_choice" && <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
       {draft.incorrect_answers.map((answer, index) => <input key={index} value={answer} onChange={(event) => updateWrong(index, event.target.value)} placeholder={`Wrong answer ${index + 1}`} className="h-10 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />)}
