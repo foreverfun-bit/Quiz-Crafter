@@ -1879,6 +1879,9 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     if (patch.answer !== undefined) dbPatch.correct_answer = patch.answer;
     if (patch.incorrectAnswers !== undefined) dbPatch.incorrect_answers = patch.incorrectAnswers;
     if (patch.funFact !== undefined) dbPatch.fun_fact = patch.funFact;
+    if (patch.imageUrl !== undefined) dbPatch.image_url = patch.imageUrl;
+    if (patch.imageTiming !== undefined) dbPatch.image_timing = patch.imageTiming;
+    if (patch.audioUrl !== undefined) dbPatch.audio_url = patch.audioUrl;
     const current = Array.isArray(session[key]) ? session[key] : [];
     const updatedArrays = { [key]: current.map((item, i) => (i === index ? { ...item, ...dbPatch } : item)) };
     setSession((prevSession) => ({ ...prevSession, ...updatedArrays }));
@@ -3722,7 +3725,38 @@ const QuestionListView = ({
 // array is a bigger operation, see moveQuestionToRound/addLibraryQuestionToRound
 // for the established pattern) -- this edits the fields that don't require it.
 const QuestionEditFields = ({ type, draft, setDraft }) => {
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [uploadingAudio, setUploadingAudio] = useState(false);
   const updateWrong = (index, value) => setDraft((prev) => ({ ...prev, incorrectAnswers: prev.incorrectAnswers.map((answer, i) => (i === index ? value : answer)) }));
+
+  const handleImageFile = async (file) => {
+    if (!file) return;
+    setUploadingImage(true);
+    try {
+      const url = await uploadQuestionMedia(file);
+      setDraft((prev) => ({ ...prev, imageUrl: url }));
+    } catch (error) {
+      console.error("Upload image error:", error);
+      toast.error(error.message || "Failed to upload image");
+    } finally {
+      setUploadingImage(false);
+    }
+  };
+
+  const handleAudioFile = async (file) => {
+    if (!file) return;
+    setUploadingAudio(true);
+    try {
+      const url = await uploadQuestionAudio(file);
+      setDraft((prev) => ({ ...prev, audioUrl: url }));
+    } catch (error) {
+      console.error("Upload audio error:", error);
+      toast.error(error.message || "Failed to upload audio");
+    } finally {
+      setUploadingAudio(false);
+    }
+  };
+
   return <div className="space-y-2" onClick={(event) => event.stopPropagation()}>
     <input value={draft.category} onChange={(event) => setDraft((prev) => ({ ...prev, category: event.target.value }))} placeholder="Category" className="h-9 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
     <textarea value={draft.questionText} onChange={(event) => setDraft((prev) => ({ ...prev, questionText: event.target.value }))} placeholder="Question" className="min-h-[70px] w-full resize-none rounded-md border border-white/10 bg-zinc-950/50 px-3 py-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
@@ -3734,6 +3768,38 @@ const QuestionEditFields = ({ type, draft, setDraft }) => {
       {draft.incorrectAnswers.map((answer, index) => <input key={index} value={answer} onChange={(event) => updateWrong(index, event.target.value)} placeholder={`Wrong answer ${index + 1}`} className="h-9 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" />)}
     </div>}
     <input value={draft.funFact} onChange={(event) => setDraft((prev) => ({ ...prev, funFact: event.target.value }))} placeholder="Fun fact (optional)" className="h-9 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
+    <div className="rounded-md border border-white/10 bg-zinc-950/30 p-2.5 space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-500">Media (optional)</p>
+        {draft.imageUrl && <div className="inline-flex rounded-md border border-white/10 bg-zinc-950/70 p-0.5">
+          <button type="button" onClick={() => setDraft((prev) => ({ ...prev, imageTiming: "initial" }))} className={`rounded px-2 py-1 text-[11px] font-semibold ${draft.imageTiming !== "after_answer" ? "bg-[#71E0DC]/15 text-[#71E0DC]" : "text-zinc-400 hover:text-white"}`}>With question</button>
+          <button type="button" onClick={() => setDraft((prev) => ({ ...prev, imageTiming: "after_answer" }))} className={`rounded px-2 py-1 text-[11px] font-semibold ${draft.imageTiming === "after_answer" ? "bg-[#71E0DC]/15 text-[#71E0DC]" : "text-zinc-400 hover:text-white"}`}>After answer</button>
+        </div>}
+      </div>
+      <label className="flex h-14 cursor-pointer items-center gap-3 rounded-md border border-dashed border-white/15 bg-zinc-950/40 px-3 hover:border-[#71E0DC]/40">
+        {uploadingImage ? <Loader2 size={16} className="animate-spin text-[#71E0DC]" /> : draft.imageUrl ? <img src={draft.imageUrl} alt="Question media preview" className="h-10 w-10 rounded object-cover border border-white/10" /> : <Upload size={14} className="text-zinc-400" />}
+        <span className="text-xs text-zinc-400">{draft.imageUrl ? "Click to replace the image" : "Click to upload an image, or paste a URL below"}</span>
+        <input type="file" accept="image/*" className="hidden" disabled={uploadingImage} onChange={(event) => handleImageFile(event.target.files?.[0])} />
+      </label>
+      <div className="flex gap-2">
+        <div className="relative min-w-0 flex-1">
+          <Link className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+          <input value={draft.imageUrl} onChange={(event) => setDraft((prev) => ({ ...prev, imageUrl: event.target.value }))} placeholder="Image URL" className="h-9 w-full rounded-md border border-white/10 bg-zinc-950/50 pl-9 pr-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
+        </div>
+        {draft.imageUrl && <button type="button" onClick={() => setDraft((prev) => ({ ...prev, imageUrl: "" }))} className="shrink-0 text-xs text-zinc-500 hover:text-rose-300">Remove</button>}
+      </div>
+      <div className="flex gap-2">
+        <div className="relative min-w-0 flex-1">
+          <Music className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+          <input value={draft.audioUrl} onChange={(event) => setDraft((prev) => ({ ...prev, audioUrl: event.target.value }))} placeholder="Audio URL (optional)" className="h-9 w-full rounded-md border border-white/10 bg-zinc-950/50 pl-9 pr-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
+        </div>
+        <label className={`flex h-9 shrink-0 cursor-pointer items-center justify-center rounded-md border border-white/10 bg-zinc-950/50 px-3 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-white ${uploadingAudio ? "opacity-60" : ""}`}>
+          {uploadingAudio ? <Loader2 size={14} className="animate-spin" /> : "Upload"}
+          <input type="file" accept="audio/*" className="hidden" disabled={uploadingAudio} onChange={(event) => handleAudioFile(event.target.files?.[0])} />
+        </label>
+        {draft.audioUrl && <button type="button" onClick={() => setDraft((prev) => ({ ...prev, audioUrl: "" }))} className="shrink-0 text-xs text-zinc-500 hover:text-rose-300">Remove</button>}
+      </div>
+    </div>
   </div>;
 };
 
@@ -3743,6 +3809,9 @@ const draftFromQuestion = (question) => ({
   answer: question.answer || "",
   incorrectAnswers: [0, 1, 2].map((index) => (question.options || []).filter((option) => option !== question.answer)[index] || ""),
   funFact: question.funFact || "",
+  imageUrl: question.imageUrl || "",
+  imageTiming: normalizeImageTiming(question.imageTiming),
+  audioUrl: question.audioUrl || "",
 });
 
 // Static, non-interactive preview of a question's answer options -- every
@@ -3781,6 +3850,9 @@ const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerC
       answer: draft.answer.trim(),
       incorrectAnswers: question.type === "multiple_choice" ? draft.incorrectAnswers.map((item) => item.trim()).filter(Boolean).join("; ") : undefined,
       funFact: draft.funFact.trim(),
+      imageUrl: draft.imageUrl.trim(),
+      imageTiming: draft.imageTiming,
+      audioUrl: draft.audioUrl.trim(),
     });
     setSaving(false);
     if (ok) setEditing(false);
@@ -4313,6 +4385,9 @@ const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusM
       answer: draft.answer.trim(),
       incorrectAnswers: question.type === "multiple_choice" ? draft.incorrectAnswers.map((item) => item.trim()).filter(Boolean).join("; ") : undefined,
       funFact: draft.funFact.trim(),
+      imageUrl: draft.imageUrl.trim(),
+      imageTiming: draft.imageTiming,
+      audioUrl: draft.audioUrl.trim(),
     });
     setSavingEdit(false);
     if (ok) setEditing(false);
