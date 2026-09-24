@@ -2547,7 +2547,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
         {session && <Button onClick={() => setEmptyStateAddRoundOpen(true)} className="gradient-btn"><Plus size={16} className="mr-2" />Add Round</Button>}
         {!embedded && <Button variant="outline" onClick={() => navigate(`/session/${id}`)} className="ml-2 border-white/10 text-zinc-300 hover:text-white">Back to Session</Button>}
       </div>
-      {session && emptyStateAddRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} approvedCategories={approvedCategories} onClose={() => setEmptyStateAddRoundOpen(false)} />}
+      {session && emptyStateAddRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} onSaveToLibrary={saveQuestionToLibrary} approvedCategories={approvedCategories} onClose={() => setEmptyStateAddRoundOpen(false)} />}
     </div>;
   }
   if (!displayedQuestion) {
@@ -2582,8 +2582,8 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
           {!embedded && <Button variant="outline" onClick={() => navigate(`/session/${id}`)} className="border-white/10 text-zinc-300 hover:text-white">Back to Session</Button>}
         </div>
       </div>
-      {emptyStateAddRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} approvedCategories={approvedCategories} onClose={() => setEmptyStateAddRoundOpen(false)} />}
-      {emptyStateWriteRound && <WriteQuestionModal round={emptyStateWriteRound} onCreate={(draft) => addQuestionToRound(emptyStateWriteRound, draft)} approvedCategories={approvedCategories} onClose={() => setEmptyStateWriteRoundKey(null)} />}
+      {emptyStateAddRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} onSaveToLibrary={saveQuestionToLibrary} approvedCategories={approvedCategories} onClose={() => setEmptyStateAddRoundOpen(false)} />}
+      {emptyStateWriteRound && <WriteQuestionModal round={emptyStateWriteRound} onCreate={(draft) => addQuestionToRound(emptyStateWriteRound, draft)} onSaveToLibrary={saveQuestionToLibrary} approvedCategories={approvedCategories} onClose={() => setEmptyStateWriteRoundKey(null)} />}
       {emptyStateGenerateRound && <GenerateRoundModal round={emptyStateGenerateRound} venueId={session?.venue_id} existingQuestionTexts={new Set()} onAddAll={(candidates) => addGeneratedQuestionsToRound(emptyStateGenerateRound, candidates)} onSaveToLibrary={saveQuestionToLibrary} onClose={() => setEmptyStateGenerateRoundKey(null)} />}
       {emptyStateManageRoundsOpen && <RoundManagerModal
         rounds={rounds}
@@ -2935,7 +2935,7 @@ const QuestionDraftFields = ({ draft, setDraft, approvedCategories = [] }) => {
 // concern that happens to be required (a round only becomes real once it
 // has a question -- see flattenSession/makeRounds) but shouldn't visually
 // read as "the round's fields" alongside the name field.
-const AddRoundModal = ({ onCreate, onCreateEmpty, approvedCategories, onClose }) => {
+const AddRoundModal = ({ onCreate, onCreateEmpty, onSaveToLibrary, approvedCategories, onClose }) => {
   const [step, setStep] = useState("name");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -2945,6 +2945,7 @@ const AddRoundModal = ({ onCreate, onCreateEmpty, approvedCategories, onClose })
   const [draft, setDraft] = useState(emptyRoundDraft);
   const [saving, setSaving] = useState(false);
   const [creatingEmpty, setCreatingEmpty] = useState(false);
+  const [savingToLibrary, setSavingToLibrary] = useState(false);
 
   const goToQuestionStep = () => {
     if (!name.trim()) return;
@@ -2970,6 +2971,26 @@ const AddRoundModal = ({ onCreate, onCreateEmpty, approvedCategories, onClose })
       if (ok) onClose();
     } finally {
       setCreatingEmpty(false);
+    }
+  };
+
+  // Same as WriteQuestionModal's version -- save the drafted first question
+  // straight to the library without creating the round at all.
+  const handleSaveToLibrary = async () => {
+    if (!draft.question_text.trim() || !draft.correct_answer.trim()) return toast.error("Question and answer can't be empty");
+    setSavingToLibrary(true);
+    try {
+      await onSaveToLibrary({
+        question_text: draft.question_text.trim(),
+        correct_answer: draft.correct_answer.trim(),
+        question_type: draft.question_type,
+        category: draft.category.trim() || "General",
+        incorrect_answers: draft.question_type === "multiple_choice" ? draft.incorrect_answers.map((answer) => answer.trim()).filter(Boolean) : [],
+        fun_fact: draft.fun_fact.trim(),
+        image_url: draft.image_url.trim(),
+      });
+    } finally {
+      setSavingToLibrary(false);
     }
   };
 
@@ -3019,8 +3040,9 @@ const AddRoundModal = ({ onCreate, onCreateEmpty, approvedCategories, onClose })
         <h2 className="mb-1 text-xl font-bold text-white">Write Question</h2>
         <p className="mb-5 text-sm text-zinc-500">First question for <span className="text-zinc-300 font-semibold">{name}</span> (optional -- "Create Round" on the previous step skips this and adds questions later).</p>
         <QuestionDraftFields draft={draft} setDraft={setDraft} approvedCategories={approvedCategories} />
-        <div className="mt-5 flex justify-end gap-2">
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
           <Button type="button" variant="outline" onClick={() => setStep("name")} className="border-white/10 text-zinc-300 hover:text-white">Back</Button>
+          <Button type="button" variant="outline" onClick={handleSaveToLibrary} disabled={savingToLibrary} className="border-white/10 text-zinc-300 hover:text-white"><List size={14} className="mr-1.5" />{savingToLibrary ? "Saving..." : "Save to Library"}</Button>
           <Button type="button" onClick={handleCreate} disabled={saving} className="gradient-btn">{saving ? "Creating..." : "Create Round"}</Button>
         </div>
       </>}
@@ -3031,7 +3053,7 @@ const AddRoundModal = ({ onCreate, onCreateEmpty, approvedCategories, onClose })
 // Adds one question to an existing round -- the generalized form of
 // AddRoundModal's first-question step, reachable from any round once it
 // already exists.
-const WriteQuestionModal = ({ round, onCreate, approvedCategories, onClose }) => {
+const WriteQuestionModal = ({ round, onCreate, onSaveToLibrary, approvedCategories, onClose }) => {
   // Prefills from the round's own first question, or (for a round created
   // without one yet -- see createEmptyRound) from the defaults saved with it
   // at creation -- either way, the closest thing this app has to a stored
@@ -3046,6 +3068,7 @@ const WriteQuestionModal = ({ round, onCreate, approvedCategories, onClose }) =>
     timer_seconds: roundDefaults?.timerSeconds ?? 30,
   }));
   const [saving, setSaving] = useState(false);
+  const [savingToLibrary, setSavingToLibrary] = useState(false);
 
   const handleCreate = async () => {
     setSaving(true);
@@ -3057,14 +3080,36 @@ const WriteQuestionModal = ({ round, onCreate, approvedCategories, onClose }) =>
     }
   };
 
+  // "I like this question but don't want to use it this round" -- saves the
+  // draft straight to the library without ever adding it to this round, so
+  // there's no need to add it to the session first just to then save it.
+  const handleSaveToLibrary = async () => {
+    if (!draft.question_text.trim() || !draft.correct_answer.trim()) return toast.error("Question and answer can't be empty");
+    setSavingToLibrary(true);
+    try {
+      await onSaveToLibrary({
+        question_text: draft.question_text.trim(),
+        correct_answer: draft.correct_answer.trim(),
+        question_type: draft.question_type,
+        category: draft.category.trim() || "General",
+        incorrect_answers: draft.question_type === "multiple_choice" ? draft.incorrect_answers.map((answer) => answer.trim()).filter(Boolean) : [],
+        fun_fact: draft.fun_fact.trim(),
+        image_url: draft.image_url.trim(),
+      });
+    } finally {
+      setSavingToLibrary(false);
+    }
+  };
+
   return <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 pt-8 md:pt-14 overflow-y-auto">
     <div className="w-full max-w-2xl rounded-xl bg-[#17181c] border border-white/10 shadow-2xl shadow-black/60 p-5 relative">
       <button type="button" onClick={onClose} className="absolute right-4 top-4 text-zinc-400 hover:text-white" aria-label="Close"><X size={18} /></button>
       <h2 className="mb-1 text-xl font-bold text-white">Write Question</h2>
       <p className="mb-5 text-sm text-zinc-500">Added to the end of <span className="text-zinc-300 font-semibold">{round.name}</span>.</p>
       <QuestionDraftFields draft={draft} setDraft={setDraft} approvedCategories={approvedCategories} />
-      <div className="mt-5 flex justify-end gap-2">
+      <div className="mt-5 flex flex-wrap justify-end gap-2">
         <Button type="button" variant="outline" onClick={onClose} className="border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
+        <Button type="button" variant="outline" onClick={handleSaveToLibrary} disabled={savingToLibrary} className="border-white/10 text-zinc-300 hover:text-white"><List size={14} className="mr-1.5" />{savingToLibrary ? "Saving..." : "Save to Library"}</Button>
         <Button type="button" onClick={handleCreate} disabled={saving} className="gradient-btn">{saving ? "Adding..." : "Add Question"}</Button>
       </div>
     </div>
@@ -3770,8 +3815,8 @@ const QuestionListView = ({
       onAddRound={() => setAddRoundOpen(true)}
       onClose={() => setManageRoundsOpen(false)}
     />}
-    {addRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} approvedCategories={approvedCategories} onClose={() => setAddRoundOpen(false)} />}
-    {writeQuestionRound && <WriteQuestionModal round={writeQuestionRound} onCreate={(draft) => addQuestionToRound(writeQuestionRound, draft)} approvedCategories={approvedCategories} onClose={() => setWriteQuestionRoundKey(null)} />}
+    {addRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} onSaveToLibrary={saveQuestionToLibrary} approvedCategories={approvedCategories} onClose={() => setAddRoundOpen(false)} />}
+    {writeQuestionRound && <WriteQuestionModal round={writeQuestionRound} onCreate={(draft) => addQuestionToRound(writeQuestionRound, draft)} onSaveToLibrary={saveQuestionToLibrary} approvedCategories={approvedCategories} onClose={() => setWriteQuestionRoundKey(null)} />}
     {libraryRound && <LibraryPickerModal round={libraryRound} libraryQuestions={libraryQuestions} loading={libraryLoading} existingTexts={existingQuestionTexts} onInsert={(question) => addLibraryQuestionToRound(libraryRound, question)} onClose={() => setLibraryRoundKey(null)} />}
     {aiEditQuestion && <AiEditQuestionModal question={aiEditQuestion} onEdit={editQuestionWithAi} onApply={(patch) => updateQuestionContent(aiEditQuestion, patch)} onClose={() => setAiEditQuestionId(null)} />}
     {generateRound && <GenerateRoundModal round={generateRound} venueId={venueId} existingQuestionTexts={existingQuestionTexts} onAddAll={(candidates) => addGeneratedQuestionsToRound(generateRound, candidates)} onSaveToLibrary={saveQuestionToLibrary} onClose={() => setGenerateRoundKey(null)} />}
