@@ -2088,6 +2088,70 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     }
   };
 
+  // A straight copy, appended to the end of the same round it was
+  // duplicated from -- reuses appendQuestionToRound, so it lands after
+  // everything else in that round with the same index-remap safety as
+  // Write Question/Add from Library.
+  const duplicateQuestion = async (question) => {
+    const round = rounds.find((item) => item.questions.some((q) => q.id === question.id));
+    if (!round) return;
+    const key = question.type === "true_false" ? "true_false_questions" : question.type === "multiple_choice" ? "multiple_choice_questions" : "written_questions";
+    const wrongAnswers = (question.options || []).filter((option) => option !== question.answer);
+    const dup = {
+      question_type: question.type,
+      category: question.category,
+      question_text: question.questionText,
+      correct_answer: question.answer,
+      incorrect_answers: question.type === "multiple_choice" ? wrongAnswers.join("; ") : null,
+      fun_fact: question.funFact || "",
+      image_url: question.imageUrl || "",
+      image_timing: question.imageTiming || "initial",
+      audio_url: question.audioUrl || "",
+      points: question.points,
+      timer_seconds: Number(question.timerSeconds || 30),
+      wager_limit: Number(question.wagerLimit || 0),
+      wager_timing: question.wagerTiming || "after_answer",
+    };
+    await appendQuestionToRound(round, key, dup);
+    toast.success("Question duplicated");
+  };
+
+  // Removes exactly one question -- unlike deleteRound, everything else in
+  // its round (and every later round) keeps its round, so this is a plain
+  // single-position removal + remap, no per-round batching needed.
+  const discardQuestion = (question) => {
+    const match = String(question.id || "").match(/^(.+)-(\d+)$/);
+    if (!match) return;
+    const [, key, indexStr] = match;
+    const index = Number(indexStr);
+    const baseIndex = questions.findIndex((item) => item.id === question.id);
+    if (baseIndex === -1) return;
+    if (eventOpen && baseIndex === hostIndex) return toast.error("Can't discard the question that's currently live or being reviewed");
+    const round = rounds.find((item) => item.questions.some((q) => q.id === question.id));
+    if (round && round.questions.length <= 1) return toast.error("A round needs at least one question -- delete the round instead");
+    if (!window.confirm("Discard this question? This can't be undone.")) return;
+
+    const current = Array.isArray(session[key]) ? session[key] : [];
+    const updatedArrays = { [key]: current.filter((_, i) => i !== index) };
+    const remap = (position) => {
+      if (position > baseIndex) return position - 1;
+      if (position === baseIndex) return Math.max(0, baseIndex - 1);
+      return position;
+    };
+
+    setSession((prevSession) => ({ ...prevSession, ...updatedArrays }));
+    setCurrentIndex((value) => remap(value));
+    setReviewIndex((value) => (value === null ? value : remap(value)));
+
+    if (isTestRun) return;
+    supabase.from("sessions").update(updatedArrays).eq("id", id).then(({ error }) => {
+      if (error) {
+        console.warn("Discard question save unavailable:", error);
+        toast.error("Saved for this session, but couldn't sync to the database");
+      }
+    });
+  };
+
   useEffect(() => {
     if (!displayedQuestion || !showAnswer) return;
     currentAnswers.forEach((answer) => {
@@ -2214,6 +2278,8 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
             deleteRound={deleteRound}
             createRound={createRound}
             moveQuestionToRound={moveQuestionToRound}
+            duplicateQuestion={duplicateQuestion}
+            discardQuestion={discardQuestion}
             addQuestionToRound={addQuestionToRound}
             addLibraryQuestionToRound={addLibraryQuestionToRound}
             updateQuestionContent={updateQuestionContent}
@@ -2557,7 +2623,7 @@ const QuestionListView = ({
   displayedQuestion, goToQuestion, reviewQuestion, onBackToLive, onGoLiveWithThis,
   answersForQuestionIndex, gradedAnswers, players, hostAnswers, fairPlayStats,
   showAnswer, showFunFact, timeRemaining, viewPointsPerQuestion, viewTimerSeconds, viewWagerMode, viewWagerLimit, viewWagerTiming,
-  onUpdateSettings, renameRound, describeRound, moveRound, deleteRound, createRound, moveQuestionToRound, addQuestionToRound, addLibraryQuestionToRound, updateQuestionContent, branding, markAnswer, addManualAnswer, editWager, releaseMode,
+  onUpdateSettings, renameRound, describeRound, moveRound, deleteRound, createRound, moveQuestionToRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, updateQuestionContent, branding, markAnswer, addManualAnswer, editWager, releaseMode,
   hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion,
 }) => {
   // Only one round is shown at a time (see RoundHeader/RoundSwitcher) --
@@ -2628,7 +2694,7 @@ const QuestionListView = ({
         {activeRound.questions.map((question, localIndex) => {
           const index = activeRound.startIndex + localIndex;
           if (index === hostIndex) {
-            return <QuestionStage key={question.id} question={displayedQuestion} index={hostIndex} total={questions.length} showAnswer={showAnswer} showFunFact={showFunFact} pointsPerQuestion={viewPointsPerQuestion} timerSeconds={viewTimerSeconds} timeRemaining={timeRemaining} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} wagerTiming={viewWagerTiming} onUpdateSettings={onUpdateSettings} onUpdateContent={(patch) => updateQuestionContent(displayedQuestion, patch)} branding={branding} players={players} answers={hostAnswers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} setMode={releaseMode} isReviewing={isReviewing} hasRevealExtra={hasRevealExtra} hasFunFact={hasFunFact} hasAudio={hasAudio} isPlayingAudio={isPlayingAudio} onToggleAudio={onToggleAudio} onRevealAnswer={onRevealAnswer} onShowFunFact={onShowFunFact} startTimer={startTimer} resetTimer={resetTimer} resetQuestion={resetQuestion} onBackToLive={onBackToLive} onGoLiveWithThis={onGoLiveWithThis} />;
+            return <QuestionStage key={question.id} question={displayedQuestion} index={hostIndex} total={questions.length} showAnswer={showAnswer} showFunFact={showFunFact} pointsPerQuestion={viewPointsPerQuestion} timerSeconds={viewTimerSeconds} timeRemaining={timeRemaining} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} wagerTiming={viewWagerTiming} onUpdateSettings={onUpdateSettings} onUpdateContent={(patch) => updateQuestionContent(displayedQuestion, patch)} onDuplicate={() => duplicateQuestion(displayedQuestion)} branding={branding} players={players} answers={hostAnswers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} setMode={releaseMode} isReviewing={isReviewing} hasRevealExtra={hasRevealExtra} hasFunFact={hasFunFact} hasAudio={hasAudio} isPlayingAudio={isPlayingAudio} onToggleAudio={onToggleAudio} onRevealAnswer={onRevealAnswer} onShowFunFact={onShowFunFact} startTimer={startTimer} resetTimer={resetTimer} resetQuestion={resetQuestion} onBackToLive={onBackToLive} onGoLiveWithThis={onGoLiveWithThis} />;
           }
           const isLiveElsewhere = index === currentIndex && isReviewing;
           const state = isLiveElsewhere ? "live" : index < currentIndex ? "completed" : "upcoming";
@@ -2646,9 +2712,12 @@ const QuestionListView = ({
             eventOpen={eventOpen}
             onAsk={() => goToQuestion(index, { startTimer: true })}
             onReview={isLiveElsewhere ? onBackToLive : () => reviewQuestion(index)}
+            currentRoundName={activeRound.name}
             otherRounds={rounds.filter((item) => item.key !== activeRound.key)}
             onMoveToRound={(targetRound) => moveQuestionToRound(question, targetRound)}
             onUpdateContent={(patch) => updateQuestionContent(question, patch)}
+            onDuplicate={() => duplicateQuestion(question)}
+            onDiscard={() => discardQuestion(question)}
           />;
         })}
       </div>
@@ -2698,11 +2767,28 @@ const draftFromQuestion = (question) => ({
   funFact: question.funFact || "",
 });
 
-const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerCount, correctCount, eventOpen, onAsk, onReview, otherRounds, onMoveToRound, onUpdateContent }) => {
+// Static, non-interactive preview of a question's answer options -- every
+// card shows this at all times (see CollapsedQuestionCard), not just the
+// live one. True/False is always green/red regardless of which is actually
+// correct (a fixed convention, not a hint); multiple choice options are
+// neutral since which one's correct only matters once the question is live.
+const AnswerOptionPreview = ({ question }) => {
+  if (question.type === "true_false") return <div className="mt-2.5 flex gap-2">
+    <span className="flex items-center gap-1 rounded-full bg-emerald-500/15 px-3 py-1 text-xs font-bold text-emerald-300"><CheckCircle size={12} />True</span>
+    <span className="flex items-center gap-1 rounded-full bg-rose-500/15 px-3 py-1 text-xs font-bold text-rose-300"><XCircle size={12} />False</span>
+  </div>;
+  if (question.type === "multiple_choice" && question.options?.length) return <div className="mt-2.5 flex flex-wrap gap-1.5">
+    {question.options.map((option, i) => <span key={i} className="rounded-full bg-zinc-800 px-2.5 py-1 text-xs text-zinc-300">{option}</span>)}
+  </div>;
+  return null;
+};
+
+const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerCount, correctCount, eventOpen, onAsk, onReview, currentRoundName, otherRounds, onMoveToRound, onUpdateContent, onDuplicate, onDiscard }) => {
   const meta = typeMeta[question.type] || typeMeta.written;
   const points = getQuestionPoints(question);
   const wagerLimit = Number(question.wagerLimit || 0);
   const timerSeconds = Number(question.timerSeconds || 30);
+  const imageUrl = buildStorageUrl(question.imageUrl);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(() => draftFromQuestion(question));
   const [saving, setSaving] = useState(false);
@@ -2723,7 +2809,6 @@ const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerC
   };
 
   const correctPct = state === "completed" && submittedCount > 0 ? Math.round((correctCount / submittedCount) * 100) : null;
-  const metaBits = [`${points} pts`, `${timerSeconds}s`, wagerLimit > 0 ? "Wager" : null].filter(Boolean).join(" · ");
 
   if (editing) {
     return <Card className="glass-card">
@@ -2739,28 +2824,44 @@ const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerC
 
   return <Card className={`glass-card ${state === "live" ? "border-rose-400/40" : ""}`}>
     <CardContent className="p-3.5">
-      <div className="flex items-start justify-between gap-2">
-        <p className="text-xs text-zinc-500">{meta.label}{isBonusQuestion(question) && <span className="ml-1.5 text-amber-300" title="Bonus question">&#9733;</span>}<br />#{index + 1} {question.category}</p>
-        <div className="flex shrink-0 items-center gap-2">
-          {correctPct !== null && <span className="text-xs font-bold text-zinc-400">{correctPct}%</span>}
-          {state === "live" && <span className="flex items-center gap-1.5 rounded-full border border-rose-400/30 bg-rose-400/10 px-2 py-0.5 text-[11px] font-bold text-rose-200"><span className="h-1.5 w-1.5 rounded-full bg-rose-400 animate-pulse" />LIVE</span>}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button type="button" title="More actions" aria-label="More actions" className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white"><MoreVertical size={15} /></button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="border-white/10 bg-zinc-950 text-zinc-100">
-              <DropdownMenuItem onClick={startEdit} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Pencil size={14} className="mr-2" />Edit</DropdownMenuItem>
-              {state !== "live" && otherRounds?.map((round) => <DropdownMenuItem key={round.key} onClick={() => onMoveToRound(round)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><ArrowRightLeft size={14} className="mr-2" />Move to {round.name}</DropdownMenuItem>)}
-            </DropdownMenuContent>
-          </DropdownMenu>
+      <div className="flex items-start gap-3">
+        {imageUrl && <img src={imageUrl} alt="Question media" className="h-16 w-16 shrink-0 rounded-lg border border-white/10 object-cover" />}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-xs text-zinc-500">{meta.label}{isBonusQuestion(question) && <span className="ml-1.5 text-amber-300" title="Bonus question">&#9733;</span>}<br />#{index + 1} {question.category}</p>
+            <div className="flex shrink-0 items-center gap-2">
+              {correctPct !== null && <span className="text-xs font-bold text-zinc-400">{correctPct}%</span>}
+              {state === "live" && <span className="flex items-center gap-1.5 rounded-full border border-rose-400/30 bg-rose-400/10 px-2 py-0.5 text-[11px] font-bold text-rose-200"><span className="h-1.5 w-1.5 rounded-full bg-rose-400 animate-pulse" />LIVE</span>}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button type="button" title="More actions" aria-label="More actions" className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white"><MoreVertical size={15} /></button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56 border-white/10 bg-zinc-950 text-zinc-100">
+                  <div className="px-2 py-1.5"><span className="inline-flex items-center rounded-md bg-[#71E0DC]/15 px-2 py-1 text-xs font-bold text-[#71E0DC]">{currentRoundName}</span></div>
+                  {state !== "live" && otherRounds?.map((round) => <DropdownMenuItem key={round.key} onClick={() => onMoveToRound(round)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><ArrowRightLeft size={14} className="mr-2" />Move to {round.name}</DropdownMenuItem>)}
+                  <div className="my-1 h-px bg-white/10" />
+                  <p className="px-2 py-1 text-[11px] font-bold uppercase tracking-wide text-zinc-500">Options</p>
+                  <DropdownMenuItem onClick={startEdit} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Pencil size={14} className="mr-2" />Edit</DropdownMenuItem>
+                  <DropdownMenuItem onClick={onDuplicate} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Copy size={14} className="mr-2" />Clone</DropdownMenuItem>
+                  {state !== "live" && <DropdownMenuItem onClick={onDiscard} className="cursor-pointer text-rose-300 focus:bg-zinc-900 focus:text-rose-200"><Trash2 size={14} className="mr-2" />Discard</DropdownMenuItem>}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </div>
+          <p className="mt-1.5 text-sm font-semibold text-white">{question.questionText}</p>
+          <AnswerOptionPreview question={question} />
         </div>
       </div>
-      <p className="mt-1.5 text-sm font-semibold text-white">{question.questionText}</p>
-      <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs text-zinc-500">{state === "completed" ? `${correctCount > 0 ? `${correctCount} correct` : "Asked"} · ${submittedCount}/${playerCount || 0} · ${metaBits}` : metaBits}</p>
-        {state !== "live" && <Button size="sm" variant="outline" onClick={onReview} className="h-7 border-white/10 text-xs text-zinc-300 hover:text-white"><Eye size={12} className="mr-1" />{state === "completed" ? "Review" : "Preview"}</Button>}
-        {state === "upcoming" && <Button size="sm" onClick={onAsk} disabled={!eventOpen} title={!eventOpen ? "Open the event to start asking questions" : undefined} className="h-7 gradient-btn text-xs disabled:opacity-40"><Play size={12} className="mr-1" />Ask Question</Button>}
-        {state === "live" && <Button size="sm" variant="outline" onClick={onReview} className="h-7 border-rose-300/30 text-xs text-rose-200 hover:text-white">View Live</Button>}
+      <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-white/5 pt-2.5">
+        {state === "upcoming" && <Button size="sm" onClick={onAsk} disabled={!eventOpen} title={!eventOpen ? "Open the event to start asking questions" : undefined} className="h-8 gradient-btn text-xs disabled:opacity-40"><Play size={12} className="mr-1" />Ask Question</Button>}
+        {state === "completed" && <Button size="sm" variant="outline" onClick={onReview} className="h-8 border-white/10 text-xs text-zinc-300 hover:text-white"><Eye size={12} className="mr-1" />Review</Button>}
+        {state === "live" && <Button size="sm" variant="outline" onClick={onReview} className="h-8 border-rose-300/30 text-xs text-rose-200 hover:text-white">View Live</Button>}
+        <div className="flex items-center gap-3 text-xs text-zinc-500">
+          {state === "completed" && <span>{correctCount > 0 ? `${correctCount} correct` : "Asked"} &middot; {submittedCount}/{playerCount || 0}</span>}
+          <span className="flex items-center gap-1"><Tags size={12} />{points}pts</span>
+          <span className="flex items-center gap-1"><Clock size={12} />{timerSeconds}s</span>
+          {wagerLimit > 0 && <span className="text-purple-300">Wager</span>}
+        </div>
       </div>
     </CardContent>
   </Card>;
@@ -3200,7 +3301,7 @@ const WagerChip = ({ answer, disabled, onSave }) => {
   return <button type="button" disabled={disabled} onClick={() => setEditing(true)} className="rounded-full border border-purple-400/30 bg-purple-400/10 px-2.5 py-1 text-[11px] font-bold text-purple-200 transition disabled:cursor-default disabled:opacity-70 enabled:hover:border-purple-300/60">{answer.playerName || "Team"}: {Number(answer.wagerAmount || 0)}</button>;
 };
 
-const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusMode, pointsPerQuestion, timerSeconds, timeRemaining, wagerMode, wagerTiming, onUpdateSettings, onUpdateContent, branding, players, answers, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, editWager, setMode, isReviewing, hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, onBackToLive, onGoLiveWithThis }) => {
+const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusMode, pointsPerQuestion, timerSeconds, timeRemaining, wagerMode, wagerTiming, onUpdateSettings, onUpdateContent, onDuplicate, branding, players, answers, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, editWager, setMode, isReviewing, hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, onBackToLive, onGoLiveWithThis }) => {
   const [mediaModalOpen, setMediaModalOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(() => draftFromQuestion(question));
@@ -3240,7 +3341,7 @@ const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusM
 
   return <>
   <Card className={`glass-card overflow-hidden ${isReviewing ? "border-amber-400/40" : "border-rose-400/30"} ${focusMode ? "w-full" : ""}`}><CardContent className={focusMode ? "p-8 lg:p-12" : "p-5 lg:p-7"}>{isReviewing && <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-100"><Eye size={13} className="shrink-0 text-amber-300" /><span className="flex-1">Reviewing this question &mdash; players and the presentation screen still see the live question.</span>{onBackToLive && <Button size="sm" variant="outline" onClick={onBackToLive} className="h-7 border-amber-300/30 text-amber-100 hover:text-white">Back to Live</Button>}{onGoLiveWithThis && <Button size="sm" onClick={onGoLiveWithThis} className="h-7 bg-amber-300 text-zinc-950 hover:bg-amber-200">Go Live With This Question</Button>}</div>}<div className="flex items-start justify-between gap-3 mb-1"><div className="flex items-center gap-2 flex-wrap">{branding?.logoUrl && <img src={branding.logoUrl} alt={branding.name || "Host logo"} className="h-8 w-8 rounded bg-white object-contain p-1" />}</div><div className="flex items-center gap-2">{!editing && <button type="button" onClick={startEdit} title="Edit question" aria-label="Edit question" className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 text-zinc-400 hover:text-white"><Pencil size={13} /></button>}<span className="text-zinc-500 font-mono text-sm">{index + 1} / {total}</span></div></div>{editing ? <div className="mb-6 space-y-3"><QuestionEditFields type={question.type} draft={draft} setDraft={setDraft} /><div className="flex justify-end gap-2"><Button size="sm" variant="outline" onClick={() => setEditing(false)} className="border-white/10 text-zinc-300 hover:text-white">Cancel</Button><Button size="sm" onClick={handleSaveEdit} disabled={savingEdit} className="gradient-btn">{savingEdit ? "Saving..." : "Save"}</Button></div></div> : <>
-    <div className="mb-8 flex items-center gap-2 flex-wrap"><Badge variant="outline" className="border-zinc-700 text-zinc-300">{question.category}</Badge><Badge className="border" style={{ backgroundColor: `${accentColor}1F`, borderColor: `${accentColor}00`, color: accentColor }}><Icon size={13} className="mr-1" />{meta.label}</Badge><span className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-zinc-700 bg-zinc-900/60 px-3 py-1.5 text-xs font-bold text-zinc-400" title="Only visible on this screen -- players and the presentation screen don't see this until you reveal"><EyeOff size={12} />Answer: {question.answer || "Not set"}</span><EditableStatBadge label="Points" value={Number(pointsPerQuestion) || getDefaultPoints(question)} tone="amber" step={5} onSave={(value, scope) => onUpdateSettings({ points: value }, scope, question)} /><button type="button" onClick={() => onUpdateSettings({ wagerLimit: wagerMode ? 0 : 1 }, "question", question)} className={`rounded-full border px-3 py-1.5 text-xs font-bold ${wagerMode ? "border-purple-400/50 bg-purple-500/20 text-purple-100" : "border-purple-500/30 bg-purple-500/10 text-purple-200 hover:border-purple-400/60"}`} title="Teams can wager up to whatever points they currently have -- there's no separate host-set limit">{wagerMode ? "Wager: On" : "Wager: Off"}</button><EditableStatBadge label="Timer" value={Number(timerSeconds) || 0} unit="seconds" suffix="s" tone="teal" step={5} onSave={(value, scope) => onUpdateSettings({ timerSeconds: value }, scope, question)} />{timeRemaining !== null && <span className="rounded-full border border-[#71E0DC]/25 bg-[#71E0DC]/10 px-3 py-1.5 text-sm font-bold text-[#71E0DC]">{timeRemaining}s left</span>}{wagerMode && <button type="button" onClick={() => onUpdateSettings({ wagerTiming: wagerTiming === "after_answer" ? "before_answer" : "after_answer" }, "question", question)} className="rounded-full border border-purple-500/30 bg-purple-500/10 px-3 py-1.5 text-sm font-bold text-purple-200 hover:border-purple-400/60">{wagerTiming === "after_answer" ? "After Answer" : "Before Answer"}</button>}{imageUrl && <Badge className="bg-amber-400/15 text-amber-200 border border-amber-400/20">{question.imageTiming === "after_answer" ? "Reveal Media" : "Media"}</Badge>}{playerCount > 0 && <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-bold ${allSubmitted ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-400/15 text-amber-200"}`}><span className="h-1.5 w-12 overflow-hidden rounded-full bg-white/15"><span className="block h-full rounded-full bg-current" style={{ width: `${submittedPct}%` }} /></span>{submittedCount}/{playerCount} in</span>}</div>{!isReviewing && <div className="mb-6 flex flex-wrap items-center gap-2"><Button size="sm" onClick={startTimer} className="h-9 gradient-btn"><Play size={14} className="mr-1.5" />Start Timer</Button><Button size="sm" onClick={onRevealAnswer} className={`h-9 ${showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700" : "gradient-btn"}`}>{showAnswer ? <EyeOff size={14} className="mr-1.5" /> : <Eye size={14} className="mr-1.5" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button><Button size="sm" onClick={onShowFunFact} disabled={!hasRevealExtra} className="h-9 bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-40"><Sparkles size={14} className="mr-1.5" />{showFunFact ? "Hide" : hasFunFact ? "Reveal Fun Fact" : "Reveal Media"}</Button>{hasAudio && <Button size="sm" onClick={onToggleAudio} className={`h-9 ${isPlayingAudio ? "bg-purple-500/20 text-purple-200 hover:bg-purple-500/30" : "bg-zinc-800 text-white hover:bg-zinc-700"}`}>{isPlayingAudio ? <Pause size={14} className="mr-1.5" /> : <Music size={14} className="mr-1.5" />}{isPlayingAudio ? "Stop Audio" : "Play Audio"}</Button>}<DropdownMenu><DropdownMenuTrigger asChild><button type="button" title="More actions" aria-label="More actions" className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 text-zinc-400 hover:text-white"><MoreVertical size={16} /></button></DropdownMenuTrigger><DropdownMenuContent align="start" className="border-white/10 bg-zinc-950 text-zinc-100"><DropdownMenuItem onClick={resetTimer} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><RotateCcw size={14} className="mr-2" />Clear Timer</DropdownMenuItem><DropdownMenuItem onClick={() => setMediaModalOpen(true)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Image size={14} className="mr-2" />Media</DropdownMenuItem>{resetQuestion && <DropdownMenuItem onClick={resetQuestion} className="cursor-pointer text-amber-300 focus:bg-zinc-900 focus:text-amber-200"><RefreshCw size={14} className="mr-2" />Reset Question</DropdownMenuItem>}</DropdownMenuContent></DropdownMenu></div>}<h2 className={`${focusMode ? "text-4xl lg:text-6xl" : "text-2xl lg:text-4xl"} font-black leading-tight text-white text-center mb-6`}>{question.questionText}</h2>{shouldShowImage ? <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_220px] items-start gap-5 mb-6">{answerColumn}<div className="overflow-hidden rounded-xl border border-white/10 bg-zinc-950 aspect-[4/3]"><img src={imageUrl} alt="Question" className="h-full w-full object-cover" /></div></div> : <div className="mx-auto mb-6 w-full max-w-2xl">{answerColumn}</div>}{shouldShowFunFactImage && <div className="mt-5 max-h-[42vh] overflow-y-auto rounded-lg border p-5 text-center" style={{ backgroundColor: `${accentColor}18`, borderColor: `${accentColor}55` }}><div className="mb-4 flex justify-center"><img src={imageUrl} alt="Reveal media" className="max-h-[28vh] max-w-full rounded-lg border border-white/10 object-contain" /></div><div className="flex items-center justify-center gap-2 font-bold mb-2" style={{ color: accentColor }}><Sparkles size={18} />Media</div></div>}
+    <div className="mb-8 flex items-center gap-2 flex-wrap"><Badge variant="outline" className="border-zinc-700 text-zinc-300">{question.category}</Badge><Badge className="border" style={{ backgroundColor: `${accentColor}1F`, borderColor: `${accentColor}00`, color: accentColor }}><Icon size={13} className="mr-1" />{meta.label}</Badge><span className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-zinc-700 bg-zinc-900/60 px-3 py-1.5 text-xs font-bold text-zinc-400" title="Only visible on this screen -- players and the presentation screen don't see this until you reveal"><EyeOff size={12} />Answer: {question.answer || "Not set"}</span><EditableStatBadge label="Points" value={Number(pointsPerQuestion) || getDefaultPoints(question)} tone="amber" step={5} onSave={(value, scope) => onUpdateSettings({ points: value }, scope, question)} /><button type="button" onClick={() => onUpdateSettings({ wagerLimit: wagerMode ? 0 : 1 }, "question", question)} className={`rounded-full border px-3 py-1.5 text-xs font-bold ${wagerMode ? "border-purple-400/50 bg-purple-500/20 text-purple-100" : "border-purple-500/30 bg-purple-500/10 text-purple-200 hover:border-purple-400/60"}`} title="Teams can wager up to whatever points they currently have -- there's no separate host-set limit">{wagerMode ? "Wager: On" : "Wager: Off"}</button><EditableStatBadge label="Timer" value={Number(timerSeconds) || 0} unit="seconds" suffix="s" tone="teal" step={5} onSave={(value, scope) => onUpdateSettings({ timerSeconds: value }, scope, question)} />{timeRemaining !== null && <span className="rounded-full border border-[#71E0DC]/25 bg-[#71E0DC]/10 px-3 py-1.5 text-sm font-bold text-[#71E0DC]">{timeRemaining}s left</span>}{wagerMode && <button type="button" onClick={() => onUpdateSettings({ wagerTiming: wagerTiming === "after_answer" ? "before_answer" : "after_answer" }, "question", question)} className="rounded-full border border-purple-500/30 bg-purple-500/10 px-3 py-1.5 text-sm font-bold text-purple-200 hover:border-purple-400/60">{wagerTiming === "after_answer" ? "After Answer" : "Before Answer"}</button>}{imageUrl && <Badge className="bg-amber-400/15 text-amber-200 border border-amber-400/20">{question.imageTiming === "after_answer" ? "Reveal Media" : "Media"}</Badge>}{playerCount > 0 && <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-bold ${allSubmitted ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-400/15 text-amber-200"}`}><span className="h-1.5 w-12 overflow-hidden rounded-full bg-white/15"><span className="block h-full rounded-full bg-current" style={{ width: `${submittedPct}%` }} /></span>{submittedCount}/{playerCount} in</span>}</div>{!isReviewing && <div className="mb-6 flex flex-wrap items-center gap-2"><Button size="sm" onClick={startTimer} className="h-9 gradient-btn"><Play size={14} className="mr-1.5" />Start Timer</Button><Button size="sm" onClick={onRevealAnswer} className={`h-9 ${showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700" : "gradient-btn"}`}>{showAnswer ? <EyeOff size={14} className="mr-1.5" /> : <Eye size={14} className="mr-1.5" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button><Button size="sm" variant="outline" onClick={onShowFunFact} disabled={!hasRevealExtra} className="h-8 border-white/10 text-xs text-zinc-300 hover:text-white disabled:opacity-40"><Sparkles size={12} className="mr-1" />{showFunFact ? "Hide" : hasFunFact ? "Fun Fact" : "Media"}</Button>{hasAudio && <Button size="sm" onClick={onToggleAudio} className={`h-9 ${isPlayingAudio ? "bg-purple-500/20 text-purple-200 hover:bg-purple-500/30" : "bg-zinc-800 text-white hover:bg-zinc-700"}`}>{isPlayingAudio ? <Pause size={14} className="mr-1.5" /> : <Music size={14} className="mr-1.5" />}{isPlayingAudio ? "Stop Audio" : "Play Audio"}</Button>}<DropdownMenu><DropdownMenuTrigger asChild><button type="button" title="More actions" aria-label="More actions" className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 text-zinc-400 hover:text-white"><MoreVertical size={16} /></button></DropdownMenuTrigger><DropdownMenuContent align="start" className="border-white/10 bg-zinc-950 text-zinc-100"><DropdownMenuItem onClick={resetTimer} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><RotateCcw size={14} className="mr-2" />Clear Timer</DropdownMenuItem><DropdownMenuItem onClick={() => setMediaModalOpen(true)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Image size={14} className="mr-2" />Media</DropdownMenuItem><DropdownMenuItem onClick={onDuplicate} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Copy size={14} className="mr-2" />Clone</DropdownMenuItem>{resetQuestion && <DropdownMenuItem onClick={resetQuestion} className="cursor-pointer text-amber-300 focus:bg-zinc-900 focus:text-amber-200"><RefreshCw size={14} className="mr-2" />Reset Question</DropdownMenuItem>}</DropdownMenuContent></DropdownMenu></div>}<h2 className={`${focusMode ? "text-4xl lg:text-6xl" : "text-2xl lg:text-4xl"} font-black leading-tight text-white text-center mb-6`}>{question.questionText}</h2>{shouldShowImage ? <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_220px] items-start gap-5 mb-6">{answerColumn}<div className="overflow-hidden rounded-xl border border-white/10 bg-zinc-950 aspect-[4/3]"><img src={imageUrl} alt="Question" className="h-full w-full object-cover" /></div></div> : <div className="mx-auto mb-6 w-full max-w-2xl">{answerColumn}</div>}{shouldShowFunFactImage && <div className="mt-5 max-h-[42vh] overflow-y-auto rounded-lg border p-5 text-center" style={{ backgroundColor: `${accentColor}18`, borderColor: `${accentColor}55` }}><div className="mb-4 flex justify-center"><img src={imageUrl} alt="Reveal media" className="max-h-[28vh] max-w-full rounded-lg border border-white/10 object-contain" /></div><div className="flex items-center justify-center gap-2 font-bold mb-2" style={{ color: accentColor }}><Sparkles size={18} />Media</div></div>}
   </>}</CardContent></Card>
   {mediaModalOpen && <MediaEditModal question={question} onSave={(patch) => { onUpdateSettings(patch, "question", question); setMediaModalOpen(false); }} onClose={() => setMediaModalOpen(false)} />}
   </>;
