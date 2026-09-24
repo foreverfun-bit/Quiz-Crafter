@@ -1891,6 +1891,32 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     });
   };
 
+  // Shared validation/shaping for the cut-down manual write-question form --
+  // used both to seed a brand new round (createRound) and to add a question
+  // to one that already exists (addQuestionToRound). toast.error(...) returns
+  // a truthy id, not a success flag, so every caller here returns an
+  // explicit boolean rather than the toast call itself.
+  const buildQuestionFromDraft = (draft) => {
+    const questionText = draft.question_text.trim();
+    const correctAnswer = draft.correct_answer.trim();
+    if (!questionText || !correctAnswer) { toast.error("Write the question and its answer"); return null; }
+    const wrongAnswers = draft.incorrect_answers.map((answer) => answer.trim()).filter(Boolean);
+    if (draft.question_type === "multiple_choice" && wrongAnswers.length < 2) { toast.error("Add at least two wrong answers for multiple choice"); return null; }
+    const key = draft.question_type === "true_false" ? "true_false_questions" : draft.question_type === "multiple_choice" ? "multiple_choice_questions" : "written_questions";
+    const question = {
+      question_type: draft.question_type,
+      category: draft.category.trim() || "General",
+      question_text: questionText,
+      correct_answer: draft.question_type === "true_false" ? (correctAnswer.toLowerCase() === "false" ? "False" : "True") : correctAnswer,
+      incorrect_answers: draft.question_type === "multiple_choice" ? wrongAnswers.join("; ") : null,
+      fun_fact: draft.fun_fact.trim(),
+      timer_seconds: 30,
+      wager_limit: 0,
+      wager_timing: "after_answer",
+    };
+    return { key, question };
+  };
+
   // A round only exists once it has >=1 question (flattenSession/makeRounds
   // derive rounds purely from question fields -- an empty round doesn't
   // survive a reload). So "Create Round" is really "name a round and write
@@ -1900,35 +1926,58 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   // reviewIndex position, so nothing needs remapping the way move/delete do.
   const createRound = async (name, draft) => {
     const roundName = name.trim();
-    if (!roundName) return toast.error("Give the round a name");
-    const questionText = draft.question_text.trim();
-    const correctAnswer = draft.correct_answer.trim();
-    if (!questionText || !correctAnswer) return toast.error("Write the first question and its answer");
-    const wrongAnswers = draft.incorrect_answers.map((answer) => answer.trim()).filter(Boolean);
-    if (draft.question_type === "multiple_choice" && wrongAnswers.length < 2) return toast.error("Add at least two wrong answers for multiple choice");
-
-    const key = draft.question_type === "true_false" ? "true_false_questions" : draft.question_type === "multiple_choice" ? "multiple_choice_questions" : "written_questions";
+    if (!roundName) { toast.error("Give the round a name"); return false; }
+    const built = buildQuestionFromDraft(draft);
+    if (!built) return false;
+    const { key, question } = built;
     const roundOrder = rounds.reduce((max, round) => Math.max(max, Number(round.questions[0]?.roundOrder) || 0), 0) + 1;
-    const newQuestion = {
-      question_type: draft.question_type,
-      category: draft.category.trim() || "General",
-      question_text: questionText,
-      correct_answer: draft.question_type === "true_false" ? (correctAnswer.toLowerCase() === "false" ? "False" : "True") : correctAnswer,
-      incorrect_answers: draft.question_type === "multiple_choice" ? wrongAnswers.join("; ") : null,
-      fun_fact: draft.fun_fact.trim(),
-      round_name: roundName,
-      round_order: roundOrder,
-      timer_seconds: 30,
-      wager_limit: 0,
-      wager_timing: "after_answer",
-    };
+    question.round_name = roundName;
+    question.round_order = roundOrder;
     const current = Array.isArray(session[key]) ? session[key] : [];
-    const updatedArrays = { [key]: [...current, newQuestion] };
+    const updatedArrays = { [key]: [...current, question] };
     setSession((prevSession) => ({ ...prevSession, ...updatedArrays }));
     if (!isTestRun) {
       const { error } = await supabase.from("sessions").update(updatedArrays).eq("id", id);
       if (error) {
         console.warn("Round create save unavailable:", error);
+        toast.error("Saved for this session, but couldn't sync to the database");
+      }
+    }
+    return true;
+  };
+
+  // Appending to an existing round, unlike createRound, can't rely on a
+  // fresh top-level round_order to land safely at the very end of the whole
+  // list -- it only needs to land at the end of *this* round, ahead of
+  // every later round, which does shift every question after this round's
+  // insertion point (including a live/reviewed one in a later round). Same
+  // "flatten the hypothetical, look up by id" fix as moveQuestionToRound.
+  const addQuestionToRound = async (round, draft) => {
+    const built = buildQuestionFromDraft(draft);
+    if (!built) return false;
+    const { key, question } = built;
+    const roundOrder = round.questions[0]?.roundOrder;
+    const sourceOrder = round.questions.reduce((max, item) => Math.max(max, Number(item.sourceOrder) || 0), 0) + 1;
+    question.round_name = round.name;
+    question.round_order = roundOrder;
+    question.source_order = sourceOrder;
+    const current = Array.isArray(session[key]) ? session[key] : [];
+    const updatedArrays = { [key]: [...current, question] };
+
+    const pinnedLiveId = questions[currentIndex]?.id;
+    const pinnedReviewId = isReviewing ? questions[reviewIndex]?.id : null;
+    const remappedQuestions = flattenSession({ ...session, ...updatedArrays });
+    const newCurrentIndex = remappedQuestions.findIndex((item) => item.id === pinnedLiveId);
+    const newReviewIndex = pinnedReviewId ? remappedQuestions.findIndex((item) => item.id === pinnedReviewId) : -1;
+
+    setSession((prevSession) => ({ ...prevSession, ...updatedArrays }));
+    if (newCurrentIndex !== -1) setCurrentIndex(newCurrentIndex);
+    if (isReviewing) setReviewIndex(newReviewIndex !== -1 ? newReviewIndex : null);
+
+    if (!isTestRun) {
+      const { error } = await supabase.from("sessions").update(updatedArrays).eq("id", id);
+      if (error) {
+        console.warn("Write question save unavailable:", error);
         toast.error("Saved for this session, but couldn't sync to the database");
       }
     }
@@ -2094,6 +2143,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
             deleteRound={deleteRound}
             createRound={createRound}
             moveQuestionToRound={moveQuestionToRound}
+            addQuestionToRound={addQuestionToRound}
             branding={branding}
             markAnswer={markAnswer}
             addManualAnswer={addManualAnswer}
@@ -2142,15 +2192,33 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
 // reviewed; move does, and compensates for it in moveRound itself.
 const emptyRoundDraft = { question_type: "written", category: "", question_text: "", correct_answer: "", incorrect_answers: ["", "", ""], fun_fact: "" };
 
-// A cut-down manual "Write Question" form, just enough to seed a brand new
-// round's first question -- AI-assisted drafting and media stay on the
+// Shared by AddRoundModal and WriteQuestionModal -- a cut-down manual
+// question form. AI-assisted drafting and media attachment stay on the
 // standalone builder page for now (a later merge phase ports those in).
+const QuestionDraftFields = ({ draft, setDraft }) => {
+  const updateWrong = (index, value) => setDraft((prev) => ({ ...prev, incorrect_answers: prev.incorrect_answers.map((answer, i) => (i === index ? value : answer)) }));
+  return <div className="space-y-3">
+    <div className="grid grid-cols-1 md:grid-cols-[160px_1fr] gap-3">
+      <select value={draft.question_type} onChange={(event) => setDraft((prev) => ({ ...prev, question_type: event.target.value }))} className="h-10 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white">
+        <option value="written">Free Response</option>
+        <option value="true_false">True/False</option>
+        <option value="multiple_choice">Multiple Choice</option>
+      </select>
+      <input value={draft.category} onChange={(event) => setDraft((prev) => ({ ...prev, category: event.target.value }))} placeholder="Category" className="h-10 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
+    </div>
+    <textarea value={draft.question_text} onChange={(event) => setDraft((prev) => ({ ...prev, question_text: event.target.value }))} placeholder="Question" className="min-h-[86px] w-full resize-none rounded-md border border-white/10 bg-zinc-950/50 px-3 py-2 text-white outline-none focus:border-[#71E0DC]/60" />
+    <input value={draft.correct_answer} onChange={(event) => setDraft((prev) => ({ ...prev, correct_answer: event.target.value }))} placeholder="Correct answer" className="h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
+    {draft.question_type === "multiple_choice" && <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+      {draft.incorrect_answers.map((answer, index) => <input key={index} value={answer} onChange={(event) => updateWrong(index, event.target.value)} placeholder={`Wrong answer ${index + 1}`} className="h-10 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />)}
+    </div>}
+    <input value={draft.fun_fact} onChange={(event) => setDraft((prev) => ({ ...prev, fun_fact: event.target.value }))} placeholder="Fun fact (optional)" className="h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
+  </div>;
+};
+
 const AddRoundModal = ({ onCreate, onClose }) => {
   const [name, setName] = useState("");
   const [draft, setDraft] = useState(emptyRoundDraft);
   const [saving, setSaving] = useState(false);
-
-  const updateWrong = (index, value) => setDraft((prev) => ({ ...prev, incorrect_answers: prev.incorrect_answers.map((answer, i) => (i === index ? value : answer)) }));
 
   const handleCreate = async () => {
     setSaving(true);
@@ -2169,24 +2237,42 @@ const AddRoundModal = ({ onCreate, onClose }) => {
       <p className="mb-5 text-sm text-zinc-500">Name the round and write its first question -- more questions can be added to it after.</p>
       <div className="space-y-3">
         <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Round name" className="h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" autoFocus />
-        <div className="grid grid-cols-1 md:grid-cols-[160px_1fr] gap-3">
-          <select value={draft.question_type} onChange={(event) => setDraft((prev) => ({ ...prev, question_type: event.target.value }))} className="h-10 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white">
-            <option value="written">Free Response</option>
-            <option value="true_false">True/False</option>
-            <option value="multiple_choice">Multiple Choice</option>
-          </select>
-          <input value={draft.category} onChange={(event) => setDraft((prev) => ({ ...prev, category: event.target.value }))} placeholder="Category" className="h-10 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
-        </div>
-        <textarea value={draft.question_text} onChange={(event) => setDraft((prev) => ({ ...prev, question_text: event.target.value }))} placeholder="Question" className="min-h-[86px] w-full resize-none rounded-md border border-white/10 bg-zinc-950/50 px-3 py-2 text-white outline-none focus:border-[#71E0DC]/60" />
-        <input value={draft.correct_answer} onChange={(event) => setDraft((prev) => ({ ...prev, correct_answer: event.target.value }))} placeholder="Correct answer" className="h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
-        {draft.question_type === "multiple_choice" && <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-          {draft.incorrect_answers.map((answer, index) => <input key={index} value={answer} onChange={(event) => updateWrong(index, event.target.value)} placeholder={`Wrong answer ${index + 1}`} className="h-10 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />)}
-        </div>}
-        <input value={draft.fun_fact} onChange={(event) => setDraft((prev) => ({ ...prev, fun_fact: event.target.value }))} placeholder="Fun fact (optional)" className="h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
+        <QuestionDraftFields draft={draft} setDraft={setDraft} />
       </div>
       <div className="mt-5 flex justify-end gap-2">
         <Button type="button" variant="outline" onClick={onClose} className="border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
         <Button type="button" onClick={handleCreate} disabled={saving} className="gradient-btn">{saving ? "Creating..." : "Create Round"}</Button>
+      </div>
+    </div>
+  </div>;
+};
+
+// Adds one question to an existing round -- the generalized form of
+// AddRoundModal's first-question step, reachable from any round once it
+// already exists.
+const WriteQuestionModal = ({ round, onCreate, onClose }) => {
+  const [draft, setDraft] = useState(emptyRoundDraft);
+  const [saving, setSaving] = useState(false);
+
+  const handleCreate = async () => {
+    setSaving(true);
+    try {
+      const ok = await onCreate(draft);
+      if (ok) onClose();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 pt-8 md:pt-14 overflow-y-auto">
+    <div className="w-full max-w-2xl rounded-xl bg-[#17181c] border border-white/10 shadow-2xl shadow-black/60 p-5 relative">
+      <button type="button" onClick={onClose} className="absolute right-4 top-4 text-zinc-400 hover:text-white" aria-label="Close"><X size={18} /></button>
+      <h2 className="mb-1 text-xl font-bold text-white">Write Question</h2>
+      <p className="mb-5 text-sm text-zinc-500">Added to the end of <span className="text-zinc-300 font-semibold">{round.name}</span>.</p>
+      <QuestionDraftFields draft={draft} setDraft={setDraft} />
+      <div className="mt-5 flex justify-end gap-2">
+        <Button type="button" variant="outline" onClick={onClose} className="border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
+        <Button type="button" onClick={handleCreate} disabled={saving} className="gradient-btn">{saving ? "Adding..." : "Add Question"}</Button>
       </div>
     </div>
   </div>;
@@ -2257,10 +2343,12 @@ const QuestionListView = ({
   displayedQuestion, goToQuestion, reviewQuestion, onBackToLive, onGoLiveWithThis,
   answersForQuestionIndex, gradedAnswers, players, hostAnswers, fairPlayStats,
   showAnswer, showFunFact, timeRemaining, viewPointsPerQuestion, viewTimerSeconds, viewWagerMode, viewWagerLimit, viewWagerTiming,
-  onUpdateSettings, renameRound, describeRound, moveRound, deleteRound, createRound, moveQuestionToRound, branding, markAnswer, addManualAnswer, editWager, releaseMode,
+  onUpdateSettings, renameRound, describeRound, moveRound, deleteRound, createRound, moveQuestionToRound, addQuestionToRound, branding, markAnswer, addManualAnswer, editWager, releaseMode,
   hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion,
 }) => {
   const [addRoundOpen, setAddRoundOpen] = useState(false);
+  const [writeQuestionRoundKey, setWriteQuestionRoundKey] = useState(null);
+  const writeQuestionRound = rounds.find((round) => round.key === writeQuestionRoundKey) || null;
   return <div className="space-y-6">
     <div className="flex justify-end">
       <Button size="sm" variant="outline" onClick={() => setAddRoundOpen(true)} className="h-8 border-white/10 text-zinc-300 hover:text-white"><Plus size={14} className="mr-1.5" />Add Round</Button>
@@ -2303,9 +2391,11 @@ const QuestionListView = ({
             onMoveToRound={(targetRound) => moveQuestionToRound(question, targetRound)}
           />;
         })}
+        <Button size="sm" variant="outline" onClick={() => setWriteQuestionRoundKey(round.key)} className="h-8 border-dashed border-white/15 text-zinc-400 hover:text-white"><Plus size={14} className="mr-1.5" />Write Question</Button>
       </div>
     </section>)}
     {addRoundOpen && <AddRoundModal onCreate={createRound} onClose={() => setAddRoundOpen(false)} />}
+    {writeQuestionRound && <WriteQuestionModal round={writeQuestionRound} onCreate={(draft) => addQuestionToRound(writeQuestionRound, draft)} onClose={() => setWriteQuestionRoundKey(null)} />}
   </div>;
 };
 
