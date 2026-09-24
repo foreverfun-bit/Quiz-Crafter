@@ -1,7 +1,7 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
-import { uploadQuestionMedia } from "../lib/mediaUpload";
+import { uploadQuestionMedia, uploadQuestionAudio } from "../lib/mediaUpload";
 import { ensureLiveGame, fetchLivePlayers, subscribeLivePlayers, upsertLivePlayer, removeLivePlayer, resetTestGame, endLiveGame } from "../lib/liveGame";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
@@ -23,6 +23,7 @@ import {
   EyeOff,
   ExternalLink,
   Image,
+  Link,
   List,
   Loader2,
   Lock,
@@ -321,6 +322,7 @@ const flattenSession = (session) => {
         funFact: question.fun_fact || "",
         imageUrl: firstQuestionImageUrl(question),
         imageTiming: normalizeImageTiming(question.image_timing || question.image_display_timing || question.media_timing || question.mediaTiming),
+        audioUrl: question.audio_url || question.audioUrl || "",
         options: buildAnswerOptions(question, questionType),
         type: questionType,
         roundName: getRoundName(question, roundOrder),
@@ -1717,6 +1719,9 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     if (patch.timerSeconds !== undefined) dbPatch.timer_seconds = patch.timerSeconds;
     if (patch.wagerLimit !== undefined) dbPatch.wager_limit = patch.wagerLimit;
     if (patch.wagerTiming !== undefined) dbPatch.wager_timing = patch.wagerTiming;
+    if (patch.imageUrl !== undefined) dbPatch.image_url = patch.imageUrl;
+    if (patch.imageTiming !== undefined) dbPatch.image_timing = patch.imageTiming;
+    if (patch.audioUrl !== undefined) dbPatch.audio_url = patch.audioUrl;
 
     const affectedIndicesByKey = new Map();
     scopedQuestions.forEach((question) => {
@@ -2132,7 +2137,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     if (presentMode === "categories") releaseMode("categories", roundKey);
   };
   return <div className={`${embedded ? "h-full" : "min-h-screen"} bg-[#09090B] text-white`} data-testid="host-session-page" style={brandStyle}>
-    {displayedQuestion?.audio_url && <audio ref={audioRef} src={displayedQuestion.audio_url} preload="none" onPlay={() => setIsPlayingAudio(true)} onPause={() => setIsPlayingAudio(false)} onEnded={() => setIsPlayingAudio(false)} className="hidden" />}
+    {displayedQuestion?.audioUrl && <audio ref={audioRef} src={displayedQuestion.audioUrl} preload="none" onPlay={() => setIsPlayingAudio(true)} onPause={() => setIsPlayingAudio(false)} onEnded={() => setIsPlayingAudio(false)} className="hidden" />}
     {isTestRun && !focusMode && <div className="bg-amber-400/15 border-b border-amber-400/30 text-amber-200 text-sm px-4 py-2 flex items-center justify-center gap-2" data-testid="test-mode-banner">
       <AlertTriangle size={14} />
       Test Run -- teams and scores here won't count. Starting the real event clears this out automatically.
@@ -2184,7 +2189,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
             releaseMode={releaseMode}
             hasRevealExtra={hasRevealExtra}
             hasFunFact={Boolean(displayedQuestion.funFact)}
-            hasAudio={Boolean(displayedQuestion.audio_url)}
+            hasAudio={Boolean(displayedQuestion.audioUrl)}
             isPlayingAudio={isPlayingAudio}
             onToggleAudio={toggleAudioPlayback}
             onRevealAnswer={toggleAnswer}
@@ -2994,6 +2999,7 @@ const WagerChip = ({ answer, disabled, onSave }) => {
 };
 
 const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusMode, pointsPerQuestion, timerSeconds, timeRemaining, wagerMode, wagerTiming, onUpdateSettings, branding, players, answers, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, editWager, setMode, isReviewing, hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, onBackToLive, onGoLiveWithThis }) => {
+  const [mediaModalOpen, setMediaModalOpen] = useState(false);
   const meta = typeMeta[question.type] || typeMeta.written;
   const Icon = meta.icon;
   const imageUrl = buildStorageUrl(question.imageUrl);
@@ -3012,7 +3018,85 @@ const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusM
   const funFactBox = question.funFact && <div className="mt-4 flex items-start gap-2.5 rounded-lg border border-dashed p-3.5 text-sm leading-relaxed transition-opacity" style={{ borderColor: `${accentColor}59`, backgroundColor: `${accentColor}0F`, color: "#C7C9F5", opacity: showFunFact ? 1 : 0.65 }}><Sparkles size={15} className="mt-0.5 shrink-0" style={{ color: accentColor }} /><div><b style={{ color: accentColor }}>Fun fact:</b> {question.funFact}</div></div>;
   const answerColumn = <div>{answerRows}{funFactBox}</div>;
 
-  return <Card className={`glass-card overflow-hidden ${isReviewing ? "border-amber-400/40" : "border-rose-400/30"} ${focusMode ? "w-full" : ""}`}><CardContent className={focusMode ? "p-8 lg:p-12" : "p-5 lg:p-7"}>{isReviewing && <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-100"><Eye size={13} className="shrink-0 text-amber-300" /><span className="flex-1">Reviewing this question &mdash; players and the presentation screen still see the live question.</span>{onBackToLive && <Button size="sm" variant="outline" onClick={onBackToLive} className="h-7 border-amber-300/30 text-amber-100 hover:text-white">Back to Live</Button>}{onGoLiveWithThis && <Button size="sm" onClick={onGoLiveWithThis} className="h-7 bg-amber-300 text-zinc-950 hover:bg-amber-200">Go Live With This Question</Button>}</div>}<div className="flex items-start justify-between gap-3 mb-1"><div className="flex items-center gap-2 flex-wrap">{branding?.logoUrl && <img src={branding.logoUrl} alt={branding.name || "Host logo"} className="h-8 w-8 rounded bg-white object-contain p-1" />}</div><span className="text-zinc-500 font-mono text-sm">{index + 1} / {total}</span></div><div className="mb-8 flex items-center gap-2 flex-wrap"><Badge variant="outline" className="border-zinc-700 text-zinc-300">{question.category}</Badge><Badge className="border" style={{ backgroundColor: `${accentColor}1F`, borderColor: `${accentColor}00`, color: accentColor }}><Icon size={13} className="mr-1" />{meta.label}</Badge><span className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-zinc-700 bg-zinc-900/60 px-3 py-1.5 text-xs font-bold text-zinc-400" title="Only visible on this screen -- players and the presentation screen don't see this until you reveal"><EyeOff size={12} />Answer: {question.answer || "Not set"}</span><EditableStatBadge label="Points" value={Number(pointsPerQuestion) || getDefaultPoints(question)} tone="amber" step={5} onSave={(value, scope) => onUpdateSettings({ points: value }, scope, question)} /><button type="button" onClick={() => onUpdateSettings({ wagerLimit: wagerMode ? 0 : 1 }, "question", question)} className={`rounded-full border px-3 py-1.5 text-xs font-bold ${wagerMode ? "border-purple-400/50 bg-purple-500/20 text-purple-100" : "border-purple-500/30 bg-purple-500/10 text-purple-200 hover:border-purple-400/60"}`} title="Teams can wager up to whatever points they currently have -- there's no separate host-set limit">{wagerMode ? "Wager: On" : "Wager: Off"}</button><EditableStatBadge label="Timer" value={Number(timerSeconds) || 0} unit="seconds" suffix="s" tone="teal" step={5} onSave={(value, scope) => onUpdateSettings({ timerSeconds: value }, scope, question)} />{timeRemaining !== null && <span className="rounded-full border border-[#71E0DC]/25 bg-[#71E0DC]/10 px-3 py-1.5 text-sm font-bold text-[#71E0DC]">{timeRemaining}s left</span>}{wagerMode && <button type="button" onClick={() => onUpdateSettings({ wagerTiming: wagerTiming === "after_answer" ? "before_answer" : "after_answer" }, "question", question)} className="rounded-full border border-purple-500/30 bg-purple-500/10 px-3 py-1.5 text-sm font-bold text-purple-200 hover:border-purple-400/60">{wagerTiming === "after_answer" ? "After Answer" : "Before Answer"}</button>}{imageUrl && <Badge className="bg-amber-400/15 text-amber-200 border border-amber-400/20">{question.imageTiming === "after_answer" ? "Reveal Media" : "Media"}</Badge>}{playerCount > 0 && <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-bold ${allSubmitted ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-400/15 text-amber-200"}`}><span className="h-1.5 w-12 overflow-hidden rounded-full bg-white/15"><span className="block h-full rounded-full bg-current" style={{ width: `${submittedPct}%` }} /></span>{submittedCount}/{playerCount} in</span>}</div>{!isReviewing && <div className="mb-6 flex flex-wrap items-center gap-2"><Button size="sm" onClick={startTimer} className="h-9 gradient-btn"><Play size={14} className="mr-1.5" />Start Timer</Button><Button size="sm" variant="outline" onClick={resetTimer} className="h-9 border-white/10 text-zinc-300 hover:text-white"><RotateCcw size={14} className="mr-1.5" />Clear Timer</Button><Button size="sm" onClick={onRevealAnswer} className={`h-9 ${showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700" : "gradient-btn"}`}>{showAnswer ? <EyeOff size={14} className="mr-1.5" /> : <Eye size={14} className="mr-1.5" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button><Button size="sm" onClick={onShowFunFact} disabled={!hasRevealExtra} className="h-9 bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-40"><Sparkles size={14} className="mr-1.5" />{showFunFact ? "Hide" : hasFunFact ? "Reveal Fun Fact" : "Reveal Media"}</Button>{hasAudio && <Button size="sm" onClick={onToggleAudio} className={`h-9 ${isPlayingAudio ? "bg-purple-500/20 text-purple-200 hover:bg-purple-500/30" : "bg-zinc-800 text-white hover:bg-zinc-700"}`}>{isPlayingAudio ? <Pause size={14} className="mr-1.5" /> : <Music size={14} className="mr-1.5" />}{isPlayingAudio ? "Stop Audio" : "Play Audio"}</Button>}{resetQuestion && <Button size="sm" variant="outline" onClick={resetQuestion} className="h-9 border-white/10 text-zinc-400 hover:text-amber-300" title="Clears submissions and grading for this question so it can be asked fresh"><RefreshCw size={14} className="mr-1.5" />Reset Question</Button>}</div>}<h2 className={`${focusMode ? "text-4xl lg:text-6xl" : "text-2xl lg:text-4xl"} font-black leading-tight text-white text-center mb-6`}>{question.questionText}</h2>{shouldShowImage ? <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_220px] items-start gap-5 mb-6">{answerColumn}<div className="overflow-hidden rounded-xl border border-white/10 bg-zinc-950 aspect-[4/3]"><img src={imageUrl} alt="Question" className="h-full w-full object-cover" /></div></div> : <div className="mx-auto mb-6 w-full max-w-2xl">{answerColumn}</div>}{shouldShowFunFactImage && <div className="mt-5 max-h-[42vh] overflow-y-auto rounded-lg border p-5 text-center" style={{ backgroundColor: `${accentColor}18`, borderColor: `${accentColor}55` }}><div className="mb-4 flex justify-center"><img src={imageUrl} alt="Reveal media" className="max-h-[28vh] max-w-full rounded-lg border border-white/10 object-contain" /></div><div className="flex items-center justify-center gap-2 font-bold mb-2" style={{ color: accentColor }}><Sparkles size={18} />Media</div></div>}</CardContent></Card>;
+  return <>
+  <Card className={`glass-card overflow-hidden ${isReviewing ? "border-amber-400/40" : "border-rose-400/30"} ${focusMode ? "w-full" : ""}`}><CardContent className={focusMode ? "p-8 lg:p-12" : "p-5 lg:p-7"}>{isReviewing && <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-100"><Eye size={13} className="shrink-0 text-amber-300" /><span className="flex-1">Reviewing this question &mdash; players and the presentation screen still see the live question.</span>{onBackToLive && <Button size="sm" variant="outline" onClick={onBackToLive} className="h-7 border-amber-300/30 text-amber-100 hover:text-white">Back to Live</Button>}{onGoLiveWithThis && <Button size="sm" onClick={onGoLiveWithThis} className="h-7 bg-amber-300 text-zinc-950 hover:bg-amber-200">Go Live With This Question</Button>}</div>}<div className="flex items-start justify-between gap-3 mb-1"><div className="flex items-center gap-2 flex-wrap">{branding?.logoUrl && <img src={branding.logoUrl} alt={branding.name || "Host logo"} className="h-8 w-8 rounded bg-white object-contain p-1" />}</div><span className="text-zinc-500 font-mono text-sm">{index + 1} / {total}</span></div><div className="mb-8 flex items-center gap-2 flex-wrap"><Badge variant="outline" className="border-zinc-700 text-zinc-300">{question.category}</Badge><Badge className="border" style={{ backgroundColor: `${accentColor}1F`, borderColor: `${accentColor}00`, color: accentColor }}><Icon size={13} className="mr-1" />{meta.label}</Badge><span className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-zinc-700 bg-zinc-900/60 px-3 py-1.5 text-xs font-bold text-zinc-400" title="Only visible on this screen -- players and the presentation screen don't see this until you reveal"><EyeOff size={12} />Answer: {question.answer || "Not set"}</span><EditableStatBadge label="Points" value={Number(pointsPerQuestion) || getDefaultPoints(question)} tone="amber" step={5} onSave={(value, scope) => onUpdateSettings({ points: value }, scope, question)} /><button type="button" onClick={() => onUpdateSettings({ wagerLimit: wagerMode ? 0 : 1 }, "question", question)} className={`rounded-full border px-3 py-1.5 text-xs font-bold ${wagerMode ? "border-purple-400/50 bg-purple-500/20 text-purple-100" : "border-purple-500/30 bg-purple-500/10 text-purple-200 hover:border-purple-400/60"}`} title="Teams can wager up to whatever points they currently have -- there's no separate host-set limit">{wagerMode ? "Wager: On" : "Wager: Off"}</button><EditableStatBadge label="Timer" value={Number(timerSeconds) || 0} unit="seconds" suffix="s" tone="teal" step={5} onSave={(value, scope) => onUpdateSettings({ timerSeconds: value }, scope, question)} />{timeRemaining !== null && <span className="rounded-full border border-[#71E0DC]/25 bg-[#71E0DC]/10 px-3 py-1.5 text-sm font-bold text-[#71E0DC]">{timeRemaining}s left</span>}{wagerMode && <button type="button" onClick={() => onUpdateSettings({ wagerTiming: wagerTiming === "after_answer" ? "before_answer" : "after_answer" }, "question", question)} className="rounded-full border border-purple-500/30 bg-purple-500/10 px-3 py-1.5 text-sm font-bold text-purple-200 hover:border-purple-400/60">{wagerTiming === "after_answer" ? "After Answer" : "Before Answer"}</button>}{imageUrl && <Badge className="bg-amber-400/15 text-amber-200 border border-amber-400/20">{question.imageTiming === "after_answer" ? "Reveal Media" : "Media"}</Badge>}{playerCount > 0 && <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-bold ${allSubmitted ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-400/15 text-amber-200"}`}><span className="h-1.5 w-12 overflow-hidden rounded-full bg-white/15"><span className="block h-full rounded-full bg-current" style={{ width: `${submittedPct}%` }} /></span>{submittedCount}/{playerCount} in</span>}</div>{!isReviewing && <div className="mb-6 flex flex-wrap items-center gap-2"><Button size="sm" onClick={startTimer} className="h-9 gradient-btn"><Play size={14} className="mr-1.5" />Start Timer</Button><Button size="sm" variant="outline" onClick={resetTimer} className="h-9 border-white/10 text-zinc-300 hover:text-white"><RotateCcw size={14} className="mr-1.5" />Clear Timer</Button><Button size="sm" onClick={onRevealAnswer} className={`h-9 ${showAnswer ? "bg-zinc-800 text-white hover:bg-zinc-700" : "gradient-btn"}`}>{showAnswer ? <EyeOff size={14} className="mr-1.5" /> : <Eye size={14} className="mr-1.5" />}{showAnswer ? "Hide Answer" : "Reveal Answer"}</Button><Button size="sm" onClick={onShowFunFact} disabled={!hasRevealExtra} className="h-9 bg-zinc-800 text-white hover:bg-zinc-700 disabled:opacity-40"><Sparkles size={14} className="mr-1.5" />{showFunFact ? "Hide" : hasFunFact ? "Reveal Fun Fact" : "Reveal Media"}</Button>{hasAudio && <Button size="sm" onClick={onToggleAudio} className={`h-9 ${isPlayingAudio ? "bg-purple-500/20 text-purple-200 hover:bg-purple-500/30" : "bg-zinc-800 text-white hover:bg-zinc-700"}`}>{isPlayingAudio ? <Pause size={14} className="mr-1.5" /> : <Music size={14} className="mr-1.5" />}{isPlayingAudio ? "Stop Audio" : "Play Audio"}</Button>}{resetQuestion && <Button size="sm" variant="outline" onClick={resetQuestion} className="h-9 border-white/10 text-zinc-400 hover:text-amber-300" title="Clears submissions and grading for this question so it can be asked fresh"><RefreshCw size={14} className="mr-1.5" />Reset Question</Button>}<Button size="sm" variant="outline" onClick={() => setMediaModalOpen(true)} className="h-9 border-white/10 text-zinc-300 hover:text-white"><Image size={14} className="mr-1.5" />Media</Button></div>}<h2 className={`${focusMode ? "text-4xl lg:text-6xl" : "text-2xl lg:text-4xl"} font-black leading-tight text-white text-center mb-6`}>{question.questionText}</h2>{shouldShowImage ? <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_220px] items-start gap-5 mb-6">{answerColumn}<div className="overflow-hidden rounded-xl border border-white/10 bg-zinc-950 aspect-[4/3]"><img src={imageUrl} alt="Question" className="h-full w-full object-cover" /></div></div> : <div className="mx-auto mb-6 w-full max-w-2xl">{answerColumn}</div>}{shouldShowFunFactImage && <div className="mt-5 max-h-[42vh] overflow-y-auto rounded-lg border p-5 text-center" style={{ backgroundColor: `${accentColor}18`, borderColor: `${accentColor}55` }}><div className="mb-4 flex justify-center"><img src={imageUrl} alt="Reveal media" className="max-h-[28vh] max-w-full rounded-lg border border-white/10 object-contain" /></div><div className="flex items-center justify-center gap-2 font-bold mb-2" style={{ color: accentColor }}><Sparkles size={18} />Media</div></div>}</CardContent></Card>
+  {mediaModalOpen && <MediaEditModal question={question} onSave={(patch) => { onUpdateSettings(patch, "question", question); setMediaModalOpen(false); }} onClose={() => setMediaModalOpen(false)} />}
+  </>;
+};
+
+// Full workspace merge Phase 5. A cut-down version of BuildSession's
+// MediaModal -- image URL/upload + before/after timing, audio upload/
+// remove -- without its AI image-generation panel (that's part of the AI
+// surface a later merge phase ports in alongside per-question AI edit).
+// Always commits with scope "question" only: unlike points/timer, "apply
+// this image to the rest of the round" is never what a host wants.
+const MediaEditModal = ({ question, onSave, onClose }) => {
+  const [imageUrl, setImageUrl] = useState(question.imageUrl || "");
+  const [imageTiming, setImageTiming] = useState(normalizeImageTiming(question.imageTiming));
+  const [audioUrl, setAudioUrl] = useState(question.audioUrl || "");
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [uploadingAudio, setUploadingAudio] = useState(false);
+
+  const handleImageFile = async (file) => {
+    if (!file) return;
+    setUploadingImage(true);
+    try {
+      setImageUrl(await uploadQuestionMedia(file));
+    } catch (error) {
+      console.error("Upload image error:", error);
+      toast.error(error.message || "Failed to upload image");
+    } finally {
+      setUploadingImage(false);
+    }
+  };
+
+  const handleAudioFile = async (file) => {
+    if (!file) return;
+    setUploadingAudio(true);
+    try {
+      setAudioUrl(await uploadQuestionAudio(file));
+    } catch (error) {
+      console.error("Upload audio error:", error);
+      toast.error(error.message || "Failed to upload audio");
+    } finally {
+      setUploadingAudio(false);
+    }
+  };
+
+  const handleSave = () => onSave({ imageUrl: imageUrl.trim(), imageTiming, audioUrl: audioUrl.trim() });
+
+  return <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 pt-8 md:pt-14 overflow-y-auto">
+    <div className="w-full max-w-lg rounded-xl border border-white/10 bg-[#17181c] p-6 shadow-2xl shadow-black/60 relative">
+      <button type="button" onClick={onClose} className="absolute right-4 top-4 text-zinc-400 hover:text-white" aria-label="Close media"><X size={18} /></button>
+      <h2 className="mb-5 text-xl font-bold text-white">Media</h2>
+      <div className="mb-4 flex gap-2">
+        <button type="button" onClick={() => setImageTiming("initial")} className={`h-9 flex-1 rounded-md border text-sm font-semibold ${imageTiming !== "after_answer" ? "border-[#71E0DC]/50 bg-[#71E0DC]/15 text-[#71E0DC]" : "border-white/10 text-zinc-400 hover:text-white"}`}>Show with question</button>
+        <button type="button" onClick={() => setImageTiming("after_answer")} className={`h-9 flex-1 rounded-md border text-sm font-semibold ${imageTiming === "after_answer" ? "border-[#71E0DC]/50 bg-[#71E0DC]/15 text-[#71E0DC]" : "border-white/10 text-zinc-400 hover:text-white"}`}>Show after answer</button>
+      </div>
+      <div className="mb-4 flex gap-2">
+        <div className="relative flex-1">
+          <Link className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+          <input value={imageUrl} onChange={(event) => setImageUrl(event.target.value)} placeholder="Image URL" className="h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 pl-9 pr-3 text-white outline-none focus:border-[#71E0DC]/60" />
+        </div>
+      </div>
+      <label className={`mb-2 flex h-40 cursor-pointer flex-col items-center justify-center rounded-md border-2 border-dashed transition-colors ${uploadingImage ? "border-zinc-600 bg-zinc-950/20" : "border-zinc-600 bg-zinc-950/20 hover:border-[#71E0DC]"}`}>
+        {uploadingImage ? <Loader2 size={22} className="animate-spin text-[#71E0DC]" /> : imageUrl ? <img src={imageUrl} alt="Question media preview" className="max-h-32 max-w-full rounded object-contain" /> : <><Upload size={22} className="mb-2 text-white" /><p className="text-sm font-medium text-white">Drop an image or click to upload</p></>}
+        <input type="file" accept="image/*" className="hidden" disabled={uploadingImage} onChange={(event) => handleImageFile(event.target.files?.[0])} />
+      </label>
+      {imageUrl && <Button type="button" variant="ghost" onClick={() => setImageUrl("")} className="mb-4 text-zinc-400 hover:text-white">Remove image</Button>}
+      <div className="my-5 h-px bg-white/10" />
+      <label className="mb-3 flex items-center gap-2 text-zinc-300"><Music size={16} />Audio clip</label>
+      <label className={`flex h-16 cursor-pointer items-center justify-center gap-2 rounded-md border-2 border-dashed transition-colors ${uploadingAudio ? "border-zinc-600 bg-zinc-950/20" : "border-zinc-600 bg-zinc-950/20 hover:border-[#71E0DC]"}`}>
+        {uploadingAudio ? <Loader2 size={18} className="animate-spin text-[#71E0DC]" /> : <><Upload size={16} className="text-white" /><p className="text-sm font-medium text-white">{audioUrl ? "Replace audio clip" : "Click to upload an audio clip"}</p></>}
+        <input type="file" accept="audio/*" className="hidden" disabled={uploadingAudio} onChange={(event) => handleAudioFile(event.target.files?.[0])} />
+      </label>
+      {audioUrl && <div className="mt-3"><audio controls src={audioUrl} className="h-10 w-full" /><Button type="button" variant="ghost" onClick={() => setAudioUrl("")} className="mt-2 text-zinc-400 hover:text-white">Remove audio</Button></div>}
+      <div className="mt-6 flex justify-end gap-2">
+        <Button type="button" variant="outline" onClick={onClose} className="border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
+        <Button type="button" onClick={handleSave} disabled={uploadingImage || uploadingAudio} className="gradient-btn">Save</Button>
+      </div>
+    </div>
+  </div>;
 };
 
 export default HostSession;
