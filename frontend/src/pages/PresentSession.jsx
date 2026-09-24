@@ -7,7 +7,9 @@ import { findLiveGame, fetchLivePlayers, subscribeLivePlayers } from "../lib/liv
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent } from "../components/ui/card";
 import {
+  Award,
   CheckCircle,
+  Clock,
   Image,
   List,
   Loader2,
@@ -26,6 +28,12 @@ const typeMeta = {
   multiple_choice: { label: "Multiple Choice", short: "MC", icon: List },
   written: { label: "Written", short: "Written", icon: MessageSquare },
 };
+
+// Mirrors HostSession's POINTS_BY_TYPE/getDefaultPoints -- a question with no
+// explicit points falls back to a per-type default, so the round intro's
+// points figure needs the same fallback to match what actually gets awarded.
+const POINTS_BY_TYPE = { true_false: 25, multiple_choice: 50, written: 100 };
+const getDefaultPoints = (type) => POINTS_BY_TYPE[type] || 100;
 
 // Kept separate from the customizable brand colors below -- gold/silver/bronze
 // are universal placement colors, not something a host's brand identity should
@@ -628,8 +636,18 @@ const LobbyView = ({ branding, sessionName, joinUrl, playerCount = 0, teams = []
 };
 
 const CategoriesView = ({ branding, round }) => {
-  const categories = round?.categories || [...new Set((round?.questions || []).map((question) => question.category).filter(Boolean))];
+  const roundQuestions = round?.questions || [];
+  const categories = round?.categories || [...new Set(roundQuestions.map((question) => question.category).filter(Boolean))];
   const swatches = [branding.primaryColor, branding.accentColor];
+  const firstQuestion = roundQuestions[0];
+  // The local `rounds` lookup carries full question objects; the broadcast
+  // fallback (serializeRoundIntro, used when that lookup misses) sends these
+  // same three facts pre-computed instead, since it has no question array.
+  const uniformType = firstQuestion
+    ? (roundQuestions.every((question) => question.type === firstQuestion.type) ? firstQuestion.type : null)
+    : round?.questionType || null;
+  const points = firstQuestion ? (Number(firstQuestion.points) > 0 ? Number(firstQuestion.points) : getDefaultPoints(firstQuestion.type)) : (round?.points ?? null);
+  const timerSeconds = firstQuestion?.timerSeconds || round?.timerSeconds || null;
 
   return (
     <div className="h-full w-full max-w-6xl flex items-start">
@@ -642,7 +660,12 @@ const CategoriesView = ({ branding, round }) => {
               <h2 className="text-4xl lg:text-5xl font-black">{round?.name || "Round"}</h2>
             </div>
           </div>
-          {round?.description && <p className="text-2xl lg:text-3xl text-zinc-200 leading-snug mb-7">{round.description}</p>}
+          {round?.description && <p className="text-2xl lg:text-3xl text-zinc-200 leading-snug mb-5">{round.description}</p>}
+          {(uniformType || points !== null || timerSeconds) && <div className="flex flex-wrap items-center gap-3 mb-7">
+            {uniformType && <span className="flex items-center gap-2 rounded-lg border px-4 py-2 text-lg font-bold" style={{ color: branding.primaryColor, borderColor: tint(branding.primaryColor, 30), background: tint(branding.primaryColor, 10) }}>{typeMeta[uniformType]?.label || uniformType}</span>}
+            {points !== null && <span className="flex items-center gap-2 rounded-lg border px-4 py-2 text-lg font-bold" style={{ color: branding.accentColor, borderColor: tint(branding.accentColor, 30), background: tint(branding.accentColor, 10) }}><Award size={20} />{points} pts</span>}
+            {timerSeconds && <span className="flex items-center gap-2 rounded-lg border border-white/15 bg-white/5 px-4 py-2 text-lg font-bold text-zinc-200"><Clock size={20} />{timerSeconds}s</span>}
+          </div>}
           <p className="text-zinc-400 uppercase tracking-wider text-base font-semibold mb-4">Round Categories</p>
           <div className="flex flex-wrap gap-4">
             {categories.map((category, index) => {

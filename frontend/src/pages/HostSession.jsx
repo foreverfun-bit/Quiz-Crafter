@@ -443,7 +443,22 @@ const mergePlayerProfiles = (current, incoming) => {
 };
 const normalizeAnswerText = (value) => String(value || "").trim().toLowerCase().replace(/[’']/g, "'").replace(/[^a-z0-9]+/g, " ").trim();
 const isCorrectSubmission = (answer, question) => Boolean(question?.answer) && normalizeAnswerText(answer?.answer) === normalizeAnswerText(question.answer);
-const serializeRoundIntro = (round) => round ? { key: round.key, name: round.name, description: round.description || "", categories: [...new Set((round.questions || []).map((question) => question.category).filter(Boolean))], questionCount: round.questions?.length || 0, startIndex: round.startIndex } : null;
+const serializeRoundIntro = (round) => {
+  if (!round) return null;
+  const firstQuestion = round.questions?.[0];
+  const uniformType = round.questions?.length && round.questions.every((question) => question.type === firstQuestion.type) ? firstQuestion.type : null;
+  return {
+    key: round.key,
+    name: round.name,
+    description: round.description || "",
+    categories: [...new Set((round.questions || []).map((question) => question.category).filter(Boolean))],
+    questionCount: round.questions?.length || 0,
+    startIndex: round.startIndex,
+    questionType: uniformType,
+    points: firstQuestion ? getQuestionPoints(firstQuestion) : null,
+    timerSeconds: firstQuestion?.timerSeconds || null,
+  };
+};
 const getTeamScore = (leaderboard, teamId) => Number(leaderboard.find((team) => team.id === teamId)?.score || 0);
 const isLateSubmission = (answer) => answer?.secondsRemainingAtSubmit !== null && answer?.secondsRemainingAtSubmit !== undefined && Number(answer.secondsRemainingAtSubmit) <= 5;
 const hasSubmittedWager = (answer) => Boolean(answer?.wagerMode) && (answer?.wagerSubmitted === true || answer?.wagerTiming !== "after_answer" || Number(answer?.wagerAmount || 0) > 0);
