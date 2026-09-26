@@ -2760,6 +2760,16 @@ const QuestionDraftFields = ({ draft, setDraft, approvedCategories = [] }) => {
   const [uploadingAudio, setUploadingAudio] = useState(false);
   const updateWrong = (index, value) => setDraft((prev) => ({ ...prev, incorrect_answers: prev.incorrect_answers.map((answer, i) => (i === index ? value : answer)) }));
 
+  // Captured once, on first render, so Clear restores the round-inherited
+  // defaults (question_type/points/timer_seconds) this draft actually
+  // started with instead of a hardcoded blank -- "clear the AI question if I
+  // don't like it" without also losing those.
+  const initialDraftRef = useRef(draft);
+  const clearContent = () => {
+    setDraft((prev) => ({ ...initialDraftRef.current, question_type: prev.question_type, points: prev.points, timer_seconds: prev.timer_seconds }));
+    toast.success("Cleared");
+  };
+
   // Mirrors BuildSession's randomizeCategory -- picks a different one each
   // click rather than the same first-in-list every time.
   const cycleCategory = () => {
@@ -2885,7 +2895,8 @@ const QuestionDraftFields = ({ draft, setDraft, approvedCategories = [] }) => {
       </div>
     </div>
     <div className="relative">
-      <textarea value={draft.question_text} onChange={(event) => setDraft((prev) => ({ ...prev, question_text: event.target.value }))} placeholder="Question" className="min-h-[86px] w-full resize-none rounded-md border border-white/10 bg-zinc-950/50 px-3 py-2 pr-12 text-white outline-none focus:border-[#71E0DC]/60" />
+      <textarea value={draft.question_text} onChange={(event) => setDraft((prev) => ({ ...prev, question_text: event.target.value }))} placeholder="Question" className="min-h-[86px] w-full resize-none rounded-md border border-white/10 bg-zinc-950/50 px-3 py-2 pr-20 text-white outline-none focus:border-[#71E0DC]/60" />
+      {(draft.question_text.trim() || draft.correct_answer.trim() || draft.fun_fact.trim()) && <button type="button" title="Clear the question, answer, wrong answers, and fun fact" aria-label="Clear question" onClick={clearContent} className="absolute right-11 top-2 flex h-8 w-8 items-center justify-center rounded-md border border-white/10 bg-zinc-950/70 text-zinc-300 hover:bg-zinc-800 hover:text-white"><X size={15} /></button>}
       <button type="button" title={draft.question_text.trim() ? "AI fill in the missing answer, wrong answers, or fun fact -- keeps your question as-is" : "AI draft a question from your category"} aria-label="AI assist" onClick={runAssist} disabled={assisting} className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-md border border-white/10 bg-zinc-950/70 text-zinc-300 hover:bg-zinc-800 hover:text-white disabled:opacity-60">
         {assisting ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
       </button>
