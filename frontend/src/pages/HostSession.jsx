@@ -1123,10 +1123,19 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     if (force || durableKey !== liveStateSaveKeyRef.current || nowMs - liveStateSaveRef.current > 1200) {
       liveStateSaveKeyRef.current = durableKey;
       liveStateSaveRef.current = nowMs;
-      const hostedResults = { ...hostedResultsRef.current, liveState: orderedState, liveStateUpdatedAt: orderedState.updatedAt };
-      hostedResultsRef.current = hostedResults;
+      // Keep the local ref current for the host's own bookkeeping (e.g. endSession
+      // reads it), but DON'T write it back to the DB as a full-column overwrite --
+      // hostedResultsRef.current is only refreshed every 2.5s by a polling interval,
+      // so a naive `update({ hosted_results: hostedResults })` here (this fires on
+      // nearly every host action) could clobber a player's liveEvents entry that
+      // landed in the DB after this stale snapshot was taken, and could even revert
+      // hosted_results.liveState itself if a stale write raced in after this one --
+      // the actual mechanism behind presentation-screen flicker/desync. The
+      // merge_host_live_state RPC does a single atomic UPDATE scoped to only
+      // liveState/liveStateUpdatedAt, so it can never step on liveEvents.
+      hostedResultsRef.current = { ...hostedResultsRef.current, liveState: orderedState, liveStateUpdatedAt: orderedState.updatedAt };
       if (!isTestRun) {
-        supabase.from("sessions").update({ hosted_results: hostedResults }).eq("id", id).then(({ error }) => {
+        supabase.rpc("merge_host_live_state", { p_session_id: id, p_live_state: orderedState }).then(({ error }) => {
           if (error) console.warn("Live presentation state save unavailable:", error);
         }).catch((error) => console.warn("Live presentation state save unavailable:", error));
       }

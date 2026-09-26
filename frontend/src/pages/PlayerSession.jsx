@@ -93,14 +93,25 @@ const makeLiveEventId = (event, payload = {}) => [
   payload.questionId || "",
   payload.submittedAt || payload.updatedAt || payload.joinedAt || Date.now(),
 ].join(":");
+// A player is never authenticated (no supabase.auth session -- joining is
+// just picking a name), so sessions' RLS UPDATE policy (auth.uid() =
+// user_id, the host's own account) can never let a plain
+// supabase.from("sessions").update(...) from here succeed -- that used to
+// be exactly what this function did, meaning it silently failed every
+// single time in production (caught below, only console.warn'd) and every
+// player/answer/feedback event relied entirely on best-effort Realtime
+// broadcast delivery with no working fallback. append_live_event is a
+// SECURITY DEFINER Postgres function (see the matching migration) that
+// atomically appends to hosted_results.liveEvents only -- it runs with the
+// function owner's privileges, so it works for an anonymous caller, and
+// because the whole append happens in one database statement it can't race
+// with another player's (or the host's) write the way a client-side
+// read-modify-write of the whole column could.
 const saveDurablePlayerEvent = async (sessionId, event, payload) => {
   const eventRecord = { id: payload.eventId || makeLiveEventId(event, payload), event, payload };
   try {
-    const { data } = await supabase.from("sessions").select("hosted_results").eq("id", sessionId).single();
-    const currentResults = data?.hosted_results && typeof data.hosted_results === "object" && !Array.isArray(data.hosted_results) ? data.hosted_results : {};
-    const currentEvents = Array.isArray(currentResults.liveEvents) ? currentResults.liveEvents : [];
-    const nextEvents = [...currentEvents.filter((item) => item?.id !== eventRecord.id), eventRecord].slice(-1000);
-    await supabase.from("sessions").update({ hosted_results: { ...currentResults, liveEvents: nextEvents, liveEventsUpdatedAt: new Date().toISOString() } }).eq("id", sessionId);
+    const { error } = await supabase.rpc("append_live_event", { p_session_id: sessionId, p_event: eventRecord });
+    if (error) throw error;
   } catch (error) {
     console.warn("Durable player event save unavailable:", error);
   }
