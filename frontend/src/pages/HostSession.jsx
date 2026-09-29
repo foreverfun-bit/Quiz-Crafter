@@ -356,6 +356,49 @@ const makeRounds = (questions) => {
   return [...groups.values()];
 };
 
+// "I don't like to use the same category more than once in a round" -- shared
+// by the Write Question/Add Round forms (QuestionDraftFields) and the
+// existing-question Edit form (QuestionEditFields) so both a manually-typed
+// category and an AI draft's category can be checked against what's already
+// on the board. `inRound` gates the hard stuff (AI generation exclusion,
+// cycleCategory avoidance); `elsewhere` is purely informational, since a
+// category repeating in a *different* round is fine -- the host only asked
+// about repeats within the same round, but said they want to see any-round
+// usage while writing.
+// inRound maps categoryKey -> the category's actual display text (not just
+// the key) so callers that feed it to the AI (excludeCategories) can show
+// the model a readable category name rather than a stripped-down key.
+const buildCategoryUsage = (questions, { roundKey = null, excludeQuestionId = null } = {}) => {
+  const inRound = new Map();
+  const elsewhere = new Map();
+  questions.forEach((question) => {
+    if (excludeQuestionId && question.id === excludeQuestionId) return;
+    const key = categoryKey(question.category);
+    if (!key) return;
+    const questionRoundKey = `${question.roundOrder}-${question.roundName}`;
+    if (roundKey && questionRoundKey === roundKey) {
+      if (!inRound.has(key)) inRound.set(key, question.category);
+    } else {
+      if (!elsewhere.has(key)) elsewhere.set(key, new Set());
+      elsewhere.get(key).add(question.roundName);
+    }
+  });
+  return { inRound, elsewhere };
+};
+
+// Small inline hint under a Category input -- an amber warning when the
+// typed/drafted category is already used in the round this question belongs
+// to (what the host said they want to avoid), a quieter note when it's only
+// used in a different round (informational, not a problem).
+const CategoryUsageHint = ({ category, usage }) => {
+  const key = categoryKey(category);
+  if (!key || !usage) return null;
+  if (usage.inRound?.has(key)) return <p className="mt-1 flex items-center gap-1 text-xs font-semibold text-amber-400"><AlertTriangle size={12} />Already used in this round</p>;
+  const elsewhereRounds = usage.elsewhere?.get(key);
+  if (elsewhereRounds?.size) return <p className="mt-1 text-xs text-zinc-500">Already used in {[...elsewhereRounds].join(", ")}</p>;
+  return null;
+};
+
 const readStoredLeaderboard = (sessionId) => {
   try {
     return JSON.parse(localStorage.getItem(`quiz-crafter-leaderboard-${sessionId}`) || "[]");
@@ -2556,7 +2599,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
         {session && <Button onClick={() => setEmptyStateAddRoundOpen(true)} className="gradient-btn"><Plus size={16} className="mr-2" />Add Round</Button>}
         {!embedded && <Button variant="outline" onClick={() => navigate(`/session/${id}`)} className="ml-2 border-white/10 text-zinc-300 hover:text-white">Back to Session</Button>}
       </div>
-      {session && emptyStateAddRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} onSaveToLibrary={saveQuestionToLibrary} approvedCategories={approvedCategories} onClose={() => setEmptyStateAddRoundOpen(false)} />}
+      {session && emptyStateAddRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} onSaveToLibrary={saveQuestionToLibrary} approvedCategories={approvedCategories} categoryUsage={buildCategoryUsage(questions)} onClose={() => setEmptyStateAddRoundOpen(false)} />}
     </div>;
   }
   if (!displayedQuestion) {
@@ -2591,8 +2634,8 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
           {!embedded && <Button variant="outline" onClick={() => navigate(`/session/${id}`)} className="border-white/10 text-zinc-300 hover:text-white">Back to Session</Button>}
         </div>
       </div>
-      {emptyStateAddRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} onSaveToLibrary={saveQuestionToLibrary} approvedCategories={approvedCategories} onClose={() => setEmptyStateAddRoundOpen(false)} />}
-      {emptyStateWriteRound && <WriteQuestionModal round={emptyStateWriteRound} onCreate={(draft) => addQuestionToRound(emptyStateWriteRound, draft)} onSaveToLibrary={saveQuestionToLibrary} approvedCategories={approvedCategories} onClose={() => setEmptyStateWriteRoundKey(null)} />}
+      {emptyStateAddRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} onSaveToLibrary={saveQuestionToLibrary} approvedCategories={approvedCategories} categoryUsage={buildCategoryUsage(questions)} onClose={() => setEmptyStateAddRoundOpen(false)} />}
+      {emptyStateWriteRound && <WriteQuestionModal round={emptyStateWriteRound} onCreate={(draft) => addQuestionToRound(emptyStateWriteRound, draft)} onSaveToLibrary={saveQuestionToLibrary} approvedCategories={approvedCategories} categoryUsage={buildCategoryUsage(questions, { roundKey: emptyStateWriteRound.key })} onClose={() => setEmptyStateWriteRoundKey(null)} />}
       {emptyStateGenerateRound && <GenerateRoundModal round={emptyStateGenerateRound} venueId={session?.venue_id} existingQuestionTexts={new Set()} onAddAll={(candidates) => addGeneratedQuestionsToRound(emptyStateGenerateRound, candidates)} onSaveToLibrary={saveQuestionToLibrary} onClose={() => setEmptyStateGenerateRoundKey(null)} />}
       {emptyStateManageRoundsOpen && <RoundManagerModal
         rounds={rounds}
@@ -2763,7 +2806,7 @@ const emptyRoundDraft = { question_type: "written", category: "", question_text:
 // host-assistant.js's "question_edit" mode, explicitly told to leave the
 // question wording (and the answer, if already filled in) untouched. Media
 // attachment stays on the standalone builder page for now.
-const QuestionDraftFields = ({ draft, setDraft, approvedCategories = [] }) => {
+const QuestionDraftFields = ({ draft, setDraft, approvedCategories = [], categoryUsage = null }) => {
   const [assisting, setAssisting] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [uploadingAudio, setUploadingAudio] = useState(false);
@@ -2780,11 +2823,16 @@ const QuestionDraftFields = ({ draft, setDraft, approvedCategories = [] }) => {
   };
 
   // Mirrors BuildSession's randomizeCategory -- picks a different one each
-  // click rather than the same first-in-list every time.
+  // click rather than the same first-in-list every time. Prefers a category
+  // not already used in this round (the host's stated preference); only
+  // falls back to repeating one if every approved category is already
+  // spoken for, so cycling never just gets stuck doing nothing.
   const cycleCategory = () => {
     const pool = approvedCategories.filter(Boolean);
     if (!pool.length) return toast.error("No approved categories yet -- approve some from the Categories page");
-    const options = pool.length > 1 ? pool.filter((category) => category !== draft.category) : pool;
+    const notCurrent = pool.filter((category) => category !== draft.category);
+    const unused = notCurrent.filter((category) => !categoryUsage?.inRound?.has(categoryKey(category)));
+    const options = unused.length ? unused : (notCurrent.length ? notCurrent : pool);
     setDraft((prev) => ({ ...prev, category: options[Math.floor(Math.random() * options.length)] }));
   };
 
@@ -2857,6 +2905,11 @@ const QuestionDraftFields = ({ draft, setDraft, approvedCategories = [] }) => {
         }));
         toast.success("Filled in the missing pieces");
       } else {
+        // Only tell the AI to avoid this round's categories when it's the
+        // one picking the category (no theme forcing a specific one) --
+        // if the host already typed/cycled to a category themselves, that's
+        // a deliberate choice (the CategoryUsageHint below already told them
+        // if it repeats), not something to fight.
         const response = await fetch("/api/generate-session-candidates", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2865,6 +2918,7 @@ const QuestionDraftFields = ({ draft, setDraft, approvedCategories = [] }) => {
             questionType: draft.question_type,
             count: 1,
             theme: draft.category ? `Use category: ${draft.category}` : "",
+            excludeCategories: draft.category ? [] : [...(categoryUsage?.inRound?.values() || [])],
             excludeUsed: true,
             avoidDuplicates: true,
             hostStyleProfile: readHostStyleProfile(),
@@ -2898,9 +2952,12 @@ const QuestionDraftFields = ({ draft, setDraft, approvedCategories = [] }) => {
         <option value="true_false">True/False</option>
         <option value="multiple_choice">Multiple Choice</option>
       </select>
-      <div className="flex gap-2">
-        <input value={draft.category} onChange={(event) => setDraft((prev) => ({ ...prev, category: event.target.value }))} placeholder="Category" className="h-10 min-w-0 flex-1 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
-        <button type="button" onClick={cycleCategory} title="Cycle through your approved categories" aria-label="Cycle approved categories" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-white/10 bg-zinc-950/50 text-zinc-300 hover:bg-zinc-800 hover:text-white"><RefreshCw size={16} /></button>
+      <div>
+        <div className="flex gap-2">
+          <input value={draft.category} onChange={(event) => setDraft((prev) => ({ ...prev, category: event.target.value }))} placeholder="Category" className="h-10 min-w-0 flex-1 rounded-md border border-white/10 bg-zinc-950/50 px-3 text-white outline-none focus:border-[#71E0DC]/60" />
+          <button type="button" onClick={cycleCategory} title="Cycle through your approved categories" aria-label="Cycle approved categories" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-white/10 bg-zinc-950/50 text-zinc-300 hover:bg-zinc-800 hover:text-white"><RefreshCw size={16} /></button>
+        </div>
+        <CategoryUsageHint category={draft.category} usage={categoryUsage} />
       </div>
     </div>
     <div className="relative">
@@ -2955,7 +3012,7 @@ const QuestionDraftFields = ({ draft, setDraft, approvedCategories = [] }) => {
 // concern that happens to be required (a round only becomes real once it
 // has a question -- see flattenSession/makeRounds) but shouldn't visually
 // read as "the round's fields" alongside the name field.
-const AddRoundModal = ({ onCreate, onCreateEmpty, onSaveToLibrary, approvedCategories, onClose }) => {
+const AddRoundModal = ({ onCreate, onCreateEmpty, onSaveToLibrary, approvedCategories, categoryUsage, onClose }) => {
   const [step, setStep] = useState("name");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -3059,7 +3116,7 @@ const AddRoundModal = ({ onCreate, onCreateEmpty, onSaveToLibrary, approvedCateg
       </> : <>
         <h2 className="mb-1 text-xl font-bold text-white">Write Question</h2>
         <p className="mb-5 text-sm text-zinc-500">First question for <span className="text-zinc-300 font-semibold">{name}</span> (optional -- "Create Round" on the previous step skips this and adds questions later).</p>
-        <QuestionDraftFields draft={draft} setDraft={setDraft} approvedCategories={approvedCategories} />
+        <QuestionDraftFields draft={draft} setDraft={setDraft} approvedCategories={approvedCategories} categoryUsage={categoryUsage} />
         <div className="mt-5 flex flex-wrap justify-end gap-2">
           <Button type="button" variant="outline" onClick={() => setStep("name")} className="border-white/10 text-zinc-300 hover:text-white">Back</Button>
           <Button type="button" variant="outline" onClick={handleSaveToLibrary} disabled={savingToLibrary} className="border-white/10 text-zinc-300 hover:text-white"><List size={14} className="mr-1.5" />{savingToLibrary ? "Saving..." : "Save to Library"}</Button>
@@ -3073,7 +3130,7 @@ const AddRoundModal = ({ onCreate, onCreateEmpty, onSaveToLibrary, approvedCateg
 // Adds one question to an existing round -- the generalized form of
 // AddRoundModal's first-question step, reachable from any round once it
 // already exists.
-const WriteQuestionModal = ({ round, onCreate, onSaveToLibrary, approvedCategories, onClose }) => {
+const WriteQuestionModal = ({ round, onCreate, onSaveToLibrary, approvedCategories, categoryUsage, onClose }) => {
   // Prefills from the round's own first question, or (for a round created
   // without one yet -- see createEmptyRound) from the defaults saved with it
   // at creation -- either way, the closest thing this app has to a stored
@@ -3126,7 +3183,7 @@ const WriteQuestionModal = ({ round, onCreate, onSaveToLibrary, approvedCategori
       <button type="button" onClick={onClose} className="absolute right-4 top-4 text-zinc-400 hover:text-white" aria-label="Close"><X size={18} /></button>
       <h2 className="mb-1 text-xl font-bold text-white">Write Question</h2>
       <p className="mb-5 text-sm text-zinc-500">Added to the end of <span className="text-zinc-300 font-semibold">{round.name}</span>.</p>
-      <QuestionDraftFields draft={draft} setDraft={setDraft} approvedCategories={approvedCategories} />
+      <QuestionDraftFields draft={draft} setDraft={setDraft} approvedCategories={approvedCategories} categoryUsage={categoryUsage} />
       <div className="mt-5 flex flex-wrap justify-end gap-2">
         <Button type="button" variant="outline" onClick={onClose} className="border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
         <Button type="button" variant="outline" onClick={handleSaveToLibrary} disabled={savingToLibrary} className="border-white/10 text-zinc-300 hover:text-white"><List size={14} className="mr-1.5" />{savingToLibrary ? "Saving..." : "Save to Library"}</Button>
@@ -3235,6 +3292,11 @@ const GENERATE_DIFFICULTIES = [
 // "Add to Round" commits the selection in one batch via
 // addGeneratedQuestionsToRound.
 const GenerateRoundModal = ({ round, venueId, existingQuestionTexts, onAddAll, onSaveToLibrary, onClose }) => {
+  // "I don't like to use the same category more than once in a round" --
+  // this round's own current categories, sent as excludeCategories below so
+  // the API's real filter (not just a prompt hint) rejects any candidate
+  // that repeats one, rather than leaving it to the model's judgment.
+  const roundCategories = [...new Set(round.questions.map((question) => question.category).filter(Boolean))];
   const [questionType, setQuestionType] = useState(round.questions[0]?.type || (round.questionType && round.questionType !== "mixed" ? round.questionType : "written"));
   const [difficulty, setDifficulty] = useState("medium");
   const [count, setCount] = useState(5);
@@ -3263,6 +3325,7 @@ const GenerateRoundModal = ({ round, venueId, existingQuestionTexts, onAddAll, o
           count: Math.max(1, Math.min(12, Number(count) || 5)),
           difficulty,
           theme: theme.trim(),
+          excludeCategories: roundCategories,
           excludeUsed: true,
           avoidDuplicates: true,
           rejectedQuestions: [...existingQuestionTexts],
@@ -3306,7 +3369,10 @@ const GenerateRoundModal = ({ round, venueId, existingQuestionTexts, onAddAll, o
     <div className="w-full max-w-2xl rounded-xl bg-[#17181c] border border-white/10 shadow-2xl shadow-black/60 p-5 relative">
       <button type="button" onClick={onClose} className="absolute right-4 top-4 text-zinc-400 hover:text-white" aria-label="Close"><X size={18} /></button>
       <h2 className="mb-1 flex items-center gap-2 text-xl font-bold text-white"><Sparkles size={18} className="text-[#71E0DC]" />Generate Questions</h2>
-      <p className="mb-4 text-sm text-zinc-500">AI-write a batch of questions for <span className="text-zinc-300 font-semibold">{round.name}</span>, then pick which ones to keep.</p>
+      <div className="mb-4">
+        <p className="text-sm text-zinc-500">AI-write a batch of questions for <span className="text-zinc-300 font-semibold">{round.name}</span>, then pick which ones to keep.</p>
+        {roundCategories.length > 0 && <p className="mt-1 text-xs text-zinc-500">Won't repeat: {roundCategories.join(", ")}</p>}
+      </div>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <label className="block text-xs text-zinc-500">Type
           <select value={questionType} onChange={(event) => setQuestionType(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-white/10 bg-zinc-950/50 px-2 text-white outline-none focus:border-[#71E0DC]/60">
@@ -3785,7 +3851,7 @@ const QuestionListView = ({
         {activeRound.questions.map((question, localIndex) => {
           const index = activeRound.startIndex + localIndex;
           if (index === hostIndex && (isReviewing || gameStarted)) {
-            return <QuestionStage key={question.id} question={displayedQuestion} index={hostIndex} total={questions.length} showAnswer={showAnswer} showFunFact={showFunFact} pointsPerQuestion={viewPointsPerQuestion} timerSeconds={viewTimerSeconds} timeRemaining={timeRemaining} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} wagerTiming={viewWagerTiming} onUpdateSettings={onUpdateSettings} onUpdateContent={(patch) => updateQuestionContent(displayedQuestion, patch)} onDuplicate={() => duplicateQuestion(displayedQuestion)} onAiEdit={() => setAiEditQuestionId(displayedQuestion.id)} onSaveToLibrary={saveQuestionToLibrary} branding={branding} players={players} answers={hostAnswers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} setMode={releaseMode} isReviewing={isReviewing} hasRevealExtra={hasRevealExtra} hasFunFact={hasFunFact} hasAudio={hasAudio} isPlayingAudio={isPlayingAudio} onToggleAudio={onToggleAudio} onRevealAnswer={onRevealAnswer} onShowFunFact={onShowFunFact} startTimer={startTimer} resetTimer={resetTimer} resetQuestion={resetQuestion} onBackToLive={onBackToLive} onGoLiveWithThis={onGoLiveWithThis} />;
+            return <QuestionStage key={question.id} question={displayedQuestion} index={hostIndex} total={questions.length} showAnswer={showAnswer} showFunFact={showFunFact} pointsPerQuestion={viewPointsPerQuestion} timerSeconds={viewTimerSeconds} timeRemaining={timeRemaining} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} wagerTiming={viewWagerTiming} onUpdateSettings={onUpdateSettings} onUpdateContent={(patch) => updateQuestionContent(displayedQuestion, patch)} onDuplicate={() => duplicateQuestion(displayedQuestion)} onAiEdit={() => setAiEditQuestionId(displayedQuestion.id)} onSaveToLibrary={saveQuestionToLibrary} branding={branding} players={players} answers={hostAnswers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} setMode={releaseMode} isReviewing={isReviewing} hasRevealExtra={hasRevealExtra} hasFunFact={hasFunFact} hasAudio={hasAudio} isPlayingAudio={isPlayingAudio} onToggleAudio={onToggleAudio} onRevealAnswer={onRevealAnswer} onShowFunFact={onShowFunFact} startTimer={startTimer} resetTimer={resetTimer} resetQuestion={resetQuestion} onBackToLive={onBackToLive} onGoLiveWithThis={onGoLiveWithThis} categoryUsage={buildCategoryUsage(questions, { roundKey: activeRound.key, excludeQuestionId: displayedQuestion.id })} />;
           }
           const isLiveElsewhere = index === currentIndex && isReviewing;
           const state = isLiveElsewhere ? "live" : index < currentIndex ? "completed" : "upcoming";
@@ -3805,6 +3871,7 @@ const QuestionListView = ({
             onReview={isLiveElsewhere ? onBackToLive : () => reviewQuestion(index)}
             currentRoundName={activeRound.name}
             otherRounds={rounds.filter((item) => item.key !== activeRound.key)}
+            categoryUsage={buildCategoryUsage(questions, { roundKey: activeRound.key, excludeQuestionId: question.id })}
             onMoveToRound={(targetRound) => moveQuestionToRound(question, targetRound)}
             onUpdateContent={(patch) => updateQuestionContent(question, patch)}
             onDuplicate={() => duplicateQuestion(question)}
@@ -3835,8 +3902,8 @@ const QuestionListView = ({
       onAddRound={() => setAddRoundOpen(true)}
       onClose={() => setManageRoundsOpen(false)}
     />}
-    {addRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} onSaveToLibrary={saveQuestionToLibrary} approvedCategories={approvedCategories} onClose={() => setAddRoundOpen(false)} />}
-    {writeQuestionRound && <WriteQuestionModal round={writeQuestionRound} onCreate={(draft) => addQuestionToRound(writeQuestionRound, draft)} onSaveToLibrary={saveQuestionToLibrary} approvedCategories={approvedCategories} onClose={() => setWriteQuestionRoundKey(null)} />}
+    {addRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} onSaveToLibrary={saveQuestionToLibrary} approvedCategories={approvedCategories} categoryUsage={buildCategoryUsage(questions)} onClose={() => setAddRoundOpen(false)} />}
+    {writeQuestionRound && <WriteQuestionModal round={writeQuestionRound} onCreate={(draft) => addQuestionToRound(writeQuestionRound, draft)} onSaveToLibrary={saveQuestionToLibrary} approvedCategories={approvedCategories} categoryUsage={buildCategoryUsage(questions, { roundKey: writeQuestionRound.key })} onClose={() => setWriteQuestionRoundKey(null)} />}
     {libraryRound && <LibraryPickerModal round={libraryRound} libraryQuestions={libraryQuestions} loading={libraryLoading} existingTexts={existingQuestionTexts} onInsert={(question) => addLibraryQuestionToRound(libraryRound, question)} onClose={() => setLibraryRoundKey(null)} />}
     {aiEditQuestion && <AiEditQuestionModal question={aiEditQuestion} onEdit={editQuestionWithAi} onApply={(patch) => updateQuestionContent(aiEditQuestion, patch)} onClose={() => setAiEditQuestionId(null)} />}
     {generateRound && <GenerateRoundModal round={generateRound} venueId={venueId} existingQuestionTexts={existingQuestionTexts} onAddAll={(candidates) => addGeneratedQuestionsToRound(generateRound, candidates)} onSaveToLibrary={saveQuestionToLibrary} onClose={() => setGenerateRoundKey(null)} />}
@@ -3850,7 +3917,7 @@ const QuestionListView = ({
 // conversion stays out of scope here (moving a question to a different
 // array is a bigger operation, see moveQuestionToRound/addLibraryQuestionToRound
 // for the established pattern) -- this edits the fields that don't require it.
-const QuestionEditFields = ({ type, draft, setDraft }) => {
+const QuestionEditFields = ({ type, draft, setDraft, categoryUsage = null }) => {
   const [uploadingImage, setUploadingImage] = useState(false);
   const [uploadingAudio, setUploadingAudio] = useState(false);
   const updateWrong = (index, value) => setDraft((prev) => ({ ...prev, incorrectAnswers: prev.incorrectAnswers.map((answer, i) => (i === index ? value : answer)) }));
@@ -3884,7 +3951,10 @@ const QuestionEditFields = ({ type, draft, setDraft }) => {
   };
 
   return <div className="space-y-2" onClick={(event) => event.stopPropagation()}>
-    <input value={draft.category} onChange={(event) => setDraft((prev) => ({ ...prev, category: event.target.value }))} placeholder="Category" className="h-9 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
+    <div>
+      <input value={draft.category} onChange={(event) => setDraft((prev) => ({ ...prev, category: event.target.value }))} placeholder="Category" className="h-9 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
+      <CategoryUsageHint category={draft.category} usage={categoryUsage} />
+    </div>
     <textarea value={draft.questionText} onChange={(event) => setDraft((prev) => ({ ...prev, questionText: event.target.value }))} placeholder="Question" className="min-h-[70px] w-full resize-none rounded-md border border-white/10 bg-zinc-950/50 px-3 py-2 text-sm text-white outline-none focus:border-[#71E0DC]/60" />
     {type === "true_false" ? <select value={draft.answer} onChange={(event) => setDraft((prev) => ({ ...prev, answer: event.target.value }))} className="h-9 w-full rounded-md border border-white/10 bg-zinc-950/50 px-3 text-sm text-white">
       <option value="True">True</option>
@@ -3956,7 +4026,7 @@ const AnswerOptionPreview = ({ question }) => {
   return null;
 };
 
-const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerCount, correctCount, eventOpen, onAsk, onReview, currentRoundName, otherRounds, onMoveToRound, onUpdateContent, onDuplicate, onDiscard, onResetQuestion, onAiEdit, onSaveToLibrary }) => {
+const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerCount, correctCount, eventOpen, onAsk, onReview, currentRoundName, otherRounds, onMoveToRound, onUpdateContent, onDuplicate, onDiscard, onResetQuestion, onAiEdit, onSaveToLibrary, categoryUsage }) => {
   const meta = typeMeta[question.type] || typeMeta.written;
   const points = getQuestionPoints(question);
   const wagerLimit = Number(question.wagerLimit || 0);
@@ -3989,7 +4059,7 @@ const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerC
   if (editing) {
     return <Card className="glass-card">
       <CardContent className="p-3.5">
-        <QuestionEditFields type={question.type} draft={draft} setDraft={setDraft} />
+        <QuestionEditFields type={question.type} draft={draft} setDraft={setDraft} categoryUsage={categoryUsage} />
         <div className="mt-2 flex justify-end gap-2">
           <Button size="sm" variant="outline" onClick={() => setEditing(false)} className="h-8 border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
           <Button size="sm" onClick={handleSave} disabled={saving} className="h-8 gradient-btn">{saving ? "Saving..." : "Save"}</Button>
@@ -4484,7 +4554,7 @@ const WagerChip = ({ answer, disabled, onSave }) => {
   return <button type="button" disabled={disabled} onClick={() => setEditing(true)} className="rounded-full border border-purple-400/30 bg-purple-400/10 px-2.5 py-1 text-[11px] font-bold text-purple-200 transition disabled:cursor-default disabled:opacity-70 enabled:hover:border-purple-300/60">{answer.playerName || "Team"}: {Number(answer.wagerAmount || 0)}</button>;
 };
 
-const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusMode, pointsPerQuestion, timerSeconds, timeRemaining, wagerMode, wagerTiming, onUpdateSettings, onUpdateContent, onDuplicate, onAiEdit, onSaveToLibrary, branding, players, answers, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, editWager, setMode, isReviewing, hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, onBackToLive, onGoLiveWithThis }) => {
+const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusMode, pointsPerQuestion, timerSeconds, timeRemaining, wagerMode, wagerTiming, onUpdateSettings, onUpdateContent, onDuplicate, onAiEdit, onSaveToLibrary, branding, players, answers, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, editWager, setMode, isReviewing, hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, onBackToLive, onGoLiveWithThis, categoryUsage }) => {
   const [mediaModalOpen, setMediaModalOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(() => draftFromQuestion(question));
@@ -4530,7 +4600,7 @@ const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusM
     <CardContent className={focusMode ? "p-6 lg:p-8" : "p-3.5"}>
       {isReviewing && <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-100"><Eye size={13} className="shrink-0 text-amber-300" /><span className="flex-1">Reviewing this question &mdash; players and the presentation screen still see the live question.</span>{onBackToLive && <Button size="sm" variant="outline" onClick={onBackToLive} className="h-7 border-amber-300/30 text-amber-100 hover:text-white">Back to Live</Button>}{onGoLiveWithThis && <Button size="sm" onClick={onGoLiveWithThis} className="h-7 bg-amber-300 text-zinc-950 hover:bg-amber-200">Go Live With This Question</Button>}</div>}
       {editing ? <>
-        <QuestionEditFields type={question.type} draft={draft} setDraft={setDraft} />
+        <QuestionEditFields type={question.type} draft={draft} setDraft={setDraft} categoryUsage={categoryUsage} />
         <div className="mt-2 flex justify-end gap-2">
           <Button size="sm" variant="outline" onClick={() => setEditing(false)} className="h-8 border-white/10 text-zinc-300 hover:text-white">Cancel</Button>
           <Button size="sm" onClick={handleSaveEdit} disabled={savingEdit} className="h-8 gradient-btn">{savingEdit ? "Saving..." : "Save"}</Button>
