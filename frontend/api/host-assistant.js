@@ -1,4 +1,7 @@
 const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+// The model habitually writes true/false questions as "True or False: <claim>"
+// -- redundant once the app already shows the question as a True/False type.
+const stripTrueFalsePrefix = (text) => text.replace(/^\s*true\s*(?:or|\/)\s*false\s*[:\-–—]?\s*/i, "").trim();
 const fingerprint = (value) => clean(value).toLowerCase().replace(/[^a-z0-9]/g, "");
 const answerPairFingerprint = (question, answer) => `${fingerprint(question)}::${fingerprint(answer)}`;
 
@@ -98,10 +101,11 @@ const parseAssistantJson = (content) => {
 
 const normalizeCandidate = (candidate) => {
   if (!candidate || typeof candidate !== "object") return null;
-  const questionText = clean(candidate.question_text || candidate.question);
+  const type = ["true_false", "multiple_choice", "written"].includes(candidate.question_type || candidate.type) ? candidate.question_type || candidate.type : "written";
+  const rawQuestionText = clean(candidate.question_text || candidate.question);
+  const questionText = type === "true_false" ? stripTrueFalsePrefix(rawQuestionText) : rawQuestionText;
   const correctAnswer = clean(candidate.correct_answer || candidate.answer);
   const category = clean(candidate.category);
-  const type = ["true_false", "multiple_choice", "written"].includes(candidate.question_type || candidate.type) ? candidate.question_type || candidate.type : "written";
   if (!questionText || !correctAnswer || !category) return null;
   const incorrect = Array.isArray(candidate.incorrect_answers) ? candidate.incorrect_answers.map(clean).filter(Boolean) : [];
   return {
@@ -219,6 +223,7 @@ async function handler(req, res) {
                     "For written, answers must be familiar/gettable enough for a live bar team.",
                     "fun_fact must be one short sentence of genuinely true additional context about THAT SAME candidate's specific subject or answer -- never a generic or unrelated trivia tidbit about a different topic, even a true one. If you have no real fact directly relevant to that exact question/answer, return fun_fact as an empty string rather than inventing an unrelated one.",
                     "Use only approved_categories if any are provided.",
+                    "The host doesn't want the same category used twice in one round -- do not suggest a category already used by any question in host_context.questions (the round currently being built), unless the host explicitly asks to repeat that category.",
                     "Do not give more than 2 of the returned candidates the same category, and prefer categories not already heavily represented in host_context.build.builtQuestions, unless the host's request specifically asks for a category or only a couple approved categories are available.",
                     "If host_context.venue.insights is present, prefer categories listed under loved there and avoid repeating categories or specific questions listed under struggled/disliked there, unless the host explicitly asks otherwise.",
                     "Do not claim to save or edit anything directly.",
@@ -253,8 +258,16 @@ async function handler(req, res) {
       const normalized = Array.isArray(parsed?.candidates) ? parsed.candidates.map(normalizeCandidate).filter(Boolean) : [];
       // "Don't repeat a category" is only a prompt instruction above, and the
       // model doesn't reliably follow it -- cap it mechanically too, same as
-      // generate-session-candidates.js does for the main draft flow.
+      // generate-session-candidates.js does for the main draft flow. Seeding
+      // the count from the round's own current questions (not just this
+      // response's candidates) means a category already used once in the
+      // round is fully blocked here, not just after two more repeats --
+      // the host said they don't want a category reused in the same round.
       const categoryCounts = new Map();
+      safeList(context.questions, 80).forEach((existing) => {
+        const key = fingerprint(existing?.category);
+        if (key) categoryCounts.set(key, 2);
+      });
       const candidates = normalized
         .filter((candidate) => !isBlockedCandidate(candidate, blocked))
         .filter((candidate) => {
@@ -268,7 +281,7 @@ async function handler(req, res) {
       const dropped = normalized.length - candidates.length;
       const assistantAnswer = clean(parsed?.answer) || "I drafted a few co-host suggestions for this build.";
       return res.status(200).json({
-        answer: dropped > 0 ? `${assistantAnswer}\n\nI filtered out ${dropped} suggestion${dropped === 1 ? "" : "s"} because they repeated questions or answers already in this build.` : assistantAnswer,
+        answer: dropped > 0 ? `${assistantAnswer}\n\nI filtered out ${dropped} suggestion${dropped === 1 ? "" : "s"} because they repeated a question, answer, or category already in this round.` : assistantAnswer,
         candidates,
         dropped,
       });

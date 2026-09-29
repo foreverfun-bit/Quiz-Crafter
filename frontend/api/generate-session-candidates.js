@@ -1104,7 +1104,7 @@ function normalizeCandidate(candidate, config, questionType, difficultyKey, incl
   if (!candidate || typeof candidate !== "object") return { ok: false, reason: "candidate_not_object" };
 
   const category = cleanText(candidate.category);
-  const questionText = cleanText(candidate.question_text);
+  const questionText = questionType === "true_false" ? stripTrueFalsePrefix(cleanText(candidate.question_text)) : cleanText(candidate.question_text);
   let correctAnswer = cleanText(candidate.correct_answer);
   const funFact = cleanText(candidate.fun_fact);
   const imagePrompt = includeImagePrompt ? cleanText(candidate.image_prompt) : "";
@@ -1191,6 +1191,14 @@ function isGenericQuestion(questionText) {
 
 function cleanText(value) {
   return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+}
+
+// The model habitually writes true/false questions as "True or False: <claim>"
+// -- a natural way to phrase them in isolation, but redundant once the app
+// already shows the question as a True/False type; the host just wants the
+// claim itself.
+function stripTrueFalsePrefix(text) {
+  return text.replace(/^\s*true\s*(?:or|\/)\s*false\s*[:\-–—]?\s*/i, "").trim();
 }
 
 function fingerprint(value) {

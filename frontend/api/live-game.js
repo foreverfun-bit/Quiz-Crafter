@@ -237,7 +237,7 @@ module.exports = async function handler(req, res) {
     if (action === "findLiveGame") {
       const sessionId = String(body.sessionId || "");
       if (!sessionId) return res.status(400).json({ error: "Missing sessionId" });
-      const { data, error } = await supabase.from("live_games").select("id, status").eq("session_id", sessionId).order("created_at", { ascending: false }).limit(1);
+      const { data, error } = await supabase.from("live_games").select("id, status, is_test").eq("session_id", sessionId).order("created_at", { ascending: false }).limit(1);
       if (error) throw error;
       const existing = data?.[0] || null;
       res.status(200).json({ data: existing && existing.status !== "finished" ? existing : null });
@@ -354,6 +354,29 @@ module.exports = async function handler(req, res) {
         if (gameRows?.[0]?.host_user_id !== user.id) return res.status(403).json({ error: "Not the host of this game" });
       }
       const { error } = await supabase.from("live_game_players").delete().eq("id", playerId);
+      if (error) throw error;
+      res.status(200).json({ data: true });
+      return;
+    }
+
+    // Ending a real hosted session (HostSession.jsx's endSession()) never
+    // marked the live_games row itself as finished -- every game a host had
+    // ever gone live with, or test-run and abandoned without explicitly
+    // ending, stayed in "lobby" status forever. Anything that infers
+    // "is this session live right now" from live_games.status (e.g. the
+    // merged event popout) needs this to actually work.
+    if (action === "endLiveGame") {
+      const gameId = String(body.gameId || "");
+      if (!gameId) return res.status(400).json({ error: "Missing gameId" });
+      const { user, error: authError, status: authStatus } = await verifyUser(supabaseUrl, anonKey, getBearerToken(req, body));
+      if (!user?.id) return rejectAuthFailure(res, "endLiveGame", authError, authStatus);
+
+      const { data: gameRows, error: gameError } = await supabase.from("live_games").select("host_user_id").eq("id", gameId).limit(1);
+      if (gameError) throw gameError;
+      if (!gameRows?.[0]) return res.status(200).json({ data: true });
+      if (gameRows[0].host_user_id !== user.id) return res.status(403).json({ error: "Not the host of this game" });
+
+      const { error } = await supabase.from("live_games").update({ status: "finished", ended_at: new Date().toISOString() }).eq("id", gameId);
       if (error) throw error;
       res.status(200).json({ data: true });
       return;
