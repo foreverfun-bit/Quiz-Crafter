@@ -64,7 +64,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { hostToolsStorageKey, loadHostSetupSettings, loadHostToolsSessionState, loadProfileValue, profileKeys, readCurrentProjectSessionId, resetHostToolsSessionState, saveHostSetupSettings, saveHostToolsSessionState, updateUserMetadata, writeCurrentProjectSessionId } from "../lib/profileState";
-import { readHostStyleProfile } from "../lib/hostStyleMemory";
+import { readHostStyleProfile, rememberStyleFeedback } from "../lib/hostStyleMemory";
 
 const STORAGE_BASE = process.env.REACT_APP_SUPABASE_URL ? `${process.env.REACT_APP_SUPABASE_URL}/storage/v1/object/public/` : "";
 const PRODUCTION_HOSTNAMES = new Set(["quizcrafter.fun", "www.quizcrafter.fun", "quiz-crafter-foreverfun-bits-projects.vercel.app"]);
@@ -1992,7 +1992,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   // rendered -- this is its first real, live caller. Conversation history is
   // round-scoped and lives in CoHostChatModal's own state, not persisted, the
   // same as BuildSession's version.
-  const askCoHost = async (round, conversation, request) => {
+  const askCoHost = async (round, conversation, request, rejectedQuestions = []) => {
     try {
       const response = await fetch("/api/host-assistant", {
         method: "POST",
@@ -2008,6 +2008,15 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
               question_text: question.questionText,
               correct_answer: question.answer,
               question_type: question.type,
+            })),
+            // Drafts the host explicitly X'd out of the Usable Drafts list --
+            // never resuggest these, not even reworded (see the X button in
+            // CoHostChatModal, which also teaches rememberStyleFeedback so
+            // this preference outlives the chat/round too).
+            rejectedQuestions: rejectedQuestions.map((candidate) => ({
+              category: candidate.category,
+              question_text: candidate.question_text,
+              correct_answer: candidate.correct_answer,
             })),
             hostStyleProfile: readHostStyleProfile(),
           },
@@ -3442,6 +3451,11 @@ const CoHostChatModal = ({ round, onAsk, onAddCandidate, onSaveToLibrary, onClos
   const [candidatesByMessage, setCandidatesByMessage] = useState([]);
   const [addedIds, setAddedIds] = useState(() => new Set());
   const [savedIds, setSavedIds] = useState(() => new Set());
+  // Drafts the host X'd out of the list -- kept for the life of this chat
+  // (not just removed from view) so every later ask sends them back as
+  // rejectedQuestions, and the co-host can't just resuggest the same thing
+  // next message.
+  const rejectedRef = useRef([]);
 
   const send = async () => {
     const request = prompt.trim();
@@ -3451,7 +3465,7 @@ const CoHostChatModal = ({ round, onAsk, onAddCandidate, onSaveToLibrary, onClos
     setPrompt("");
     setLoading(true);
     try {
-      const outcome = await onAsk(round, nextMessages, request);
+      const outcome = await onAsk(round, nextMessages, request, rejectedRef.current);
       if (!outcome) return;
       setMessages((prev) => [...prev, { role: "assistant", content: outcome.answer }].slice(-12));
       if (outcome.candidates.length) {
@@ -3470,6 +3484,18 @@ const CoHostChatModal = ({ round, onAsk, onAddCandidate, onSaveToLibrary, onClos
   const saveCandidate = async (candidate) => {
     const ok = await onSaveToLibrary(candidate);
     if (ok) setSavedIds((prev) => new Set(prev).add(candidate._id));
+  };
+
+  // "I don't like this question" -- drops it from the list and teaches two
+  // things: rememberStyleFeedback persists it as an avoid-this-style example
+  // that shapes every future AI draft across the app (not just this chat),
+  // while rejectedRef makes sure THIS chat's very next message can't just
+  // hand the exact same question back.
+  const dismissCandidate = (candidate) => {
+    setCandidatesByMessage((prev) => prev.filter((item) => item._id !== candidate._id));
+    rejectedRef.current = [...rejectedRef.current, candidate].slice(-40);
+    rememberStyleFeedback(candidate, "not_my_style", "Dismissed from AI Co-Host drafts").catch((error) => console.warn("Style feedback save unavailable:", error));
+    toast.success("Won't suggest that one again");
   };
 
   return <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 pt-8 md:pt-14 overflow-y-auto">
@@ -3515,7 +3541,10 @@ const CoHostChatModal = ({ round, onAsk, onAddCandidate, onSaveToLibrary, onClos
               return <div key={candidate._id} className="rounded-lg border border-white/10 bg-zinc-950/60 p-3">
                 <div className="flex items-start justify-between gap-2">
                   <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-500">{candidate.category}</p>
-                  <button type="button" disabled={saved} onClick={() => saveCandidate(candidate)} className={`shrink-0 text-[11px] font-semibold ${saved ? "text-zinc-600" : "text-zinc-400 hover:text-[#71E0DC]"}`}>{saved ? "Saved" : "Save to Library"}</button>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <button type="button" disabled={saved} onClick={() => saveCandidate(candidate)} className={`text-[11px] font-semibold ${saved ? "text-zinc-600" : "text-zinc-400 hover:text-[#71E0DC]"}`}>{saved ? "Saved" : "Save to Library"}</button>
+                    <button type="button" onClick={() => dismissCandidate(candidate)} title="Don't suggest this one again" aria-label="Dismiss this draft" className="text-zinc-500 hover:text-rose-300"><X size={14} /></button>
+                  </div>
                 </div>
                 <p className="mt-1 text-sm font-semibold text-white">{candidate.question_text}</p>
                 <p className="mt-1 text-sm text-[#71E0DC]">Answer: {candidate.correct_answer}</p>

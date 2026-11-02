@@ -57,6 +57,10 @@ const collectBlockedQuestions = (context = {}) => {
     ...safeList(context.questions, 80),
     ...safeList(build.activeRoundQuestions, 80),
     ...safeList(build.builtQuestions, 160),
+    // The host explicitly X'd these out of a previous Usable Drafts list --
+    // block them the same mechanical way as anything already in the build,
+    // not just a prompt instruction the model might not follow.
+    ...safeList(context.rejectedQuestions, 80),
   ];
   const textFingerprints = new Set();
   const answerPairs = new Set();
@@ -187,6 +191,7 @@ async function handler(req, res) {
                 recent_feedback: safeList(context.feedback, 30),
                 player_ideas: safeList(context.ideas, 30),
                 questions: safeList(context.questions, 40),
+                rejected_questions: safeList(context.rejectedQuestions, 40),
                 host_style_profile: styleProfileText(context.hostStyleProfile),
               },
               response_rules: editMode
@@ -211,6 +216,7 @@ async function handler(req, res) {
                     "Use the conversation history to continue refining instead of restarting the task.",
                     "Treat the newest user request as the highest priority.",
                     "Never suggest a question already present in host_context.questions, host_context.build.activeRoundQuestions, or host_context.build.builtQuestions.",
+                    "host_context.rejected_questions are drafts the host explicitly dismissed from a previous response -- never suggest any of them again, not even reworded, rephrased, or with a different fun fact.",
                     "Never reuse the same correct answer in the same category as an existing built question.",
                     "If the host rejects a direction, do not defend it; pivot and produce a materially different approach.",
                     "If you cannot satisfy the directions without duplicates, return fewer candidates and explain what constraint blocked you.",
@@ -281,7 +287,7 @@ async function handler(req, res) {
       const dropped = normalized.length - candidates.length;
       const assistantAnswer = clean(parsed?.answer) || "I drafted a few co-host suggestions for this build.";
       return res.status(200).json({
-        answer: dropped > 0 ? `${assistantAnswer}\n\nI filtered out ${dropped} suggestion${dropped === 1 ? "" : "s"} because they repeated a question, answer, or category already in this round.` : assistantAnswer,
+        answer: dropped > 0 ? `${assistantAnswer}\n\nI filtered out ${dropped} suggestion${dropped === 1 ? "" : "s"} because they repeated a question, answer, or category already in this round, or one you already dismissed.` : assistantAnswer,
         candidates,
         dropped,
       });
