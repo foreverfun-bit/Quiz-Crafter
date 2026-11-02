@@ -240,6 +240,7 @@ export default async function handler(req, res) {
       cleanExcludeCategories,
       cleanApprovedCategories,
       cleanLockedCategories,
+      cleanTheme,
       requireApprovedCategories,
       existingFingerprints,
       existingAnswerPairs,
@@ -615,7 +616,7 @@ function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, clea
       ? `Use only these approved category names. The category field must exactly match one of these names; do not invent adjacent, similar, or new category names: ${shuffledApprovedCategories.join(", ")}. This list is not in priority order -- do not favor the earlier names.`
       : `Use varied broad categories such as: ${shuffleArray(BROAD_CATEGORIES).join(", ")}.`;
   const excludedCategoryText = cleanExcludeCategories.length ? `Do not use these rejected or avoided categories: ${cleanExcludeCategories.join(", ")}.` : "";
-  const categoryDiversityText = !cleanLockedCategories.length && safeCount > 1 ? "Spread candidates across as many different categories as the approved list allows. Do not use the same category for more than a couple of candidates unless the approved list is very short." : "";
+  const categoryDiversityText = !cleanLockedCategories.length && safeCount > 1 ? (cleanTheme ? "Spread candidates across as many different categories as the theme and approved list allow, but it's fine to repeat a category since the host gave a specific theme." : "Use a different category for every candidate. Do not repeat a category, even if the approved list would allow it, unless the list is too short to avoid it.") : "";
   const themeText = cleanTheme ? `Theme/vibe/category guidance: ${cleanTheme}. Stay useful to that direction, but avoid repetitive question angles.` : "";
   const tasteProfileText = buildTasteProfileText(styleExamples, cleanSessionContext);
   const hostStyleProfileText = buildHostStyleProfileText(cleanHostStyleProfile);
@@ -989,7 +990,7 @@ async function requestCandidates(prompt, { fastMode = false } = {}) {
   }
 }
 
-function normalizeCandidates({ candidates, config, questionType, difficultyKey, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, requireApprovedCategories = true, existingFingerprints, existingAnswerPairs, existingAnswers, inBuildFingerprints = new Set(), inBuildAnswerPairs = new Set(), rejectedQuestionFingerprints, rejectedAnswerFingerprints, avoidDuplicates, includeImagePrompt, sourceSeeds = [], sourceBacked = false, sessionStyleProfile = null }) {
+function normalizeCandidates({ candidates, config, questionType, difficultyKey, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, cleanTheme = "", requireApprovedCategories = true, existingFingerprints, existingAnswerPairs, existingAnswers, inBuildFingerprints = new Set(), inBuildAnswerPairs = new Set(), rejectedQuestionFingerprints, rejectedAnswerFingerprints, avoidDuplicates, includeImagePrompt, sourceSeeds = [], sourceBacked = false, sessionStyleProfile = null }) {
   const rejected = [];
   const accepted = [];
   const batchFingerprints = new Set();
@@ -1002,10 +1003,13 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
   const shouldBlockRepeatedAnswers = questionType !== "true_false";
   // A batch spreading across categories relied entirely on a soft prompt
   // instruction the model doesn't reliably follow -- cap how many candidates
-  // in one response can share a category. Skipped when the category pool is
-  // deliberately narrow (locked, or an approved list of 2 or fewer), since a
-  // cap would just make those batches impossible to fill.
-  const maxPerCategory = lockedCategorySet.size > 0 || (approvedCategorySet.size > 0 && approvedCategorySet.size <= 2) ? Infinity : 2;
+  // in one response can share a category. Default is 1 (no repeats at all)
+  // per the host's explicit preference; skipped (Infinity, no cap) when the
+  // category pool is deliberately narrow (locked, or an approved list of 2
+  // or fewer, since a cap would make those batches impossible to fill), or
+  // when the host typed a theme -- an explicit theme is read as "go deep on
+  // this," which can legitimately mean several questions in one category.
+  const maxPerCategory = lockedCategorySet.size > 0 || (approvedCategorySet.size > 0 && approvedCategorySet.size <= 2) || cleanTheme ? Infinity : 1;
 
   if (!Array.isArray(candidates)) throw new Error("No candidates returned");
 
