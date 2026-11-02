@@ -123,12 +123,23 @@ export default async function handler(req, res) {
     const cleanSessionContext = normalizeSessionContext(sessionContext);
     const cleanHostStyleProfile = normalizeHostStyleProfile(hostStyleProfile);
     const cleanVenueId = cleanText(venueId);
-    const venueHistory = fastMode || !cleanVenueId ? null : await fetchVenueHistory(cleanVenueId);
-    const venueProfileText = buildVenueProfileText(venueHistory);
     const allowUsedSources = hasReuseIntent(cleanTheme);
     const requireApprovedCategories = cleanLockedCategories.length > 0 || cleanApprovedCategories.length > 0;
+    // Mirrors the maxPerCategory condition in normalizeCandidates (computed
+    // later, from the same inputs) -- when every candidate has to land in a
+    // different category, the model needs meaningfully more raw candidates
+    // to draw from or a 5-requested batch routinely comes back shorter, the
+    // same generation attempt just thinned out more aggressively than before.
+    const categoryDiversityRequired = !cleanLockedCategories.length && !(cleanApprovedCategories.length > 0 && cleanApprovedCategories.length <= 2) && !cleanTheme;
     const categoryExpansionMode = false;
-    const existingQuestions = avoidDuplicates || excludeUsed ? await fetchExistingQuestions(fastMode ? 220 : 1500, fastMode ? 100 : 500) : [];
+    // Neither fetch depends on the other's result -- these used to run one
+    // after the other, adding a full extra round trip's worth of latency to
+    // every generation (worse for a host who has a venue set).
+    const [venueHistory, existingQuestions] = await Promise.all([
+      fastMode || !cleanVenueId ? Promise.resolve(null) : fetchVenueHistory(cleanVenueId),
+      avoidDuplicates || excludeUsed ? fetchExistingQuestions(fastMode ? 220 : 1500, fastMode ? 100 : 500) : Promise.resolve([]),
+    ]);
+    const venueProfileText = buildVenueProfileText(venueHistory);
     // Quick mode used to skip real-library style examples entirely to save
     // prompt size, even though existingQuestions is already fetched either
     // way -- that left Quick-mode generations with no automatic signal for
@@ -216,6 +227,7 @@ export default async function handler(req, res) {
         cleanExcludeCategories,
         cleanApprovedCategories,
         cleanLockedCategories,
+        categoryDiversityRequired,
         categoryExpansionMode,
         cleanRejectedQuestions,
         cleanRejectedAnswers,
@@ -301,6 +313,7 @@ export default async function handler(req, res) {
         cleanExcludeCategories,
         cleanApprovedCategories,
         cleanLockedCategories,
+        categoryDiversityRequired,
         categoryExpansionMode,
         cleanRejectedQuestions,
         cleanRejectedAnswers,
@@ -604,8 +617,16 @@ ${rejectedText}
 `.trim();
 }
 
-function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, categoryExpansionMode, cleanRejectedQuestions = [], cleanRejectedAnswers = [], cleanSessionContext = null, existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt, fastMode = false, cleanHostStyleProfile = null, sessionStyleProfile = null, venueProfileText = "" }) {
-  const overGenerateCount = fastMode ? Math.min(8, Math.max(safeCount + 1, Math.ceil(safeCount * 1.35))) : Math.min(18, Math.max(safeCount + 4, Math.ceil(safeCount * 1.7)));
+function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, categoryDiversityRequired = false, categoryExpansionMode, cleanRejectedQuestions = [], cleanRejectedAnswers = [], cleanSessionContext = null, existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt, fastMode = false, cleanHostStyleProfile = null, sessionStyleProfile = null, venueProfileText = "" }) {
+  // When maxPerCategory (normalizeCandidates) is going to collapse every
+  // repeat down to 1, the usual overgeneration margin isn't enough raw
+  // material -- a model that clusters 2-3 of its 9 candidates into the same
+  // category previously still cleared 5 after the old 2-per-category cap;
+  // under the stricter 1-per-category default it doesn't, and the batch
+  // comes back short. Ask for substantially more up front instead.
+  const overGenerateCount = fastMode
+    ? (categoryDiversityRequired ? Math.min(10, Math.max(safeCount + 3, Math.ceil(safeCount * 1.8))) : Math.min(8, Math.max(safeCount + 1, Math.ceil(safeCount * 1.35))))
+    : (categoryDiversityRequired ? Math.min(24, Math.max(safeCount + 8, Math.ceil(safeCount * 2.4))) : Math.min(18, Math.max(safeCount + 4, Math.ceil(safeCount * 1.7))));
   const lockedCategoryText = cleanLockedCategories.length ? `Locked categories are active. The category field must exactly match one of these locked categories: ${cleanLockedCategories.join(", ")}. Generate all candidates inside these locked categories until the host unlocks them.` : "";
   const shuffledApprovedCategories = shuffleArray(cleanApprovedCategories);
   const approvedCategoryText = cleanLockedCategories.length
