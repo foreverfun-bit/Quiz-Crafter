@@ -167,6 +167,15 @@ function firstImageUrl(...values) {
   return values.map(clean).find((value) => /^https?:\/\//i.test(value) || /^data:image\//i.test(value)) || "";
 }
 
+// A single CSV cell can hold several semicolon-joined media slots (TrivNow
+// does this for audio;image even when only one slot is filled in) -- split
+// it into individual candidates so firstImageUrl can find the real URL
+// instead of failing on a leading empty slot. A plain single-URL value
+// still splits into one element, so this is a no-op for every other source.
+function splitMediaValues(value) {
+  return String(value || "").split(/\s*;\s*/).map(clean).filter(Boolean);
+}
+
 function detectQuestionType(rawType, correctAnswer, wrongAnswers, imageUrl) {
   const type = compactKey(rawType);
   const answer = clean(correctAnswer).toLowerCase();
@@ -395,9 +404,15 @@ function normalizeObjectRows(rows, requestedSource) {
     const roundName = getValue(row, ["Round", "Round Name", "RoundName", "Round Title", "Game Round"]);
     const category = getValue(row, ["Category", "Topic", "Subject", "Tags"]);
     const rawType = getValue(row, ["Question Type", "Type", "Format", "Kind"]);
-    const funFact = getValue(row, ["Question Note", "Fun Fact", "Explanation", "Fact", "Notes"]);
-    const imageUrl = firstImageUrl(getValue(row, ["Question Image URL", "Question Image", "Image URL", "Image", "Picture", "Photo", "Media URL", "Media", "Question Media"]));
-    const correctAnswerImage = firstImageUrl(getValue(row, ["Correct Answer Image URL", "Correct Answer Image", "Answer Image URL", "Answer Image", "Correct Image", "Correct Photo"]));
+    const funFact = getValue(row, ["Question Note", "Fun Fact", "Explanation", "Fact", "Notes", "Note"]);
+    // TrivNow's own export joins multiple media slots (e.g. audio;image) with
+    // a semicolon even when only one is filled in, leaving a leading empty
+    // slot -- "Media" used to be read as one raw value, so a URL like
+    // ";https://..." failed the http(s) check outright and the image was
+    // silently dropped. Split first and let firstImageUrl pick whichever
+    // piece is actually a URL.
+    const imageUrl = firstImageUrl(...splitMediaValues(getValue(row, ["Question Image URL", "Question Image", "Image URL", "Image", "Picture", "Photo", "Media URL", "Media", "Question Media"])));
+    const correctAnswerImage = firstImageUrl(...splitMediaValues(getValue(row, ["Correct Answer Image URL", "Correct Answer Image", "Answer Image URL", "Answer Image", "Correct Image", "Correct Photo"])));
     const explicitRoundOrder = getValue(row, ["Round Order", "Round Number", "Round #", "Round No"]);
     const explicitQuestionOrder = getValue(row, ["Question Order", "Question Number", "Question #", "Order"]);
 
