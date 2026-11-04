@@ -1,15 +1,15 @@
 import { NavLink, useLocation } from "react-router-dom";
-import { MessageSquare, MapPin } from "lucide-react";
+import { LayoutGrid, MessageSquare, MapPin } from "lucide-react";
 
 // A horizontal tab bar across the top of the page, mirroring TrivNow's own
-// top nav (Home / My Content / Play / Profile / ...). Host Hub and Manage
-// live here rather than in the left sidebar (Events/Questions stay there,
-// matching TrivNow's "My Content" sidebar) because the host specifically
-// wanted them running across the top like TrivNow's bar, not folded into
-// the sidebar's primary list.
+// top nav (Home / My Content / Play / Profile / ...). Each tab here has its
+// own sidebar underneath it (see components/Sidebar.jsx's per-group nav
+// lists) -- Content covers Events/Questions, the same ground TrivNow's own
+// "My Content" sidebar covers.
 const TOP_NAV_ITEMS = [
+  { path: "/past-sessions", icon: LayoutGrid, label: "Content", activePaths: ["/", "/past-sessions", "/sessions", "/session", "/game-history", "/library", "/import", "/dashboard"], testId: "topnav-content" },
   { path: "/host-tools", icon: MessageSquare, label: "Host Hub", activePaths: ["/host-tools", "/host-session"], testId: "topnav-host-hub" },
-  { path: "/manage", icon: MapPin, label: "Manage", activePaths: ["/manage", "/categories", "/venues", "/show-templates", "/style-memory", "/reset-data"], testId: "topnav-manage" },
+  { path: "/manage", icon: MapPin, label: "Manage", activePaths: ["/manage", "/categories", "/venues", "/show-templates", "/branding", "/style-memory", "/reset-data"], testId: "topnav-manage" },
 ];
 
 const TopNav = () => {

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { NavLink, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../App";
 import { Button } from "./ui/button";
 import NewEventModal from "./NewEventModal";
@@ -10,25 +10,70 @@ import {
   X,
   History,
   Gamepad2,
+  BarChart3,
+  TrendingUp,
+  Mail,
+  Sparkles,
+  FolderOpen,
+  MapPin,
+  Trophy,
+  Palette,
+  Brain,
+  Trash2,
 } from "lucide-react";
 
-// Restyled to match TrivNow's "My Content" nav: a short list of primary
-// content-type links (each with a colored icon badge), a prominent
-// "Create Event" CTA, and a secondary "Practice Hosting" CTA below it.
-// Dashboard had no TrivNow equivalent and was dropped from the nav
-// entirely (the route itself is untouched, just unreachable from here).
-// Host Hub and Manage live in TopNav (see components/TopNav.jsx), not
-// here -- the host specifically wanted those running across the top of
-// the page like TrivNow's own top bar, not folded into this sidebar.
-const PRIMARY_NAV_ITEMS = [
+// Each top-level tab in TopNav (Content/Host Hub/Manage) gets its own
+// sidebar list here, matching TrivNow's own pattern (its top tabs each have
+// their own left sidebar underneath, not one shared list). Which group
+// renders is driven entirely by the current URL -- see getActiveGroup --
+// so following a link from anywhere always lands on the matching sidebar.
+const CONTENT_NAV_ITEMS = [
   { path: "/past-sessions", icon: History, label: "Events", activePaths: ["/", "/past-sessions", "/sessions", "/session", "/game-history"], testId: "nav-sessions", badgeClass: "bg-emerald-500/20 text-emerald-300" },
   { path: "/library", icon: Library, label: "Questions", activePaths: ["/library", "/import"], testId: "nav-question-bank", badgeClass: "bg-[#AEB2EF]/20 text-[#AEB2EF]" },
 ];
+
+// These all live on the single /host-tools route (HostTools.jsx switches
+// panels off the ?tab= query param, same as it always did) -- a sidebar
+// link just navigates to that route with the matching tab param instead of
+// the in-page pill row HostTools used to render for the same job.
+const HOST_HUB_NAV_ITEMS = [
+  { path: "/host-tools?tab=feedback", tabParam: "feedback", icon: BarChart3, label: "Session Review", testId: "nav-host-feedback", badgeClass: "bg-amber-500/20 text-amber-300" },
+  { path: "/host-tools?tab=game", tabParam: "game", icon: TrendingUp, label: "Game Data", testId: "nav-host-game", badgeClass: "bg-amber-500/20 text-amber-300" },
+  { path: "/host-tools?tab=communications", tabParam: "communications", icon: Mail, label: "Communications", testId: "nav-host-comms", badgeClass: "bg-amber-500/20 text-amber-300" },
+  { path: "/host-tools?tab=clues", tabParam: "clues", icon: Sparkles, label: "Clues", testId: "nav-host-clues", badgeClass: "bg-amber-500/20 text-amber-300" },
+];
+
+// Mirrors Manage.jsx's own card grid (its page stays as the Manage tab's
+// default landing view) -- these just give direct one-click access to the
+// same six destinations from anywhere in the Manage section.
+const MANAGE_NAV_ITEMS = [
+  { path: "/categories", icon: FolderOpen, label: "Categories", testId: "nav-manage-categories", badgeClass: "bg-sky-500/20 text-sky-300" },
+  { path: "/venues", icon: MapPin, label: "Venues", testId: "nav-manage-venues", badgeClass: "bg-sky-500/20 text-sky-300" },
+  { path: "/show-templates", icon: Trophy, label: "Templates", testId: "nav-manage-templates", badgeClass: "bg-sky-500/20 text-sky-300" },
+  { path: "/branding", icon: Palette, label: "Branding", testId: "nav-manage-branding", badgeClass: "bg-sky-500/20 text-sky-300" },
+  { path: "/style-memory", icon: Brain, label: "Style Memory", testId: "nav-manage-style", badgeClass: "bg-sky-500/20 text-sky-300" },
+  { path: "/reset-data", icon: Trash2, label: "Reset Data", testId: "nav-manage-reset", badgeClass: "bg-red-500/20 text-red-300" },
+];
+
+const HOST_HUB_PATHS = ["/host-tools"];
+const MANAGE_PATHS = ["/manage", "/categories", "/venues", "/show-templates", "/branding", "/style-memory", "/reset-data"];
+
+const matchesPath = (pathname, paths) => paths.some((path) => pathname === path || pathname.startsWith(`${path}/`));
+
+// Anything that isn't clearly Host Hub or Manage (including the orphaned
+// /dashboard route, and "/" itself) falls back to Content -- the same
+// default the old single-list sidebar effectively had.
+const getActiveGroup = (pathname) => {
+  if (matchesPath(pathname, HOST_HUB_PATHS)) return "hostHub";
+  if (matchesPath(pathname, MANAGE_PATHS)) return "manage";
+  return "content";
+};
 
 const Sidebar = ({ isOpen, onClose }) => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams] = useSearchParams();
   const [newEventOpen, setNewEventOpen] = useState(false);
 
   const handleLogout = () => {
@@ -36,12 +81,17 @@ const Sidebar = ({ isOpen, onClose }) => {
     navigate("/login");
   };
 
+  const activeGroup = getActiveGroup(location.pathname);
+  const activeHostHubTab = searchParams.get("tab") || "feedback";
+
   const isPathActive = (path, activePaths = []) => {
     if (path === "/") return location.pathname === "/";
     if (activePaths.some((activePath) => location.pathname === activePath || location.pathname.startsWith(`${activePath}/`))) return true;
     if (path === "/venues" && location.pathname.startsWith("/show-templates")) return true;
     return location.pathname === path || location.pathname.startsWith(`${path}/`);
   };
+
+  const navItems = activeGroup === "hostHub" ? HOST_HUB_NAV_ITEMS : activeGroup === "manage" ? MANAGE_NAV_ITEMS : CONTENT_NAV_ITEMS;
 
   return (
     <>
@@ -73,9 +123,9 @@ const Sidebar = ({ isOpen, onClose }) => {
 
           <nav className="flex-1 px-4 py-5 overflow-y-auto">
             <div className="space-y-1.5 mb-4">
-              {PRIMARY_NAV_ITEMS.map((item) => {
+              {navItems.map((item) => {
                 const ItemIcon = item.icon;
-                const active = isPathActive(item.path, item.activePaths);
+                const active = activeGroup === "hostHub" ? activeHostHubTab === item.tabParam : isPathActive(item.path, item.activePaths);
                 return (
                   <NavLink
                     key={item.path}
@@ -94,7 +144,7 @@ const Sidebar = ({ isOpen, onClose }) => {
                 );
               })}
             </div>
-            <div className="space-y-2 mb-5">
+            {activeGroup === "content" && <div className="space-y-2 mb-5">
               <Button
                 className="w-full gradient-btn justify-center"
                 onClick={() => { onClose(); setNewEventOpen(true); }}
@@ -105,7 +155,7 @@ const Sidebar = ({ isOpen, onClose }) => {
               <Button asChild variant="outline" className="w-full justify-center border-white/10 text-zinc-300 hover:text-white">
                 <NavLink to="/host-tools" onClick={onClose}><Gamepad2 size={16} className="mr-2" />Practice Hosting</NavLink>
               </Button>
-            </div>
+            </div>}
           </nav>
 
           <div className="p-4 border-t border-white/10">
