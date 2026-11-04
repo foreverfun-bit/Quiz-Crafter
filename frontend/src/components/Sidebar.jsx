@@ -13,7 +13,6 @@ import {
   BarChart3,
   TrendingUp,
   Mail,
-  Sparkles,
   FolderOpen,
   MapPin,
   Trophy,
@@ -41,7 +40,6 @@ const HOST_HUB_NAV_ITEMS = [
   { path: "/host-tools?tab=feedback", tabParam: "feedback", icon: BarChart3, label: "Session Review", testId: "nav-host-feedback", badgeClass: "bg-amber-500/20 text-amber-300" },
   { path: "/host-tools?tab=game", tabParam: "game", icon: TrendingUp, label: "Game Data", testId: "nav-host-game", badgeClass: "bg-amber-500/20 text-amber-300" },
   { path: "/host-tools?tab=communications", tabParam: "communications", icon: Mail, label: "Communications", testId: "nav-host-comms", badgeClass: "bg-amber-500/20 text-amber-300" },
-  { path: "/host-tools?tab=clues", tabParam: "clues", icon: Sparkles, label: "Clues", testId: "nav-host-clues", badgeClass: "bg-amber-500/20 text-amber-300" },
 ];
 
 // Mirrors Manage.jsx's own card grid (its page stays as the Manage tab's
