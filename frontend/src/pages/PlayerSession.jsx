@@ -21,6 +21,19 @@ const arrayConfig = [
 ];
 
 const playerStorageKey = (sessionId) => `quiz-crafter-player-${sessionId}`;
+// Deliberately not scoped per session -- this remembers the last name/opt-in
+// used on THIS device only, so a returning player doesn't have to retype
+// their email on every new trivia night. Device-local autofill, not a
+// lookup by team name: anyone could type someone else's team name, and a
+// server-side "has this team opted in before" check would let a stranger
+// find that out. This only ever reads/writes what this same browser typed.
+const REMEMBERED_CONTACT_KEY = "quiz-crafter-player-remembered-contact-v1";
+const readRememberedContact = () => readJsonStorage(localStorage, REMEMBERED_CONTACT_KEY) || {};
+const writeRememberedContact = ({ name, updatePreference, updateContact }) => {
+  try {
+    localStorage.setItem(REMEMBERED_CONTACT_KEY, JSON.stringify({ name: name || "", updatePreference: updatePreference || "none", updateContact: updateContact || "" }));
+  } catch { /* Ignore storage failures. */ }
+};
 // Answer locks are intentionally sessionStorage-only. The team identity can
 // persist between visits, but submitted answers should not survive old test
 // runs in localStorage and come back on the phone during a new rehearsal.
@@ -201,7 +214,8 @@ const getCurrentQuestionPoints = (hostState, currentQuestion) => (
 
 const PlayerSession = () => {
   const { id } = useParams();
-  const [name, setName] = useState("");
+  const remembered = useMemo(() => readRememberedContact(), []);
+  const [name, setName] = useState(() => remembered.name || "");
   const [player, setPlayer] = useState(() => getStoredPlayer(id));
   const [editingName, setEditingName] = useState(false);
   const [renameValue, setRenameValue] = useState("");
@@ -211,8 +225,8 @@ const PlayerSession = () => {
   const [livePlayers, setLivePlayers] = useState([]);
   const [answer, setAnswer] = useState("");
   const [wagerAmount, setWagerAmount] = useState("0");
-  const [updatePreference, setUpdatePreference] = useState("none");
-  const [updateContact, setUpdateContact] = useState("");
+  const [updatePreference, setUpdatePreference] = useState(() => remembered.updatePreference || "none");
+  const [updateContact, setUpdateContact] = useState(() => remembered.updateContact || "");
   const [hostUpdate, setHostUpdate] = useState(null);
   const [ideaForm, setIdeaForm] = useState({ category: "", question: "" });
   const [feedbackByQuestion, setFeedbackByQuestion] = useState(() => getStoredFeedback(id, "question-feedback"));
@@ -449,6 +463,7 @@ const PlayerSession = () => {
     if (updatePreference === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact)) return toast.error("Enter a valid email address");
     const nextPlayer = { id: makePlayerId(), name: trimmed.slice(0, 32), updatePreference, updateContact: updatePreference === "none" ? "" : contact };
     saveStoredPlayer(id, nextPlayer);
+    writeRememberedContact(nextPlayer);
     setPlayer(nextPlayer);
   };
 
@@ -457,6 +472,7 @@ const PlayerSession = () => {
     if (!trimmed || !player) return toast.error("Enter a team name");
     const nextPlayer = { ...player, name: trimmed.slice(0, 32) };
     saveStoredPlayer(id, nextPlayer);
+    writeRememberedContact(nextPlayer);
     setPlayer(nextPlayer);
     setEditingName(false);
     sendPlayerEvent(channelRef.current, id, "player_rename", { playerId: nextPlayer.id, playerName: nextPlayer.name, updatedAt: new Date().toISOString() });
