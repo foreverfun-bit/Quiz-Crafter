@@ -20,6 +20,7 @@ import {
   Palette,
   Brain,
   Trash2,
+  Users,
 } from "lucide-react";
 
 // Each top-level tab in TopNav (Content/Host Hub/Manage) gets its own
@@ -49,6 +50,7 @@ const HOST_HUB_NAV_ITEMS = [
 const MANAGE_NAV_ITEMS = [
   { path: "/categories", icon: FolderOpen, label: "Categories", testId: "nav-manage-categories", badgeClass: "bg-sky-500/20 text-sky-300" },
   { path: "/venues", icon: MapPin, label: "Venues", testId: "nav-manage-venues", badgeClass: "bg-sky-500/20 text-sky-300" },
+  { path: "/teams", icon: Users, label: "Teams", testId: "nav-manage-teams", badgeClass: "bg-sky-500/20 text-sky-300" },
   { path: "/show-templates", icon: Trophy, label: "Templates", testId: "nav-manage-templates", badgeClass: "bg-sky-500/20 text-sky-300" },
   { path: "/branding", icon: Palette, label: "Branding", testId: "nav-manage-branding", badgeClass: "bg-sky-500/20 text-sky-300" },
   { path: "/style-memory", icon: Brain, label: "Style Memory", testId: "nav-manage-style", badgeClass: "bg-sky-500/20 text-sky-300" },
@@ -56,7 +58,7 @@ const MANAGE_NAV_ITEMS = [
 ];
 
 const HOST_HUB_PATHS = ["/host-tools"];
-const MANAGE_PATHS = ["/manage", "/categories", "/venues", "/show-templates", "/branding", "/style-memory", "/reset-data"];
+const MANAGE_PATHS = ["/manage", "/categories", "/venues", "/teams", "/show-templates", "/branding", "/style-memory", "/reset-data"];
 
 const matchesPath = (pathname, paths) => paths.some((path) => pathname === path || pathname.startsWith(`${path}/`));
 

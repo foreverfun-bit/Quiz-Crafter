@@ -312,7 +312,7 @@ const PlayerSession = () => {
 
   useEffect(() => {
     if (!player || !liveGameId) return;
-    upsertLivePlayer(liveGameId, { id: player.id, name: player.name }).catch((error) => console.warn("Live roster join unavailable:", error));
+    upsertLivePlayer(liveGameId, { id: player.id, name: player.name, updateContact: player.updateContact || "", updatePreference: player.updatePreference || "none" }).catch((error) => console.warn("Live roster join unavailable:", error));
   }, [player, liveGameId]);
 
   useEffect(() => {

@@ -20,6 +20,7 @@ import PresentSession from "./pages/PresentSession";
 import PlayerSession from "./pages/PlayerSession";
 import HostTools from "./pages/HostTools";
 import Venues from "./pages/Venues";
+import Teams from "./pages/Teams";
 import Manage from "./pages/Manage";
 import Branding from "./pages/Branding";
 import StyleMemory from "./pages/StyleMemory";
@@ -354,6 +355,7 @@ function App() {
             <Route path="/branding" element={<ProtectedRoute><AppLayout><Branding /></AppLayout></ProtectedRoute>} />
             <Route path="/style-memory" element={<ProtectedRoute><AppLayout><StyleMemory /></AppLayout></ProtectedRoute>} />
             <Route path="/venues" element={<ProtectedRoute><AppLayout><Venues /></AppLayout></ProtectedRoute>} />
+            <Route path="/teams" element={<ProtectedRoute><AppLayout><Teams /></AppLayout></ProtectedRoute>} />
             <Route path="/show-templates" element={<ProtectedRoute><AppLayout><Venues initialTab="templates" /></AppLayout></ProtectedRoute>} />
             <Route path="/game-history/:historyId" element={<ProtectedRoute><AppLayout><GameHistoryDetail /></AppLayout></ProtectedRoute>} />
             <Route path="*" element={<Navigate to="/" replace />} />

@@ -102,6 +102,11 @@ export const setLivePlayerName = (playerId, name) => callLiveGame("setPlayerName
 
 export const removeLivePlayer = (playerId) => callAuthedLiveGame("removeLivePlayer", { playerId });
 
+// Every live game this host has ever run, each with its player roster
+// (including join-time contact opt-in) -- the Teams tab groups these by
+// team name across sessions instead of fetching per-session.
+export const listHostRoster = () => callAuthedLiveGame("listHostRoster", {});
+
 // Marks a game's live_games row finished -- call this when a real hosted
 // session actually ends, so anything checking "is this session live right
 // now" (findLiveGame, the merged event workspace) stops seeing it as live.
