@@ -21,6 +21,7 @@ import {
   PlusCircle,
   ArrowUpDown,
   Circle,
+  Upload,
 } from "lucide-react";
 import { toast } from "sonner";
 import NewEventModal from "../components/NewEventModal";
@@ -478,6 +479,15 @@ const PastSessions = () => {
               Clear
             </Button>
           </>}
+          <Button
+            onClick={() => navigate("/import")}
+            variant="outline"
+            className="border-white/20 text-white hover:bg-zinc-800"
+            data-testid="import-csv-btn"
+          >
+            <Upload size={16} className="mr-2" />
+            Import CSV
+          </Button>
           <Button
             onClick={() => setNewEventOpen(true)}
             className="gradient-btn"
