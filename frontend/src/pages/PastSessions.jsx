@@ -184,6 +184,12 @@ const getBonusQuestionCount = (session) => [
   ...safeArray(session.picture_questions),
 ].filter(isBonusQuestion).length;
 
+// A bonus question is still stored in its own type's array (category=BONUS
+// is just a tag, not a separate bucket -- see isBonusQuestion above), so the
+// T/F/MC/Written counts need to exclude it or it gets counted twice: once
+// under its real type, again under Bonus.
+const getNonBonusTypeCount = (session, key) => safeArray(session[key]).filter((question) => !isBonusQuestion(question)).length;
+
 const PastSessions = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -683,14 +689,14 @@ const PastSessions = () => {
                 <div className="space-y-2 text-sm">
                   <div className="flex items-center gap-4">
                     <span className="text-zinc-500">T/F:</span>
-                    <span className="text-white">{safeArray(session.true_false_questions).length}</span>
+                    <span className="text-white">{getNonBonusTypeCount(session, "true_false_questions")}</span>
                     <span className="text-zinc-500">MC:</span>
-                    <span className="text-white">{safeArray(session.multiple_choice_questions).length}</span>
+                    <span className="text-white">{getNonBonusTypeCount(session, "multiple_choice_questions")}</span>
                   </div>
 
                   <div className="flex items-center gap-4">
                     <span className="text-zinc-500">Written:</span>
-                    <span className="text-white">{safeArray(session.written_questions).length}</span>
+                    <span className="text-white">{getNonBonusTypeCount(session, "written_questions")}</span>
                     <span className="text-zinc-500">Bonus:</span>
                     <span className="text-white">{getBonusQuestionCount(session)}</span>
                   </div>
