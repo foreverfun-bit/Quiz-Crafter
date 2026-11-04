@@ -123,12 +123,23 @@ export default async function handler(req, res) {
     const cleanSessionContext = normalizeSessionContext(sessionContext);
     const cleanHostStyleProfile = normalizeHostStyleProfile(hostStyleProfile);
     const cleanVenueId = cleanText(venueId);
-    const venueHistory = fastMode || !cleanVenueId ? null : await fetchVenueHistory(cleanVenueId);
-    const venueProfileText = buildVenueProfileText(venueHistory);
     const allowUsedSources = hasReuseIntent(cleanTheme);
     const requireApprovedCategories = cleanLockedCategories.length > 0 || cleanApprovedCategories.length > 0;
+    // Mirrors the maxPerCategory condition in normalizeCandidates (computed
+    // later, from the same inputs) -- when every candidate has to land in a
+    // different category, the model needs meaningfully more raw candidates
+    // to draw from or a 5-requested batch routinely comes back shorter, the
+    // same generation attempt just thinned out more aggressively than before.
+    const categoryDiversityRequired = !cleanLockedCategories.length && !(cleanApprovedCategories.length > 0 && cleanApprovedCategories.length <= 2) && !cleanTheme;
     const categoryExpansionMode = false;
-    const existingQuestions = avoidDuplicates || excludeUsed ? await fetchExistingQuestions(fastMode ? 220 : 1500, fastMode ? 100 : 500) : [];
+    // Neither fetch depends on the other's result -- these used to run one
+    // after the other, adding a full extra round trip's worth of latency to
+    // every generation (worse for a host who has a venue set).
+    const [venueHistory, existingQuestions] = await Promise.all([
+      fastMode || !cleanVenueId ? Promise.resolve(null) : fetchVenueHistory(cleanVenueId),
+      avoidDuplicates || excludeUsed ? fetchExistingQuestions(fastMode ? 220 : 1500, fastMode ? 100 : 500) : Promise.resolve([]),
+    ]);
+    const venueProfileText = buildVenueProfileText(venueHistory);
     // Quick mode used to skip real-library style examples entirely to save
     // prompt size, even though existingQuestions is already fetched either
     // way -- that left Quick-mode generations with no automatic signal for
@@ -216,6 +227,7 @@ export default async function handler(req, res) {
         cleanExcludeCategories,
         cleanApprovedCategories,
         cleanLockedCategories,
+        categoryDiversityRequired,
         categoryExpansionMode,
         cleanRejectedQuestions,
         cleanRejectedAnswers,
@@ -240,6 +252,7 @@ export default async function handler(req, res) {
       cleanExcludeCategories,
       cleanApprovedCategories,
       cleanLockedCategories,
+      cleanTheme,
       requireApprovedCategories,
       existingFingerprints,
       existingAnswerPairs,
@@ -300,6 +313,7 @@ export default async function handler(req, res) {
         cleanExcludeCategories,
         cleanApprovedCategories,
         cleanLockedCategories,
+        categoryDiversityRequired,
         categoryExpansionMode,
         cleanRejectedQuestions,
         cleanRejectedAnswers,
@@ -603,8 +617,16 @@ ${rejectedText}
 `.trim();
 }
 
-function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, categoryExpansionMode, cleanRejectedQuestions = [], cleanRejectedAnswers = [], cleanSessionContext = null, existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt, fastMode = false, cleanHostStyleProfile = null, sessionStyleProfile = null, venueProfileText = "" }) {
-  const overGenerateCount = fastMode ? Math.min(8, Math.max(safeCount + 1, Math.ceil(safeCount * 1.35))) : Math.min(18, Math.max(safeCount + 4, Math.ceil(safeCount * 1.7)));
+function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, cleanTheme, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, categoryDiversityRequired = false, categoryExpansionMode, cleanRejectedQuestions = [], cleanRejectedAnswers = [], cleanSessionContext = null, existingQuestions, styleExamples, excludeUsed, avoidDuplicates, includeImagePrompt, fastMode = false, cleanHostStyleProfile = null, sessionStyleProfile = null, venueProfileText = "" }) {
+  // When maxPerCategory (normalizeCandidates) is going to collapse every
+  // repeat down to 1, the usual overgeneration margin isn't enough raw
+  // material -- a model that clusters 2-3 of its 9 candidates into the same
+  // category previously still cleared 5 after the old 2-per-category cap;
+  // under the stricter 1-per-category default it doesn't, and the batch
+  // comes back short. Ask for substantially more up front instead.
+  const overGenerateCount = fastMode
+    ? (categoryDiversityRequired ? Math.min(10, Math.max(safeCount + 3, Math.ceil(safeCount * 1.8))) : Math.min(8, Math.max(safeCount + 1, Math.ceil(safeCount * 1.35))))
+    : (categoryDiversityRequired ? Math.min(24, Math.max(safeCount + 8, Math.ceil(safeCount * 2.4))) : Math.min(18, Math.max(safeCount + 4, Math.ceil(safeCount * 1.7))));
   const lockedCategoryText = cleanLockedCategories.length ? `Locked categories are active. The category field must exactly match one of these locked categories: ${cleanLockedCategories.join(", ")}. Generate all candidates inside these locked categories until the host unlocks them.` : "";
   const shuffledApprovedCategories = shuffleArray(cleanApprovedCategories);
   const approvedCategoryText = cleanLockedCategories.length
@@ -615,7 +637,7 @@ function buildPrompt({ config, safeCount, difficultyKey, difficultyProfile, clea
       ? `Use only these approved category names. The category field must exactly match one of these names; do not invent adjacent, similar, or new category names: ${shuffledApprovedCategories.join(", ")}. This list is not in priority order -- do not favor the earlier names.`
       : `Use varied broad categories such as: ${shuffleArray(BROAD_CATEGORIES).join(", ")}.`;
   const excludedCategoryText = cleanExcludeCategories.length ? `Do not use these rejected or avoided categories: ${cleanExcludeCategories.join(", ")}.` : "";
-  const categoryDiversityText = !cleanLockedCategories.length && safeCount > 1 ? "Spread candidates across as many different categories as the approved list allows. Do not use the same category for more than a couple of candidates unless the approved list is very short." : "";
+  const categoryDiversityText = !cleanLockedCategories.length && safeCount > 1 ? (cleanTheme ? "Spread candidates across as many different categories as the theme and approved list allow, but it's fine to repeat a category since the host gave a specific theme." : "Use a different category for every candidate. Do not repeat a category, even if the approved list would allow it, unless the list is too short to avoid it.") : "";
   const themeText = cleanTheme ? `Theme/vibe/category guidance: ${cleanTheme}. Stay useful to that direction, but avoid repetitive question angles.` : "";
   const tasteProfileText = buildTasteProfileText(styleExamples, cleanSessionContext);
   const hostStyleProfileText = buildHostStyleProfileText(cleanHostStyleProfile);
@@ -989,7 +1011,7 @@ async function requestCandidates(prompt, { fastMode = false } = {}) {
   }
 }
 
-function normalizeCandidates({ candidates, config, questionType, difficultyKey, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, requireApprovedCategories = true, existingFingerprints, existingAnswerPairs, existingAnswers, inBuildFingerprints = new Set(), inBuildAnswerPairs = new Set(), rejectedQuestionFingerprints, rejectedAnswerFingerprints, avoidDuplicates, includeImagePrompt, sourceSeeds = [], sourceBacked = false, sessionStyleProfile = null }) {
+function normalizeCandidates({ candidates, config, questionType, difficultyKey, cleanExcludeCategories, cleanApprovedCategories, cleanLockedCategories, cleanTheme = "", requireApprovedCategories = true, existingFingerprints, existingAnswerPairs, existingAnswers, inBuildFingerprints = new Set(), inBuildAnswerPairs = new Set(), rejectedQuestionFingerprints, rejectedAnswerFingerprints, avoidDuplicates, includeImagePrompt, sourceSeeds = [], sourceBacked = false, sessionStyleProfile = null }) {
   const rejected = [];
   const accepted = [];
   const batchFingerprints = new Set();
@@ -1002,10 +1024,13 @@ function normalizeCandidates({ candidates, config, questionType, difficultyKey, 
   const shouldBlockRepeatedAnswers = questionType !== "true_false";
   // A batch spreading across categories relied entirely on a soft prompt
   // instruction the model doesn't reliably follow -- cap how many candidates
-  // in one response can share a category. Skipped when the category pool is
-  // deliberately narrow (locked, or an approved list of 2 or fewer), since a
-  // cap would just make those batches impossible to fill.
-  const maxPerCategory = lockedCategorySet.size > 0 || (approvedCategorySet.size > 0 && approvedCategorySet.size <= 2) ? Infinity : 2;
+  // in one response can share a category. Default is 1 (no repeats at all)
+  // per the host's explicit preference; skipped (Infinity, no cap) when the
+  // category pool is deliberately narrow (locked, or an approved list of 2
+  // or fewer, since a cap would make those batches impossible to fill), or
+  // when the host typed a theme -- an explicit theme is read as "go deep on
+  // this," which can legitimately mean several questions in one category.
+  const maxPerCategory = lockedCategorySet.size > 0 || (approvedCategorySet.size > 0 && approvedCategorySet.size <= 2) || cleanTheme ? Infinity : 1;
 
   if (!Array.isArray(candidates)) throw new Error("No candidates returned");
 
@@ -1104,7 +1129,7 @@ function normalizeCandidate(candidate, config, questionType, difficultyKey, incl
   if (!candidate || typeof candidate !== "object") return { ok: false, reason: "candidate_not_object" };
 
   const category = cleanText(candidate.category);
-  const questionText = cleanText(candidate.question_text);
+  const questionText = questionType === "true_false" ? stripTrueFalsePrefix(cleanText(candidate.question_text)) : cleanText(candidate.question_text);
   let correctAnswer = cleanText(candidate.correct_answer);
   const funFact = cleanText(candidate.fun_fact);
   const imagePrompt = includeImagePrompt ? cleanText(candidate.image_prompt) : "";
@@ -1191,6 +1216,14 @@ function isGenericQuestion(questionText) {
 
 function cleanText(value) {
   return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+}
+
+// The model habitually writes true/false questions as "True or False: <claim>"
+// -- a natural way to phrase them in isolation, but redundant once the app
+// already shows the question as a True/False type; the host just wants the
+// claim itself.
+function stripTrueFalsePrefix(text) {
+  return text.replace(/^\s*true\s*(?:or|\/)\s*false\s*[:\-–—]?\s*/i, "").trim();
 }
 
 function fingerprint(value) {

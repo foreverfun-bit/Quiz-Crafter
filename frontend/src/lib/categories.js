@@ -27,3 +27,25 @@ export const dedupeCategories = (values, preferredCategories = []) => {
   values.forEach(prefer);
   return [...byKey.values()];
 };
+
+// Shared with BuildSession.jsx (moved here so HostSession.jsx's merged
+// workspace reads/writes the exact same approved/rejected category list --
+// a category approved from either screen should show up in both).
+export const CATEGORY_PREF_KEY = "quiz-crafter-category-preferences";
+
+export const loadLocalCategoryPrefs = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CATEGORY_PREF_KEY) || "{}");
+    return {
+      approved: dedupeCategories(Array.isArray(parsed.approved) ? parsed.approved : []),
+      rejected: dedupeCategories(Array.isArray(parsed.rejected) ? parsed.rejected : []),
+      // A category the host deleted as a stray duplicate -- distinct from
+      // rejected (disliked, steered away from in AI prompts). Kept out of
+      // approved the same way rejected is, but never shown as "rejected"
+      // and never sent to the AI as something to avoid.
+      removed: dedupeCategories(Array.isArray(parsed.removed) ? parsed.removed : []),
+    };
+  } catch {
+    return { approved: [], rejected: [], removed: [] };
+  }
+};

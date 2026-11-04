@@ -10,7 +10,7 @@ import Dashboard from "./pages/Dashboard";
 import Library from "./pages/Library";
 import BuildSession from "./pages/BuildSession";
 import ImportCSV from "./pages/ImportCSV";
-import SessionDetail from "./pages/SessionDetail";
+import EventWorkspace from "./pages/EventWorkspace";
 import PastSessions from "./pages/PastSessions";
 import Categories from "./pages/Categories";
 import ResetData from "./pages/ResetData";
@@ -28,6 +28,7 @@ import GameHistoryDetail from "./pages/GameHistory";
 
 // Components
 import Sidebar from "./components/Sidebar";
+import TopNav from "./components/TopNav";
 import FloatingCopilot from "./components/FloatingCopilot";
 import { CopilotProvider } from "./context/CopilotContext";
 
@@ -87,6 +88,7 @@ const AppLayout = ({ children }) => {
     <div className="app-layout">
       <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <div className="main-content">
+        <TopNav />
         <div className="lg:hidden fixed top-4 left-4 z-50">
           <button
             onClick={() => setSidebarOpen(true)}
@@ -328,7 +330,8 @@ function App() {
           <CopilotProvider>
           <Routes>
             <Route path="/login" element={<Login />} />
-            <Route path="/" element={<ProtectedRoute><AppLayout><Dashboard /></AppLayout></ProtectedRoute>} />
+            <Route path="/" element={<ProtectedRoute><AppLayout><PastSessions /></AppLayout></ProtectedRoute>} />
+            <Route path="/dashboard" element={<ProtectedRoute><AppLayout><Dashboard /></AppLayout></ProtectedRoute>} />
             <Route path="/generate" element={<ProtectedRoute><Navigate to="/build" replace /></ProtectedRoute>} />
             <Route path="/write-question" element={<ProtectedRoute><Navigate to="/build" replace /></ProtectedRoute>} />
             <Route path="/library" element={<ProtectedRoute><AppLayout><Library /></AppLayout></ProtectedRoute>} />
@@ -337,7 +340,7 @@ function App() {
             <Route path="/sessions" element={<Navigate to="/past-sessions" replace />} />
             <Route path="/past-sessions" element={<ProtectedRoute><AppLayout><PastSessions /></AppLayout></ProtectedRoute>} />
             <Route path="/import" element={<ProtectedRoute><AppLayout><ImportCSV /></AppLayout></ProtectedRoute>} />
-            <Route path="/session/:id" element={<ProtectedRoute><AppLayout><SessionDetail /></AppLayout></ProtectedRoute>} />
+            <Route path="/session/:id" element={<ProtectedRoute><EventWorkspace /></ProtectedRoute>} />
             <Route path="/host-session/:id" element={<ProtectedRoute><HostSession /></ProtectedRoute>} />
             <Route path="/present-session/:id" element={<ProtectedRoute><PresentSession /></ProtectedRoute>} />
             <Route path="/categories" element={<ProtectedRoute><AppLayout><Categories /></AppLayout></ProtectedRoute>} />

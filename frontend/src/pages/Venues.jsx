@@ -239,7 +239,7 @@ const Venues = ({ initialTab = "venues" }) => {
           ))}
         </section>
 
-        <VenueEditor form={form} selectedVenue={selectedVenue} updateForm={updateForm} saveVenue={saveVenue} saving={saving} />
+        <VenueEditor key={selectedVenueId || "new"} form={form} selectedVenue={selectedVenue} updateForm={updateForm} saveVenue={saveVenue} saving={saving} />
       </div>
       </>}
     </div>

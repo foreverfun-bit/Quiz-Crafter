@@ -93,14 +93,25 @@ const makeLiveEventId = (event, payload = {}) => [
   payload.questionId || "",
   payload.submittedAt || payload.updatedAt || payload.joinedAt || Date.now(),
 ].join(":");
+// A player is never authenticated (no supabase.auth session -- joining is
+// just picking a name), so sessions' RLS UPDATE policy (auth.uid() =
+// user_id, the host's own account) can never let a plain
+// supabase.from("sessions").update(...) from here succeed -- that used to
+// be exactly what this function did, meaning it silently failed every
+// single time in production (caught below, only console.warn'd) and every
+// player/answer/feedback event relied entirely on best-effort Realtime
+// broadcast delivery with no working fallback. append_live_event is a
+// SECURITY DEFINER Postgres function (see the matching migration) that
+// atomically appends to hosted_results.liveEvents only -- it runs with the
+// function owner's privileges, so it works for an anonymous caller, and
+// because the whole append happens in one database statement it can't race
+// with another player's (or the host's) write the way a client-side
+// read-modify-write of the whole column could.
 const saveDurablePlayerEvent = async (sessionId, event, payload) => {
   const eventRecord = { id: payload.eventId || makeLiveEventId(event, payload), event, payload };
   try {
-    const { data } = await supabase.from("sessions").select("hosted_results").eq("id", sessionId).single();
-    const currentResults = data?.hosted_results && typeof data.hosted_results === "object" && !Array.isArray(data.hosted_results) ? data.hosted_results : {};
-    const currentEvents = Array.isArray(currentResults.liveEvents) ? currentResults.liveEvents : [];
-    const nextEvents = [...currentEvents.filter((item) => item?.id !== eventRecord.id), eventRecord].slice(-1000);
-    await supabase.from("sessions").update({ hosted_results: { ...currentResults, liveEvents: nextEvents, liveEventsUpdatedAt: new Date().toISOString() } }).eq("id", sessionId);
+    const { error } = await supabase.rpc("append_live_event", { p_session_id: sessionId, p_event: eventRecord });
+    if (error) throw error;
   } catch (error) {
     console.warn("Durable player event save unavailable:", error);
   }
@@ -378,9 +389,13 @@ const PlayerSession = () => {
   const submissionTiming = () => ({ secondsRemainingAtSubmit: timeRemaining, timerEndAt: hostState?.timerEndAt || null, timerSeconds: hostState?.timerSeconds || null });
   const pointsPerQuestion = getCurrentQuestionPoints(hostState, currentQuestion);
   const wagerMode = Boolean(hostState?.wagerMode);
+  // wagerLimit itself is no longer a real ceiling -- the host only turns
+  // wagering on/off per question (wagerLimit > 0 just signals "on"). The
+  // only real cap is however many points this team currently has.
   const wagerLimit = Number(hostState?.wagerLimit || 0);
-  const effectiveWagerLimit = wagerMode ? Math.max(0, Math.min(wagerLimit || Number.POSITIVE_INFINITY, Number(myScore || 0))) : 0;
-  const wagerTiming = hostState?.wagerTiming === "after_answer" ? "after_answer" : "before_answer";
+  const effectiveWagerLimit = wagerMode ? Math.max(0, Number(myScore || 0)) : 0;
+  // After-answer is the default -- matches HostSession.jsx's normalizeWagerTiming.
+  const wagerTiming = hostState?.wagerTiming === "before_answer" ? "before_answer" : "after_answer";
   const gameStarted = hasGameStarted(hostState);
   const introRound = hostState?.introRound || null;
   const activeRoundCategories = useMemo(() => {
@@ -753,7 +768,7 @@ const LeaderboardView = ({ leaderboard, playerId, title = "Leaderboard" }) => <d
 
 const IdeasView = ({ form, setForm, onSubmit }) => <div className="w-full max-w-md"><div className="text-center mb-5"><Sparkles className="mx-auto text-[#71E0DC] mb-2" size={40} /><h2 className="text-3xl font-black">Send Ideas</h2><p className="text-zinc-500 mt-1">Help shape a future trivia night.</p></div><Card className="glass-card"><CardContent className="p-5 space-y-4"><label className="block text-sm text-zinc-400">Category idea<input value={form.category} onChange={(event) => setForm((current) => ({ ...current, category: event.target.value }))} placeholder="e.g. Movie soundtracks" className="mt-1 h-12 w-full rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><label className="block text-sm text-zinc-400">Question idea<textarea value={form.question} onChange={(event) => setForm((current) => ({ ...current, question: event.target.value }))} placeholder="A question, clue idea, or topic you want to see" className="mt-1 min-h-28 w-full rounded-lg bg-zinc-950 border border-white/10 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><Button onClick={onSubmit} className="w-full h-12 gradient-btn font-bold">Send Idea</Button></CardContent></Card></div>;
 
-const WagerInput = ({ wagerMode, wagerAmount, setWagerAmount, wagerLimit }) => wagerMode ? <div className="mb-3"><label className="text-zinc-400 text-sm block mb-1.5">Wager from 0{wagerLimit ? ` to ${wagerLimit}` : ""}</label><input value={wagerAmount} onChange={(event) => setWagerAmount(event.target.value)} type="number" min="0" max={wagerLimit || 0} inputMode="numeric" placeholder="0" className="w-full h-12 rounded-lg bg-zinc-950 border border-purple-500/30 px-3 text-white text-lg outline-none focus:border-purple-400" /></div> : null;
+const WagerInput = ({ wagerMode, wagerAmount, setWagerAmount, wagerLimit }) => wagerMode ? <div className="mb-3"><label className="text-zinc-400 text-sm block mb-1.5">Wager from 0{wagerLimit ? ` to ${wagerLimit}` : ""}</label><div className="flex gap-2"><input value={wagerAmount} onChange={(event) => setWagerAmount(event.target.value)} type="number" min="0" max={wagerLimit || 0} inputMode="numeric" placeholder="0" className="min-w-0 flex-1 h-12 rounded-lg bg-zinc-950 border border-purple-500/30 px-3 text-white text-lg outline-none focus:border-purple-400" /><Button type="button" onClick={() => setWagerAmount(String(wagerLimit || 0))} disabled={!wagerLimit} className="h-12 shrink-0 border border-purple-500/30 bg-purple-500/15 px-4 text-sm font-bold text-purple-200 hover:bg-purple-500/25 disabled:opacity-40">All In</Button></div></div> : null;
 
 // disabled: options/inputs stay visible (so players still see what they're
 // choosing between) but don't accept taps -- used while the host has
