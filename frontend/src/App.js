@@ -28,6 +28,7 @@ import GameHistoryDetail from "./pages/GameHistory";
 
 // Components
 import Sidebar from "./components/Sidebar";
+import TopNav from "./components/TopNav";
 import FloatingCopilot from "./components/FloatingCopilot";
 import { CopilotProvider } from "./context/CopilotContext";
 
@@ -87,6 +88,7 @@ const AppLayout = ({ children }) => {
     <div className="app-layout">
       <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <div className="main-content">
+        <TopNav />
         <div className="lg:hidden fixed top-4 left-4 z-50">
           <button
             onClick={() => setSidebarOpen(true)}

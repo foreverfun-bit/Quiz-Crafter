@@ -9,8 +9,6 @@ import {
   LogOut,
   X,
   History,
-  MessageSquare,
-  MapPin,
   Gamepad2,
 } from "lucide-react";
 
@@ -18,16 +16,13 @@ import {
 // content-type links (each with a colored icon badge), a prominent
 // "Create Event" CTA, and a secondary "Practice Hosting" CTA below it.
 // Dashboard had no TrivNow equivalent and was dropped from the nav
-// entirely (the route itself is untouched, just unreachable from here);
-// Host Hub and Manage are real functionality (host utilities,
-// categories/venues/templates) with no TrivNow page to fold into, so they
-// moved up into this same primary tier instead of sitting in a separate
-// secondary group.
+// entirely (the route itself is untouched, just unreachable from here).
+// Host Hub and Manage live in TopNav (see components/TopNav.jsx), not
+// here -- the host specifically wanted those running across the top of
+// the page like TrivNow's own top bar, not folded into this sidebar.
 const PRIMARY_NAV_ITEMS = [
   { path: "/past-sessions", icon: History, label: "Events", activePaths: ["/", "/past-sessions", "/sessions", "/session", "/game-history"], testId: "nav-sessions", badgeClass: "bg-emerald-500/20 text-emerald-300" },
   { path: "/library", icon: Library, label: "Questions", activePaths: ["/library", "/import"], testId: "nav-question-bank", badgeClass: "bg-[#AEB2EF]/20 text-[#AEB2EF]" },
-  { path: "/host-tools", icon: MessageSquare, label: "Host Hub", activePaths: ["/host-tools", "/host-session"], testId: "nav-host-hub", badgeClass: "bg-amber-500/20 text-amber-300" },
-  { path: "/manage", icon: MapPin, label: "Manage", activePaths: ["/manage", "/categories", "/venues", "/show-templates", "/style-memory", "/reset-data"], testId: "nav-manage", badgeClass: "bg-sky-500/20 text-sky-300" },
 ];
 
 const Sidebar = ({ isOpen, onClose }) => {
