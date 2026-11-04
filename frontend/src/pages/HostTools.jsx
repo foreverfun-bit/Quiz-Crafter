@@ -382,16 +382,24 @@ const HostTools = () => {
   const openSocialComposer = async (network) => {
     const rawText = socialPost.trim() || "Trivia update";
     const text = encodeURIComponent(rawText);
-    const url = encodeURIComponent(window.location.origin);
     if (network === "facebook") {
       if (rawText && rawText !== "Trivia update") {
         await navigator.clipboard.writeText(rawText);
         toast.success("Post copied. Paste it into Facebook.");
       }
+      // sharer.php always needs a u= link to share, and always shows that
+      // link's own preview card (title/image) pulled from its page -- there
+      // isn't a real page to link to here, just plain clue text, and
+      // pointing it at this app's own URL only ever produced an irrelevant
+      // "Dashboard -- Vercel" card. Without a configured Page URL, open
+      // Facebook itself and rely on the text already being on the
+      // clipboard to paste in, same as when a Page URL *is* set.
       const pageUrl = String(socialLinks.facebook || "").trim();
-      window.open(pageUrl || `https://www.facebook.com/sharer/sharer.php?u=${url}&quote=${text}`, "_blank", "noopener,noreferrer");
+      window.open(pageUrl || "https://www.facebook.com/", "_blank", "noopener,noreferrer");
     }
-    if (network === "x") window.open(`https://twitter.com/intent/tweet?text=${text}&url=${url}`, "_blank", "noopener,noreferrer");
+    // No url= param -- same reasoning as Facebook above, this app's own
+    // link has nothing to do with the clue and only adds an unwanted card.
+    if (network === "x") window.open(`https://twitter.com/intent/tweet?text=${text}`, "_blank", "noopener,noreferrer");
     logCurrentClue();
   };
   const exportResults = () => {
