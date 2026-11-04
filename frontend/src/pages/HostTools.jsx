@@ -395,10 +395,19 @@ const HostTools = () => {
     if (network === "facebook") {
       if (rawText && rawText !== "Trivia update") {
         await navigator.clipboard.writeText(rawText);
-        toast.success("Post copied. Paste it into Facebook.");
+        // Facebook has not honored sharer.php's quote= param for years (a
+        // deliberate anti-spam restriction, not something fixable from
+        // here) -- it has never actually pre-filled the post text, so
+        // there's no quote= param below; the clipboard is the only way the
+        // text gets in. A toast is easy to miss here: on mobile, tapping
+        // Open Facebook usually switches straight to the Facebook app,
+        // backgrounding this page (and its toast) almost immediately. A
+        // blocking alert forces the host to see and dismiss the
+        // instruction before that happens.
+        window.alert("Clue copied to your clipboard. In the Facebook post box, tap and hold to Paste it in.");
       }
       const pageUrl = String(socialLinks.facebook || "").trim();
-      window.open(pageUrl || `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(SOCIAL_SHARE_URL)}&quote=${text}`, "_blank", "noopener,noreferrer");
+      window.open(pageUrl || `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(SOCIAL_SHARE_URL)}`, "_blank", "noopener,noreferrer");
     }
     if (network === "x") window.open(`https://twitter.com/intent/tweet?text=${text}`, "_blank", "noopener,noreferrer");
     logCurrentClue();
