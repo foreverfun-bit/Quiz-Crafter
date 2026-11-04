@@ -818,7 +818,9 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   // the host's saved approve/reject prefs (quiz-crafter-category-preferences,
   // shared via lib/categories so approving one from either screen shows up
   // in both) layered onto every category actually seen in the question
-  // library, minus anything rejected. Fetched once; a category approved
+  // library, minus anything rejected or removed (a removed category is a
+  // deleted stray duplicate, not one the host dislikes, but it still
+  // shouldn't resurface here). Fetched once; a category approved
   // mid-event elsewhere won't retroactively appear here without a reload,
   // same tradeoff BuildSession already accepts.
   useEffect(() => {
@@ -827,11 +829,11 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
       if (cancelled) return;
       if (error) { console.warn("Category list unavailable:", error); return; }
       const prefs = loadLocalCategoryPrefs();
-      const approved = new Set(prefs.approved);
-      const rejectedKeys = new Set(prefs.rejected.map(categoryKey));
+      const excludedKeys = new Set([...prefs.rejected, ...prefs.removed].map(categoryKey));
+      const approved = new Set(prefs.approved.filter((category) => !excludedKeys.has(categoryKey(category))));
       (data || []).forEach((row) => {
         const category = canonicalCategory(row.category, [...approved]);
-        if (category && !rejectedKeys.has(categoryKey(category))) approved.add(category);
+        if (category && !excludedKeys.has(categoryKey(category))) approved.add(category);
       });
       setApprovedCategories(dedupeCategories([...approved]).sort((a, b) => a.localeCompare(b)));
     });

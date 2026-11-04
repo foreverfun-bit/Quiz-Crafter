@@ -107,6 +107,11 @@ export const syncProfileJson = async ({ localKey, profileKey, fallback, merge = 
     nextValue = {
       approved: dedupeCategories(mergeArrays(remoteValue?.approved, localValue?.approved)),
       rejected: dedupeCategories(mergeArrays(remoteValue?.rejected, localValue?.rejected)),
+      // Removed is distinct from rejected -- a deleted duplicate, not a
+      // category the host dislikes -- so it must survive this merge the
+      // same way approved/rejected do, or it would quietly reappear on the
+      // next sync (nextValue below replaces the whole stored object).
+      removed: dedupeCategories(mergeArrays(remoteValue?.removed, localValue?.removed)),
     };
   }
 

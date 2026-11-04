@@ -39,8 +39,13 @@ export const loadLocalCategoryPrefs = () => {
     return {
       approved: dedupeCategories(Array.isArray(parsed.approved) ? parsed.approved : []),
       rejected: dedupeCategories(Array.isArray(parsed.rejected) ? parsed.rejected : []),
+      // A category the host deleted as a stray duplicate -- distinct from
+      // rejected (disliked, steered away from in AI prompts). Kept out of
+      // approved the same way rejected is, but never shown as "rejected"
+      // and never sent to the AI as something to avoid.
+      removed: dedupeCategories(Array.isArray(parsed.removed) ? parsed.removed : []),
     };
   } catch {
-    return { approved: [], rejected: [] };
+    return { approved: [], rejected: [], removed: [] };
   }
 };
