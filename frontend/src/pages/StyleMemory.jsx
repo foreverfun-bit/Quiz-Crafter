@@ -87,9 +87,17 @@ export default function StyleMemory() {
   const retrain = async () => {
     setRetraining(true);
     try {
+      // Only the four question arrays are actually read out of each session
+      // (see collectSessionQuestions below) -- selecting "*" pulled every
+      // other column too, including hosted_results, which can be a sizeable
+      // JSON blob for any session that's actually been hosted. For an
+      // account with many hosted sessions, up to 75 of those full rows
+      // through the /api/supabase-data proxy was enough to make the
+      // connection drop mid-response, which surfaces client-side as a bare
+      // "Failed to fetch" rather than a real error message.
       const [questionsResult, sessionsResult] = await Promise.all([
         supabase.from("questions").select("*").order("created_at", { ascending: false }).limit(500),
-        supabase.from("sessions").select("*").order("created_at", { ascending: false }).limit(75),
+        supabase.from("sessions").select("true_false_questions, multiple_choice_questions, written_questions, picture_questions").order("created_at", { ascending: false }).limit(75),
       ]);
       if (questionsResult.error) throw questionsResult.error;
       if (sessionsResult.error) throw sessionsResult.error;
