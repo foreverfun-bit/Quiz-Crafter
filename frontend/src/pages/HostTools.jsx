@@ -379,6 +379,16 @@ const HostTools = () => {
     logCurrentClue();
   };
 
+  // sharer.php is also what makes Facebook pop its "Create post" composer
+  // open automatically (vs. just opening facebook.com and leaving the host
+  // to click "What's on your mind" themselves) -- that only happens when a
+  // u= link is attached, and it always shows that link's own preview card.
+  // window.location.origin used to be passed here, which is the Vercel
+  // deployment's own URL (changes per deploy, has no real Open Graph info
+  // of its own), producing a broken "Dashboard -- Vercel" card instead of
+  // anything about trivia night. The actual public site has real branding,
+  // so the card is now at least correct, even if still not the clue itself.
+  const SOCIAL_SHARE_URL = "https://www.quizcrafter.fun";
   const openSocialComposer = async (network) => {
     const rawText = socialPost.trim() || "Trivia update";
     const text = encodeURIComponent(rawText);
@@ -387,18 +397,9 @@ const HostTools = () => {
         await navigator.clipboard.writeText(rawText);
         toast.success("Post copied. Paste it into Facebook.");
       }
-      // sharer.php always needs a u= link to share, and always shows that
-      // link's own preview card (title/image) pulled from its page -- there
-      // isn't a real page to link to here, just plain clue text, and
-      // pointing it at this app's own URL only ever produced an irrelevant
-      // "Dashboard -- Vercel" card. Without a configured Page URL, open
-      // Facebook itself and rely on the text already being on the
-      // clipboard to paste in, same as when a Page URL *is* set.
       const pageUrl = String(socialLinks.facebook || "").trim();
-      window.open(pageUrl || "https://www.facebook.com/", "_blank", "noopener,noreferrer");
+      window.open(pageUrl || `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(SOCIAL_SHARE_URL)}&quote=${text}`, "_blank", "noopener,noreferrer");
     }
-    // No url= param -- same reasoning as Facebook above, this app's own
-    // link has nothing to do with the clue and only adds an unwanted card.
     if (network === "x") window.open(`https://twitter.com/intent/tweet?text=${text}`, "_blank", "noopener,noreferrer");
     logCurrentClue();
   };
