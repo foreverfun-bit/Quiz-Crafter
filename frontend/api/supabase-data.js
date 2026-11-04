@@ -218,6 +218,9 @@ const getClientUserId = (body = {}) => {
 };
 
 module.exports = async function handler(req, res) {
+  const startedAt = Date.now();
+  console.log(`[supabase-data] request received method=${req.method}`);
+
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
     return;
@@ -228,6 +231,7 @@ module.exports = async function handler(req, res) {
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
   if (!supabaseUrl || !anonKey || !serviceRoleKey) {
+    console.error("[supabase-data] missing server configuration", { hasUrl: !!supabaseUrl, hasAnonKey: !!anonKey, hasServiceRoleKey: !!serviceRoleKey });
     res.status(500).json({ error: "Missing Supabase server configuration" });
     return;
   }
@@ -235,13 +239,16 @@ module.exports = async function handler(req, res) {
   const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
   const table = String(body.table || "");
   const action = String(body.action || "select");
+  console.log(`[supabase-data] table=${table} action=${action} columns=${body.columns || "*"} limit=${body.limit ?? "none"}`);
 
   if (!ALLOWED_TABLES.has(table)) {
     res.status(400).json({ error: "Table is not available through this endpoint" });
     return;
   }
 
+  const authStartedAt = Date.now();
   const user = await verifyUser(supabaseUrl, anonKey, getBearerToken(req, body));
+  console.log(`[supabase-data] verifyUser resolved in ${Date.now() - authStartedAt}ms userId=${user?.id || "none"}`);
   const filteredUserId = getFilteredUserId(body.filters);
   const clientUserId = getClientUserId(body);
   const effectiveUserId = user?.id || filteredUserId || clientUserId;
@@ -281,13 +288,17 @@ module.exports = async function handler(req, res) {
     if (action !== "select" && columns) query = query.select(columns);
     if (body.single) query = query.single();
 
+    const queryStartedAt = Date.now();
     const { data, error } = await query;
+    console.log(`[supabase-data] query for table=${table} action=${action} finished in ${Date.now() - queryStartedAt}ms (total ${Date.now() - startedAt}ms)`);
     if (error) {
+      console.error(`[supabase-data] query error for table=${table} action=${action}:`, error.message, error.details || error.hint || "");
       res.status(400).json({ error: error.message, details: error.details || error.hint || null });
       return;
     }
     res.status(200).json({ data });
   } catch (error) {
+    console.error(`[supabase-data] handler threw for table=${table} action=${action} after ${Date.now() - startedAt}ms:`, error?.stack || error);
     res.status(500).json({ error: error.message || "Supabase data request failed" });
   }
 };
