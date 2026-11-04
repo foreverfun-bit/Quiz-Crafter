@@ -4,7 +4,6 @@ import { useAuth } from "../App";
 import { Button } from "./ui/button";
 import NewEventModal from "./NewEventModal";
 import {
-  LayoutDashboard,
   Library,
   PlusCircle,
   LogOut,
@@ -18,18 +17,17 @@ import {
 // Restyled to match TrivNow's "My Content" nav: a short list of primary
 // content-type links (each with a colored icon badge), a prominent
 // "Create Event" CTA, and a secondary "Practice Hosting" CTA below it.
-// Dashboard, Host Hub, and Manage stay as a secondary group underneath --
-// real functionality (stats/todos, host utilities, categories/venues/
-// templates) with no TrivNow equivalent to fold into, not dropped.
+// Dashboard had no TrivNow equivalent and was dropped from the nav
+// entirely (the route itself is untouched, just unreachable from here);
+// Host Hub and Manage are real functionality (host utilities,
+// categories/venues/templates) with no TrivNow page to fold into, so they
+// moved up into this same primary tier instead of sitting in a separate
+// secondary group.
 const PRIMARY_NAV_ITEMS = [
   { path: "/past-sessions", icon: History, label: "Events", activePaths: ["/", "/past-sessions", "/sessions", "/session", "/game-history"], testId: "nav-sessions", badgeClass: "bg-emerald-500/20 text-emerald-300" },
   { path: "/library", icon: Library, label: "Questions", activePaths: ["/library", "/import"], testId: "nav-question-bank", badgeClass: "bg-[#AEB2EF]/20 text-[#AEB2EF]" },
-];
-
-const SECONDARY_NAV_ITEMS = [
-  { path: "/dashboard", icon: LayoutDashboard, label: "Dashboard", testId: "nav-dashboard" },
-  { path: "/host-tools", icon: MessageSquare, label: "Host Hub", activePaths: ["/host-tools", "/host-session"], testId: "nav-host-hub" },
-  { path: "/manage", icon: MapPin, label: "Manage", activePaths: ["/manage", "/categories", "/venues", "/show-templates", "/style-memory", "/reset-data"], testId: "nav-manage" },
+  { path: "/host-tools", icon: MessageSquare, label: "Host Hub", activePaths: ["/host-tools", "/host-session"], testId: "nav-host-hub", badgeClass: "bg-amber-500/20 text-amber-300" },
+  { path: "/manage", icon: MapPin, label: "Manage", activePaths: ["/manage", "/categories", "/venues", "/show-templates", "/style-memory", "/reset-data"], testId: "nav-manage", badgeClass: "bg-sky-500/20 text-sky-300" },
 ];
 
 const Sidebar = ({ isOpen, onClose }) => {
@@ -42,8 +40,6 @@ const Sidebar = ({ isOpen, onClose }) => {
     logout();
     navigate("/login");
   };
-
-  const navItems = SECONDARY_NAV_ITEMS;
 
   const isPathActive = (path, activePaths = []) => {
     if (path === "/") return location.pathname === "/";
@@ -114,30 +110,6 @@ const Sidebar = ({ isOpen, onClose }) => {
               <Button asChild variant="outline" className="w-full justify-center border-white/10 text-zinc-300 hover:text-white">
                 <NavLink to="/host-tools" onClick={onClose}><Gamepad2 size={16} className="mr-2" />Practice Hosting</NavLink>
               </Button>
-            </div>
-            <div className="h-px bg-white/10 mb-3" />
-            <div className="space-y-2">
-              {navItems.map((item) => {
-                const ItemIcon = item.icon;
-                const active = isPathActive(item.path, item.activePaths);
-                return (
-                  <NavLink
-                    key={item.path}
-                    to={item.path}
-                    end={item.end}
-                    onClick={onClose}
-                    className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${
-                      active
-                        ? "bg-gradient-to-r from-[#71E0DC]/20 to-[#AEB2EF]/20 text-white border border-[#71E0DC]/30"
-                        : "text-zinc-400 hover:text-white hover:bg-zinc-800/50"
-                    }`}
-                    data-testid={item.testId}
-                  >
-                    <ItemIcon size={20} />
-                    <span className="font-medium">{item.label}</span>
-                  </NavLink>
-                );
-              })}
             </div>
           </nav>
 
