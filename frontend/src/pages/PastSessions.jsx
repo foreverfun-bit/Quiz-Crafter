@@ -299,8 +299,12 @@ const PastSessions = () => {
   // mount; a real remount re-fetches allSessions fresh anyway).
   const autoScheduledKeysRef = useRef(new Set());
   useEffect(() => {
-    if (loading || !user?.id || !venues.length || !templates.length) return;
+    if (loading || !user?.id || !venues.length || !templates.length) {
+      console.log("[auto-schedule] skipped:", { loading, hasUser: !!user?.id, venueCount: venues.length, templateCount: templates.length });
+      return;
+    }
     const dueVenues = venues.filter((venue) => venue.defaultTemplateId && venue.dayOfWeek);
+    console.log("[auto-schedule] venues:", venues.map((v) => ({ name: v.name, defaultTemplateId: v.defaultTemplateId, dayOfWeek: v.dayOfWeek, frequency: v.frequency })), "dueVenues:", dueVenues.length);
     if (!dueVenues.length) return;
     let cancelled = false;
     const ensureUpcomingSessions = async () => {
@@ -309,18 +313,23 @@ const PastSessions = () => {
       for (const venue of dueVenues) {
         if (cancelled) return;
         const date = nextVenueDate(venue);
+        console.log(`[auto-schedule] venue "${venue.name}": nextDate=`, date);
         if (!date) continue;
         const inputDate = date.toISOString().slice(0, 10);
         const key = `${venue.id}|${inputDate}`;
-        if (existingKeys.has(key)) continue;
+        if (existingKeys.has(key)) { console.log(`[auto-schedule] venue "${venue.name}": session already exists for ${inputDate}, skipping`); continue; }
         const template = templates.find((item) => item.id === venue.defaultTemplateId);
+        console.log(`[auto-schedule] venue "${venue.name}": looking for template ${venue.defaultTemplateId}, found:`, template?.name || "NONE", "available:", templates.map((t) => t.id));
         if (!template) continue;
         existingKeys.add(key);
         autoScheduledKeysRef.current.add(key);
+        console.log(`[auto-schedule] venue "${venue.name}": inserting session for ${inputDate}`);
         const { error } = await supabase.from("sessions").insert(buildAutoSessionPayload({ venue, template, date, userId: user.id }));
         if (error) {
           console.warn(`Auto-schedule insert failed for venue "${venue.name}":`, error);
           autoScheduledKeysRef.current.delete(key);
+        } else {
+          console.log(`[auto-schedule] venue "${venue.name}": insert succeeded`);
         }
       }
     };
