@@ -198,6 +198,29 @@ const getSavedRoundDescription = (session, roundOrder, roundName) => {
   const match = metadata.find((round) => Number(round.order || round.round_order) === Number(roundOrder) || String(round.name || round.round_name || "").toLowerCase() === String(roundName || "").toLowerCase());
   return normalizeText(match?.description || match?.round_description);
 };
+// A session that's been auto-scheduled from a venue's default template (or
+// otherwise saved before any questions were ever added) has round_descriptions
+// but no questions to derive rounds from -- the questions-based reconstruction
+// above produces an empty rounds array for it, which used to fall back to
+// generic createDefaultRounds() and silently discard the template's actual
+// round plan. Build empty round shells straight from round_descriptions
+// instead, so the plan the host picked still shows up with nothing written yet.
+const roundsFromMetadata = (session) => {
+  const metadata = getSessionRoundMetadata(session);
+  if (!metadata.length) return createDefaultRounds();
+  return normalizeRounds(metadata.map((round, index) => {
+    const order = Number(round.order ?? round.round_order ?? index + 1) || index + 1;
+    const name = normalizeText(round.name || round.round_name) || `Round ${order}`;
+    return {
+      id: `round-${order}-${fingerprint(name) || order}`,
+      name,
+      description: round.description || round.round_description || "",
+      questionType: round.questionType || round.question_type || "mixed",
+      defaultQuestionSettings: { points: round.points, timer_seconds: round.timer_seconds, wager_limit: round.wager_limit },
+      questionIds: [],
+    };
+  }));
+};
 const buildStateFromSavedSession = (session) => {
   const entries = [
     ["true_false", session?.true_false_questions],
@@ -226,7 +249,8 @@ const buildStateFromSavedSession = (session) => {
     return normalizeQuestion({ ...entry.question, id, question_type: entry.type === "picture" ? "written" : entry.type, image_url: entry.question?.image_url || entry.question?.media_url || "", image_timing: entry.question?.image_timing || entry.question?.image_display_timing, isGenerated: Boolean(entry.question?.is_generated) }, entry.type);
   });
   const rounds = [...roundMap.values()];
-  return { questions, rounds: rounds.length ? rounds : createDefaultRounds(), activeRoundId: rounds[0]?.id || defaultRounds[0].id };
+  const resolvedRounds = rounds.length ? rounds : roundsFromMetadata(session);
+  return { questions, rounds: resolvedRounds, activeRoundId: resolvedRounds[0]?.id || defaultRounds[0].id };
 };
 const newRoundId = () => `round-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const mergeTemplateRoundsWithExisting = (templateRounds, currentRounds) => {

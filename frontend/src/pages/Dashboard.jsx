@@ -28,7 +28,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
-import { PROFILE_ACTIVE_VENUE_KEY, PROFILE_SHOW_TEMPLATES_KEY, PROFILE_VENUES_KEY, mergeProfileRecords, normalizeTemplate, normalizeVenue, readActiveVenueId, readLocalTemplates, readLocalVenues, recordsChanged, writeActiveVenueId, writeLocalTemplates, writeLocalVenues } from "../lib/venues";
+import { PROFILE_ACTIVE_VENUE_KEY, PROFILE_SHOW_TEMPLATES_KEY, PROFILE_VENUES_KEY, buildAutoSessionPayload, mergeProfileRecords, normalizeTemplate, normalizeVenue, readActiveVenueId, readLocalTemplates, readLocalVenues, recordsChanged, writeActiveVenueId, writeLocalTemplates, writeLocalVenues } from "../lib/venues";
 import { loadHostSetupSettings, loadProfileValue, profileKeys, readCurrentProjectSessionId, saveHostSetupSettings, saveProfileValue, updateUserMetadata } from "../lib/profileState";
 
 const BUILD_STORAGE_KEYS = [
@@ -286,6 +286,46 @@ const Dashboard = () => {
 
     fetchStats();
   }, [user?.id]);
+
+  // Opt-in, venue-by-venue: a venue only gets auto-scheduled once it has a
+  // Default Template set (Venues page), so a host who hasn't set one up for
+  // a given venue never sees a surprise session appear. This only runs when
+  // the host actually opens the Dashboard -- there's no server-side cron
+  // creating sessions while nobody's looking, so a venue that's never
+  // visited stays exactly as un-automated as it would with no templates at
+  // all. The existing-session check queries fresh each run rather than
+  // trusting cached state, so re-running this (new tab, revisit) can't
+  // double-create the same date's session.
+  useEffect(() => {
+    if (!user?.id || !venues.length || !templates.length) return;
+    const dueVenues = venues.filter((venue) => venue.defaultTemplateId && venue.dayOfWeek);
+    if (!dueVenues.length) return;
+    let cancelled = false;
+    const ensureUpcomingSessions = async () => {
+      try {
+        const { data: existingSessions, error } = await supabase.from("sessions").select("venue_id, session_date").eq("user_id", user.id);
+        if (error) throw error;
+        if (cancelled) return;
+        const existingKeys = new Set((existingSessions || []).map((session) => `${session.venue_id}|${session.session_date}`));
+        for (const venue of dueVenues) {
+          const date = nextVenueDate(venue);
+          if (!date) continue;
+          const inputDate = date.toISOString().slice(0, 10);
+          const key = `${venue.id}|${inputDate}`;
+          if (existingKeys.has(key)) continue;
+          const template = templates.find((item) => item.id === venue.defaultTemplateId);
+          if (!template) continue;
+          existingKeys.add(key);
+          const { error: insertError } = await supabase.from("sessions").insert(buildAutoSessionPayload({ venue, template, date, userId: user.id }));
+          if (insertError) console.warn(`Auto-schedule insert failed for venue "${venue.name}":`, insertError);
+        }
+      } catch (autoScheduleError) {
+        console.warn("Auto-schedule unavailable:", autoScheduleError);
+      }
+    };
+    ensureUpcomingSessions();
+    return () => { cancelled = true; };
+  }, [user?.id, venues, templates]);
 
   useEffect(() => {
     if (!currentProjectSessionId || !user?.id) { setFetchedCurrentProjectSession(null); return; }

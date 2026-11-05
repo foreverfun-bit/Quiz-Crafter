@@ -29,6 +29,7 @@ export const defaultVenue = {
   defaultWagerLimit: 0,
   houseRules: "",
   hostNotes: "",
+  defaultTemplateId: "",
 };
 
 export const readLocalVenues = () => {
@@ -86,6 +87,7 @@ export const normalizeVenue = (venue = {}) => {
     defaultPoints: Math.max(0, Number(source.defaultPoints || defaultVenue.defaultPoints)),
     defaultTimer: Math.max(0, Number(source.defaultTimer || defaultVenue.defaultTimer)),
     defaultWagerLimit: Math.max(0, Number(source.defaultWagerLimit || 0)),
+    defaultTemplateId: String(source.defaultTemplateId || "").trim(),
     updatedAt: source.updatedAt || "",
   };
 };
@@ -328,4 +330,54 @@ export const writeTemplateBuildDraft = (template, venue = null) => {
   } catch {
     // Builder can still open without the draft.
   }
+};
+
+export const makeAutoSessionTitle = (venue, date) => {
+  const dateLabel = date.toLocaleDateString(undefined, { month: "numeric", day: "numeric", year: "numeric" });
+  const title = venue?.nightName || venue?.name || "Trivia";
+  return `${dateLabel} ${title}`.trim();
+};
+
+// Round-level settings live in round_descriptions (not question_type/points
+// columns of their own), matching what BuildSession.jsx's normalizeRounds /
+// buildStateFromSavedSession already read back out of a saved session's
+// round_descriptions once the empty-round fallback there knows to use them.
+export const buildAutoSessionRoundDescriptions = (template) => {
+  const clean = normalizeTemplate(template);
+  return clean.roundNames.map((name, index) => ({
+    order: index + 1,
+    name,
+    description: clean.roundDescriptions[index] || "",
+    questionType: clean.roundQuestionTypes[index] || "mixed",
+    points: clean.roundPoints[index] ?? clean.defaultPoints,
+    timer_seconds: clean.roundTimers[index] ?? clean.defaultTimer,
+    wager_limit: clean.roundWagerLimits[index] ?? clean.defaultWagerLimit,
+  }));
+};
+
+// Mirrors NewEventModal's insert shape (same columns, same empty question
+// arrays -- a host still has to write or generate the actual questions),
+// just with the round plan pre-filled from the venue's default template
+// instead of created blank.
+export const buildAutoSessionPayload = ({ venue, template, date, userId }) => {
+  const venueName = venue?.name || venue?.nightName || "";
+  const title = makeAutoSessionTitle(venue, date);
+  const inputDate = date.toISOString().slice(0, 10);
+  return {
+    user_id: userId,
+    name: title,
+    session_name: title,
+    source_type: "built",
+    is_past: false,
+    session_date: inputDate,
+    event_date: inputDate,
+    event_time: venue?.startTime || null,
+    venue: venueName || null,
+    venue_id: venue?.id || null,
+    true_false_questions: [],
+    multiple_choice_questions: [],
+    written_questions: [],
+    picture_questions: [],
+    round_descriptions: buildAutoSessionRoundDescriptions(template),
+  };
 };
