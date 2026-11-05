@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../App";
@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import NewEventModal from "../components/NewEventModal";
-import { mergeProfileRecords, normalizeVenue, readLocalVenues } from "../lib/venues";
+import { buildAutoSessionPayload, mergeProfileRecords, nextVenueDate, normalizeVenue, readLocalTemplates, readLocalVenues } from "../lib/venues";
 import { loadProfileValue, profileKeys, readCurrentProjectSessionId, writeCurrentProjectSessionId } from "../lib/profileState";
 import { downloadCsv } from "../lib/csv";
 
@@ -200,6 +200,7 @@ const PastSessions = () => {
   const [sortMode, setSortMode] = useState("host_desc");
   const [dateFilter, setDateFilter] = useState("all");
   const [venues, setVenues] = useState([]);
+  const [templates, setTemplates] = useState(() => readLocalTemplates());
   const [savingVenueId, setSavingVenueId] = useState(null);
   const [currentProjectId, setCurrentProjectId] = useState(null);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
@@ -285,6 +286,47 @@ const PastSessions = () => {
   useEffect(() => {
     if (user?.id) fetchSessions(user.id);
   }, [fetchSessions, user?.id]);
+
+  // Opt-in, venue-by-venue: only venues with a Default Template set (Venues
+  // page) get auto-scheduled. This is the actual home page (Dashboard isn't
+  // linked from nav anymore), so this is where "open the app" actually
+  // means for most hosts. Runs client-side on page load, not a server-side
+  // job -- a venue nobody ever opens the app for just never gets a session
+  // created, same as if auto-scheduling didn't exist for it.
+  // autoScheduledKeysRef guards against double-inserting the same
+  // venue+date if this re-runs before allSessions has been refreshed with
+  // what was just created (the ref persists across re-renders within this
+  // mount; a real remount re-fetches allSessions fresh anyway).
+  const autoScheduledKeysRef = useRef(new Set());
+  useEffect(() => {
+    if (loading || !user?.id || !venues.length || !templates.length) return;
+    const dueVenues = venues.filter((venue) => venue.defaultTemplateId && venue.dayOfWeek);
+    if (!dueVenues.length) return;
+    let cancelled = false;
+    const ensureUpcomingSessions = async () => {
+      const existingKeys = new Set(autoScheduledKeysRef.current);
+      allSessions.forEach((session) => existingKeys.add(`${session.venue_id}|${session.session_date}`));
+      for (const venue of dueVenues) {
+        if (cancelled) return;
+        const date = nextVenueDate(venue);
+        if (!date) continue;
+        const inputDate = date.toISOString().slice(0, 10);
+        const key = `${venue.id}|${inputDate}`;
+        if (existingKeys.has(key)) continue;
+        const template = templates.find((item) => item.id === venue.defaultTemplateId);
+        if (!template) continue;
+        existingKeys.add(key);
+        autoScheduledKeysRef.current.add(key);
+        const { error } = await supabase.from("sessions").insert(buildAutoSessionPayload({ venue, template, date, userId: user.id }));
+        if (error) {
+          console.warn(`Auto-schedule insert failed for venue "${venue.name}":`, error);
+          autoScheduledKeysRef.current.delete(key);
+        }
+      }
+    };
+    ensureUpcomingSessions();
+    return () => { cancelled = true; };
+  }, [user?.id, venues, templates, allSessions, loading]);
 
   const handleDelete = async (sessionId, e) => {
     e.stopPropagation();

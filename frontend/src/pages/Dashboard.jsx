@@ -28,7 +28,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
-import { PROFILE_ACTIVE_VENUE_KEY, PROFILE_SHOW_TEMPLATES_KEY, PROFILE_VENUES_KEY, buildAutoSessionPayload, mergeProfileRecords, normalizeTemplate, normalizeVenue, readActiveVenueId, readLocalTemplates, readLocalVenues, recordsChanged, writeActiveVenueId, writeLocalTemplates, writeLocalVenues } from "../lib/venues";
+import { PROFILE_ACTIVE_VENUE_KEY, PROFILE_SHOW_TEMPLATES_KEY, PROFILE_VENUES_KEY, mergeProfileRecords, nextVenueDate, normalizeTemplate, normalizeVenue, readActiveVenueId, readLocalTemplates, readLocalVenues, recordsChanged, writeActiveVenueId, writeLocalTemplates, writeLocalVenues } from "../lib/venues";
 import { loadHostSetupSettings, loadProfileValue, profileKeys, readCurrentProjectSessionId, saveHostSetupSettings, saveProfileValue, updateUserMetadata } from "../lib/profileState";
 
 const BUILD_STORAGE_KEYS = [
@@ -110,8 +110,6 @@ const compactDate = (value) => {
 const venueMetadataKey = PROFILE_VENUES_KEY;
 const templateMetadataKey = PROFILE_SHOW_TEMPLATES_KEY;
 const activeVenueMetadataKey = PROFILE_ACTIVE_VENUE_KEY;
-const dayIndex = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
-const weekIndex = { first: 1, second: 2, third: 3, fourth: 4 };
 const formatScheduleTime = (time, timeZone) => {
   if (!time) return "Time TBD";
   const [hours, minutes = "00"] = String(time).split(":");
@@ -119,51 +117,6 @@ const formatScheduleTime = (time, timeZone) => {
   date.setHours(Number(hours) || 0, Number(minutes) || 0, 0, 0);
   const zone = String(timeZone || "America/Chicago").split("/").pop()?.replace("_", " ") || "Local";
   return `${date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} ${zone}`;
-};
-const addDays = (date, days) => {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next;
-};
-const startOfDay = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
-const nextWeeklyDate = (venue, fromDate) => {
-  const target = dayIndex[venue.dayOfWeek];
-  if (target === undefined) return null;
-  const from = startOfDay(fromDate);
-  const offset = (target - from.getDay() + 7) % 7;
-  return addDays(from, offset);
-};
-const monthlyOccurrence = (year, month, dayName, monthlyWeek) => {
-  const target = dayIndex[dayName];
-  if (target === undefined) return null;
-  if (monthlyWeek === "last") {
-    const date = new Date(year, month + 1, 0);
-    date.setDate(date.getDate() - ((date.getDay() - target + 7) % 7));
-    return startOfDay(date);
-  }
-  const occurrence = weekIndex[monthlyWeek] || 1;
-  const first = new Date(year, month, 1);
-  const offset = (target - first.getDay() + 7) % 7;
-  return startOfDay(new Date(year, month, 1 + offset + ((occurrence - 1) * 7)));
-};
-const nextMonthlyDate = (venue, fromDate) => {
-  const from = startOfDay(fromDate);
-  for (let offset = 0; offset < 12; offset += 1) {
-    const monthDate = new Date(from.getFullYear(), from.getMonth() + offset, 1);
-    const candidate = monthlyOccurrence(monthDate.getFullYear(), monthDate.getMonth(), venue.dayOfWeek, venue.monthlyWeek);
-    if (candidate && candidate >= from) return candidate;
-  }
-  return null;
-};
-const nextVenueDate = (venue, fromDate = new Date()) => {
-  if (venue.frequency === "monthly") return nextMonthlyDate(venue, fromDate);
-  const weekly = nextWeeklyDate(venue, fromDate);
-  if (!weekly) return null;
-  if (venue.frequency !== "bi_weekly") return weekly;
-  const updated = venue.updatedAt ? new Date(venue.updatedAt) : fromDate;
-  const anchor = Number.isNaN(updated.getTime()) ? fromDate : updated;
-  const weeks = Math.floor((weekly - startOfDay(anchor)) / (7 * 24 * 60 * 60 * 1000));
-  return weeks % 2 === 0 ? weekly : addDays(weekly, 7);
 };
 const buildVenueSchedule = (venues) => venues
   .map((venue) => ({ venue, date: nextVenueDate(venue) }))
@@ -286,46 +239,6 @@ const Dashboard = () => {
 
     fetchStats();
   }, [user?.id]);
-
-  // Opt-in, venue-by-venue: a venue only gets auto-scheduled once it has a
-  // Default Template set (Venues page), so a host who hasn't set one up for
-  // a given venue never sees a surprise session appear. This only runs when
-  // the host actually opens the Dashboard -- there's no server-side cron
-  // creating sessions while nobody's looking, so a venue that's never
-  // visited stays exactly as un-automated as it would with no templates at
-  // all. The existing-session check queries fresh each run rather than
-  // trusting cached state, so re-running this (new tab, revisit) can't
-  // double-create the same date's session.
-  useEffect(() => {
-    if (!user?.id || !venues.length || !templates.length) return;
-    const dueVenues = venues.filter((venue) => venue.defaultTemplateId && venue.dayOfWeek);
-    if (!dueVenues.length) return;
-    let cancelled = false;
-    const ensureUpcomingSessions = async () => {
-      try {
-        const { data: existingSessions, error } = await supabase.from("sessions").select("venue_id, session_date").eq("user_id", user.id);
-        if (error) throw error;
-        if (cancelled) return;
-        const existingKeys = new Set((existingSessions || []).map((session) => `${session.venue_id}|${session.session_date}`));
-        for (const venue of dueVenues) {
-          const date = nextVenueDate(venue);
-          if (!date) continue;
-          const inputDate = date.toISOString().slice(0, 10);
-          const key = `${venue.id}|${inputDate}`;
-          if (existingKeys.has(key)) continue;
-          const template = templates.find((item) => item.id === venue.defaultTemplateId);
-          if (!template) continue;
-          existingKeys.add(key);
-          const { error: insertError } = await supabase.from("sessions").insert(buildAutoSessionPayload({ venue, template, date, userId: user.id }));
-          if (insertError) console.warn(`Auto-schedule insert failed for venue "${venue.name}":`, insertError);
-        }
-      } catch (autoScheduleError) {
-        console.warn("Auto-schedule unavailable:", autoScheduleError);
-      }
-    };
-    ensureUpcomingSessions();
-    return () => { cancelled = true; };
-  }, [user?.id, venues, templates]);
 
   useEffect(() => {
     if (!currentProjectSessionId || !user?.id) { setFetchedCurrentProjectSession(null); return; }

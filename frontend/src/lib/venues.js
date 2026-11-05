@@ -6,6 +6,53 @@ export const PROFILE_VENUES_KEY = "quiz_crafter_venues_v1";
 export const PROFILE_ACTIVE_VENUE_KEY = "quiz_crafter_active_venue_id";
 export const PROFILE_SHOW_TEMPLATES_KEY = "quiz_crafter_show_templates_v1";
 
+// Single source of truth for "when does this venue's schedule next land" --
+// used to show up to Dashboard's upcoming-shows card, BuildSession's venue
+// picker, and auto-scheduling (see buildAutoSessionPayload below). This used
+// to be copy-pasted into each of those files separately.
+const SCHEDULE_DAY_INDEX = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
+const SCHEDULE_WEEK_INDEX = { first: 1, second: 2, third: 3, fourth: 4 };
+const startOfDay = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+const addDays = (date, days) => { const next = new Date(date); next.setDate(next.getDate() + days); return next; };
+const nextWeeklyDate = (venue, fromDate) => {
+  const target = SCHEDULE_DAY_INDEX[venue.dayOfWeek];
+  if (target === undefined) return null;
+  const from = startOfDay(fromDate);
+  return addDays(from, (target - from.getDay() + 7) % 7);
+};
+const monthlyOccurrence = (year, month, dayName, monthlyWeek) => {
+  const target = SCHEDULE_DAY_INDEX[dayName];
+  if (target === undefined) return null;
+  if (monthlyWeek === "last") {
+    const date = new Date(year, month + 1, 0);
+    date.setDate(date.getDate() - ((date.getDay() - target + 7) % 7));
+    return startOfDay(date);
+  }
+  const occurrence = SCHEDULE_WEEK_INDEX[monthlyWeek] || 1;
+  const first = new Date(year, month, 1);
+  const offset = (target - first.getDay() + 7) % 7;
+  return startOfDay(new Date(year, month, 1 + offset + ((occurrence - 1) * 7)));
+};
+const nextMonthlyDate = (venue, fromDate) => {
+  const from = startOfDay(fromDate);
+  for (let offset = 0; offset < 12; offset += 1) {
+    const monthDate = new Date(from.getFullYear(), from.getMonth() + offset, 1);
+    const candidate = monthlyOccurrence(monthDate.getFullYear(), monthDate.getMonth(), venue.dayOfWeek, venue.monthlyWeek);
+    if (candidate && candidate >= from) return candidate;
+  }
+  return null;
+};
+export const nextVenueDate = (venue, fromDate = new Date()) => {
+  if (venue.frequency === "monthly") return nextMonthlyDate(venue, fromDate);
+  const weekly = nextWeeklyDate(venue, fromDate);
+  if (!weekly) return null;
+  if (venue.frequency !== "bi_weekly") return weekly;
+  const updated = venue.updatedAt ? new Date(venue.updatedAt) : fromDate;
+  const anchor = Number.isNaN(updated.getTime()) ? fromDate : updated;
+  const weeks = Math.floor((weekly - startOfDay(anchor)) / (7 * 24 * 60 * 60 * 1000));
+  return weeks % 2 === 0 ? weekly : addDays(weekly, 7);
+};
+
 export const defaultVenue = {
   name: "",
   nightName: "",
