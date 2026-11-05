@@ -1027,24 +1027,47 @@ function hasQuestionBankIntent(value) {
   return /\b(question bank|library|saved question|saved questions|unused question|unused questions|from my questions|from my bank)\b/i.test(cleanText(value));
 }
 
+// This fetch used to have no timeout at all -- if OpenAI ever hung instead
+// of erroring, nothing here would notice, and the request just rode it out
+// until Vercel's own platform-level hard limit (300s) killed the function.
+// At that point the client gets Vercel's own plain-text error page instead
+// of a response, which fails to parse as JSON client-side and surfaces as a
+// generic "Unexpected token" toast with no indication anything timed out.
+// Adding the top-up request in the batch-came-back-short case doubled how
+// often a single generation call could end up being the one that hangs, so
+// a call that fails fast here instead of hanging is what lets the top-up's
+// own try/catch actually degrade gracefully back to the shorter batch
+// (that catch was there for an outright request failure, not a 300-second
+// stall that starves any real response).
+const OPENAI_REQUEST_TIMEOUT_MS = 45000;
 async function requestCandidates(prompt, { fastMode = false } = {}) {
   if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured in Vercel");
 
-  const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: fastMode ? (process.env.OPENAI_FAST_GENERATOR_MODEL || "gpt-4.1-mini") : (process.env.OPENAI_GENERATOR_MODEL || "gpt-4.1"),
-      temperature: fastMode ? 0.76 : 0.82,
-      presence_penalty: fastMode ? 0.2 : 0.35,
-      frequency_penalty: fastMode ? 0.2 : 0.3,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: "You are a careful, inventive trivia co-host for a weekly live trivia host. You learn from the host's saved library and previously hosted questions, avoid common quiz-bank questions, and return only valid JSON." },
-        { role: "user", content: prompt },
-      ],
-    }),
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), OPENAI_REQUEST_TIMEOUT_MS);
+  let openaiRes;
+  try {
+    openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: fastMode ? (process.env.OPENAI_FAST_GENERATOR_MODEL || "gpt-4.1-mini") : (process.env.OPENAI_GENERATOR_MODEL || "gpt-4.1"),
+        temperature: fastMode ? 0.76 : 0.82,
+        presence_penalty: fastMode ? 0.2 : 0.35,
+        frequency_penalty: fastMode ? 0.2 : 0.3,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: "You are a careful, inventive trivia co-host for a weekly live trivia host. You learn from the host's saved library and previously hosted questions, avoid common quiz-bank questions, and return only valid JSON." },
+          { role: "user", content: prompt },
+        ],
+      }),
+    });
+  } catch (error) {
+    throw error?.name === "AbortError" ? new Error("The AI took too long to respond -- try again") : error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   const data = await openaiRes.json();
   if (!openaiRes.ok) {
