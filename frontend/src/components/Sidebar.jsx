@@ -13,13 +13,13 @@ import {
   BarChart3,
   TrendingUp,
   Mail,
-  Sparkles,
   FolderOpen,
   MapPin,
   Trophy,
   Palette,
   Brain,
   Trash2,
+  Users,
 } from "lucide-react";
 
 // Each top-level tab in TopNav (Content/Host Hub/Manage) gets its own
@@ -40,7 +40,6 @@ const HOST_HUB_NAV_ITEMS = [
   { path: "/host-tools?tab=feedback", tabParam: "feedback", icon: BarChart3, label: "Session Review", testId: "nav-host-feedback", badgeClass: "bg-amber-500/20 text-amber-300" },
   { path: "/host-tools?tab=game", tabParam: "game", icon: TrendingUp, label: "Game Data", testId: "nav-host-game", badgeClass: "bg-amber-500/20 text-amber-300" },
   { path: "/host-tools?tab=communications", tabParam: "communications", icon: Mail, label: "Communications", testId: "nav-host-comms", badgeClass: "bg-amber-500/20 text-amber-300" },
-  { path: "/host-tools?tab=clues", tabParam: "clues", icon: Sparkles, label: "Clues", testId: "nav-host-clues", badgeClass: "bg-amber-500/20 text-amber-300" },
 ];
 
 // Mirrors Manage.jsx's own card grid (its page stays as the Manage tab's
@@ -49,6 +48,7 @@ const HOST_HUB_NAV_ITEMS = [
 const MANAGE_NAV_ITEMS = [
   { path: "/categories", icon: FolderOpen, label: "Categories", testId: "nav-manage-categories", badgeClass: "bg-sky-500/20 text-sky-300" },
   { path: "/venues", icon: MapPin, label: "Venues", testId: "nav-manage-venues", badgeClass: "bg-sky-500/20 text-sky-300" },
+  { path: "/teams", icon: Users, label: "Teams", testId: "nav-manage-teams", badgeClass: "bg-sky-500/20 text-sky-300" },
   { path: "/show-templates", icon: Trophy, label: "Templates", testId: "nav-manage-templates", badgeClass: "bg-sky-500/20 text-sky-300" },
   { path: "/branding", icon: Palette, label: "Branding", testId: "nav-manage-branding", badgeClass: "bg-sky-500/20 text-sky-300" },
   { path: "/style-memory", icon: Brain, label: "Style Memory", testId: "nav-manage-style", badgeClass: "bg-sky-500/20 text-sky-300" },
@@ -56,7 +56,7 @@ const MANAGE_NAV_ITEMS = [
 ];
 
 const HOST_HUB_PATHS = ["/host-tools"];
-const MANAGE_PATHS = ["/manage", "/categories", "/venues", "/show-templates", "/branding", "/style-memory", "/reset-data"];
+const MANAGE_PATHS = ["/manage", "/categories", "/venues", "/teams", "/show-templates", "/branding", "/style-memory", "/reset-data"];
 
 const matchesPath = (pathname, paths) => paths.some((path) => pathname === path || pathname.startsWith(`${path}/`));
 

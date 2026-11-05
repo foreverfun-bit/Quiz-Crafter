@@ -8,13 +8,13 @@ import { BarChart3, CheckCircle, Clock, Copy, ExternalLink, Loader2, Mail, Messa
 import { toast } from "sonner";
 import { loadHostToolsSessionState, profileKeys, saveHostToolsSessionState, saveProfileValue, syncProfileJson } from "../lib/profileState";
 import { buildClueStyleExamples, deleteCluePost, extractCluePostFromImage, logCluePost, readClueHistory, syncClueHistory, updateCluePostSession, updateCluePostText } from "../lib/clueHistory";
+import { listHostRoster } from "../lib/liveGame";
 import { imageBlobToDataUrl } from "../lib/mediaUpload";
 import { dedupeCategories } from "../lib/categories";
 import { downloadCsv } from "../lib/csv";
 import { useCopilot } from "../context/CopilotContext";
 
 const SOCIAL_STORAGE_KEY = "quiz-crafter-social-links";
-const OUTREACH_CONTACTS_STORAGE_KEY = "quiz-crafter-outreach-contacts-v1";
 const readJson = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); } catch { return fallback; } };
 const writeJson = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* Keep tools usable if browser storage is full. */ } };
 const sessionStorageKey = (sessionId, name) => `quiz-crafter-host-tools-${sessionId}-${name}`;
@@ -30,7 +30,6 @@ const hostToolTabs = [
   { key: "feedback", label: "Session Review", icon: BarChart3 },
   { key: "game", label: "Game Data", icon: TrendingUp },
   { key: "communications", label: "Communications", icon: Mail },
-  { key: "clues", label: "Clues", icon: Sparkles },
 ];
 
 const HostTools = () => {
@@ -52,7 +51,7 @@ const HostTools = () => {
   const [aiDirection, setAiDirection] = useState("Make it playful, punny, and useful without giving away answers.");
   const [selectedClueKeys, setSelectedClueKeys] = useState([]);
   const [socialLinks, setSocialLinks] = useState(() => readJson(SOCIAL_STORAGE_KEY, { facebook: "", instagram: "", x: "" }));
-  const [outreachContacts, setOutreachContacts] = useState(() => readJson(OUTREACH_CONTACTS_STORAGE_KEY, []));
+  const [roster, setRoster] = useState([]);
   const [clueHistory, setClueHistory] = useState(() => readClueHistory());
   const [attendance, setAttendance] = useState({ nonPlayers: { adults: "", kids: "" }, teamHeadcounts: {} });
   const [generating, setGenerating] = useState(false);
@@ -63,7 +62,27 @@ const HostTools = () => {
 
   const selectedSession = useMemo(() => sessions.find((session) => session.id === selectedSessionId) || null, [sessions, selectedSessionId]);
   const emailPlayers = useMemo(() => players.filter((player) => player.updatePreference === "email" && player.updateContact), [players]);
-  const allEmailContacts = useMemo(() => mergeContacts(outreachContacts, contactRowsFromPlayers(emailPlayers, selectedSession)), [outreachContacts, emailPlayers, selectedSession]);
+  // Reads straight from live_game_players (via listHostRoster) rather than
+  // the host's own cached hostToolsBySession snapshot (which `players`
+  // above is built from) -- that snapshot only ever gets a team's opt-in
+  // written into it when the Host screen was open and connected at the
+  // exact moment they joined, so it silently missed anyone who opted in
+  // while nobody was watching. The roster is written at join time
+  // regardless, so it's the complete, durable source for this.
+  const durableEmailContacts = useMemo(() => {
+    const rows = [];
+    roster.forEach((game) => {
+      if (game.is_test) return;
+      (game.players || []).forEach((player) => {
+        if (player.update_preference === "email" && player.update_contact) {
+          rows.push({ name: player.name || "Team", email: normalizeEmail(player.update_contact), sessionId: game.session_id, sessionName: game.session_name || "Trivia", joinedAt: player.joined_at || game.created_at || "" });
+        }
+      });
+    });
+    return rows.sort((a, b) => String(a.joinedAt).localeCompare(String(b.joinedAt)));
+  }, [roster]);
+  const allEmailContacts = useMemo(() => mergeContacts(durableEmailContacts.filter((row) => row.email)), [durableEmailContacts]);
+  const sessionEmailContactCount = useMemo(() => durableEmailContacts.filter((row) => row.sessionId === selectedSessionId).length, [durableEmailContacts, selectedSessionId]);
   const questionFeedback = useMemo(() => summarize(feedback, "questionText"), [feedback]);
   const categoryRows = useMemo(() => summarize(categoryFeedback, "category"), [categoryFeedback]);
   const analytics = useMemo(() => buildAnalytics({ selectedSession, players, feedback, categoryFeedback, playerIdeas, answers, activity, emailPlayers, leaderboard, gradedAnswers }), [selectedSession, players, feedback, categoryFeedback, playerIdeas, answers, activity, emailPlayers, leaderboard, gradedAnswers]);
@@ -113,15 +132,9 @@ const HostTools = () => {
   }, []);
 
   useEffect(() => {
-    const syncOutreachContacts = async () => {
-      try {
-        const contacts = await syncProfileJson({ localKey: OUTREACH_CONTACTS_STORAGE_KEY, profileKey: profileKeys.outreachContacts, fallback: [], merge: "array" });
-        setOutreachContacts(normalizeContacts(contacts));
-      } catch (error) {
-        console.warn("Outreach contacts profile sync unavailable:", error);
-      }
-    };
-    syncOutreachContacts();
+    let cancelled = false;
+    listHostRoster().then((games) => { if (!cancelled) setRoster(Array.isArray(games) ? games : []); }).catch((error) => console.warn("Team roster load unavailable:", error));
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -311,15 +324,6 @@ const HostTools = () => {
     return () => window.clearTimeout(timeout);
   }, [selectedSessionId, attendance]);
 
-  useEffect(() => {
-    if (!emailPlayers.length) return;
-    const nextContacts = mergeContacts(outreachContacts, contactRowsFromPlayers(emailPlayers, selectedSession));
-    if (JSON.stringify(nextContacts) === JSON.stringify(outreachContacts)) return;
-    setOutreachContacts(nextContacts);
-    writeJson(OUTREACH_CONTACTS_STORAGE_KEY, nextContacts);
-    saveProfileValue(profileKeys.outreachContacts, nextContacts).catch((error) => console.warn("Outreach contacts profile save unavailable:", error));
-  }, [emailPlayers, outreachContacts, selectedSession]);
-
   const updateSocialLink = (key, value) => {
     const next = { ...socialLinks, [key]: value };
     setSocialLinks(next);
@@ -340,12 +344,18 @@ const HostTools = () => {
     toast.success("Email list copied");
   };
 
-  const openEmailDraft = () => {
+  const openEmailDraft = (bodyOverride) => {
     if (!allEmailContacts.length) return toast.error("No email opt-ins yet");
     const subject = encodeURIComponent(selectedSession?.name || selectedSession?.session_name || "Trivia update");
-    const body = encodeURIComponent(message || socialPost || "");
+    const body = encodeURIComponent(bodyOverride ?? (message || socialPost || ""));
     const bcc = encodeURIComponent(allEmailContacts.map((contact) => contact.email).join(","));
     window.location.href = `mailto:?bcc=${bcc}&subject=${subject}&body=${body}`;
+  };
+  const emailCluePost = () => {
+    const text = socialPost.trim();
+    if (!text) return toast.error("Write or generate a clue first");
+    openEmailDraft(text);
+    logCurrentClue();
   };
 
   // Logged here, not at draft time -- copying/opening a post is the host's
@@ -372,16 +382,15 @@ const HostTools = () => {
   const openSocialComposer = async (network) => {
     const rawText = socialPost.trim() || "Trivia update";
     const text = encodeURIComponent(rawText);
-    const url = encodeURIComponent(window.location.origin);
     if (network === "facebook") {
       if (rawText && rawText !== "Trivia update") {
         await navigator.clipboard.writeText(rawText);
         toast.success("Post copied. Paste it into Facebook.");
       }
       const pageUrl = String(socialLinks.facebook || "").trim();
-      window.open(pageUrl || `https://www.facebook.com/sharer/sharer.php?u=${url}&quote=${text}`, "_blank", "noopener,noreferrer");
+      window.open(pageUrl || "https://www.facebook.com/", "_blank", "noopener,noreferrer");
     }
-    if (network === "x") window.open(`https://twitter.com/intent/tweet?text=${text}&url=${url}`, "_blank", "noopener,noreferrer");
+    if (network === "x") window.open(`https://twitter.com/intent/tweet?text=${text}`, "_blank", "noopener,noreferrer");
     logCurrentClue();
   };
   const exportResults = () => {
@@ -457,12 +466,15 @@ const HostTools = () => {
         <Badge className={connected ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/20" : "bg-zinc-800 text-zinc-300"}>{connected ? "Listening live" : "Choose a session"}</Badge>
       </div>
 
-      <Card className="glass-card mb-6"><CardContent className="p-4 grid grid-cols-1 lg:grid-cols-[1fr_auto_auto] gap-3 items-end"><label className="text-sm text-zinc-400">Session<select value={selectedSessionId} onChange={(event) => setSelectedSessionId(event.target.value)} className="mt-1 w-full h-11 rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60">{sessions.map((session) => <option key={session.id} value={session.id}>{session.name || session.session_name || "Untitled Session"}</option>)}</select></label><Badge className="h-10 justify-center bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20"><Users size={15} className="mr-1" />{emailPlayers.length} this session</Badge><Badge className="h-10 justify-center bg-[#AEB2EF]/15 text-[#AEB2EF] border border-[#AEB2EF]/20"><Mail size={15} className="mr-1" />{allEmailContacts.length} total opt-ins</Badge></CardContent></Card>
+      <Card className="glass-card mb-6"><CardContent className="p-4 grid grid-cols-1 lg:grid-cols-[1fr_auto_auto] gap-3 items-end"><label className="text-sm text-zinc-400">Session<select value={selectedSessionId} onChange={(event) => setSelectedSessionId(event.target.value)} className="mt-1 w-full h-11 rounded-lg bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60">{sessions.map((session) => <option key={session.id} value={session.id}>{session.name || session.session_name || "Untitled Session"}</option>)}</select></label><Badge className="h-10 justify-center bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20"><Users size={15} className="mr-1" />{sessionEmailContactCount} this session</Badge><Badge className="h-10 justify-center bg-[#AEB2EF]/15 text-[#AEB2EF] border border-[#AEB2EF]/20"><Mail size={15} className="mr-1" />{allEmailContacts.length} total opt-ins</Badge></CardContent></Card>
 
       {activeTab === "feedback" && <HostReviewWorkspace selectedSession={selectedSession} analytics={analytics} questionFeedback={questionFeedback} categoryRows={categoryRows} playerIdeas={playerIdeas} exportResults={exportResults} attendance={attendance} setAttendance={setAttendance} />}
       {activeTab === "game" && <GameDataPanel analytics={analytics} />}
-      {activeTab === "communications" && <div className="space-y-6 max-w-6xl"><FollowUpPanel message={message} setMessage={setMessage} sendUpdate={sendUpdate} openEmailDraft={openEmailDraft} copyEmails={copyEmails} contactsCount={allEmailContacts.length} scheduleNextShow={scheduleNextShow} buildNextSession={buildNextSession} /><OutreachPanel message={message} setMessage={setMessage} sendUpdate={sendUpdate} openEmailDraft={openEmailDraft} copyEmails={copyEmails} contacts={allEmailContacts} sessionEmailCount={emailPlayers.length} socialLinks={socialLinks} updateSocialLink={updateSocialLink} /></div>}
-      {activeTab === "clues" && <CluesPanel aiDirection={aiDirection} setAiDirection={setAiDirection} generateClues={generateClues} generating={generating} selectedSession={selectedSession} clueQuestionRows={clueQuestionRows} selectedClueKeys={selectedClueKeys} setSelectedClueKeys={setSelectedClueKeys} socialPost={socialPost} setSocialPost={setSocialPost} copySocialPost={copySocialPost} openSocialComposer={openSocialComposer} socialLinks={socialLinks} clueHistory={clueHistory} sessions={sessions} reassignCluePost={reassignCluePost} addManualCluePost={addManualCluePost} editCluePost={editCluePost} removeCluePost={removeCluePost} />}
+      {activeTab === "communications" && <div className="space-y-6 max-w-6xl">
+        <CluesPanel aiDirection={aiDirection} setAiDirection={setAiDirection} generateClues={generateClues} generating={generating} selectedSession={selectedSession} clueQuestionRows={clueQuestionRows} selectedClueKeys={selectedClueKeys} setSelectedClueKeys={setSelectedClueKeys} socialPost={socialPost} setSocialPost={setSocialPost} copySocialPost={copySocialPost} openSocialComposer={openSocialComposer} socialLinks={socialLinks} clueHistory={clueHistory} sessions={sessions} reassignCluePost={reassignCluePost} addManualCluePost={addManualCluePost} editCluePost={editCluePost} removeCluePost={removeCluePost} emailCluePost={emailCluePost} emailContactsCount={allEmailContacts.length} />
+        <OutreachPanel message={message} setMessage={setMessage} sendUpdate={sendUpdate} openEmailDraft={openEmailDraft} copyEmails={copyEmails} contacts={allEmailContacts} sessionEmailCount={sessionEmailContactCount} socialLinks={socialLinks} updateSocialLink={updateSocialLink} />
+        <FollowUpPanel message={message} setMessage={setMessage} sendUpdate={sendUpdate} openEmailDraft={openEmailDraft} copyEmails={copyEmails} contactsCount={allEmailContacts.length} scheduleNextShow={scheduleNextShow} buildNextSession={buildNextSession} />
+      </div>}
     </div>
   );
 };
@@ -554,7 +566,7 @@ const CrowdActivityCard = ({ rows }) => <Card className="glass-card"><CardHeader
 
 const CorrectBadge = ({ status }) => status === "correct" ? <Badge className="bg-emerald-500/15 text-emerald-300"><CheckCircle size={12} className="mr-1" />Yes</Badge> : status === "incorrect" ? <Badge className="bg-red-500/15 text-red-300"><XCircle size={12} className="mr-1" />No</Badge> : <Badge className="bg-zinc-800 text-zinc-300">Pending</Badge>;
 
-const CluesPanel = ({ aiDirection, setAiDirection, generateClues, generating, selectedSession, clueQuestionRows, selectedClueKeys, setSelectedClueKeys, socialPost, setSocialPost, copySocialPost, openSocialComposer, socialLinks, clueHistory, sessions, reassignCluePost, addManualCluePost, editCluePost, removeCluePost }) => {
+const CluesPanel = ({ aiDirection, setAiDirection, generateClues, generating, selectedSession, clueQuestionRows, selectedClueKeys, setSelectedClueKeys, socialPost, setSocialPost, copySocialPost, openSocialComposer, socialLinks, clueHistory, sessions, reassignCluePost, addManualCluePost, editCluePost, removeCluePost, emailCluePost, emailContactsCount }) => {
   const [addClueOpen, setAddClueOpen] = useState(false);
   const selectedQuestions = clueQuestionRows.filter((question) => selectedClueKeys.includes(question.key));
   const toggleQuestion = (key) => setSelectedClueKeys((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
@@ -563,7 +575,7 @@ const CluesPanel = ({ aiDirection, setAiDirection, generateClues, generating, se
   const reusePastClue = (entry) => setSocialPost(entry.socialPost || entry.message);
   const sessionNameOptions = [...new Set(sessions.map((session) => session.name || session.session_name).filter(Boolean))];
 
-  return <section className="space-y-6 max-w-6xl"><Panel title="Clue Builder" icon={Sparkles}><div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-5"><div className="space-y-4"><div><p className="text-sm font-bold text-white">Select the questions the clue should hint at</p><p className="text-xs text-zinc-500 mt-1">Only selected questions are sent to AI. Answers are included for context, but the prompt blocks answer reveals.</p></div><div className="flex flex-wrap gap-2"><Button type="button" size="sm" variant="outline" onClick={selectAll} className="border-white/10 text-zinc-300 hover:text-white">Select All</Button><Button type="button" size="sm" variant="outline" onClick={selectNone} className="border-white/10 text-zinc-300 hover:text-white">Clear</Button><Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20">{selectedQuestions.length} selected</Badge></div><div className="max-h-[520px] overflow-y-auto rounded-xl border border-white/10 bg-zinc-950/50 p-2 space-y-2">{clueQuestionRows.map((question) => <button key={question.key} type="button" onClick={() => toggleQuestion(question.key)} className={`w-full rounded-lg border p-3 text-left transition ${selectedClueKeys.includes(question.key) ? "border-[#71E0DC]/50 bg-[#71E0DC]/10" : "border-white/10 bg-zinc-950/50 hover:border-white/20"}`}><div className="flex items-start gap-3"><span className={`mt-0.5 flex h-5 w-5 items-center justify-center rounded border ${selectedClueKeys.includes(question.key) ? "border-[#71E0DC] bg-[#71E0DC] text-zinc-950" : "border-white/20 text-transparent"}`}>{selectedClueKeys.includes(question.key) ? <CheckCircle size={14} /> : null}</span><div className="min-w-0"><div className="mb-1 flex flex-wrap items-center gap-2"><Badge className="bg-zinc-800 text-zinc-300">Q{question.index + 1}</Badge><Badge className="bg-[#AEB2EF]/15 text-[#AEB2EF]">{question.category}</Badge></div><p className="text-sm font-semibold text-white line-clamp-2">{question.question}</p><p className="mt-1 text-xs text-[#71E0DC]">Answer: {question.answer}</p></div></div></button>)}{!clueQuestionRows.length && <p className="p-6 text-center text-sm text-zinc-500">Choose a session with questions first.</p>}</div></div><div className="space-y-4"><label className="block text-sm font-bold text-white">Direction<textarea value={aiDirection} onChange={(event) => setAiDirection(event.target.value)} className="mt-2 min-h-28 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" /></label><Button onClick={() => generateClues(selectedQuestions)} disabled={generating || !selectedSession || !selectedQuestions.length} className="w-full gradient-btn">{generating ? <Sparkles className="mr-2 animate-spin" size={16} /> : <Sparkles className="mr-2" size={16} />}Draft From Selected</Button><p className="text-xs text-zinc-500">Tip: pick 3-6 questions for the most natural Facebook-style teaser.</p></div></div></Panel><Panel title="Drafted Social Post" icon={MessageSquare}><label className="text-sm font-bold text-white">Social post<textarea value={socialPost} onChange={(event) => setSocialPost(event.target.value)} placeholder="Facebook/social post..." className="mt-2 min-h-36 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-2"><Button onClick={copySocialPost} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Copy size={16} className="mr-2" />Copy Post</Button><Button onClick={() => openSocialComposer("facebook")} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />{socialLinks.facebook ? "Open Facebook Page" : "Open Facebook"}</Button><Button onClick={() => openSocialComposer("x")} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />X/Twitter</Button></div></Panel><Panel title="Past Clues" icon={Clock}><div className="-mt-2 flex flex-wrap items-start justify-between gap-3"><p className="text-xs text-zinc-500">Logged whenever you copy or open a post to publish it, or add one from a screenshot. New drafts lean on your last few posts here to match your own voice once you've used a few.</p><Button type="button" size="sm" onClick={() => setAddClueOpen(true)} className="h-8 shrink-0 gradient-btn"><Upload size={14} className="mr-1.5" />Add Clue</Button></div><div className="space-y-2 max-h-[480px] overflow-y-auto">{clueHistory.map((entry) => <PastClueRow key={entry.id} entry={entry} sessionNameOptions={sessionNameOptions} onReassignSession={(sessionName) => reassignCluePost(entry.id, sessionName)} onReuse={() => reusePastClue(entry)} onEdit={(text) => editCluePost(entry.id, text)} onDelete={() => removeCluePost(entry.id)} />)}{!clueHistory.length && <p className="p-6 text-center text-sm text-zinc-500">Posts you copy or open from above will show up here.</p>}</div></Panel>{addClueOpen && <AddClueModal sessionNameOptions={sessionNameOptions} defaultSessionName={selectedSession?.name || selectedSession?.session_name || ""} onClose={() => setAddClueOpen(false)} onSaved={addManualCluePost} />}</section>;
+  return <section className="space-y-6 max-w-6xl"><Panel title="Clue Builder" icon={Sparkles}><div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-5"><div className="space-y-4"><div><p className="text-sm font-bold text-white">Select the questions the clue should hint at</p><p className="text-xs text-zinc-500 mt-1">Only selected questions are sent to AI. Answers are included for context, but the prompt blocks answer reveals.</p></div><div className="flex flex-wrap gap-2"><Button type="button" size="sm" variant="outline" onClick={selectAll} className="border-white/10 text-zinc-300 hover:text-white">Select All</Button><Button type="button" size="sm" variant="outline" onClick={selectNone} className="border-white/10 text-zinc-300 hover:text-white">Clear</Button><Badge className="bg-[#71E0DC]/15 text-[#71E0DC] border border-[#71E0DC]/20">{selectedQuestions.length} selected</Badge></div><div className="max-h-[520px] overflow-y-auto rounded-xl border border-white/10 bg-zinc-950/50 p-2 space-y-2">{clueQuestionRows.map((question) => <button key={question.key} type="button" onClick={() => toggleQuestion(question.key)} className={`w-full rounded-lg border p-3 text-left transition ${selectedClueKeys.includes(question.key) ? "border-[#71E0DC]/50 bg-[#71E0DC]/10" : "border-white/10 bg-zinc-950/50 hover:border-white/20"}`}><div className="flex items-start gap-3"><span className={`mt-0.5 flex h-5 w-5 items-center justify-center rounded border ${selectedClueKeys.includes(question.key) ? "border-[#71E0DC] bg-[#71E0DC] text-zinc-950" : "border-white/20 text-transparent"}`}>{selectedClueKeys.includes(question.key) ? <CheckCircle size={14} /> : null}</span><div className="min-w-0"><div className="mb-1 flex flex-wrap items-center gap-2"><Badge className="bg-zinc-800 text-zinc-300">Q{question.index + 1}</Badge><Badge className="bg-[#AEB2EF]/15 text-[#AEB2EF]">{question.category}</Badge></div><p className="text-sm font-semibold text-white line-clamp-2">{question.question}</p><p className="mt-1 text-xs text-[#71E0DC]">Answer: {question.answer}</p></div></div></button>)}{!clueQuestionRows.length && <p className="p-6 text-center text-sm text-zinc-500">Choose a session with questions first.</p>}</div></div><div className="space-y-4"><label className="block text-sm font-bold text-white">Direction<textarea value={aiDirection} onChange={(event) => setAiDirection(event.target.value)} className="mt-2 min-h-28 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-sm text-white outline-none focus:border-[#71E0DC]/60" /></label><Button onClick={() => generateClues(selectedQuestions)} disabled={generating || !selectedSession || !selectedQuestions.length} className="w-full gradient-btn">{generating ? <Sparkles className="mr-2 animate-spin" size={16} /> : <Sparkles className="mr-2" size={16} />}Draft From Selected</Button><p className="text-xs text-zinc-500">Tip: pick 3-6 questions for the most natural Facebook-style teaser.</p></div></div></Panel><Panel title="Send This Clue" icon={MessageSquare}><label className="text-sm font-bold text-white">Social post<textarea value={socialPost} onChange={(event) => setSocialPost(event.target.value)} placeholder="Facebook/social post..." className="mt-2 min-h-36 w-full resize-none rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-white outline-none focus:border-[#71E0DC]/60" /></label><div className="mt-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2"><Button onClick={emailCluePost} className="gradient-btn"><Mail size={16} className="mr-2" />Email All ({emailContactsCount})</Button><Button onClick={() => openSocialComposer("facebook")} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />{socialLinks.facebook ? "Open Facebook Page" : "Open Facebook"}</Button><Button onClick={() => openSocialComposer("x")} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><ExternalLink size={16} className="mr-2" />X/Twitter</Button><Button onClick={copySocialPost} variant="outline" className="border-white/10 text-zinc-300 hover:text-white"><Copy size={16} className="mr-2" />Copy Post</Button></div></Panel><Panel title="Past Clues" icon={Clock}><div className="-mt-2 flex flex-wrap items-start justify-between gap-3"><p className="text-xs text-zinc-500">Logged whenever you copy or open a post to publish it, or add one from a screenshot. New drafts lean on your last few posts here to match your own voice once you've used a few.</p><Button type="button" size="sm" onClick={() => setAddClueOpen(true)} className="h-8 shrink-0 gradient-btn"><Upload size={14} className="mr-1.5" />Add Clue</Button></div><div className="space-y-2 max-h-[480px] overflow-y-auto">{clueHistory.map((entry) => <PastClueRow key={entry.id} entry={entry} sessionNameOptions={sessionNameOptions} onReassignSession={(sessionName) => reassignCluePost(entry.id, sessionName)} onReuse={() => reusePastClue(entry)} onEdit={(text) => editCluePost(entry.id, text)} onDelete={() => removeCluePost(entry.id)} />)}{!clueHistory.length && <p className="p-6 text-center text-sm text-zinc-500">Posts you copy or open from above will show up here.</p>}</div></Panel>{addClueOpen && <AddClueModal sessionNameOptions={sessionNameOptions} defaultSessionName={selectedSession?.name || selectedSession?.session_name || ""} onClose={() => setAddClueOpen(false)} onSaved={addManualCluePost} />}</section>;
 };
 
 const PastClueRow = ({ entry, sessionNameOptions, onReassignSession, onReuse, onEdit, onDelete }) => {
@@ -716,13 +728,6 @@ const OutreachPanel = ({ message, setMessage, sendUpdate, openEmailDraft, copyEm
 
 
 const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
-const normalizeContacts = (contacts) => mergeContacts([], contacts);
-const contactRowsFromPlayers = (players, session) => {
-  const sessionName = session?.name || session?.session_name || "Trivia";
-  return (Array.isArray(players) ? players : [])
-    .filter((player) => player.updatePreference === "email" && normalizeEmail(player.updateContact))
-    .map((player) => ({ name: player.name || "Team", email: normalizeEmail(player.updateContact), sessionName, joinedAt: player.joinedAt || new Date().toISOString() }));
-};
 const mergeContacts = (...lists) => {
   const map = new Map();
   lists.flatMap((list) => Array.isArray(list) ? list : []).forEach((contact) => {

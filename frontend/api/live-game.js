@@ -308,7 +308,7 @@ module.exports = async function handler(req, res) {
     if (action === "fetchLivePlayers") {
       const gameId = String(body.gameId || "");
       if (!gameId) return res.status(400).json({ error: "Missing gameId" });
-      const { data, error } = await supabase.from("live_game_players").select("id, name, score, joined_at").eq("game_id", gameId).order("joined_at", { ascending: true });
+      const { data, error } = await supabase.from("live_game_players").select("id, name, score, joined_at, update_contact, update_preference").eq("game_id", gameId).order("joined_at", { ascending: true });
       if (error) throw error;
       res.status(200).json({ data: data || [] });
       return;
@@ -324,6 +324,12 @@ module.exports = async function handler(req, res) {
 
       const payload = { id: player.id, game_id: gameId, name: player.name };
       if (player.score !== undefined) payload.score = Number(player.score || 0);
+      // Only set on the join-time upsert (which passes these), not on the
+      // host's own name-sync upserts (which don't) -- supabase-js upsert()
+      // only touches columns present in the payload, so leaving these out
+      // of a later upsert for the same row doesn't erase them.
+      if (player.updateContact !== undefined) payload.update_contact = String(player.updateContact || "");
+      if (player.updatePreference !== undefined) payload.update_preference = String(player.updatePreference || "");
       const { error } = await supabase.from("live_game_players").upsert(payload);
       if (error) throw error;
       res.status(200).json({ data: true });
@@ -379,6 +385,43 @@ module.exports = async function handler(req, res) {
       const { error } = await supabase.from("live_games").update({ status: "finished", ended_at: new Date().toISOString() }).eq("id", gameId);
       if (error) throw error;
       res.status(200).json({ data: true });
+      return;
+    }
+
+    if (action === "listHostRoster") {
+      // Powers the Teams tab: every team that has ever joined one of this
+      // host's live games, across every session, in one round trip instead
+      // of a fetch per session. live_games/live_game_players are RLS-public
+      // (anyone can join by code), so this explicitly scopes to the caller's
+      // own host_user_id rather than relying on RLS to do it.
+      const { user, error: authError, status: authStatus } = await verifyUser(supabaseUrl, anonKey, getBearerToken(req, body));
+      if (!user?.id) return rejectAuthFailure(res, "listHostRoster", authError, authStatus);
+
+      const { data: games, error: gamesError } = await supabase
+        .from("live_games")
+        .select("id, session_id, session_name, created_at, ended_at, is_test")
+        .eq("host_user_id", user.id)
+        .order("created_at", { ascending: false });
+      if (gamesError) throw gamesError;
+
+      const gameIds = (games || []).map((game) => game.id);
+      let players = [];
+      if (gameIds.length) {
+        const { data: playerRows, error: playersError } = await supabase
+          .from("live_game_players")
+          .select("id, game_id, name, score, joined_at, update_contact, update_preference")
+          .in("game_id", gameIds);
+        if (playersError) throw playersError;
+        players = playerRows || [];
+      }
+
+      const playersByGame = new Map();
+      players.forEach((player) => {
+        if (!playersByGame.has(player.game_id)) playersByGame.set(player.game_id, []);
+        playersByGame.get(player.game_id).push(player);
+      });
+      const data = (games || []).map((game) => ({ ...game, players: playersByGame.get(game.id) || [] }));
+      res.status(200).json({ data });
       return;
     }
 

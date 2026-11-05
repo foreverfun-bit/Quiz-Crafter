@@ -2,7 +2,7 @@ import { useNavigate } from "react-router-dom";
 import { Card, CardContent } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
-import { Brain, FolderOpen, MapPin, Palette, Settings, Trash2, Trophy } from "lucide-react";
+import { Brain, FolderOpen, MapPin, Palette, Settings, Trash2, Trophy, Users } from "lucide-react";
 
 const setupTools = [
   {
@@ -18,6 +18,13 @@ const setupTools = [
     path: "/venues",
     icon: MapPin,
     badge: "Schedule",
+  },
+  {
+    title: "Teams",
+    description: "Regulars tracked automatically from live games -- games played, headcount, and category likes/dislikes.",
+    path: "/teams",
+    icon: Users,
+    badge: "Player history",
   },
   {
     title: "Templates",

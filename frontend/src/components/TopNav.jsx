@@ -9,7 +9,7 @@ import { LayoutGrid, MessageSquare, MapPin } from "lucide-react";
 const TOP_NAV_ITEMS = [
   { path: "/past-sessions", icon: LayoutGrid, label: "Content", activePaths: ["/", "/past-sessions", "/sessions", "/session", "/game-history", "/library", "/import", "/dashboard"], testId: "topnav-content" },
   { path: "/host-tools", icon: MessageSquare, label: "Host Hub", activePaths: ["/host-tools", "/host-session"], testId: "topnav-host-hub" },
-  { path: "/manage", icon: MapPin, label: "Manage", activePaths: ["/manage", "/categories", "/venues", "/show-templates", "/branding", "/style-memory", "/reset-data"], testId: "topnav-manage" },
+  { path: "/manage", icon: MapPin, label: "Manage", activePaths: ["/manage", "/categories", "/venues", "/teams", "/show-templates", "/branding", "/style-memory", "/reset-data"], testId: "topnav-manage" },
 ];
 
 const TopNav = () => {
