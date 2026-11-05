@@ -346,6 +346,58 @@ export default async function handler(req, res) {
       }
     }
 
+    // Everything above only fires when generation came back completely
+    // empty. A batch that comes back short -- say 3 of 5, because the
+    // over-generation margin above wasn't enough once duplicates/category
+    // conflicts got filtered out -- used to just ship short with no attempt
+    // to fill the gap. One top-up request for exactly the shortfall, telling
+    // it to avoid what was already accepted (both in the prompt text and in
+    // validation, same as any other rejected question), instead of leaving
+    // the host to notice the count is wrong and ask again themselves.
+    if (validation.candidates.length && validation.candidates.length < safeCount && !fastMode) {
+      const deficit = safeCount - validation.candidates.length;
+      const acceptedQuestionTexts = validation.candidates.map((candidate) => candidate.question_text).filter(Boolean);
+      const topUpRejectedQuestions = dedupeStrings([...cleanRejectedQuestions, ...acceptedQuestionTexts]);
+      const topUpRejectedFingerprints = new Set([...rejectedQuestionFingerprints, ...acceptedQuestionTexts.map(fingerprint)]);
+      try {
+        const topUpPrompt = buildPrompt({
+          config,
+          safeCount: deficit,
+          difficultyKey,
+          difficultyProfile,
+          cleanTheme,
+          cleanExcludeCategories,
+          cleanApprovedCategories,
+          cleanLockedCategories,
+          categoryDiversityRequired,
+          categoryExpansionMode,
+          cleanRejectedQuestions: topUpRejectedQuestions,
+          cleanRejectedAnswers,
+          cleanSessionContext,
+          existingQuestions,
+          styleExamples,
+          excludeUsed,
+          avoidDuplicates,
+          includeImagePrompt,
+          fastMode,
+          cleanHostStyleProfile,
+          sessionStyleProfile,
+          venueProfileText,
+        });
+        const topUpParsed = await requestCandidates(topUpPrompt, { fastMode });
+        const topUpValidation = normalizeCandidates({
+          ...validationInput,
+          candidates: topUpParsed.candidates,
+          rejectedQuestionFingerprints: topUpRejectedFingerprints,
+          sourceSeeds: [],
+          sourceBacked: false,
+        });
+        validation = { candidates: [...validation.candidates, ...topUpValidation.candidates], rejected: [...validation.rejected, ...topUpValidation.rejected] };
+      } catch (topUpError) {
+        console.warn("generate-session-candidates top-up attempt failed, returning the shorter batch:", topUpError);
+      }
+    }
+
     return res.status(200).json({ candidates: validation.candidates.slice(0, safeCount), rejected: validation.rejected, requested: safeCount, source_notice: sourceNotice, style_reference_note: sessionStyleProfile?.note || "" });
   } catch (error) {
     console.error("generate-session-candidates error:", error);
