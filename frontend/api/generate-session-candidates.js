@@ -369,6 +369,24 @@ export default async function handler(req, res) {
       const acceptedQuestionTexts = validation.candidates.map((candidate) => candidate.question_text).filter(Boolean);
       const topUpRejectedQuestions = dedupeStrings([...cleanRejectedQuestions, ...acceptedQuestionTexts]);
       const topUpRejectedFingerprints = new Set([...rejectedQuestionFingerprints, ...acceptedQuestionTexts.map(fingerprint)]);
+      // normalizeCandidates only ever keeps one candidate per category
+      // (maxPerCategory, below) -- a shortfall almost never means the model
+      // ran out of good questions, it means it kept clustering its raw
+      // candidates into the same handful of categories and everything past
+      // the first in each one got capped. Asking again without also ruling
+      // out the categories already accepted just invites the same
+      // clustering and the same cap a second time. Excluding them here (the
+      // same cleanExcludeCategories mechanism already used for rejected/
+      // avoided categories) is what actually forces fresh category ground.
+      // categoryDiversityRequired is the exact same condition normalizeCandidates
+      // uses to decide whether maxPerCategory is 1 or Infinity -- only worth
+      // excluding accepted categories when that cap is actually what's
+      // active. When it isn't (locked categories, a small approved list, or
+      // an explicit theme), categories can legitimately repeat, and
+      // excluding them here would just shrink an already-narrow allowed set
+      // instead of fixing anything.
+      const acceptedCategories = categoryDiversityRequired ? validation.candidates.map((candidate) => candidate.category).filter(Boolean) : [];
+      const topUpExcludeCategories = dedupeCategoryStrings([...cleanExcludeCategories, ...acceptedCategories]);
       try {
         const topUpPrompt = buildPrompt({
           config,
@@ -376,7 +394,7 @@ export default async function handler(req, res) {
           difficultyKey,
           difficultyProfile,
           cleanTheme,
-          cleanExcludeCategories,
+          cleanExcludeCategories: topUpExcludeCategories,
           cleanApprovedCategories,
           cleanLockedCategories,
           categoryDiversityRequired,
@@ -398,6 +416,7 @@ export default async function handler(req, res) {
         const topUpValidation = normalizeCandidates({
           ...validationInput,
           candidates: topUpParsed.candidates,
+          cleanExcludeCategories: topUpExcludeCategories,
           rejectedQuestionFingerprints: topUpRejectedFingerprints,
           sourceSeeds: [],
           sourceBacked: false,
