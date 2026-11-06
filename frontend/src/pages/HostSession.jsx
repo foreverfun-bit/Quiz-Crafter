@@ -2647,7 +2647,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
       </div>
       {emptyStateAddRoundOpen && <AddRoundModal onCreate={createRound} onCreateEmpty={createEmptyRound} onSaveToLibrary={saveQuestionToLibrary} approvedCategories={approvedCategories} categoryUsage={buildCategoryUsage(questions)} onClose={() => setEmptyStateAddRoundOpen(false)} />}
       {emptyStateWriteRound && <WriteQuestionModal round={emptyStateWriteRound} onCreate={(draft) => addQuestionToRound(emptyStateWriteRound, draft)} onSaveToLibrary={saveQuestionToLibrary} approvedCategories={approvedCategories} categoryUsage={buildCategoryUsage(questions, { roundKey: emptyStateWriteRound.key })} onClose={() => setEmptyStateWriteRoundKey(null)} />}
-      {emptyStateGenerateRound && <GenerateRoundModal round={emptyStateGenerateRound} venueId={session?.venue_id} existingQuestionTexts={new Set()} onAddAll={(candidates) => addGeneratedQuestionsToRound(emptyStateGenerateRound, candidates)} onSaveToLibrary={saveQuestionToLibrary} onClose={() => setEmptyStateGenerateRoundKey(null)} />}
+      {emptyStateGenerateRound && <GenerateRoundModal round={emptyStateGenerateRound} venueId={session?.venue_id} existingQuestionTexts={new Set()} approvedCategories={approvedCategories} onAddAll={(candidates) => addGeneratedQuestionsToRound(emptyStateGenerateRound, candidates)} onSaveToLibrary={saveQuestionToLibrary} onClose={() => setEmptyStateGenerateRoundKey(null)} />}
       {emptyStateManageRoundsOpen && <RoundManagerModal
         rounds={rounds}
         onRename={renameRound}
@@ -3302,7 +3302,7 @@ const GENERATE_DIFFICULTIES = [
 // a review step, not an auto-add: the host picks which ones to keep, then
 // "Add to Round" commits the selection in one batch via
 // addGeneratedQuestionsToRound.
-const GenerateRoundModal = ({ round, venueId, existingQuestionTexts, onAddAll, onSaveToLibrary, onClose }) => {
+const GenerateRoundModal = ({ round, venueId, existingQuestionTexts, approvedCategories, onAddAll, onSaveToLibrary, onClose }) => {
   // "I don't like to use the same category more than once in a round" --
   // this round's own current categories, sent as excludeCategories below so
   // the API's real filter (not just a prompt hint) rejects any candidate
@@ -3337,6 +3337,16 @@ const GenerateRoundModal = ({ round, venueId, existingQuestionTexts, onAddAll, o
           difficulty,
           theme: theme.trim(),
           excludeCategories: roundCategories,
+          // Only constrains to the approved list when there's no theme --
+          // this previously wasn't sent at all, so every generation here
+          // fell back to the server's generic broad-category list instead
+          // of what's actually been approved in Categories. A theme is a
+          // stronger, more specific signal than the approved list ("90s
+          // movies" shouldn't get blocked for not matching an approved
+          // category name), so it takes priority the same way the server's
+          // own category-diversity instruction already treats themes as a
+          // special case.
+          approvedCategories: theme.trim() ? [] : approvedCategories,
           excludeUsed: true,
           avoidDuplicates: true,
           rejectedQuestions: [...existingQuestionTexts],
@@ -3937,7 +3947,7 @@ const QuestionListView = ({
     {writeQuestionRound && <WriteQuestionModal round={writeQuestionRound} onCreate={(draft) => addQuestionToRound(writeQuestionRound, draft)} onSaveToLibrary={saveQuestionToLibrary} approvedCategories={approvedCategories} categoryUsage={buildCategoryUsage(questions, { roundKey: writeQuestionRound.key })} onClose={() => setWriteQuestionRoundKey(null)} />}
     {libraryRound && <LibraryPickerModal round={libraryRound} libraryQuestions={libraryQuestions} loading={libraryLoading} existingTexts={existingQuestionTexts} onInsert={(question) => addLibraryQuestionToRound(libraryRound, question)} onClose={() => setLibraryRoundKey(null)} />}
     {aiEditQuestion && <AiEditQuestionModal question={aiEditQuestion} onEdit={editQuestionWithAi} onApply={(patch) => updateQuestionContent(aiEditQuestion, patch)} onClose={() => setAiEditQuestionId(null)} />}
-    {generateRound && <GenerateRoundModal round={generateRound} venueId={venueId} existingQuestionTexts={existingQuestionTexts} onAddAll={(candidates) => addGeneratedQuestionsToRound(generateRound, candidates)} onSaveToLibrary={saveQuestionToLibrary} onClose={() => setGenerateRoundKey(null)} />}
+    {generateRound && <GenerateRoundModal round={generateRound} venueId={venueId} existingQuestionTexts={existingQuestionTexts} approvedCategories={approvedCategories} onAddAll={(candidates) => addGeneratedQuestionsToRound(generateRound, candidates)} onSaveToLibrary={saveQuestionToLibrary} onClose={() => setGenerateRoundKey(null)} />}
     {coHostRound && <CoHostChatModal round={coHostRound} onAsk={askCoHost} onAddCandidate={(candidate) => addGeneratedQuestionsToRound(coHostRound, [candidate])} onSaveToLibrary={saveQuestionToLibrary} onClose={() => setCoHostRoundKey(null)} />}
   </div>;
 };
