@@ -350,11 +350,21 @@ export default async function handler(req, res) {
     // empty. A batch that comes back short -- say 3 of 5, because the
     // over-generation margin above wasn't enough once duplicates/category
     // conflicts got filtered out -- used to just ship short with no attempt
-    // to fill the gap. One top-up request for exactly the shortfall, telling
-    // it to avoid what was already accepted (both in the prompt text and in
-    // validation, same as any other rejected question), instead of leaving
-    // the host to notice the count is wrong and ask again themselves.
-    if (validation.candidates.length && validation.candidates.length < safeCount && !fastMode) {
+    // to fill the gap.
+    //
+    // A single top-up request for exactly the shortfall turned out not to be
+    // enough on its own: asking for only the last 1-2 candidates under the
+    // same "every candidate needs a different category" constraint hits
+    // close to the same rejection rate as the original batch did, so one
+    // more attempt can easily land short again too. Loop it instead, each
+    // round asking only for whatever's still missing and excluding
+    // everything accepted so far (same mechanism as any other rejected
+    // question), capped at 2 extra rounds so a genuinely hard-to-fill last
+    // slot can't run the request's latency up indefinitely -- 3 sequential
+    // generation calls at worst, each bounded by requestCandidates' own
+    // timeout, comfortably inside the platform's function time limit.
+    const MAX_TOP_UP_ATTEMPTS = 2;
+    for (let topUpAttempt = 0; topUpAttempt < MAX_TOP_UP_ATTEMPTS && validation.candidates.length && validation.candidates.length < safeCount && !fastMode; topUpAttempt += 1) {
       const deficit = safeCount - validation.candidates.length;
       const acceptedQuestionTexts = validation.candidates.map((candidate) => candidate.question_text).filter(Boolean);
       const topUpRejectedQuestions = dedupeStrings([...cleanRejectedQuestions, ...acceptedQuestionTexts]);
@@ -393,8 +403,10 @@ export default async function handler(req, res) {
           sourceBacked: false,
         });
         validation = { candidates: [...validation.candidates, ...topUpValidation.candidates], rejected: [...validation.rejected, ...topUpValidation.rejected] };
+        if (!topUpValidation.candidates.length) break;
       } catch (topUpError) {
-        console.warn("generate-session-candidates top-up attempt failed, returning the shorter batch:", topUpError);
+        console.warn(`generate-session-candidates top-up attempt ${topUpAttempt + 1} failed, returning what's been collected so far:`, topUpError);
+        break;
       }
     }
 
