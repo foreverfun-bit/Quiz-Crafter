@@ -4473,7 +4473,10 @@ const AnswerRows = ({ question, players, answers, fairPlayStats, gradedAnswers, 
     </div> : <Button size="sm" variant="outline" onClick={() => setManualOpen(true)} className="mb-3 h-9 w-full border-white/10 text-zinc-300 hover:text-white"><Plus size={14} className="mr-2" />Manual Answer</Button>}
 
     {waitingPlayers.length > 0 && <p className="mb-2 text-[11px] text-zinc-500">Waiting on <b className="font-semibold text-amber-300">{waitingPlayers.map((player) => player.name || "Team").join(", ")}</b></p>}
-    {wageredCount > 0 && <div className="mb-2 rounded-lg border border-purple-400/25 bg-purple-400/10 p-2.5"><p className="mb-1.5 text-xs font-bold text-purple-200">Wagers submitted: {wageredCount}/{submittedCount || 0}</p><div className="flex flex-wrap gap-1.5">{answers.filter(hasSubmittedWager).map((answer) => <WagerChip key={answer.playerId} answer={answer} disabled={isReviewing || !editWager} onSave={(value) => editWager(answer.playerId, answer.questionIndex, value)} />)}</div></div>}
+    {/* Shown even at 0/N (not just once wagers start coming in) -- a host who reveals
+        the answer before anyone's wagered needs to see that plainly, not infer it from
+        the section's absence, since scores quietly wait on this before they land. */}
+    {wagerMode && submittedCount > 0 && <div className="mb-2 rounded-lg border border-purple-400/25 bg-purple-400/10 p-2.5"><p className="mb-1.5 text-xs font-bold text-purple-200">Wagers submitted: {wageredCount}/{submittedCount}</p>{wageredCount > 0 && <div className="flex flex-wrap gap-1.5">{answers.filter(hasSubmittedWager).map((answer) => <WagerChip key={answer.playerId} answer={answer} disabled={isReviewing || !editWager} onSave={(value) => editWager(answer.playerId, answer.questionIndex, value)} />)}</div>}</div>}
     {lateCorrectIds.size > 0 && <div className="mb-2 rounded-lg border border-purple-400/30 bg-purple-400/10 p-2.5 text-xs font-bold text-purple-200">{lateCorrectIds.size} late correct answer{lateCorrectIds.size === 1 ? "" : "s"} flagged</div>}
 
     <div className="mt-1 flex items-center justify-between gap-2">
