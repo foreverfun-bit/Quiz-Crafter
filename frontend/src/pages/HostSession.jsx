@@ -2826,10 +2826,14 @@ const QuestionDraftFields = ({ draft, setDraft, approvedCategories = [], categor
   // Captured once, on first render, so Clear restores the round-inherited
   // defaults (question_type/points/timer_seconds) this draft actually
   // started with instead of a hardcoded blank -- "clear the AI question if I
-  // don't like it" without also losing those.
+  // don't like it" without also losing those. Category is preserved from the
+  // current draft too (the button's own label says it only clears the
+  // question/answer/wrong-answers/fun fact) -- otherwise a host who types or
+  // cycles to a category, generates, then clears to retry loses that choice
+  // and the next AI draft falls back to a random category.
   const initialDraftRef = useRef(draft);
   const clearContent = () => {
-    setDraft((prev) => ({ ...initialDraftRef.current, question_type: prev.question_type, points: prev.points, timer_seconds: prev.timer_seconds }));
+    setDraft((prev) => ({ ...initialDraftRef.current, question_type: prev.question_type, points: prev.points, timer_seconds: prev.timer_seconds, category: prev.category }));
     toast.success("Cleared");
   };
 
