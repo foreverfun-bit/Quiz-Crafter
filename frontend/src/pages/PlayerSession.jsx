@@ -582,6 +582,15 @@ const PlayerQuestionView = ({ currentQuestion, hostState, branding, pointsPerQue
   const showQuestionMedia = Boolean(imageUrl) && imageTiming !== "after_answer" && !hostState.showFunFact;
   const showFunFactMedia = Boolean(imageUrl) && imageTiming === "after_answer" && hostState.showFunFact;
   const submittedForCurrentQuestion = submitted?.questionIndex === hostState.currentIndex && submitted?.questionId === currentQuestion.id;
+  // "After answer" wager submission is normally offered right after the
+  // team answers, inside the "Answer Locked" card below -- but that card
+  // (and its wager input) only renders while the answer is still hidden.
+  // A host who reveals the answer quickly after time's up -- the common
+  // case, especially on a bonus question -- was cutting that window short:
+  // the team's wager stayed 0 forever with no way to submit it, and no
+  // points were ever added or subtracted for them. This mirrors that same
+  // prompt so it keeps showing after the reveal until they actually wager.
+  const needsWagerAfterAnswer = submittedForCurrentQuestion && submitted.wagerMode && wagerTiming === "after_answer" && !submitted.wagerSubmitted;
 
   return (
     <div className="w-full max-w-md">
@@ -621,8 +630,18 @@ const PlayerQuestionView = ({ currentQuestion, hostState, branding, pointsPerQue
         </Card>
       )}
 
+      {(hostState.showAnswer || hostState.showFunFact) && needsWagerAfterAnswer && (
+        <Card className="glass-card mt-4 border-purple-500/30 bg-purple-500/10">
+          <CardContent className="p-5 text-center">
+            <p className="text-purple-200 text-sm uppercase tracking-wide mb-2 font-bold">Still need your wager</p>
+            <WagerInput wagerMode wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={effectiveWagerLimit} />
+            <Button onClick={submitWager} className="w-full gradient-btn">Submit Wager</Button>
+          </CardContent>
+        </Card>
+      )}
+
       {!hostState.showAnswer && !hostState.showFunFact && (submittedForCurrentQuestion ? (
-        <Card className="glass-card"><CardContent className="p-6 text-center"><CheckCircle className="mx-auto text-emerald-300 mb-3" size={42} /><h3 className="text-2xl font-black mb-1">Answer Locked</h3><p className="text-zinc-400">You answered: <span className="text-white font-bold">{submitted.answer}</span></p>{submitted.wagerMode && wagerTiming === "after_answer" && !submitted.wagerSubmitted ? <div className="mt-4"><WagerInput wagerMode wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={effectiveWagerLimit} /><Button onClick={submitWager} className="w-full gradient-btn">Submit Wager</Button></div> : submitted.wagerMode && <p className="text-purple-300 font-bold mt-2">Wager: {submitted.wagerAmount}</p>}</CardContent></Card>
+        <Card className="glass-card"><CardContent className="p-6 text-center"><CheckCircle className="mx-auto text-emerald-300 mb-3" size={42} /><h3 className="text-2xl font-black mb-1">Answer Locked</h3><p className="text-zinc-400">You answered: <span className="text-white font-bold">{submitted.answer}</span></p>{needsWagerAfterAnswer ? <div className="mt-4"><WagerInput wagerMode wagerAmount={wagerAmount} setWagerAmount={setWagerAmount} wagerLimit={effectiveWagerLimit} /><Button onClick={submitWager} className="w-full gradient-btn">Submit Wager</Button></div> : submitted.wagerMode && <p className="text-purple-300 font-bold mt-2">Wager: {submitted.wagerAmount}</p>}</CardContent></Card>
       ) : hostState.answersPaused ? (
         <div>
           <div className="mb-3 flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-2.5 text-left">
