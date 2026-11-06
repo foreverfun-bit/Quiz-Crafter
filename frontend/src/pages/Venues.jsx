@@ -5,7 +5,7 @@ import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { CalendarDays, ClipboardList, MapPin, Plus, Save, Trash2, UserRound } from "lucide-react";
 import { toast } from "sonner";
-import { ACTIVE_VENUE_STORAGE_KEY, PROFILE_ACTIVE_VENUE_KEY, PROFILE_VENUES_KEY, VENUES_STORAGE_KEY, defaultVenue, mergeProfileRecords, normalizeVenue, readActiveVenueId, readLocalVenues, recordsChanged, writeActiveVenueId, writeLocalVenues } from "../lib/venues";
+import { ACTIVE_VENUE_STORAGE_KEY, PROFILE_ACTIVE_VENUE_KEY, PROFILE_VENUES_KEY, VENUES_STORAGE_KEY, defaultVenue, mergeProfileRecords, normalizeVenue, readActiveVenueId, readLocalTemplates, readLocalVenues, recordsChanged, writeActiveVenueId, writeLocalVenues } from "../lib/venues";
 import { loadHostSetupSettings, saveHostSetupSettings, updateUserMetadata } from "../lib/profileState";
 import ShowTemplates from "./ShowTemplates";
 
@@ -57,6 +57,7 @@ const updatedLabel = (value) => {
 const Venues = ({ initialTab = "venues" }) => {
   const [activeTab, setActiveTab] = useState(initialTab);
   const [venues, setVenues] = useState([]);
+  const [templates, setTemplates] = useState(() => readLocalTemplates());
   const [activeVenueId, setActiveVenueId] = useState(readActiveVenueId);
   const [selectedVenueId, setSelectedVenueId] = useState("");
   const [form, setForm] = useState(() => normalizeVenue(defaultVenue));
@@ -201,7 +202,7 @@ const Venues = ({ initialTab = "venues" }) => {
         </div>
       </div>
       <div className="mb-6 grid grid-cols-2 gap-2 rounded-xl border border-white/10 bg-zinc-950/60 p-2">
-        <button type="button" onClick={() => setActiveTab("venues")} className={`h-11 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition ${activeTab === "venues" ? "text-zinc-950" : "text-zinc-300 hover:bg-white/5 hover:text-white"}`} style={activeTab === "venues" ? { background: "linear-gradient(90deg, #71E0DC, #AEB2EF)" } : undefined}><MapPin size={17} />Venues</button>
+        <button type="button" onClick={() => { setActiveTab("venues"); setTemplates(readLocalTemplates()); }} className={`h-11 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition ${activeTab === "venues" ? "text-zinc-950" : "text-zinc-300 hover:bg-white/5 hover:text-white"}`} style={activeTab === "venues" ? { background: "linear-gradient(90deg, #71E0DC, #AEB2EF)" } : undefined}><MapPin size={17} />Venues</button>
         <button type="button" onClick={() => setActiveTab("templates")} className={`h-11 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition ${activeTab === "templates" ? "text-zinc-950" : "text-zinc-300 hover:bg-white/5 hover:text-white"}`} style={activeTab === "templates" ? { background: "linear-gradient(90deg, #71E0DC, #AEB2EF)" } : undefined}><ClipboardList size={17} />Templates</button>
       </div>
 
@@ -239,14 +240,14 @@ const Venues = ({ initialTab = "venues" }) => {
           ))}
         </section>
 
-        <VenueEditor key={selectedVenueId || "new"} form={form} selectedVenue={selectedVenue} updateForm={updateForm} saveVenue={saveVenue} saving={saving} />
+        <VenueEditor key={selectedVenueId || "new"} form={form} selectedVenue={selectedVenue} updateForm={updateForm} saveVenue={saveVenue} saving={saving} templates={templates} />
       </div>
       </>}
     </div>
   );
 };
 
-const VenueEditor = ({ form, selectedVenue, updateForm, saveVenue, saving }) => (
+const VenueEditor = ({ form, selectedVenue, updateForm, saveVenue, saving, templates }) => (
   <Card className="glass-card xl:sticky xl:top-6">
     <CardHeader><CardTitle className="text-white flex items-center gap-2"><MapPin className="text-[#71E0DC]" />{selectedVenue ? "Edit Venue" : "New Venue"}</CardTitle></CardHeader>
     <CardContent className="space-y-5">
@@ -276,6 +277,12 @@ const VenueEditor = ({ form, selectedVenue, updateForm, saveVenue, saving }) => 
           <Field label="Time" type="time" value={form.startTime} onChange={(value) => updateForm("startTime", value)} />
           <label className="text-xs text-zinc-400">Time zone<select value={form.timeZone} onChange={(event) => updateForm("timeZone", event.target.value)} className="mt-1 h-10 w-full rounded-md bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60">{timeZones.map((zone) => <option key={zone.value} value={zone.value}>{zone.label}</option>)}</select></label>
         </div>
+      </div>
+
+      <div className="rounded-xl border border-white/10 bg-zinc-950/50 p-4 space-y-3">
+        <h3 className="font-bold text-white flex items-center gap-2"><ClipboardList size={17} className="text-[#71E0DC]" />Auto-Scheduling</h3>
+        <label className="text-xs text-zinc-400 block">Default template<select value={form.defaultTemplateId} onChange={(event) => updateForm("defaultTemplateId", event.target.value)} className="mt-1 h-10 w-full rounded-md bg-zinc-950 border border-white/10 px-3 text-white outline-none focus:border-[#71E0DC]/60"><option value="">Off -- don't auto-create sessions</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>
+        <p className="text-xs text-zinc-500">When set, the next scheduled night for this venue gets created automatically (titled with the date and venue name, using this template's round plan) the next time you open the Dashboard.</p>
       </div>
 
       <div className="flex justify-between gap-3 flex-wrap">

@@ -346,6 +346,89 @@ export default async function handler(req, res) {
       }
     }
 
+    // Everything above only fires when generation came back completely
+    // empty. A batch that comes back short -- say 3 of 5, because the
+    // over-generation margin above wasn't enough once duplicates/category
+    // conflicts got filtered out -- used to just ship short with no attempt
+    // to fill the gap.
+    //
+    // A single top-up request for exactly the shortfall turned out not to be
+    // enough on its own: asking for only the last 1-2 candidates under the
+    // same "every candidate needs a different category" constraint hits
+    // close to the same rejection rate as the original batch did, so one
+    // more attempt can easily land short again too. Loop it instead, each
+    // round asking only for whatever's still missing and excluding
+    // everything accepted so far (same mechanism as any other rejected
+    // question), capped at 2 extra rounds so a genuinely hard-to-fill last
+    // slot can't run the request's latency up indefinitely -- 3 sequential
+    // generation calls at worst, each bounded by requestCandidates' own
+    // timeout, comfortably inside the platform's function time limit.
+    const MAX_TOP_UP_ATTEMPTS = 2;
+    for (let topUpAttempt = 0; topUpAttempt < MAX_TOP_UP_ATTEMPTS && validation.candidates.length && validation.candidates.length < safeCount && !fastMode; topUpAttempt += 1) {
+      const deficit = safeCount - validation.candidates.length;
+      const acceptedQuestionTexts = validation.candidates.map((candidate) => candidate.question_text).filter(Boolean);
+      const topUpRejectedQuestions = dedupeStrings([...cleanRejectedQuestions, ...acceptedQuestionTexts]);
+      const topUpRejectedFingerprints = new Set([...rejectedQuestionFingerprints, ...acceptedQuestionTexts.map(fingerprint)]);
+      // normalizeCandidates only ever keeps one candidate per category
+      // (maxPerCategory, below) -- a shortfall almost never means the model
+      // ran out of good questions, it means it kept clustering its raw
+      // candidates into the same handful of categories and everything past
+      // the first in each one got capped. Asking again without also ruling
+      // out the categories already accepted just invites the same
+      // clustering and the same cap a second time. Excluding them here (the
+      // same cleanExcludeCategories mechanism already used for rejected/
+      // avoided categories) is what actually forces fresh category ground.
+      // categoryDiversityRequired is the exact same condition normalizeCandidates
+      // uses to decide whether maxPerCategory is 1 or Infinity -- only worth
+      // excluding accepted categories when that cap is actually what's
+      // active. When it isn't (locked categories, a small approved list, or
+      // an explicit theme), categories can legitimately repeat, and
+      // excluding them here would just shrink an already-narrow allowed set
+      // instead of fixing anything.
+      const acceptedCategories = categoryDiversityRequired ? validation.candidates.map((candidate) => candidate.category).filter(Boolean) : [];
+      const topUpExcludeCategories = dedupeCategoryStrings([...cleanExcludeCategories, ...acceptedCategories]);
+      try {
+        const topUpPrompt = buildPrompt({
+          config,
+          safeCount: deficit,
+          difficultyKey,
+          difficultyProfile,
+          cleanTheme,
+          cleanExcludeCategories: topUpExcludeCategories,
+          cleanApprovedCategories,
+          cleanLockedCategories,
+          categoryDiversityRequired,
+          categoryExpansionMode,
+          cleanRejectedQuestions: topUpRejectedQuestions,
+          cleanRejectedAnswers,
+          cleanSessionContext,
+          existingQuestions,
+          styleExamples,
+          excludeUsed,
+          avoidDuplicates,
+          includeImagePrompt,
+          fastMode,
+          cleanHostStyleProfile,
+          sessionStyleProfile,
+          venueProfileText,
+        });
+        const topUpParsed = await requestCandidates(topUpPrompt, { fastMode });
+        const topUpValidation = normalizeCandidates({
+          ...validationInput,
+          candidates: topUpParsed.candidates,
+          cleanExcludeCategories: topUpExcludeCategories,
+          rejectedQuestionFingerprints: topUpRejectedFingerprints,
+          sourceSeeds: [],
+          sourceBacked: false,
+        });
+        validation = { candidates: [...validation.candidates, ...topUpValidation.candidates], rejected: [...validation.rejected, ...topUpValidation.rejected] };
+        if (!topUpValidation.candidates.length) break;
+      } catch (topUpError) {
+        console.warn(`generate-session-candidates top-up attempt ${topUpAttempt + 1} failed, returning what's been collected so far:`, topUpError);
+        break;
+      }
+    }
+
     return res.status(200).json({ candidates: validation.candidates.slice(0, safeCount), rejected: validation.rejected, requested: safeCount, source_notice: sourceNotice, style_reference_note: sessionStyleProfile?.note || "" });
   } catch (error) {
     console.error("generate-session-candidates error:", error);
@@ -975,24 +1058,47 @@ function hasQuestionBankIntent(value) {
   return /\b(question bank|library|saved question|saved questions|unused question|unused questions|from my questions|from my bank)\b/i.test(cleanText(value));
 }
 
+// This fetch used to have no timeout at all -- if OpenAI ever hung instead
+// of erroring, nothing here would notice, and the request just rode it out
+// until Vercel's own platform-level hard limit (300s) killed the function.
+// At that point the client gets Vercel's own plain-text error page instead
+// of a response, which fails to parse as JSON client-side and surfaces as a
+// generic "Unexpected token" toast with no indication anything timed out.
+// Adding the top-up request in the batch-came-back-short case doubled how
+// often a single generation call could end up being the one that hangs, so
+// a call that fails fast here instead of hanging is what lets the top-up's
+// own try/catch actually degrade gracefully back to the shorter batch
+// (that catch was there for an outright request failure, not a 300-second
+// stall that starves any real response).
+const OPENAI_REQUEST_TIMEOUT_MS = 45000;
 async function requestCandidates(prompt, { fastMode = false } = {}) {
   if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured in Vercel");
 
-  const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: fastMode ? (process.env.OPENAI_FAST_GENERATOR_MODEL || "gpt-4.1-mini") : (process.env.OPENAI_GENERATOR_MODEL || "gpt-4.1"),
-      temperature: fastMode ? 0.76 : 0.82,
-      presence_penalty: fastMode ? 0.2 : 0.35,
-      frequency_penalty: fastMode ? 0.2 : 0.3,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: "You are a careful, inventive trivia co-host for a weekly live trivia host. You learn from the host's saved library and previously hosted questions, avoid common quiz-bank questions, and return only valid JSON." },
-        { role: "user", content: prompt },
-      ],
-    }),
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), OPENAI_REQUEST_TIMEOUT_MS);
+  let openaiRes;
+  try {
+    openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: fastMode ? (process.env.OPENAI_FAST_GENERATOR_MODEL || "gpt-4.1-mini") : (process.env.OPENAI_GENERATOR_MODEL || "gpt-4.1"),
+        temperature: fastMode ? 0.76 : 0.82,
+        presence_penalty: fastMode ? 0.2 : 0.35,
+        frequency_penalty: fastMode ? 0.2 : 0.3,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: "You are a careful, inventive trivia co-host for a weekly live trivia host. You learn from the host's saved library and previously hosted questions, avoid common quiz-bank questions, and return only valid JSON." },
+          { role: "user", content: prompt },
+        ],
+      }),
+    });
+  } catch (error) {
+    throw error?.name === "AbortError" ? new Error("The AI took too long to respond -- try again") : error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   const data = await openaiRes.json();
   if (!openaiRes.ok) {

@@ -6,6 +6,53 @@ export const PROFILE_VENUES_KEY = "quiz_crafter_venues_v1";
 export const PROFILE_ACTIVE_VENUE_KEY = "quiz_crafter_active_venue_id";
 export const PROFILE_SHOW_TEMPLATES_KEY = "quiz_crafter_show_templates_v1";
 
+// Single source of truth for "when does this venue's schedule next land" --
+// used to show up to Dashboard's upcoming-shows card, BuildSession's venue
+// picker, and auto-scheduling (see buildAutoSessionPayload below). This used
+// to be copy-pasted into each of those files separately.
+const SCHEDULE_DAY_INDEX = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
+const SCHEDULE_WEEK_INDEX = { first: 1, second: 2, third: 3, fourth: 4 };
+const startOfDay = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+const addDays = (date, days) => { const next = new Date(date); next.setDate(next.getDate() + days); return next; };
+const nextWeeklyDate = (venue, fromDate) => {
+  const target = SCHEDULE_DAY_INDEX[venue.dayOfWeek];
+  if (target === undefined) return null;
+  const from = startOfDay(fromDate);
+  return addDays(from, (target - from.getDay() + 7) % 7);
+};
+const monthlyOccurrence = (year, month, dayName, monthlyWeek) => {
+  const target = SCHEDULE_DAY_INDEX[dayName];
+  if (target === undefined) return null;
+  if (monthlyWeek === "last") {
+    const date = new Date(year, month + 1, 0);
+    date.setDate(date.getDate() - ((date.getDay() - target + 7) % 7));
+    return startOfDay(date);
+  }
+  const occurrence = SCHEDULE_WEEK_INDEX[monthlyWeek] || 1;
+  const first = new Date(year, month, 1);
+  const offset = (target - first.getDay() + 7) % 7;
+  return startOfDay(new Date(year, month, 1 + offset + ((occurrence - 1) * 7)));
+};
+const nextMonthlyDate = (venue, fromDate) => {
+  const from = startOfDay(fromDate);
+  for (let offset = 0; offset < 12; offset += 1) {
+    const monthDate = new Date(from.getFullYear(), from.getMonth() + offset, 1);
+    const candidate = monthlyOccurrence(monthDate.getFullYear(), monthDate.getMonth(), venue.dayOfWeek, venue.monthlyWeek);
+    if (candidate && candidate >= from) return candidate;
+  }
+  return null;
+};
+export const nextVenueDate = (venue, fromDate = new Date()) => {
+  if (venue.frequency === "monthly") return nextMonthlyDate(venue, fromDate);
+  const weekly = nextWeeklyDate(venue, fromDate);
+  if (!weekly) return null;
+  if (venue.frequency !== "bi_weekly") return weekly;
+  const updated = venue.updatedAt ? new Date(venue.updatedAt) : fromDate;
+  const anchor = Number.isNaN(updated.getTime()) ? fromDate : updated;
+  const weeks = Math.floor((weekly - startOfDay(anchor)) / (7 * 24 * 60 * 60 * 1000));
+  return weeks % 2 === 0 ? weekly : addDays(weekly, 7);
+};
+
 export const defaultVenue = {
   name: "",
   nightName: "",
@@ -29,6 +76,7 @@ export const defaultVenue = {
   defaultWagerLimit: 0,
   houseRules: "",
   hostNotes: "",
+  defaultTemplateId: "",
 };
 
 export const readLocalVenues = () => {
@@ -86,6 +134,7 @@ export const normalizeVenue = (venue = {}) => {
     defaultPoints: Math.max(0, Number(source.defaultPoints || defaultVenue.defaultPoints)),
     defaultTimer: Math.max(0, Number(source.defaultTimer || defaultVenue.defaultTimer)),
     defaultWagerLimit: Math.max(0, Number(source.defaultWagerLimit || 0)),
+    defaultTemplateId: String(source.defaultTemplateId || "").trim(),
     updatedAt: source.updatedAt || "",
   };
 };
@@ -328,4 +377,54 @@ export const writeTemplateBuildDraft = (template, venue = null) => {
   } catch {
     // Builder can still open without the draft.
   }
+};
+
+export const makeAutoSessionTitle = (venue, date) => {
+  const dateLabel = date.toLocaleDateString(undefined, { month: "numeric", day: "numeric", year: "numeric" });
+  const title = venue?.nightName || venue?.name || "Trivia";
+  return `${dateLabel} ${title}`.trim();
+};
+
+// Round-level settings live in round_descriptions (not question_type/points
+// columns of their own), matching what BuildSession.jsx's normalizeRounds /
+// buildStateFromSavedSession already read back out of a saved session's
+// round_descriptions once the empty-round fallback there knows to use them.
+export const buildAutoSessionRoundDescriptions = (template) => {
+  const clean = normalizeTemplate(template);
+  return clean.roundNames.map((name, index) => ({
+    order: index + 1,
+    name,
+    description: clean.roundDescriptions[index] || "",
+    questionType: clean.roundQuestionTypes[index] || "mixed",
+    points: clean.roundPoints[index] ?? clean.defaultPoints,
+    timer_seconds: clean.roundTimers[index] ?? clean.defaultTimer,
+    wager_limit: clean.roundWagerLimits[index] ?? clean.defaultWagerLimit,
+  }));
+};
+
+// Mirrors NewEventModal's insert shape (same columns, same empty question
+// arrays -- a host still has to write or generate the actual questions),
+// just with the round plan pre-filled from the venue's default template
+// instead of created blank.
+export const buildAutoSessionPayload = ({ venue, template, date, userId }) => {
+  const venueName = venue?.name || venue?.nightName || "";
+  const title = makeAutoSessionTitle(venue, date);
+  const inputDate = date.toISOString().slice(0, 10);
+  return {
+    user_id: userId,
+    name: title,
+    session_name: title,
+    source_type: "built",
+    is_past: false,
+    session_date: inputDate,
+    event_date: inputDate,
+    event_time: venue?.startTime || null,
+    venue: venueName || null,
+    venue_id: venue?.id || null,
+    true_false_questions: [],
+    multiple_choice_questions: [],
+    written_questions: [],
+    picture_questions: [],
+    round_descriptions: buildAutoSessionRoundDescriptions(template),
+  };
 };
