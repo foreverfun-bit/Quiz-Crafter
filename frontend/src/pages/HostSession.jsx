@@ -2800,7 +2800,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
       </div>
     </div>
     {scoreModal && <ScoreAdjustModal modal={scoreModal} setModal={setScoreModal} adjustScore={adjustScore} setScore={setScore} />}
-    {!focusMode && <ToolDrawer activeDrawer={activeDrawer} onClose={() => setActiveDrawer(null)}>
+    {!focusMode && <ToolDrawer activeDrawer={activeDrawer} onClose={() => setActiveDrawer(null)} embedded={embedded}>
       {activeDrawer === "teams" && <LeaderboardPanel leaderboard={leaderboard} teamName={teamName} teamScore={teamScore} setTeamName={setTeamName} setTeamScore={setTeamScore} addTeam={addTeam} openScoreModal={openScoreModal} removeTeam={removeTeam} toggleTeamDropped={toggleTeamDropped} showLeaderboard={() => releaseMode("leaderboard")} fairPlayStats={fairPlayStats} attendance={attendance} updateNonPlayers={updateNonPlayers} updateTeamHeadcount={updateTeamHeadcount} />}
       {activeDrawer === "run" && <div className="space-y-4"><RunSheet rounds={rounds} currentIndex={hostIndex} goToQuestion={reviewQuestion} answers={answers} players={activePlayers} gradedAnswers={gradedAnswers} editBuild={() => (onEditBuild ? onEditBuild() : navigate(`/build/${id}`))} /><AnswerHistoryPanel rounds={rounds} players={activePlayers} leaderboard={leaderboard} answers={answers} gradedAnswers={gradedAnswers} currentIndex={hostIndex} markAnswer={markAnswer} openScoreModal={openScoreModal} reviewQuestion={reviewQuestion} /></div>}
       {activeDrawer === "fairplay" && <FairPlayPanel leaderboard={leaderboard} fairPlayStats={fairPlayStats} openScoreModal={openScoreModal} />}
@@ -4583,11 +4583,16 @@ const ScoreAdjustModal = ({ modal, setModal, adjustScore, setScore }) => {
 
 const TOOL_DRAWER_TITLES = { teams: "Teams & Leaderboard", run: "Run Sheet", fairplay: "Fair Play", disputes: "Disputes", emergency: "Emergency Host Tools", feedback: "Live Feedback" };
 
-const ToolDrawer = ({ activeDrawer, onClose, children }) => {
+const ToolDrawer = ({ activeDrawer, onClose, children, embedded }) => {
   const open = Boolean(activeDrawer);
+  // Embedded inside EventWorkspace.jsx, its own gear/close buttons float
+  // fixed at the same top-right corner (z-50, above this drawer's z-40) --
+  // this drawer's own close button used to start right under them, so two
+  // unrelated "X"s (close this panel vs. close the whole event) sat close
+  // enough together to fat-finger. Starting the panel lower clears them.
   return <>
     <div onClick={onClose} className={`fixed inset-0 z-40 bg-black/55 transition-opacity ${open ? "opacity-100" : "pointer-events-none opacity-0"}`} />
-    <div className={`fixed inset-y-0 right-0 z-40 flex w-full max-w-md flex-col border-l border-white/10 bg-zinc-950 shadow-2xl transition-transform duration-200 ${open ? "translate-x-0" : "translate-x-full"}`}>
+    <div className={`fixed ${embedded ? "top-16" : "inset-y-0"} bottom-0 right-0 z-40 flex w-full max-w-md flex-col border-l border-white/10 bg-zinc-950 shadow-2xl transition-transform duration-200 ${open ? "translate-x-0" : "translate-x-full"}`}>
       <div className="flex items-center justify-between gap-3 border-b border-white/10 p-4">
         <h3 className="text-lg font-bold text-white">{TOOL_DRAWER_TITLES[activeDrawer] || "Tools"}</h3>
         <Button variant="ghost" onClick={onClose} className="h-9 w-9 p-0 text-zinc-400 hover:text-white" aria-label="Close"><XCircle size={20} /></Button>
