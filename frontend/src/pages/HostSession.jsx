@@ -279,7 +279,10 @@ const normalizeType = (question, fallbackType = "written") => {
 };
 
 const getRoundOrder = (question, fallbackOrder = 1) => Number(question?.round_order || question?.round_number || question?.round || fallbackOrder) || fallbackOrder;
-const getSourceOrder = (question, fallbackOrder = 1) => Number(question?.import_order || question?.source_order || question?.question_order || question?.order || fallbackOrder) || fallbackOrder;
+// source_order must win over import_order: import_order is the static
+// original-import position and never changes, so a reorder (which only
+// ever writes source_order) would otherwise have no visible effect.
+const getSourceOrder = (question, fallbackOrder = 1) => Number(question?.source_order || question?.import_order || question?.question_order || question?.order || fallbackOrder) || fallbackOrder;
 // After-answer is the default going forward -- only a question explicitly
 // saved with "before_answer" keeps that behavior; anything unset (including
 // every question saved before this default flip) normalizes to after_answer.

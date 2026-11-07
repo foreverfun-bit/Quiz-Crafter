@@ -183,7 +183,11 @@ const normalizeType = (question, fallbackType = "written") => {
 const normalizeWagerTiming = (value) => value === "after_answer" || value === "after" ? "after_answer" : "before_answer";
 
 const getRoundOrder = (question, fallbackOrder = 1) => Number(question?.round_order || question?.round_number || question?.round || fallbackOrder) || fallbackOrder;
-const getSourceOrder = (question, fallbackOrder = 1) => Number(question?.import_order || question?.source_order || question?.question_order || question?.order || fallbackOrder) || fallbackOrder;
+// Must match HostSession's precedence exactly -- the host broadcasts a
+// numeric currentIndex into its own flattened question list, and this
+// screen looks that index up in its own flattened list built the same
+// way, so the two sorts have to agree or the wrong question shows.
+const getSourceOrder = (question, fallbackOrder = 1) => Number(question?.source_order || question?.import_order || question?.question_order || question?.order || fallbackOrder) || fallbackOrder;
 const normalizeImageTiming = (value) => {
   const normalized = String(value || "").toLowerCase();
   if (["after", "after_answer", "post", "reveal"].includes(normalized)) return "after_answer";
