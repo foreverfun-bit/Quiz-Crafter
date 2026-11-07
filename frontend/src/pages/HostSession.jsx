@@ -4294,7 +4294,12 @@ const PlaybackRail = ({ eventOpen, onOpenEvent, mode, setMode, rounds, introRoun
   const sceneButtonClass = (active) => `h-14 rounded-lg text-[11px] font-bold flex flex-col items-center justify-center gap-1 transition ${active ? "text-zinc-950" : "border border-white/10 text-zinc-300 hover:bg-white/5 hover:text-white"}`;
   const sceneButtonStyle = (active) => active ? { background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" } : undefined;
 
-  return <aside className="space-y-4">
+  // Sticky instead of scrolling away with the (often long) question list --
+  // self-start keeps it from stretching to the grid row's full height
+  // (which would make "sticky" a no-op, since it'd already span the whole
+  // scrollable area), and its own max-height/overflow lets it scroll
+  // internally on a short window instead of running off-screen unreachable.
+  return <aside className="space-y-4 self-start sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto">
     <Card className="glass-card overflow-hidden">
       <CardContent className="p-0">
         <div className="flex items-center justify-between gap-2 border-b border-white/10 px-4 py-3">
