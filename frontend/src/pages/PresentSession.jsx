@@ -302,6 +302,10 @@ const PresentSession = () => {
     instanceIdRef.current = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
   const hasClaimedRef = useRef(false);
+  // Read inside the heartbeat interval below (a ref, not state, so the
+  // interval's closure always sees the latest value without having to
+  // restart the interval every time this changes).
+  const isSupersededRef = useRef(false);
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 500);
@@ -401,7 +405,20 @@ const PresentSession = () => {
         }
       });
 
+    // Lets the host screen show a live "presentation connected" indicator
+    // instead of just hoping the broadcast channel is still good -- without
+    // this, a silently dropped connection on this screen (the common failure
+    // when presenting from a separate device, away from any tab the host is
+    // actually watching) gave the host no sign of trouble at all. Skipped
+    // once superseded so the indicator reflects the screen actually driving
+    // the display, not a stray tab left open in the background.
+    const heartbeat = window.setInterval(() => {
+      if (isSupersededRef.current) return;
+      channel.send({ type: "broadcast", event: "present_heartbeat", payload: { instanceId: instanceIdRef.current } });
+    }, 8000);
+
     return () => {
+      window.clearInterval(heartbeat);
       supabase.removeChannel(channel);
     };
   }, [id]);
@@ -412,7 +429,9 @@ const PresentSession = () => {
   useEffect(() => {
     const claimedInstanceId = presentState.presentInstanceId;
     if (!claimedInstanceId || !hasClaimedRef.current) return;
-    setIsSuperseded(claimedInstanceId !== instanceIdRef.current);
+    const superseded = claimedInstanceId !== instanceIdRef.current;
+    setIsSuperseded(superseded);
+    isSupersededRef.current = superseded;
   }, [presentState.presentInstanceId]);
 
   // This is a fallback for the realtime broadcast channel above (catches
