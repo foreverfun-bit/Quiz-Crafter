@@ -2658,6 +2658,10 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     setSession((prevSession) => ({ ...prevSession, ...updatedArrays }));
     if (newCurrentIndex !== -1) setCurrentIndex(newCurrentIndex);
     if (isReviewing) setReviewIndex(newReviewIndex !== -1 ? newReviewIndex : null);
+    // A one-row swap in a long list is easy to miss with no other signal --
+    // every other answer/wager/points edit on this page confirms itself
+    // with a toast, this didn't.
+    toast.success(direction < 0 ? "Moved up" : "Moved down");
 
     if (isTestRun) return;
     const { error } = await supabase.from("sessions").update(updatedArrays).eq("id", id);
