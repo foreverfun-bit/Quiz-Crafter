@@ -607,6 +607,22 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   const liveChannelRef = useRef(null);
   const liveStateRef = useRef(null);
   const liveStateSequenceRef = useRef(0);
+  // Identifies this specific tab/mount as a host instance (mirrors
+  // PresentSession's instanceIdRef, same problem) -- liveSequence is only
+  // ever a local counter per tab, starting back at 0 on every load. A stale
+  // tab left open elsewhere (built/tested at home, never closed) can easily
+  // have climbed higher than a freshly opened one at the actual venue, so
+  // if its connection so much as blips and reconnects, its next automatic
+  // re-broadcast would look "newer" to every player/presentation screen
+  // than the real host's -- the actual mechanism behind "I forgot to close
+  // the other tab and now players stopped seeing updates." Any host tab
+  // that ever hears a *different* host instance broadcasting for this same
+  // session latches permanently quiet instead -- see hostSupersededRef below.
+  const hostInstanceIdRef = useRef(null);
+  if (!hostInstanceIdRef.current) {
+    hostInstanceIdRef.current = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+  const hostSupersededRef = useRef(false);
   const presentReadyDebounceRef = useRef(null);
   const processedLiveEventsRef = useRef(new Set());
   const hostedResultsRef = useRef({});
@@ -657,6 +673,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   const [gradedAnswers, setGradedAnswers] = useState(() => readStoredObject(hostToolsStorageKey(id, "graded-answers")));
   const [scoreModal, setScoreModal] = useState(null);
   const [liveStatus, setLiveStatus] = useState("connecting");
+  const [hostSuperseded, setHostSuperseded] = useState(false);
   // When the presentation screen last pinged this screen (its initial
   // present_ready claim, or its periodic heartbeat) -- lets the host see
   // that it's actually still connected (see PRESENT_STALE_MS below) instead
@@ -1049,7 +1066,22 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
       .on("broadcast", { event: "present_heartbeat" }, () => {
         setPresentLastSeenAt(Date.now());
       })
+      // self:false means this only ever fires for a DIFFERENT host tab's
+      // broadcast, never this one's own -- so hearing this at all means
+      // another host instance is live for this same session right now.
+      // Latches permanently (never reset) rather than toggling back and
+      // forth: the common case is one abandoned tab and one real one, and
+      // once this tab knows it's the stale one, it should stay quiet for
+      // good rather than possibly flip-flopping back if the other side
+      // happens to go briefly idle.
+      .on("broadcast", { event: "host_state" }, ({ payload }) => {
+        if (payload?.hostInstanceId && payload.hostInstanceId !== hostInstanceIdRef.current && !hostSupersededRef.current) {
+          hostSupersededRef.current = true;
+          setHostSuperseded(true);
+        }
+      })
       .on("broadcast", { event: "present_ready" }, ({ payload }) => {
+        if (hostSupersededRef.current) return;
         setPresentLastSeenAt(Date.now());
         // A presentation screen claiming itself as active (see PresentSession) --
         // the most recent claim always wins, which is what actually kicks an
@@ -1075,7 +1107,11 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
       })
       .subscribe((status) => {
         setLiveStatus(status === "SUBSCRIBED" ? "live" : "connecting");
-        if (status === "SUBSCRIBED" && liveStateRef.current) {
+        // Guarded too, not just persistLiveState below -- this fires
+        // automatically on every (re)connect regardless of any host
+        // action, which is exactly the moment a stale tab could leak a
+        // broadcast before it's had a chance to hear anyone else first.
+        if (status === "SUBSCRIBED" && liveStateRef.current && !hostSupersededRef.current) {
           sendLiveBroadcast(liveChannelRef.current, { type: "broadcast", event: "host_state", payload: liveStateRef.current });
         }
       });
@@ -1160,9 +1196,15 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
 
   const persistLiveState = (state, force = false) => {
     liveStateSequenceRef.current = Math.max(liveStateSequenceRef.current + 1, Number(state.liveSequence || 0));
-    const orderedState = { ...state, liveSequence: liveStateSequenceRef.current };
+    const orderedState = { ...state, liveSequence: liveStateSequenceRef.current, hostInstanceId: hostInstanceIdRef.current };
     liveStateRef.current = orderedState;
     localStorage.setItem(`quiz-crafter-present-state-${id}`, JSON.stringify(orderedState));
+    // A superseded tab (another host instance is live for this session --
+    // see hostSupersededRef above) keeps updating its own local state so
+    // the host isn't staring at a frozen screen, but stops pushing any of
+    // it to players or the presentation screen -- it's not the one driving
+    // the real show anymore.
+    if (hostSupersededRef.current) return;
     sendLiveBroadcast(liveChannelRef.current, { type: "broadcast", event: "host_state", payload: orderedState });
     const nowMs = Date.now();
     const durableKey = [
@@ -1206,6 +1248,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   // liveSequence (persistLiveState always bumps it) and a DB write, so it
   // lands even if nothing about the state actually changed since the last save.
   const resyncPresentation = () => {
+    if (hostSupersededRef.current) return toast.error("This screen is read-only -- another device is hosting this session now");
     if (!liveStateRef.current) return toast.error("Nothing to resync yet -- go live with a question first");
     persistLiveState({ ...liveStateRef.current, updatedAt: new Date().toISOString() }, true);
     toast.success("Resent the current state to the presentation screen");
@@ -2729,6 +2772,11 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     {isTestRun && !focusMode && <div className="bg-amber-400/15 border-b border-amber-400/30 text-amber-200 text-sm px-4 py-2 flex items-center justify-center gap-2" data-testid="test-mode-banner">
       <AlertTriangle size={14} />
       Test Run -- teams and scores here won't count. Starting the real event clears this out automatically.
+    </div>}
+    {hostSuperseded && <div className="bg-rose-500/15 border-b border-rose-500/30 text-rose-200 text-sm px-4 py-2 flex flex-wrap items-center justify-center gap-2" data-testid="host-superseded-banner">
+      <AlertTriangle size={14} />
+      Another device is actively hosting this session right now -- this screen is read-only so it can't knock players out of sync. Close this tab, or reload to take back control here instead.
+      <Button size="sm" variant="outline" onClick={() => window.location.reload()} className="h-7 border-rose-300/30 text-rose-100 hover:text-white">Reload to Take Over</Button>
     </div>}
     {!focusMode && <TopBar navigate={navigate} id={id} embedded={embedded} sessionName={sessionName} venueName={session?.venue_name || session?.venueName || session?.venue || ""} questions={questions} players={players} currentIndex={currentIndex} liveStatus={liveStatus} presentConnected={presentConnected} presentLastSeenAt={presentLastSeenAt} onResyncPresentation={resyncPresentation} openPresentation={openPresentation} setFocusMode={setFocusMode} progress={progress} branding={branding} customizeOpen={customizeOpen} setCustomizeOpen={setCustomizeOpen} endSession={endSession} collapsed={topbarCollapsed} onToggleCollapse={() => setTopbarCollapsed((value) => !value)} answersPaused={answersPaused} onToggleAnswersPaused={toggleAnswersPaused} />}
     <div className={`max-w-[1680px] mx-auto p-4 lg:p-8 ${focusMode ? `${embedded ? "h-full" : "min-h-screen"} flex flex-col` : ""}`}>
