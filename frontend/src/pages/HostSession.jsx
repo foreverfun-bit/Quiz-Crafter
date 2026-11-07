@@ -607,6 +607,22 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   const liveChannelRef = useRef(null);
   const liveStateRef = useRef(null);
   const liveStateSequenceRef = useRef(0);
+  // Identifies this specific tab/mount as a host instance (mirrors
+  // PresentSession's instanceIdRef, same problem) -- liveSequence is only
+  // ever a local counter per tab, starting back at 0 on every load. A stale
+  // tab left open elsewhere (built/tested at home, never closed) can easily
+  // have climbed higher than a freshly opened one at the actual venue, so
+  // if its connection so much as blips and reconnects, its next automatic
+  // re-broadcast would look "newer" to every player/presentation screen
+  // than the real host's -- the actual mechanism behind "I forgot to close
+  // the other tab and now players stopped seeing updates." Any host tab
+  // that ever hears a *different* host instance broadcasting for this same
+  // session latches permanently quiet instead -- see hostSupersededRef below.
+  const hostInstanceIdRef = useRef(null);
+  if (!hostInstanceIdRef.current) {
+    hostInstanceIdRef.current = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+  const hostSupersededRef = useRef(false);
   const presentReadyDebounceRef = useRef(null);
   const processedLiveEventsRef = useRef(new Set());
   const hostedResultsRef = useRef({});
@@ -657,6 +673,14 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   const [gradedAnswers, setGradedAnswers] = useState(() => readStoredObject(hostToolsStorageKey(id, "graded-answers")));
   const [scoreModal, setScoreModal] = useState(null);
   const [liveStatus, setLiveStatus] = useState("connecting");
+  const [hostSuperseded, setHostSuperseded] = useState(false);
+  // When the presentation screen last pinged this screen (its initial
+  // present_ready claim, or its periodic heartbeat) -- lets the host see
+  // that it's actually still connected (see PRESENT_STALE_MS below) instead
+  // of just assuming the broadcast channel got through, which is exactly
+  // the assumption that silently failed when presenting from a separate
+  // device with no way to notice.
+  const [presentLastSeenAt, setPresentLastSeenAt] = useState(null);
   const [hostStateLoaded, setHostStateLoaded] = useState(false);
   const [pointsPerQuestion, setPointsPerQuestion] = useState(25);
   const [wagerMode, setWagerMode] = useState(false);
@@ -1039,7 +1063,26 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
       .on("broadcast", { event: "idea_submit" }, ({ payload }) => {
         applyLivePlayerEvent("idea_submit", payload);
       })
+      .on("broadcast", { event: "present_heartbeat" }, () => {
+        setPresentLastSeenAt(Date.now());
+      })
+      // self:false means this only ever fires for a DIFFERENT host tab's
+      // broadcast, never this one's own -- so hearing this at all means
+      // another host instance is live for this same session right now.
+      // Latches permanently (never reset) rather than toggling back and
+      // forth: the common case is one abandoned tab and one real one, and
+      // once this tab knows it's the stale one, it should stay quiet for
+      // good rather than possibly flip-flopping back if the other side
+      // happens to go briefly idle.
+      .on("broadcast", { event: "host_state" }, ({ payload }) => {
+        if (payload?.hostInstanceId && payload.hostInstanceId !== hostInstanceIdRef.current && !hostSupersededRef.current) {
+          hostSupersededRef.current = true;
+          setHostSuperseded(true);
+        }
+      })
       .on("broadcast", { event: "present_ready" }, ({ payload }) => {
+        if (hostSupersededRef.current) return;
+        setPresentLastSeenAt(Date.now());
         // A presentation screen claiming itself as active (see PresentSession) --
         // the most recent claim always wins, which is what actually kicks an
         // older screen (a stray tab, a duplicate "Open Presentation" click) out
@@ -1064,7 +1107,11 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
       })
       .subscribe((status) => {
         setLiveStatus(status === "SUBSCRIBED" ? "live" : "connecting");
-        if (status === "SUBSCRIBED" && liveStateRef.current) {
+        // Guarded too, not just persistLiveState below -- this fires
+        // automatically on every (re)connect regardless of any host
+        // action, which is exactly the moment a stale tab could leak a
+        // broadcast before it's had a chance to hear anyone else first.
+        if (status === "SUBSCRIBED" && liveStateRef.current && !hostSupersededRef.current) {
           sendLiveBroadcast(liveChannelRef.current, { type: "broadcast", event: "host_state", payload: liveStateRef.current });
         }
       });
@@ -1143,12 +1190,21 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   const joinUrl = `${getPublicOrigin()}/join?session=${id}${getProtectionBypassQuery()}`;
   const timeRemaining = timerEndAt ? Math.max(0, Math.ceil((timerEndAt - now) / 1000)) : null;
   const acceptingAnswers = !answersPaused && (timeRemaining === null || timeRemaining > 0);
+  // Heartbeats land every 8s (see PresentSession) -- anything past double
+  // that is treated as disconnected rather than just running slow.
+  const presentConnected = presentLastSeenAt !== null && now - presentLastSeenAt < 20000;
 
   const persistLiveState = (state, force = false) => {
     liveStateSequenceRef.current = Math.max(liveStateSequenceRef.current + 1, Number(state.liveSequence || 0));
-    const orderedState = { ...state, liveSequence: liveStateSequenceRef.current };
+    const orderedState = { ...state, liveSequence: liveStateSequenceRef.current, hostInstanceId: hostInstanceIdRef.current };
     liveStateRef.current = orderedState;
     localStorage.setItem(`quiz-crafter-present-state-${id}`, JSON.stringify(orderedState));
+    // A superseded tab (another host instance is live for this session --
+    // see hostSupersededRef above) keeps updating its own local state so
+    // the host isn't staring at a frozen screen, but stops pushing any of
+    // it to players or the presentation screen -- it's not the one driving
+    // the real show anymore.
+    if (hostSupersededRef.current) return;
     sendLiveBroadcast(liveChannelRef.current, { type: "broadcast", event: "host_state", payload: orderedState });
     const nowMs = Date.now();
     const durableKey = [
@@ -1185,6 +1241,17 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
         }).catch((error) => console.warn("Live presentation state save unavailable:", error));
       }
     }
+  };
+  // A manual nudge for a host who doesn't want to wait on the presentation
+  // screen's own 8s durable-state poll to catch up, or who just wants
+  // confirmation something was actually sent. force=true guarantees a fresh
+  // liveSequence (persistLiveState always bumps it) and a DB write, so it
+  // lands even if nothing about the state actually changed since the last save.
+  const resyncPresentation = () => {
+    if (hostSupersededRef.current) return toast.error("This screen is read-only -- another device is hosting this session now");
+    if (!liveStateRef.current) return toast.error("Nothing to resync yet -- go live with a question first");
+    persistLiveState({ ...liveStateRef.current, updatedAt: new Date().toISOString() }, true);
+    toast.success("Resent the current state to the presentation screen");
   };
 
   const buildLiveState = ({
@@ -2706,7 +2773,12 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
       <AlertTriangle size={14} />
       Test Run -- teams and scores here won't count. Starting the real event clears this out automatically.
     </div>}
-    {!focusMode && <TopBar navigate={navigate} id={id} embedded={embedded} sessionName={sessionName} venueName={session?.venue_name || session?.venueName || session?.venue || ""} questions={questions} players={players} currentIndex={currentIndex} liveStatus={liveStatus} openPresentation={openPresentation} setFocusMode={setFocusMode} progress={progress} branding={branding} customizeOpen={customizeOpen} setCustomizeOpen={setCustomizeOpen} endSession={endSession} collapsed={topbarCollapsed} onToggleCollapse={() => setTopbarCollapsed((value) => !value)} answersPaused={answersPaused} onToggleAnswersPaused={toggleAnswersPaused} />}
+    {hostSuperseded && <div className="bg-rose-500/15 border-b border-rose-500/30 text-rose-200 text-sm px-4 py-2 flex flex-wrap items-center justify-center gap-2" data-testid="host-superseded-banner">
+      <AlertTriangle size={14} />
+      Another device is actively hosting this session right now -- this screen is read-only so it can't knock players out of sync. Close this tab, or reload to take back control here instead.
+      <Button size="sm" variant="outline" onClick={() => window.location.reload()} className="h-7 border-rose-300/30 text-rose-100 hover:text-white">Reload to Take Over</Button>
+    </div>}
+    {!focusMode && <TopBar navigate={navigate} id={id} embedded={embedded} sessionName={sessionName} venueName={session?.venue_name || session?.venueName || session?.venue || ""} questions={questions} players={players} currentIndex={currentIndex} liveStatus={liveStatus} presentConnected={presentConnected} presentLastSeenAt={presentLastSeenAt} onResyncPresentation={resyncPresentation} openPresentation={openPresentation} setFocusMode={setFocusMode} progress={progress} branding={branding} customizeOpen={customizeOpen} setCustomizeOpen={setCustomizeOpen} endSession={endSession} collapsed={topbarCollapsed} onToggleCollapse={() => setTopbarCollapsed((value) => !value)} answersPaused={answersPaused} onToggleAnswersPaused={toggleAnswersPaused} />}
     <div className={`max-w-[1680px] mx-auto p-4 lg:p-8 ${focusMode ? `${embedded ? "h-full" : "min-h-screen"} flex flex-col` : ""}`}>
       {focusMode && <div className="flex justify-between items-center mb-4"><Badge className="bg-zinc-800 text-zinc-300">{currentRound?.name || "Round"} - {currentIndex + 1} / {questions.length}</Badge><Button variant="outline" onClick={() => setFocusMode(false)} className="border-white/10 text-zinc-300 hover:text-white">Exit Focus</Button></div>}
       <div className={focusMode ? "flex-1 flex items-center" : "grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-7"}>
@@ -4223,7 +4295,7 @@ const PlaybackRail = ({ eventOpen, onOpenEvent, mode, setMode, rounds, introRoun
   </aside>;
 };
 
-const TopBar = ({ navigate, id, embedded, sessionName, venueName, questions, players, currentIndex, liveStatus, openPresentation, setFocusMode, progress, branding, customizeOpen, setCustomizeOpen, endSession, collapsed, onToggleCollapse, answersPaused, onToggleAnswersPaused }) => <div className="border-b border-white/10 bg-zinc-950/85 sticky top-0 z-20 backdrop-blur"><div className={`max-w-[1680px] mx-auto px-4 lg:px-6 flex items-center gap-3 transition-[padding] ${collapsed ? "py-1.5" : "py-3"}`}>{!collapsed && !embedded && <Button variant="ghost" onClick={() => navigate(`/session/${id}`)} className="text-zinc-400 hover:text-white h-9 w-9 p-0 shrink-0" aria-label="Back to session"><ArrowLeft size={18} /></Button>}{!collapsed && branding?.logoUrl && <img src={branding.logoUrl} alt={branding.name || "Host logo"} className="h-10 w-10 rounded-md bg-white object-contain p-1 shrink-0" />}<div className="min-w-0 flex-1">{!collapsed && <p className="text-xs font-bold uppercase tracking-wide truncate" style={{ color: "var(--host-primary)" }}>{venueName || branding?.name || "Live Trivia"}</p>}<h1 className={`font-bold truncate ${collapsed ? "text-sm" : ""}`}>{sessionName}</h1>{!collapsed && <p className="text-xs text-zinc-500">{players.length} player{players.length === 1 ? "" : "s"} connected</p>}</div>{!collapsed && <div className="flex items-center gap-2 flex-wrap justify-end"><Badge className={liveStatus === "live" ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/20" : "bg-zinc-800 text-zinc-300"}><Wifi size={13} className="mr-1" />{liveStatus === "live" ? "Live" : "Connecting"}</Badge><Badge className="bg-zinc-800 text-zinc-300">Question {currentIndex + 1} of {questions.length}</Badge><Button onClick={onToggleAnswersPaused} title="Session-wide -- stays on or off across every question until you flip it back. Join, feedback, and idea submission on phones are never affected." className={answersPaused ? "bg-amber-400/15 text-amber-300 border border-amber-400/30 hover:bg-amber-400/20" : "bg-transparent border border-white/10 text-zinc-300 hover:bg-white/5 hover:text-white"}>{answersPaused ? <Unlock size={16} className="mr-2" /> : <Lock size={16} className="mr-2" />}Phone Answers: {answersPaused ? "Paused" : "On"}</Button><Button onClick={endSession} className="bg-amber-300 text-zinc-950 hover:bg-amber-200"><Save size={16} className="mr-2" />End Session</Button><DropdownMenu><DropdownMenuTrigger asChild><Button variant="outline" className="h-10 w-10 border-white/10 p-0 text-zinc-300 hover:text-white" aria-label="Host screen options"><MoreHorizontal size={18} /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" className="border-white/10 bg-zinc-950 text-zinc-100"><DropdownMenuItem onClick={() => setCustomizeOpen((value) => !value)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Palette size={15} className="mr-2" />{customizeOpen ? "Hide Customize" : "Customize"}</DropdownMenuItem><DropdownMenuItem onClick={() => setFocusMode(true)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Maximize2 size={15} className="mr-2" />Focus Mode</DropdownMenuItem></DropdownMenuContent></DropdownMenu></div>}<Button variant="outline" onClick={onToggleCollapse} className="h-8 w-8 shrink-0 border-white/10 p-0 text-zinc-400 hover:text-white" aria-label={collapsed ? "Expand toolbar" : "Minimize toolbar"} title={collapsed ? "Expand toolbar" : "Minimize toolbar"}><ChevronLeft size={15} className={`transition-transform ${collapsed ? "-rotate-90" : "rotate-90"}`} /></Button><div className="w-px h-7 bg-white/10 shrink-0" /><Button onClick={openPresentation} className="shrink-0 text-zinc-950 font-bold shadow-lg shadow-[#71E0DC]/20" style={{ background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" }} title="Opens the audience screen in a new tab, for a TV or projector"><MonitorPlay size={16} className="mr-2" />Present<ExternalLink size={13} className="ml-2 opacity-70" /></Button></div>{!collapsed && <div className="h-1 bg-zinc-900"><div className="h-1 transition-all" style={{ width: `${progress}%`, background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" }} /></div>}</div>;
+const TopBar = ({ navigate, id, embedded, sessionName, venueName, questions, players, currentIndex, liveStatus, presentConnected, presentLastSeenAt, onResyncPresentation, openPresentation, setFocusMode, progress, branding, customizeOpen, setCustomizeOpen, endSession, collapsed, onToggleCollapse, answersPaused, onToggleAnswersPaused }) => <div className="border-b border-white/10 bg-zinc-950/85 sticky top-0 z-20 backdrop-blur"><div className={`max-w-[1680px] mx-auto px-4 lg:px-6 flex items-center gap-3 transition-[padding] ${collapsed ? "py-1.5" : "py-3"}`}>{!collapsed && !embedded && <Button variant="ghost" onClick={() => navigate(`/session/${id}`)} className="text-zinc-400 hover:text-white h-9 w-9 p-0 shrink-0" aria-label="Back to session"><ArrowLeft size={18} /></Button>}{!collapsed && branding?.logoUrl && <img src={branding.logoUrl} alt={branding.name || "Host logo"} className="h-10 w-10 rounded-md bg-white object-contain p-1 shrink-0" />}<div className="min-w-0 flex-1">{!collapsed && <p className="text-xs font-bold uppercase tracking-wide truncate" style={{ color: "var(--host-primary)" }}>{venueName || branding?.name || "Live Trivia"}</p>}<h1 className={`font-bold truncate ${collapsed ? "text-sm" : ""}`}>{sessionName}</h1>{!collapsed && <p className="text-xs text-zinc-500">{players.length} player{players.length === 1 ? "" : "s"} connected</p>}</div>{!collapsed && <div className="flex items-center gap-2 flex-wrap justify-end"><Badge className={liveStatus === "live" ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/20" : "bg-zinc-800 text-zinc-300"}><Wifi size={13} className="mr-1" />{liveStatus === "live" ? "Live" : "Connecting"}</Badge>{presentLastSeenAt !== null && <><Badge title={presentConnected ? "The presentation screen checked in within the last 20 seconds" : `The presentation screen hasn't checked in since ${new Date(presentLastSeenAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })} -- it may have lost its connection`} className={presentConnected ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/20" : "bg-amber-400/15 text-amber-300 border border-amber-400/30"}><MonitorPlay size={13} className="mr-1" />{presentConnected ? "Presentation: Live" : "Presentation: Not Connected"}</Badge><Button variant="outline" onClick={onResyncPresentation} title="Resend the current state to the presentation screen" aria-label="Resync presentation screen" className="h-8 w-8 border-white/10 p-0 text-zinc-400 hover:text-white"><RefreshCw size={14} /></Button></>}<Badge className="bg-zinc-800 text-zinc-300">Question {currentIndex + 1} of {questions.length}</Badge><Button onClick={onToggleAnswersPaused} title="Session-wide -- stays on or off across every question until you flip it back. Join, feedback, and idea submission on phones are never affected." className={answersPaused ? "bg-amber-400/15 text-amber-300 border border-amber-400/30 hover:bg-amber-400/20" : "bg-transparent border border-white/10 text-zinc-300 hover:bg-white/5 hover:text-white"}>{answersPaused ? <Unlock size={16} className="mr-2" /> : <Lock size={16} className="mr-2" />}Phone Answers: {answersPaused ? "Paused" : "On"}</Button><Button onClick={endSession} className="bg-amber-300 text-zinc-950 hover:bg-amber-200"><Save size={16} className="mr-2" />End Session</Button><DropdownMenu><DropdownMenuTrigger asChild><Button variant="outline" className="h-10 w-10 border-white/10 p-0 text-zinc-300 hover:text-white" aria-label="Host screen options"><MoreHorizontal size={18} /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" className="border-white/10 bg-zinc-950 text-zinc-100"><DropdownMenuItem onClick={() => setCustomizeOpen((value) => !value)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Palette size={15} className="mr-2" />{customizeOpen ? "Hide Customize" : "Customize"}</DropdownMenuItem><DropdownMenuItem onClick={() => setFocusMode(true)} className="cursor-pointer focus:bg-zinc-900 focus:text-white"><Maximize2 size={15} className="mr-2" />Focus Mode</DropdownMenuItem></DropdownMenuContent></DropdownMenu></div>}<Button variant="outline" onClick={onToggleCollapse} className="h-8 w-8 shrink-0 border-white/10 p-0 text-zinc-400 hover:text-white" aria-label={collapsed ? "Expand toolbar" : "Minimize toolbar"} title={collapsed ? "Expand toolbar" : "Minimize toolbar"}><ChevronLeft size={15} className={`transition-transform ${collapsed ? "-rotate-90" : "rotate-90"}`} /></Button><div className="w-px h-7 bg-white/10 shrink-0" /><Button onClick={openPresentation} className="shrink-0 text-zinc-950 font-bold shadow-lg shadow-[#71E0DC]/20" style={{ background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" }} title="Opens the audience screen in a new tab, for a TV or projector"><MonitorPlay size={16} className="mr-2" />Present<ExternalLink size={13} className="ml-2 opacity-70" /></Button></div>{!collapsed && <div className="h-1 bg-zinc-900"><div className="h-1 transition-all" style={{ width: `${progress}%`, background: "linear-gradient(90deg, var(--host-primary), var(--host-accent))" }} /></div>}</div>;
 
 const PresentationControls = ({ mode, setMode, rounds, currentIndex, currentRound, introRoundKey, setIntroRoundKey }) => {
   const nextRound = rounds.find((round) => round.startIndex > currentIndex);
