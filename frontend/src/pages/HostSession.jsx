@@ -1937,6 +1937,26 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     });
     toast.success(`Answer updated for ${existing.playerName || "team"}`);
   };
+  // Overrides how many points THIS team's correct answer is worth on THIS
+  // question -- same idea as editWager, just for a non-wager question's
+  // point value instead of a wager amount. markAnswer already prefers
+  // answer.points over the question's own default when it's set (see
+  // answerPoints there), so storing it here is enough to make it stick.
+  const editPoints = (playerId, questionIndex, nextPoints) => {
+    const existing = answers.find((item) => item.playerId === playerId && Number(item.questionIndex) === Number(questionIndex));
+    if (!existing) return toast.error("No submitted answer to edit for this team");
+    const points = Math.max(0, Number(nextPoints) || 0);
+    const updated = { ...existing, points };
+    setAnswers((current) => {
+      const next = current.map((item) => (item.playerId === playerId && Number(item.questionIndex) === Number(questionIndex) ? updated : item));
+      writeStoredList(hostToolsStorageKey(id, "answers"), next);
+      persistHostToolsPatch({ answers: next }, "Points edit");
+      return next;
+    });
+    const grade = gradedAnswers[answerKey(existing)];
+    if (grade?.status) markAnswer(updated, grade.status, { silent: true });
+    toast.success(`Points set to ${points} for ${existing.playerName || "team"}`);
+  };
   // Points/timer/wager edits used to only touch the live pointsPerQuestion/
   // timerSeconds/wagerLimit state, which goToQuestion resets from the
   // question's own stored fields on every navigation -- so an edit "stuck"
@@ -2853,6 +2873,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
             addManualAnswer={addManualAnswer}
             editWager={editWager}
             editAnswerText={editAnswerText}
+            editPoints={editPoints}
             releaseMode={releaseMode}
             hasRevealExtra={hasRevealExtra}
             hasFunFact={Boolean(displayedQuestion.funFact)}
@@ -3905,7 +3926,7 @@ const QuestionListView = ({
   displayedQuestion, goToQuestion, reviewQuestion, onBackToLive, onGoLiveWithThis,
   answersForQuestionIndex, gradedAnswers, players, hostAnswers, fairPlayStats,
   showAnswer, showFunFact, timeRemaining, viewPointsPerQuestion, viewTimerSeconds, viewWagerMode, viewWagerLimit, viewWagerTiming,
-  onUpdateSettings, renameRound, describeRound, setEmptyRoundSettings, moveRound, deleteRound, createRound, createEmptyRound, moveQuestionToRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, addGeneratedQuestionsToRound, updateQuestionContent, editQuestionWithAi, askCoHost, saveQuestionToLibrary, venueId, approvedCategories, branding, markAnswer, addManualAnswer, editWager, editAnswerText, releaseMode,
+  onUpdateSettings, renameRound, describeRound, setEmptyRoundSettings, moveRound, deleteRound, createRound, createEmptyRound, moveQuestionToRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, addGeneratedQuestionsToRound, updateQuestionContent, editQuestionWithAi, askCoHost, saveQuestionToLibrary, venueId, approvedCategories, branding, markAnswer, addManualAnswer, editWager, editAnswerText, editPoints, releaseMode,
   hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, resetQuestionAt,
 }) => {
   // Only one round is shown at a time (see RoundHeader/RoundSwitcher) --
@@ -3986,7 +4007,7 @@ const QuestionListView = ({
         {activeRound.questions.map((question, localIndex) => {
           const index = activeRound.startIndex + localIndex;
           if (index === hostIndex && (isReviewing || gameStarted)) {
-            return <QuestionStage key={question.id} question={displayedQuestion} index={hostIndex} total={questions.length} showAnswer={showAnswer} showFunFact={showFunFact} pointsPerQuestion={viewPointsPerQuestion} timerSeconds={viewTimerSeconds} timeRemaining={timeRemaining} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} wagerTiming={viewWagerTiming} onUpdateSettings={onUpdateSettings} onUpdateContent={(patch) => updateQuestionContent(displayedQuestion, patch)} onDuplicate={() => duplicateQuestion(displayedQuestion)} onAiEdit={() => setAiEditQuestionId(displayedQuestion.id)} onSaveToLibrary={saveQuestionToLibrary} branding={branding} players={players} answers={hostAnswers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} editAnswerText={editAnswerText} setMode={releaseMode} isReviewing={isReviewing} hasRevealExtra={hasRevealExtra} hasFunFact={hasFunFact} hasAudio={hasAudio} isPlayingAudio={isPlayingAudio} onToggleAudio={onToggleAudio} onRevealAnswer={onRevealAnswer} onShowFunFact={onShowFunFact} startTimer={startTimer} resetTimer={resetTimer} resetQuestion={resetQuestion} onBackToLive={onBackToLive} onGoLiveWithThis={onGoLiveWithThis} categoryUsage={buildCategoryUsage(questions, { roundKey: activeRound.key, excludeQuestionId: displayedQuestion.id })} />;
+            return <QuestionStage key={question.id} question={displayedQuestion} index={hostIndex} total={questions.length} showAnswer={showAnswer} showFunFact={showFunFact} pointsPerQuestion={viewPointsPerQuestion} timerSeconds={viewTimerSeconds} timeRemaining={timeRemaining} wagerMode={viewWagerMode} wagerLimit={viewWagerLimit} wagerTiming={viewWagerTiming} onUpdateSettings={onUpdateSettings} onUpdateContent={(patch) => updateQuestionContent(displayedQuestion, patch)} onDuplicate={() => duplicateQuestion(displayedQuestion)} onAiEdit={() => setAiEditQuestionId(displayedQuestion.id)} onSaveToLibrary={saveQuestionToLibrary} branding={branding} players={players} answers={hostAnswers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} editAnswerText={editAnswerText} editPoints={editPoints} setMode={releaseMode} isReviewing={isReviewing} hasRevealExtra={hasRevealExtra} hasFunFact={hasFunFact} hasAudio={hasAudio} isPlayingAudio={isPlayingAudio} onToggleAudio={onToggleAudio} onRevealAnswer={onRevealAnswer} onShowFunFact={onShowFunFact} startTimer={startTimer} resetTimer={resetTimer} resetQuestion={resetQuestion} onBackToLive={onBackToLive} onGoLiveWithThis={onGoLiveWithThis} categoryUsage={buildCategoryUsage(questions, { roundKey: activeRound.key, excludeQuestionId: displayedQuestion.id })} />;
           }
           const isLiveElsewhere = index === currentIndex && isReviewing;
           const state = isLiveElsewhere ? "live" : index < currentIndex ? "completed" : "upcoming";
@@ -4450,7 +4471,7 @@ const optionToneClasses = {
 
 // The grading UI for a question's answers, rendered as the same rows that
 // display the options -- there is no separate "answers submitted" section.
-const AnswerRows = ({ question, players, answers, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, editWager, editAnswerText, wagerMode, pointsPerQuestion, setMode, isReviewing, showAnswer }) => {
+const AnswerRows = ({ question, players, answers, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, editWager, editAnswerText, editPoints, wagerMode, pointsPerQuestion, setMode, isReviewing, showAnswer }) => {
   const [manualTeamIds, setManualTeamIds] = useState([]);
   const [manualAnswer, setManualAnswer] = useState("");
   const [manualWager, setManualWager] = useState("");
@@ -4582,23 +4603,32 @@ const AnswerRows = ({ question, players, answers, fairPlayStats, gradedAnswers, 
     {/* Shown even at 0/N (not just once wagers start coming in) -- a host who reveals
         the answer before anyone's wagered needs to see that plainly, not infer it from
         the section's absence, since scores quietly wait on this before they land. */}
-    {wagerMode && submittedCount > 0 && <div className="mb-2 rounded-lg border border-purple-400/25 bg-purple-400/10 p-2.5"><p className="mb-1.5 text-xs font-bold text-purple-200">Wagers submitted: {wageredCount}/{submittedCount}</p>{wageredCount > 0 && <div className="flex flex-wrap gap-1.5">{answers.filter(hasSubmittedWager).map((answer) => <WagerChip key={answer.playerId} answer={answer} disabled={isReviewing || !editWager} onSave={(value) => editWager(answer.playerId, answer.questionIndex, value)} />)}</div>}</div>}
+    {/* Read-only status now -- editing a wager (along with the answer, points,
+        and grade) lives in one place, the "Edit a submitted answer" modal
+        above, instead of this also being independently click-to-edit. */}
+    {wagerMode && submittedCount > 0 && <div className="mb-2 rounded-lg border border-purple-400/25 bg-purple-400/10 p-2.5"><p className="mb-1.5 text-xs font-bold text-purple-200">Wagers submitted: {wageredCount}/{submittedCount}</p>{wageredCount > 0 && <div className="flex flex-wrap gap-1.5">{answers.filter(hasSubmittedWager).map((answer) => <span key={answer.playerId} className="rounded-full border border-purple-400/30 bg-purple-400/10 px-2.5 py-1 text-[11px] font-bold text-purple-200">{answer.playerName || "Team"}: {Number(answer.wagerAmount || 0)}</span>)}</div>}</div>}
     {lateCorrectIds.size > 0 && <div className="mb-2 rounded-lg border border-purple-400/30 bg-purple-400/10 p-2.5 text-xs font-bold text-purple-200">{lateCorrectIds.size} late correct answer{lateCorrectIds.size === 1 ? "" : "s"} flagged</div>}
 
     <div className="mt-1 flex items-center justify-between gap-2">
       <p className="text-[11px] text-zinc-600">{allSubmitted ? "All answers are in" : `${submittedCount}/${playerCount || 0} submitted`} &middot; {wagerMode ? "Correct adds wager, incorrect subtracts wager" : `Correct: +${pointsPerQuestion}`}</p>
       <Button size="sm" variant="outline" onClick={() => setMode("leaderboard")} className="h-7 border-white/10 text-zinc-300 hover:text-white"><Trophy size={13} className="mr-1.5" />Leaderboard</Button>
     </div>
-    {editingAnswer && <AnswerEditModal answer={editingAnswer} question={question} gradedAnswers={gradedAnswers} wagerMode={wagerMode} markAnswer={markAnswer} editWager={editWager} editAnswerText={editAnswerText} onClose={() => setEditingAnswer(null)} />}
+    {editingAnswer && <AnswerEditModal answer={editingAnswer} question={question} gradedAnswers={gradedAnswers} wagerMode={wagerMode} pointsPerQuestion={pointsPerQuestion} markAnswer={markAnswer} editWager={editWager} editAnswerText={editAnswerText} editPoints={editPoints} onClose={() => setEditingAnswer(null)} />}
   </div>;
 };
 
 // Opened by the "Edit a submitted answer" chip list above -- edits just
-// that one team's answer text and wager, and marks just that one answer
-// correct/incorrect, independent of the rows' own all-or-nothing toggle.
-const AnswerEditModal = ({ answer, question, gradedAnswers, wagerMode, markAnswer, editWager, editAnswerText, onClose }) => {
+// that one team's answer text, wager, and (on a non-wager question) point
+// value, and marks just that one answer correct/incorrect, independent of
+// the rows' own all-or-nothing toggle. Wager and Points are mutually
+// exclusive, not both shown -- a wager question's award already comes
+// entirely from the wager amount (see markAnswer/getWagerAward), so a
+// separate points override there would just be dead input that silently
+// does nothing once graded.
+const AnswerEditModal = ({ answer, question, gradedAnswers, wagerMode, pointsPerQuestion, markAnswer, editWager, editAnswerText, editPoints, onClose }) => {
   const [answerDraft, setAnswerDraft] = useState(answer.answer || "");
   const [wagerDraft, setWagerDraft] = useState(String(answer.wagerAmount || 0));
+  const [pointsDraft, setPointsDraft] = useState(String(answer.points || pointsPerQuestion || 0));
   const status = gradedAnswers[answerKey(answer)]?.status || null;
 
   const saveAnswer = () => {
@@ -4608,6 +4638,10 @@ const AnswerEditModal = ({ answer, question, gradedAnswers, wagerMode, markAnswe
   };
   const saveWager = () => {
     editWager(answer.playerId, answer.questionIndex, wagerDraft);
+    onClose();
+  };
+  const savePoints = () => {
+    editPoints(answer.playerId, answer.questionIndex, pointsDraft);
     onClose();
   };
   const setStatus = (nextStatus) => {
@@ -4628,7 +4662,7 @@ const AnswerEditModal = ({ answer, question, gradedAnswers, wagerMode, markAnswe
 
       <label className="block text-xs text-zinc-400">Answer<div className="mt-1 flex gap-2"><input value={answerDraft} onChange={(event) => setAnswerDraft(event.target.value)} onKeyDown={(event) => event.key === "Enter" && saveAnswer()} className="h-10 min-w-0 flex-1 rounded-md border border-white/10 bg-zinc-900 px-3 text-white outline-none focus:border-[#71E0DC]/60" /><Button onClick={saveAnswer} disabled={!answerDraft.trim() || answerDraft === answer.answer} className="h-10 bg-zinc-800 text-white hover:bg-zinc-700">Save</Button></div></label>
 
-      {wagerMode && <label className="mt-3 block text-xs text-zinc-400">Wager<div className="mt-1 flex gap-2"><input value={wagerDraft} onChange={(event) => setWagerDraft(event.target.value)} onKeyDown={(event) => event.key === "Enter" && saveWager()} type="number" min="0" className="h-10 min-w-0 flex-1 rounded-md border border-purple-500/30 bg-zinc-900 px-3 text-white outline-none focus:border-purple-400" /><Button onClick={saveWager} disabled={wagerDraft === String(answer.wagerAmount || 0)} className="h-10 bg-purple-500/20 text-purple-100 hover:bg-purple-500/30">Save</Button></div>{!hasSubmittedWager(answer) && <p className="mt-1 text-[11px] text-amber-300">No wager submitted yet -- saving sets one on their behalf.</p>}</label>}
+      {wagerMode ? <label className="mt-3 block text-xs text-zinc-400">Wager<div className="mt-1 flex gap-2"><input value={wagerDraft} onChange={(event) => setWagerDraft(event.target.value)} onKeyDown={(event) => event.key === "Enter" && saveWager()} type="number" min="0" className="h-10 min-w-0 flex-1 rounded-md border border-purple-500/30 bg-zinc-900 px-3 text-white outline-none focus:border-purple-400" /><Button onClick={saveWager} disabled={wagerDraft === String(answer.wagerAmount || 0)} className="h-10 bg-purple-500/20 text-purple-100 hover:bg-purple-500/30">Save</Button></div>{!hasSubmittedWager(answer) && <p className="mt-1 text-[11px] text-amber-300">No wager submitted yet -- saving sets one on their behalf.</p>}</label> : <label className="mt-3 block text-xs text-zinc-400">Points (if correct)<div className="mt-1 flex gap-2"><input value={pointsDraft} onChange={(event) => setPointsDraft(event.target.value)} onKeyDown={(event) => event.key === "Enter" && savePoints()} type="number" min="0" className="h-10 min-w-0 flex-1 rounded-md border border-amber-500/30 bg-zinc-900 px-3 text-white outline-none focus:border-amber-400" /><Button onClick={savePoints} disabled={pointsDraft === String(answer.points || pointsPerQuestion || 0)} className="h-10 bg-amber-500/20 text-amber-100 hover:bg-amber-500/30">Save</Button></div></label>}
 
       <div className="mt-4">
         <p className="mb-1.5 text-xs text-zinc-400">Grade</p>
@@ -4735,34 +4769,7 @@ const EditableStatBadge = ({ label, value, unit, suffix, tone, onSave, step = 5 
     </PopoverContent>
   </Popover>;
 };
-// A per-team click-to-edit wager amount -- corrects a submitted wager
-// (mis-heard over the mic, fat-fingered manual entry) without touching the
-// team's answer text or resubmitting it as a fresh answer.
-// Edits inline (swaps the badge for an input in place) rather than in an
-// absolutely-positioned popover -- this sits inside QuestionStage's
-// overflow-hidden card, low enough in the layout that a popover opening
-// below the button was getting silently clipped, making the chip look
-// unresponsive even though the click was registering.
-const WagerChip = ({ answer, disabled, onSave }) => {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(answer.wagerAmount);
-  useEffect(() => { if (editing) setDraft(answer.wagerAmount); }, [editing, answer.wagerAmount]);
-  const save = () => {
-    onSave(Math.max(0, Number(draft) || 0));
-    setEditing(false);
-  };
-  if (editing) {
-    return <span className="inline-flex items-center gap-1 rounded-full border border-purple-400/40 bg-zinc-950 py-1 pl-2.5 pr-1.5">
-      <span className="text-[11px] font-bold text-purple-200">{answer.playerName || "Team"}</span>
-      <input type="number" min="0" autoFocus value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => event.key === "Enter" && save()} className="h-6 w-16 rounded border border-white/10 bg-zinc-900 px-1 text-center text-xs text-white outline-none focus:border-[#71E0DC]/60" />
-      <button type="button" onClick={save} aria-label="Save wager" className="text-emerald-300 hover:text-emerald-200"><CheckCircle size={14} /></button>
-      <button type="button" onClick={() => setEditing(false)} aria-label="Cancel" className="text-zinc-500 hover:text-zinc-300"><XCircle size={14} /></button>
-    </span>;
-  }
-  return <button type="button" disabled={disabled} onClick={() => setEditing(true)} className="rounded-full border border-purple-400/30 bg-purple-400/10 px-2.5 py-1 text-[11px] font-bold text-purple-200 transition disabled:cursor-default disabled:opacity-70 enabled:hover:border-purple-300/60">{answer.playerName || "Team"}: {Number(answer.wagerAmount || 0)}</button>;
-};
-
-const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusMode, pointsPerQuestion, timerSeconds, timeRemaining, wagerMode, wagerTiming, onUpdateSettings, onUpdateContent, onDuplicate, onAiEdit, onSaveToLibrary, branding, players, answers, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, editWager, editAnswerText, setMode, isReviewing, hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, onBackToLive, onGoLiveWithThis, categoryUsage }) => {
+const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusMode, pointsPerQuestion, timerSeconds, timeRemaining, wagerMode, wagerTiming, onUpdateSettings, onUpdateContent, onDuplicate, onAiEdit, onSaveToLibrary, branding, players, answers, fairPlayStats, gradedAnswers, markAnswer, addManualAnswer, editWager, editAnswerText, editPoints, setMode, isReviewing, hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, onBackToLive, onGoLiveWithThis, categoryUsage }) => {
   const [mediaModalOpen, setMediaModalOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(() => draftFromQuestion(question));
@@ -4846,7 +4853,7 @@ const QuestionStage = ({ question, index, total, showAnswer, showFunFact, focusM
         </div>
         {imageUrl && revealTiming === "after_answer" && showFunFact && <div className="mt-3 overflow-hidden rounded-lg border border-white/10 bg-zinc-950"><img src={imageUrl} alt="Reveal media" className="max-h-64 w-full object-contain" /></div>}
         <div className="mt-2.5 border-t border-white/5 pt-2.5">
-          <AnswerRows question={question} players={players} answers={answers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} editAnswerText={editAnswerText} wagerMode={wagerMode} pointsPerQuestion={Number(pointsPerQuestion) || getDefaultPoints(question)} setMode={setMode} isReviewing={isReviewing} showAnswer={showAnswer} />
+          <AnswerRows question={question} players={players} answers={answers} fairPlayStats={fairPlayStats} gradedAnswers={gradedAnswers} markAnswer={markAnswer} addManualAnswer={addManualAnswer} editWager={editWager} editAnswerText={editAnswerText} editPoints={editPoints} wagerMode={wagerMode} pointsPerQuestion={Number(pointsPerQuestion) || getDefaultPoints(question)} setMode={setMode} isReviewing={isReviewing} showAnswer={showAnswer} />
         </div>
         {!isReviewing && <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-white/5 pt-2.5">
           <div className="flex flex-wrap items-center gap-2">
