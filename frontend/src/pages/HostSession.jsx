@@ -11,8 +11,10 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Popover, PopoverTrigger, PopoverContent } from "../components/ui/popover";
 import {
   AlertTriangle,
+  ArrowDown,
   ArrowLeft,
   ArrowRightLeft,
+  ArrowUp,
   Bot,
   Check,
   CheckCircle,
@@ -2613,6 +2615,58 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     }
   };
 
+  // Reorders a question within its own round (direction: -1 up, +1 down).
+  // Renumbers the WHOLE round's source_order sequentially in the new order,
+  // rather than just swapping the two moved questions' values -- older
+  // questions never had an explicit source_order stamped (flattenSession
+  // falls back to their raw, cross-round position in session[key] then,
+  // which has nothing to do with round-relative order), so a plain
+  // two-item swap could land a question next to an unrelated fallback
+  // value instead of actually moving it. Renumbering 1..N every time is
+  // self-healing regardless of what was there before. Same id-parsing/
+  // remap pattern as moveQuestionToRound, just scoped to one round.
+  const moveQuestionWithinRound = async (question, direction) => {
+    const round = rounds.find((item) => item.questions.some((q) => q.id === question.id));
+    if (!round) return;
+    const position = round.questions.findIndex((q) => q.id === question.id);
+    const targetPosition = position + direction;
+    if (targetPosition < 0 || targetPosition >= round.questions.length) return;
+
+    const reordered = [...round.questions];
+    [reordered[position], reordered[targetPosition]] = [reordered[targetPosition], reordered[position]];
+
+    const updatedArrays = {};
+    const arrayFor = (key) => {
+      if (!updatedArrays[key]) updatedArrays[key] = Array.isArray(session[key]) ? [...session[key]] : [];
+      return updatedArrays[key];
+    };
+    reordered.forEach((item, sequenceIndex) => {
+      const match = String(item.id || "").match(/^(.+)-(\d+)$/);
+      if (!match) return;
+      const [, key, indexStr] = match;
+      const arr = arrayFor(key);
+      const rawIndex = Number(indexStr);
+      arr[rawIndex] = { ...arr[rawIndex], source_order: sequenceIndex + 1 };
+    });
+
+    const pinnedLiveId = questions[currentIndex]?.id;
+    const pinnedReviewId = isReviewing ? questions[reviewIndex]?.id : null;
+    const remappedQuestions = flattenSession({ ...session, ...updatedArrays });
+    const newCurrentIndex = remappedQuestions.findIndex((item) => item.id === pinnedLiveId);
+    const newReviewIndex = pinnedReviewId ? remappedQuestions.findIndex((item) => item.id === pinnedReviewId) : -1;
+
+    setSession((prevSession) => ({ ...prevSession, ...updatedArrays }));
+    if (newCurrentIndex !== -1) setCurrentIndex(newCurrentIndex);
+    if (isReviewing) setReviewIndex(newReviewIndex !== -1 ? newReviewIndex : null);
+
+    if (isTestRun) return;
+    const { error } = await supabase.from("sessions").update(updatedArrays).eq("id", id);
+    if (error) {
+      console.warn("Reorder question save unavailable:", error);
+      toast.error("Saved for this session, but couldn't sync to the database");
+    }
+  };
+
   // A straight copy, appended to the end of the same round it was
   // duplicated from -- reuses appendQuestionToRound, so it lands after
   // everything else in that round with the same index-remap safety as
@@ -2857,6 +2911,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
             createRound={createRound}
             createEmptyRound={createEmptyRound}
             moveQuestionToRound={moveQuestionToRound}
+            moveQuestionWithinRound={moveQuestionWithinRound}
             duplicateQuestion={duplicateQuestion}
             discardQuestion={discardQuestion}
             addQuestionToRound={addQuestionToRound}
@@ -3926,7 +3981,7 @@ const QuestionListView = ({
   displayedQuestion, goToQuestion, reviewQuestion, onBackToLive, onGoLiveWithThis,
   answersForQuestionIndex, gradedAnswers, players, hostAnswers, fairPlayStats,
   showAnswer, showFunFact, timeRemaining, viewPointsPerQuestion, viewTimerSeconds, viewWagerMode, viewWagerLimit, viewWagerTiming,
-  onUpdateSettings, renameRound, describeRound, setEmptyRoundSettings, moveRound, deleteRound, createRound, createEmptyRound, moveQuestionToRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, addGeneratedQuestionsToRound, updateQuestionContent, editQuestionWithAi, askCoHost, saveQuestionToLibrary, venueId, approvedCategories, branding, markAnswer, addManualAnswer, editWager, editAnswerText, editPoints, releaseMode,
+  onUpdateSettings, renameRound, describeRound, setEmptyRoundSettings, moveRound, deleteRound, createRound, createEmptyRound, moveQuestionToRound, moveQuestionWithinRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, addGeneratedQuestionsToRound, updateQuestionContent, editQuestionWithAi, askCoHost, saveQuestionToLibrary, venueId, approvedCategories, branding, markAnswer, addManualAnswer, editWager, editAnswerText, editPoints, releaseMode,
   hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, resetQuestionAt,
 }) => {
   // Only one round is shown at a time (see RoundHeader/RoundSwitcher) --
@@ -4029,6 +4084,10 @@ const QuestionListView = ({
             otherRounds={rounds.filter((item) => item.key !== activeRound.key)}
             categoryUsage={buildCategoryUsage(questions, { roundKey: activeRound.key, excludeQuestionId: question.id })}
             onMoveToRound={(targetRound) => moveQuestionToRound(question, targetRound)}
+            onMoveUp={() => moveQuestionWithinRound(question, -1)}
+            onMoveDown={() => moveQuestionWithinRound(question, 1)}
+            canMoveUp={localIndex > 0}
+            canMoveDown={localIndex < activeRound.questions.length - 1}
             onUpdateContent={(patch) => updateQuestionContent(question, patch)}
             onDuplicate={() => duplicateQuestion(question)}
             onDiscard={() => discardQuestion(question)}
@@ -4182,7 +4241,7 @@ const AnswerOptionPreview = ({ question }) => {
   return null;
 };
 
-const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerCount, correctCount, eventOpen, onAsk, onReview, currentRoundName, otherRounds, onMoveToRound, onUpdateContent, onDuplicate, onDiscard, onResetQuestion, onAiEdit, onSaveToLibrary, categoryUsage }) => {
+const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerCount, correctCount, eventOpen, onAsk, onReview, currentRoundName, otherRounds, onMoveToRound, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onUpdateContent, onDuplicate, onDiscard, onResetQuestion, onAiEdit, onSaveToLibrary, categoryUsage }) => {
   const meta = typeMeta[question.type] || typeMeta.written;
   const points = getQuestionPoints(question);
   const wagerLimit = Number(question.wagerLimit || 0);
@@ -4234,6 +4293,10 @@ const CollapsedQuestionCard = ({ question, index, state, submittedCount, playerC
             <div className="flex shrink-0 items-center gap-2">
               {correctPct !== null && <span className="text-xs font-bold text-zinc-400">{correctPct}%</span>}
               {state === "live" && <span className="flex items-center gap-1.5 rounded-full border border-rose-400/30 bg-rose-400/10 px-2 py-0.5 text-[11px] font-bold text-rose-200"><span className="h-1.5 w-1.5 rounded-full bg-rose-400 animate-pulse" />LIVE</span>}
+              <span className="flex items-center">
+                <button type="button" title="Move up in this round" aria-label="Move question up" disabled={!canMoveUp} onClick={onMoveUp} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 enabled:hover:text-white disabled:opacity-30"><ArrowUp size={15} /></button>
+                <button type="button" title="Move down in this round" aria-label="Move question down" disabled={!canMoveDown} onClick={onMoveDown} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 enabled:hover:text-white disabled:opacity-30"><ArrowDown size={15} /></button>
+              </span>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button type="button" title="More actions" aria-label="More actions" className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:text-white"><MoreVertical size={15} /></button>
