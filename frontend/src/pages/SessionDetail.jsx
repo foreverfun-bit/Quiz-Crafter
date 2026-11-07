@@ -117,7 +117,9 @@ const getRoundName = (question, fallbackOrder = 1) => {
 };
 
 const getRoundOrder = (question, fallbackOrder = 1) => Number(question?.round_order || question?.round_number || question?.round || fallbackOrder) || fallbackOrder;
-const getSourceOrder = (question, fallbackOrder = 1) => Number(question?.import_order || question?.source_order || question?.question_order || question?.order || fallbackOrder) || fallbackOrder;
+// Matches HostSession/PresentSession's precedence -- source_order (what a
+// reorder writes) must win over the static original-import position.
+const getSourceOrder = (question, fallbackOrder = 1) => Number(question?.source_order || question?.import_order || question?.question_order || question?.order || fallbackOrder) || fallbackOrder;
 
 const makeRoundGroups = (entries) => {
   const groups = new Map();
