@@ -95,8 +95,15 @@ export default function StyleMemory() {
       // through the /api/supabase-data proxy was enough to make the
       // connection drop mid-response, which surfaces client-side as a bare
       // "Failed to fetch" rather than a real error message.
+      //
+      // Same failure mode on the questions side: select("*") on up to 500
+      // rows also pulled image_url (and correct_answer_image), neither of
+      // which retrain reads -- image_url alone can run into the hundreds of
+      // KB per row for picture questions. None of the fields this function
+      // actually uses (see questionText/answerText/categoryText above) need
+      // more than this explicit column list.
       const [questionsResult, sessionsResult] = await Promise.all([
-        supabase.from("questions").select("*").order("created_at", { ascending: false }).limit(500),
+        supabase.from("questions").select("question_text, question_type, category, correct_answer, fun_fact, status, liked, created_at").order("created_at", { ascending: false }).limit(500),
         supabase.from("sessions").select("true_false_questions, multiple_choice_questions, written_questions, picture_questions").order("created_at", { ascending: false }).limit(75),
       ]);
       if (questionsResult.error) throw questionsResult.error;
