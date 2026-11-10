@@ -9,6 +9,7 @@ const USER_SCOPED_TABLES = new Set([
   "rejected_categories",
   "category_preferences",
   "venues",
+  "host_tools_state",
 ]);
 
 const PUBLIC_SESSION_READ_TABLES = new Set(["sessions"]);

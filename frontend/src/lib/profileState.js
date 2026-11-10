@@ -11,7 +11,6 @@ export const profileKeys = {
   unusedQuestionIds: "quiz_crafter_unused_question_ids_v1",
   socialLinks: "quiz_crafter_social_links_v1",
   outreachContacts: "quiz_crafter_outreach_contacts_v1",
-  hostToolsBySession: "quiz_crafter_host_tools_by_session_v1",
   hostSetup: "quiz_crafter_host_setup_v1",
   venues: "quiz_crafter_venues_v1",
   showTemplates: "quiz_crafter_show_templates_v1",
@@ -147,20 +146,34 @@ export const writeCurrentProjectSessionId = (sessionId) => {
   return value;
 };
 
+// Lives in its own host_tools_state table (one row per session, keyed by
+// session_id) rather than user_metadata -- this used to be one giant object
+// under a single user_metadata key, with every session's players/answers/
+// activity/feedback/etc ever hosted accumulating in it forever (nothing
+// ever pruned old sessions out). Supabase embeds user_metadata in the JWT,
+// so that blob grew right along with the access token on every request;
+// for an account with many hosted sessions it reached 175KB+, and both the
+// oversized token and the oversized updateUser() request body it took to
+// save it started failing outright with a bare "Failed to fetch". Per-row
+// storage means a save only ever touches one session's data, and nothing
+// here rides along on auth requests anymore.
 export const loadHostToolsSessionState = async (sessionId) => {
-  const allState = await loadProfileValue(profileKeys.hostToolsBySession);
-  return isPlainObject(allState?.[sessionId]) ? allState[sessionId] : {};
+  if (!sessionId) return {};
+  const { data, error } = await supabase.from("host_tools_state").select("data").eq("session_id", sessionId);
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  return isPlainObject(row?.data) ? row.data : {};
 };
 
 let hostToolsSessionSaveQueue = Promise.resolve();
 
 export const saveHostToolsSessionState = (sessionId, patch) => {
   const task = hostToolsSessionSaveQueue.catch(() => {}).then(async () => {
-    const allState = await loadProfileValue(profileKeys.hostToolsBySession);
-    const safeState = isPlainObject(allState) ? allState : {};
-    const next = { ...safeState, [sessionId]: { ...(safeState[sessionId] || {}), ...patch } };
-    await saveProfileValue(profileKeys.hostToolsBySession, next);
-    return next[sessionId];
+    const current = await loadHostToolsSessionState(sessionId);
+    const next = { ...current, ...patch };
+    const { error } = await supabase.from("host_tools_state").upsert({ session_id: sessionId, data: next, updated_at: new Date().toISOString() });
+    if (error) throw error;
+    return next;
   });
   hostToolsSessionSaveQueue = task;
   return task;
@@ -183,10 +196,6 @@ export const resetHostToolsSessionState = async (sessionId) => {
     try { localStorage.removeItem(hostToolsStorageKey(sessionId, name)); } catch { /* Local cache is best-effort. */ }
   });
   try { localStorage.removeItem(`quiz-crafter-leaderboard-${sessionId}`); } catch { /* Local cache is best-effort. */ }
-  const allState = await loadProfileValue(profileKeys.hostToolsBySession).catch(() => null);
-  if (isPlainObject(allState) && allState[sessionId]) {
-    const next = { ...allState };
-    delete next[sessionId];
-    await saveProfileValue(profileKeys.hostToolsBySession, next);
-  }
+  const { error } = await supabase.from("host_tools_state").delete().eq("session_id", sessionId);
+  if (error) console.warn("Host tools state reset unavailable:", error);
 };
