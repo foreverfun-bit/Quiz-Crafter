@@ -1734,8 +1734,8 @@ async function fetchVenueHistory(venueId) {
     const idFilter = `(${sessionIds.map((sessionId) => `"${sessionId}"`).join(",")})`;
 
     const [questionFeedback, categoryFeedback, ideas] = await Promise.all([
-      fetchJsonWithFallback([`${base}/rest/v1/session_question_feedback?select=category,sentiment,question_text&session_id=in.${idFilter}&limit=1000`], headers),
-      fetchJsonWithFallback([`${base}/rest/v1/session_category_feedback?select=category,sentiment&session_id=in.${idFilter}&limit=1000`], headers),
+      fetchJsonWithFallback([`${base}/rest/v1/session_question_feedback?select=category,sentiment,question_text,player_name,session_id&session_id=in.${idFilter}&limit=1000`], headers),
+      fetchJsonWithFallback([`${base}/rest/v1/session_category_feedback?select=category,sentiment,player_name,session_id&session_id=in.${idFilter}&limit=1000`], headers),
       fetchJsonWithFallback([`${base}/rest/v1/session_player_ideas?select=category,question&session_id=in.${idFilter}&order=created_at.desc&limit=40`], headers),
     ]);
 
@@ -1752,6 +1752,17 @@ async function fetchVenueHistory(venueId) {
     return null;
   }
 }
+
+// A "team" has no account of its own -- players just type a name each time
+// they join, so name matching (trimmed/collapsed/lowercased) is the only way
+// to recognize the same team across nights. Matches Teams.jsx's identical
+// normalization, since both are reading the same feedback tables.
+const normalizeRegularName = (name) => String(name || "").trim().replace(/\s+/g, " ").toLowerCase();
+
+// Distinguishes "this venue's regulars" from the anonymous venue-wide crowd
+// tally below -- a team whose feedback spans at least 2 different nights at
+// this venue is a repeat visitor, not someone who only ever came once.
+const REGULAR_MIN_SESSIONS = 2;
 
 function buildVenueProfileText(history) {
   if (!history || !history.sessionCount) return "";
@@ -1778,16 +1789,56 @@ function buildVenueProfileText(history) {
   const dislikedQuestions = history.questionFeedback.filter((item) => item.sentiment === "dislike" && item.question_text).slice(0, 4).map((item) => `- ${item.question_text}`);
   const ideaLines = history.ideas.filter((idea) => idea.category || idea.question).slice(0, 6).map((idea) => `- ${[idea.category, idea.question].filter(Boolean).join(": ")}`);
 
+  const teams = new Map();
+  const teamEntry = (name) => {
+    const key = normalizeRegularName(name);
+    if (!key) return null;
+    if (!teams.has(key)) teams.set(key, { sessionIds: new Set(), liked: new Map(), disliked: new Map() });
+    return teams.get(key);
+  };
+  const bumpTeam = (name, sessionId, category, sentiment) => {
+    const entry = teamEntry(name);
+    const cleanCategory = cleanText(category);
+    if (!entry || !cleanCategory) return;
+    if (sessionId) entry.sessionIds.add(sessionId);
+    if (sentiment === "like") entry.liked.set(cleanCategory, (entry.liked.get(cleanCategory) || 0) + 1);
+    else if (sentiment === "dislike") entry.disliked.set(cleanCategory, (entry.disliked.get(cleanCategory) || 0) + 1);
+  };
+  history.categoryFeedback.forEach((item) => bumpTeam(item.player_name, item.session_id, item.category, item.sentiment));
+  history.questionFeedback.forEach((item) => bumpTeam(item.player_name, item.session_id, item.category, item.sentiment));
+
+  const regularCategoryScores = new Map();
+  teams.forEach((entry) => {
+    if (entry.sessionIds.size < REGULAR_MIN_SESSIONS) return;
+    entry.liked.forEach((count, category) => {
+      const score = regularCategoryScores.get(category) || { likes: 0, dislikes: 0 };
+      score.likes += count;
+      regularCategoryScores.set(category, score);
+    });
+    entry.disliked.forEach((count, category) => {
+      const score = regularCategoryScores.get(category) || { likes: 0, dislikes: 0 };
+      score.dislikes += count;
+      regularCategoryScores.set(category, score);
+    });
+  });
+  const regularRanked = [...regularCategoryScores.entries()]
+    .map(([category, { likes, dislikes }]) => ({ category, net: likes - dislikes }))
+    .sort((a, b) => b.net - a.net);
+  const regularsLoved = regularRanked.filter((row) => row.net > 0).slice(0, 6).map((row) => row.category);
+  const regularsStruggled = regularRanked.filter((row) => row.net < 0).slice(-6).map((row) => row.category).reverse();
+
   return [
     "Venue history for this location:",
     `- Played here ${history.sessionCount} time${history.sessionCount === 1 ? "" : "s"} before${history.mostRecentDate ? `, most recently ${history.mostRecentDate}` : ""}.`,
     history.pastThemes.length ? `- Past session names here: ${history.pastThemes.join(", ")}` : "",
     loved.length ? `- Categories that have landed well here (live audience thumbs-up outweighing thumbs-down): ${loved.join(", ")}` : "",
     struggled.length ? `- Categories that have struggled here (live audience thumbs-down outweighing thumbs-up): ${struggled.join(", ")}` : "",
+    regularsLoved.length ? `- This venue's regular teams (repeat visitors, not one-off crowds) specifically enjoy: ${regularsLoved.join(", ")}` : "",
+    regularsStruggled.length ? `- This venue's regular teams specifically steer away from: ${regularsStruggled.join(", ")}` : "",
     likedQuestions.length ? `Specific questions this crowd liked here:\n${likedQuestions.join("\n")}` : "",
     dislikedQuestions.length ? `Specific questions this crowd disliked here, avoid this style/topic again:\n${dislikedQuestions.join("\n")}` : "",
     ideaLines.length ? `Player-submitted category/question ideas from past nights here:\n${ideaLines.join("\n")}` : "",
-    "Lean toward what has worked at this venue before. Avoid repeating categories or angles that have struggled here unless given a genuinely fresh angle.",
+    "Lean toward what has worked at this venue before, weighting the regulars' tastes above the general crowd where they conflict. Avoid repeating categories or angles that have struggled here unless given a genuinely fresh angle.",
   ].filter(Boolean).join("\n");
 }
 

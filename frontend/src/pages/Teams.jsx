@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { listHostRoster } from "../lib/liveGame";
+import { readLocalVenues } from "../lib/venues";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
-import { Users, Trophy, Mail, ThumbsUp, ThumbsDown, Search } from "lucide-react";
+import { Users, Trophy, Mail, MapPin, ThumbsUp, ThumbsDown, Search } from "lucide-react";
 
 // A "team" has no account of its own -- players just type a name each time
 // they join. This is the only identity we have to recognize a regular
@@ -38,7 +39,7 @@ const Teams = () => {
       try {
         const [games, sessionsResult] = await Promise.all([
           listHostRoster(),
-          supabase.from("sessions").select("id, session_name, created_at, attendance"),
+          supabase.from("sessions").select("id, session_name, created_at, attendance, venue_id"),
         ]);
         if (sessionsResult.error) throw sessionsResult.error;
         const sessions = Array.isArray(sessionsResult.data) ? sessionsResult.data : [];
@@ -97,6 +98,8 @@ const Teams = () => {
     return map;
   }, [categoryFeedback, questionFeedback]);
 
+  const venueNamesById = useMemo(() => new Map(readLocalVenues().map((venue) => [venue.id, venue.name || venue.nightName || "Unnamed venue"])), []);
+
   const teams = useMemo(() => {
     const map = new Map();
     roster.forEach((game) => {
@@ -107,7 +110,7 @@ const Teams = () => {
         const key = normalizeTeamName(player.name);
         if (!key) return;
         if (!map.has(key)) {
-          map.set(key, { key, displayName: player.name, gamesPlayed: 0, lastPlayedAt: "", contactEmail: "", headcounts: [] });
+          map.set(key, { key, displayName: player.name, gamesPlayed: 0, lastPlayedAt: "", contactEmail: "", headcounts: [], venueCounts: new Map() });
         }
         const team = map.get(key);
         team.gamesPlayed += 1;
@@ -120,6 +123,7 @@ const Teams = () => {
         const adults = Number(headcount?.adults) || 0;
         const kids = Number(headcount?.kids) || 0;
         if (adults || kids) team.headcounts.push({ sessionName: game.session_name, adults, kids });
+        if (session?.venue_id) team.venueCounts.set(session.venue_id, (team.venueCounts.get(session.venue_id) || 0) + 1);
       });
     });
     return [...map.values()]
@@ -128,15 +132,19 @@ const Teams = () => {
         const avgHeadcount = team.headcounts.length
           ? Math.round((team.headcounts.reduce((sum, hc) => sum + hc.adults + hc.kids, 0) / team.headcounts.length) * 10) / 10
           : null;
+        const venues = [...team.venueCounts.entries()]
+          .map(([venueId, count]) => ({ venueId, name: venueNamesById.get(venueId) || "Unknown venue", count }))
+          .sort((a, b) => b.count - a.count);
         return {
           ...team,
           avgHeadcount,
+          venues,
           topLiked: feedback ? topEntries(feedback.liked) : [],
           topDisliked: feedback ? topEntries(feedback.disliked) : [],
         };
       })
       .sort((a, b) => b.gamesPlayed - a.gamesPlayed || (b.lastPlayedAt || "").localeCompare(a.lastPlayedAt || ""));
-  }, [roster, sessionsById, feedbackByTeam]);
+  }, [roster, sessionsById, feedbackByTeam, venueNamesById]);
 
   const visibleTeams = useMemo(() => {
     const query = normalizeTeamName(search);
@@ -148,7 +156,7 @@ const Teams = () => {
     <div className="p-6 lg:p-8 max-w-5xl mx-auto animate-fade-in" data-testid="teams-page">
       <div className="mb-6">
         <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">Teams</h1>
-        <p className="text-zinc-500">Regulars tracked automatically from every live game you've hosted -- games played, headcount, and the categories they tend to like or skip.</p>
+        <p className="text-zinc-500">Regulars tracked automatically from every live game you've hosted -- games played, which venue(s) they show up at, and the categories they tend to like or skip. A team that's played 2+ nights at a venue also weighs into what the AI leans toward when generating for that venue.</p>
       </div>
 
       <div className="relative mb-5 max-w-sm">
@@ -204,6 +212,15 @@ const TeamCard = ({ team }) => (
         {team.avgHeadcount !== null && <span>~{team.avgHeadcount} players/game</span>}
         {team.contactEmail && <span className="flex items-center gap-1 text-[#AEB2EF]"><Mail size={13} />{team.contactEmail}</span>}
       </div>
+      {team.venues.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {team.venues.map((venue) => (
+            <span key={venue.venueId} className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-zinc-900 px-2 py-0.5 text-xs text-zinc-300">
+              <MapPin size={11} className="text-[#71E0DC]" />{venue.name} ({venue.count})
+            </span>
+          ))}
+        </div>
+      )}
       {(team.topLiked.length > 0 || team.topDisliked.length > 0) && (
         <div className="space-y-2 pt-1 border-t border-white/10">
           <CategoryTagList icon={ThumbsUp} tone="like" entries={team.topLiked} />
