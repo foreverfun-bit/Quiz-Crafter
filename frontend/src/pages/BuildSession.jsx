@@ -11,7 +11,7 @@ import { Label } from "../components/ui/label";
 import { Textarea } from "../components/ui/textarea";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { Badge } from "../components/ui/badge";
-import { ArrowDown, ArrowUp, Ban, Check, CheckCircle, ChevronDown, Clock, Coins, CopyPlus, Database, Image, Layers, Link, List, Loader2, MapPin, MessageSquare, Minus, MoreHorizontal, Music, Pencil, Plus, RefreshCw, Save, Search, Settings, Sparkles, Tag, ThumbsDown, ThumbsUp, Trash2, Upload, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Ban, Check, CheckCircle, ChevronDown, Clock, Coins, CopyPlus, Database, Image, Layers, Link, List, Loader2, MapPin, MessageSquare, Minus, MoreHorizontal, Music, Pencil, Plus, RefreshCw, Save, Search, Settings, Sparkles, Tag, ThumbsDown, ThumbsUp, Trash2, Upload, Users, X } from "lucide-react";
 import { toast } from "sonner";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 import { canonicalCategory, categoryKey, dedupeCategories, CATEGORY_PREF_KEY, loadLocalCategoryPrefs } from "../lib/categories";
@@ -399,6 +399,16 @@ const buildStateUpdatedAt = (state) => {
   const time = new Date(state?.updatedAt || 0).getTime();
   return Number.isNaN(time) || time <= 0 ? (hasBuildContent(state) ? 1 : 0) : time;
 };
+// Matches Teams.jsx's identical normalization -- a team has no account of
+// its own, so name matching is the only way to recognize the same team
+// across nights.
+const normalizeRegularName = (name) => String(name || "").trim().replace(/\s+/g, " ").toLowerCase();
+// A team whose feedback spans at least this many different nights at a
+// venue is a repeat visitor, not someone who only ever came once -- this
+// is what distinguishes "this venue's regulars" from the anonymous
+// venue-wide crowd tally below.
+const REGULAR_MIN_SESSIONS = 2;
+
 const fetchVenueInsights = async (venueId) => {
   const { data: sessions, error: sessionsError } = await supabase
     .from("sessions")
@@ -411,13 +421,49 @@ const fetchVenueInsights = async (venueId) => {
 
   const sessionIds = sessions.map((session) => session.id);
   const [questionFeedbackResult, categoryFeedbackResult, ideasResult] = await Promise.all([
-    supabase.from("session_question_feedback").select("category,sentiment,question_text").in("session_id", sessionIds).limit(1000),
-    supabase.from("session_category_feedback").select("category,sentiment").in("session_id", sessionIds).limit(1000),
+    supabase.from("session_question_feedback").select("category,sentiment,question_text,player_name,session_id").in("session_id", sessionIds).limit(1000),
+    supabase.from("session_category_feedback").select("category,sentiment,player_name,session_id").in("session_id", sessionIds).limit(1000),
     supabase.from("session_player_ideas").select("category,question,submitted_at").in("session_id", sessionIds).order("submitted_at", { ascending: false }).limit(20),
   ]);
   if (questionFeedbackResult.error) throw questionFeedbackResult.error;
   if (categoryFeedbackResult.error) throw categoryFeedbackResult.error;
   if (ideasResult.error) throw ideasResult.error;
+
+  const teams = new Map();
+  const teamEntry = (name) => {
+    const key = normalizeRegularName(name);
+    if (!key) return null;
+    if (!teams.has(key)) teams.set(key, { sessionIds: new Set(), liked: new Map(), disliked: new Map() });
+    return teams.get(key);
+  };
+  const bumpTeam = (name, sessionId, category, sentiment) => {
+    const entry = teamEntry(name);
+    const cleanCategory = (category || "").trim();
+    if (!entry || !cleanCategory) return;
+    if (sessionId) entry.sessionIds.add(sessionId);
+    if (sentiment === "like") entry.liked.set(cleanCategory, (entry.liked.get(cleanCategory) || 0) + 1);
+    else if (sentiment === "dislike") entry.disliked.set(cleanCategory, (entry.disliked.get(cleanCategory) || 0) + 1);
+  };
+  (categoryFeedbackResult.data || []).forEach((item) => bumpTeam(item.player_name, item.session_id, item.category, item.sentiment));
+  (questionFeedbackResult.data || []).forEach((item) => bumpTeam(item.player_name, item.session_id, item.category, item.sentiment));
+
+  const regularCategoryScores = new Map();
+  let regularCount = 0;
+  teams.forEach((entry) => {
+    if (entry.sessionIds.size < REGULAR_MIN_SESSIONS) return;
+    regularCount += 1;
+    entry.liked.forEach((count, category) => {
+      const score = regularCategoryScores.get(category) || { likes: 0, dislikes: 0 };
+      score.likes += count;
+      regularCategoryScores.set(category, score);
+    });
+    entry.disliked.forEach((count, category) => {
+      const score = regularCategoryScores.get(category) || { likes: 0, dislikes: 0 };
+      score.dislikes += count;
+      regularCategoryScores.set(category, score);
+    });
+  });
+  const regularRanked = [...regularCategoryScores.entries()].map(([category, { likes, dislikes }]) => ({ category, likes, dislikes, net: likes - dislikes })).sort((a, b) => b.net - a.net);
 
   const categoryScores = new Map();
   const bump = (category, sentiment) => {
@@ -441,6 +487,9 @@ const fetchVenueInsights = async (venueId) => {
     likedQuestions: (questionFeedbackResult.data || []).filter((item) => item.sentiment === "like" && item.question_text).slice(0, 4),
     dislikedQuestions: (questionFeedbackResult.data || []).filter((item) => item.sentiment === "dislike" && item.question_text).slice(0, 4),
     ideas: (ideasResult.data || []).filter((idea) => idea.category || idea.question),
+    regularCount,
+    regularsLoved: regularRanked.filter((row) => row.net > 0).slice(0, 6),
+    regularsStruggled: regularRanked.filter((row) => row.net < 0).slice(-6).reverse(),
   };
 };
 
@@ -1734,9 +1783,16 @@ const VenueInsightsPanel = ({ venueName, insights, loading }) => {
     </button>
     {!collapsed && <>
     <p className="text-xs text-zinc-500">Played here {insights.sessionCount} time{insights.sessionCount === 1 ? "" : "s"}{insights.mostRecentDate ? `, most recently ${insights.mostRecentDate}` : ""}.{insights.pastNames?.length ? ` Past sessions: ${insights.pastNames.join(", ")}.` : ""} This is automatically folded into generation for this venue.</p>
+    {(insights.regularsLoved?.length > 0 || insights.regularsStruggled?.length > 0) && <div className="rounded-lg border border-[#AEB2EF]/25 bg-[#AEB2EF]/8 p-3 space-y-2">
+      <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-[#AEB2EF]"><Users size={13} />{insights.regularCount} regular team{insights.regularCount === 1 ? "" : "s"} here (played 2+ nights)</p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {insights.regularsLoved?.length > 0 && <div><p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-emerald-300"><ThumbsUp size={12} />Regulars specifically like</p><div className="flex flex-wrap gap-1.5">{insights.regularsLoved.map((row) => <Badge key={row.category} className="bg-emerald-500/15 text-emerald-200 border border-emerald-500/20">{row.category}</Badge>)}</div></div>}
+        {insights.regularsStruggled?.length > 0 && <div><p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-red-300"><ThumbsDown size={12} />Regulars specifically avoid</p><div className="flex flex-wrap gap-1.5">{insights.regularsStruggled.map((row) => <Badge key={row.category} className="bg-red-500/15 text-red-200 border border-red-500/20">{row.category}</Badge>)}</div></div>}
+      </div>
+    </div>}
     {(insights.loved?.length || insights.struggled?.length) && <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-      {insights.loved?.length > 0 && <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3"><p className="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-emerald-300"><ThumbsUp size={13} />Landed well here</p><div className="flex flex-wrap gap-1.5">{insights.loved.map((row) => <Badge key={row.category} className="bg-emerald-500/15 text-emerald-200 border border-emerald-500/20">{row.category}</Badge>)}</div></div>}
-      {insights.struggled?.length > 0 && <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3"><p className="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-red-300"><ThumbsDown size={13} />Struggled here</p><div className="flex flex-wrap gap-1.5">{insights.struggled.map((row) => <Badge key={row.category} className="bg-red-500/15 text-red-200 border border-red-500/20">{row.category}</Badge>)}</div></div>}
+      {insights.loved?.length > 0 && <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3"><p className="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-emerald-300"><ThumbsUp size={13} />Landed well here (whole crowd)</p><div className="flex flex-wrap gap-1.5">{insights.loved.map((row) => <Badge key={row.category} className="bg-emerald-500/15 text-emerald-200 border border-emerald-500/20">{row.category}</Badge>)}</div></div>}
+      {insights.struggled?.length > 0 && <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3"><p className="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-red-300"><ThumbsDown size={13} />Struggled here (whole crowd)</p><div className="flex flex-wrap gap-1.5">{insights.struggled.map((row) => <Badge key={row.category} className="bg-red-500/15 text-red-200 border border-red-500/20">{row.category}</Badge>)}</div></div>}
     </div>}
     {(insights.likedQuestions?.length > 0 || insights.dislikedQuestions?.length > 0) && <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
       {insights.likedQuestions?.length > 0 && <div><p className="mb-1 font-bold text-zinc-400">Specific questions this crowd liked</p><ul className="space-y-1 text-zinc-500">{insights.likedQuestions.map((item, index) => <li key={index} className="line-clamp-2">- {item.question_text}</li>)}</ul></div>}
