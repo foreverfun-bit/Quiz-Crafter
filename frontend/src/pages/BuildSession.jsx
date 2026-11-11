@@ -19,6 +19,8 @@ import { PROFILE_SHOW_TEMPLATES_KEY, PROFILE_VENUES_KEY, hasSavedLocalTemplates,
 import { isMemoryBlocked, memoryRejectedQuestionTexts, readQuestionMemory, saveQuestionMemoryToProfile, syncQuestionMemoryFromProfile, upsertQuestionMemory } from "../lib/questionMemory";
 import { loadHostSetupSettings, loadProfileValue, profileKeys, readCurrentProjectSessionId, saveHostSetupSettings, saveProfileValue, syncProfileJson, updateUserMetadata } from "../lib/profileState";
 import { readHostStyleProfile, rememberStyleFeedback, syncHostStyleProfile } from "../lib/hostStyleMemory";
+import { fetchVenueInsights } from "../lib/venueInsights";
+import VenueInsightsPanel from "../components/VenueInsightsPanel";
 import { useCopilot } from "../context/CopilotContext";
 
 const questionTypes = [
@@ -399,99 +401,8 @@ const buildStateUpdatedAt = (state) => {
   const time = new Date(state?.updatedAt || 0).getTime();
   return Number.isNaN(time) || time <= 0 ? (hasBuildContent(state) ? 1 : 0) : time;
 };
-// Matches Teams.jsx's identical normalization -- a team has no account of
-// its own, so name matching is the only way to recognize the same team
-// across nights.
-const normalizeRegularName = (name) => String(name || "").trim().replace(/\s+/g, " ").toLowerCase();
-// A team whose feedback spans at least this many different nights at a
-// venue is a repeat visitor, not someone who only ever came once -- this
-// is what distinguishes "this venue's regulars" from the anonymous
-// venue-wide crowd tally below.
-const REGULAR_MIN_SESSIONS = 2;
-
-const fetchVenueInsights = async (venueId) => {
-  const { data: sessions, error: sessionsError } = await supabase
-    .from("sessions")
-    .select("id,name,session_name,session_date,event_date,created_at")
-    .eq("venue_id", venueId)
-    .order("created_at", { ascending: false })
-    .limit(20);
-  if (sessionsError) throw sessionsError;
-  if (!sessions?.length) return { sessionCount: 0 };
-
-  const sessionIds = sessions.map((session) => session.id);
-  const [questionFeedbackResult, categoryFeedbackResult, ideasResult] = await Promise.all([
-    supabase.from("session_question_feedback").select("category,sentiment,question_text,player_name,session_id").in("session_id", sessionIds).limit(1000),
-    supabase.from("session_category_feedback").select("category,sentiment,player_name,session_id").in("session_id", sessionIds).limit(1000),
-    supabase.from("session_player_ideas").select("category,question,submitted_at").in("session_id", sessionIds).order("submitted_at", { ascending: false }).limit(20),
-  ]);
-  if (questionFeedbackResult.error) throw questionFeedbackResult.error;
-  if (categoryFeedbackResult.error) throw categoryFeedbackResult.error;
-  if (ideasResult.error) throw ideasResult.error;
-
-  const teams = new Map();
-  const teamEntry = (name) => {
-    const key = normalizeRegularName(name);
-    if (!key) return null;
-    if (!teams.has(key)) teams.set(key, { sessionIds: new Set(), liked: new Map(), disliked: new Map() });
-    return teams.get(key);
-  };
-  const bumpTeam = (name, sessionId, category, sentiment) => {
-    const entry = teamEntry(name);
-    const cleanCategory = (category || "").trim();
-    if (!entry || !cleanCategory) return;
-    if (sessionId) entry.sessionIds.add(sessionId);
-    if (sentiment === "like") entry.liked.set(cleanCategory, (entry.liked.get(cleanCategory) || 0) + 1);
-    else if (sentiment === "dislike") entry.disliked.set(cleanCategory, (entry.disliked.get(cleanCategory) || 0) + 1);
-  };
-  (categoryFeedbackResult.data || []).forEach((item) => bumpTeam(item.player_name, item.session_id, item.category, item.sentiment));
-  (questionFeedbackResult.data || []).forEach((item) => bumpTeam(item.player_name, item.session_id, item.category, item.sentiment));
-
-  const regularCategoryScores = new Map();
-  let regularCount = 0;
-  teams.forEach((entry) => {
-    if (entry.sessionIds.size < REGULAR_MIN_SESSIONS) return;
-    regularCount += 1;
-    entry.liked.forEach((count, category) => {
-      const score = regularCategoryScores.get(category) || { likes: 0, dislikes: 0 };
-      score.likes += count;
-      regularCategoryScores.set(category, score);
-    });
-    entry.disliked.forEach((count, category) => {
-      const score = regularCategoryScores.get(category) || { likes: 0, dislikes: 0 };
-      score.dislikes += count;
-      regularCategoryScores.set(category, score);
-    });
-  });
-  const regularRanked = [...regularCategoryScores.entries()].map(([category, { likes, dislikes }]) => ({ category, likes, dislikes, net: likes - dislikes })).sort((a, b) => b.net - a.net);
-
-  const categoryScores = new Map();
-  const bump = (category, sentiment) => {
-    const key = (category || "").trim();
-    if (!key) return;
-    const entry = categoryScores.get(key) || { likes: 0, dislikes: 0 };
-    if (sentiment === "like") entry.likes += 1;
-    else if (sentiment === "dislike") entry.dislikes += 1;
-    categoryScores.set(key, entry);
-  };
-  (categoryFeedbackResult.data || []).forEach((item) => bump(item.category, item.sentiment));
-  (questionFeedbackResult.data || []).forEach((item) => bump(item.category, item.sentiment));
-  const ranked = [...categoryScores.entries()].map(([category, { likes, dislikes }]) => ({ category, likes, dislikes, net: likes - dislikes })).sort((a, b) => b.net - a.net);
-
-  return {
-    sessionCount: sessions.length,
-    mostRecentDate: sessions[0]?.session_date || sessions[0]?.event_date || sessions[0]?.created_at || "",
-    pastNames: sessions.map((session) => session.name || session.session_name).filter(Boolean).slice(0, 6),
-    loved: ranked.filter((row) => row.net > 0).slice(0, 8),
-    struggled: ranked.filter((row) => row.net < 0).slice(-8).reverse(),
-    likedQuestions: (questionFeedbackResult.data || []).filter((item) => item.sentiment === "like" && item.question_text).slice(0, 4),
-    dislikedQuestions: (questionFeedbackResult.data || []).filter((item) => item.sentiment === "dislike" && item.question_text).slice(0, 4),
-    ideas: (ideasResult.data || []).filter((idea) => idea.category || idea.question),
-    regularCount,
-    regularsLoved: regularRanked.filter((row) => row.net > 0).slice(0, 6),
-    regularsStruggled: regularRanked.filter((row) => row.net < 0).slice(-6).reverse(),
-  };
-};
+// fetchVenueInsights now lives in ../lib/venueInsights (shared with
+// HostSession.jsx's merged-workspace equivalent).
 
 const createBuildSnapshot = ({ sessionName, sessionDate, selectedVenueId, rounds, activeRoundId, theme, difficulty, typeFilter, generateType, generateCount, includeImageIdeas, questions }) => {
   const draftRounds = normalizeRounds(rounds);
@@ -1772,36 +1683,8 @@ const BuildSession = ({ sessionIdProp, onGoLive } = {}) => {
 };
 
 const Field = ({ label, children }) => <div className="space-y-2"><Label className="text-zinc-300">{label}</Label>{children}</div>;
-const VenueInsightsPanel = ({ venueName, insights, loading }) => {
-  const [collapsed, setCollapsed] = useState(false);
-  if (loading) return <Card className="glass-card mb-4"><CardContent className="p-4 flex items-center gap-2 text-sm text-zinc-400"><Loader2 size={15} className="animate-spin" />Checking what {venueName} has liked so far...</CardContent></Card>;
-  if (!insights || !insights.sessionCount) return <Card className="glass-card mb-4"><CardContent className="p-4 flex items-center gap-2 text-sm text-zinc-500"><MapPin size={15} className="text-zinc-600" />No history yet at {venueName}. The AI will use your general style profile until you've played a session or two here.</CardContent></Card>;
-  return <Card className="glass-card mb-4 border-[#71E0DC]/15"><CardContent className="p-4 space-y-3">
-    <button type="button" onClick={() => setCollapsed((value) => !value)} className="flex w-full items-center justify-between gap-2 text-left">
-      <span className="flex items-center gap-2 text-white font-semibold"><MapPin size={16} className="text-[#71E0DC]" />What {venueName} has taught the AI</span>
-      <ChevronDown size={18} className={`flex-shrink-0 text-zinc-400 transition-transform ${collapsed ? "-rotate-90" : ""}`} />
-    </button>
-    {!collapsed && <>
-    <p className="text-xs text-zinc-500">Played here {insights.sessionCount} time{insights.sessionCount === 1 ? "" : "s"}{insights.mostRecentDate ? `, most recently ${insights.mostRecentDate}` : ""}.{insights.pastNames?.length ? ` Past sessions: ${insights.pastNames.join(", ")}.` : ""} This is automatically folded into generation for this venue.</p>
-    {(insights.regularsLoved?.length > 0 || insights.regularsStruggled?.length > 0) && <div className="rounded-lg border border-[#AEB2EF]/25 bg-[#AEB2EF]/8 p-3 space-y-2">
-      <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-[#AEB2EF]"><Users size={13} />{insights.regularCount} regular team{insights.regularCount === 1 ? "" : "s"} here (played 2+ nights)</p>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {insights.regularsLoved?.length > 0 && <div><p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-emerald-300"><ThumbsUp size={12} />Regulars specifically like</p><div className="flex flex-wrap gap-1.5">{insights.regularsLoved.map((row) => <Badge key={row.category} className="bg-emerald-500/15 text-emerald-200 border border-emerald-500/20">{row.category}</Badge>)}</div></div>}
-        {insights.regularsStruggled?.length > 0 && <div><p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-red-300"><ThumbsDown size={12} />Regulars specifically avoid</p><div className="flex flex-wrap gap-1.5">{insights.regularsStruggled.map((row) => <Badge key={row.category} className="bg-red-500/15 text-red-200 border border-red-500/20">{row.category}</Badge>)}</div></div>}
-      </div>
-    </div>}
-    {(insights.loved?.length || insights.struggled?.length) && <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-      {insights.loved?.length > 0 && <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3"><p className="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-emerald-300"><ThumbsUp size={13} />Landed well here (whole crowd)</p><div className="flex flex-wrap gap-1.5">{insights.loved.map((row) => <Badge key={row.category} className="bg-emerald-500/15 text-emerald-200 border border-emerald-500/20">{row.category}</Badge>)}</div></div>}
-      {insights.struggled?.length > 0 && <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3"><p className="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-red-300"><ThumbsDown size={13} />Struggled here (whole crowd)</p><div className="flex flex-wrap gap-1.5">{insights.struggled.map((row) => <Badge key={row.category} className="bg-red-500/15 text-red-200 border border-red-500/20">{row.category}</Badge>)}</div></div>}
-    </div>}
-    {(insights.likedQuestions?.length > 0 || insights.dislikedQuestions?.length > 0) && <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-      {insights.likedQuestions?.length > 0 && <div><p className="mb-1 font-bold text-zinc-400">Specific questions this crowd liked</p><ul className="space-y-1 text-zinc-500">{insights.likedQuestions.map((item, index) => <li key={index} className="line-clamp-2">- {item.question_text}</li>)}</ul></div>}
-      {insights.dislikedQuestions?.length > 0 && <div><p className="mb-1 font-bold text-zinc-400">Specific questions this crowd disliked</p><ul className="space-y-1 text-zinc-500">{insights.dislikedQuestions.map((item, index) => <li key={index} className="line-clamp-2">- {item.question_text}</li>)}</ul></div>}
-    </div>}
-    {insights.ideas?.length > 0 && <div className="text-xs"><p className="mb-1 font-bold text-zinc-400">Player-submitted ideas from past nights here</p><ul className="space-y-1 text-zinc-500">{insights.ideas.slice(0, 6).map((idea, index) => <li key={index} className="line-clamp-2">- {[idea.category, idea.question].filter(Boolean).join(": ")}</li>)}</ul></div>}
-    </>}
-  </CardContent></Card>;
-};
+// VenueInsightsPanel now lives in ../components/VenueInsightsPanel (shared
+// with HostSession.jsx's merged-workspace equivalent).
 const BuildAssistantStrip = ({ onAsk, onBuildRound, onImportOpenTrivia, otdbCategory, setOtdbCategory, otdbType, setOtdbType, otdbDifficulty, setOtdbDifficulty, otdbCount, setOtdbCount, activeRoundName, undoSnapshot, onUndo, loading, generationStatus, generationMode, setGenerationMode }) => <div className="mb-4 rounded-xl border border-[#71E0DC]/15 bg-zinc-950/40 px-4 py-3"><div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3"><div><p className="text-sm font-bold text-white flex items-center gap-2"><Sparkles size={16} className="text-[#71E0DC]" />Need help building?</p><p className="text-xs text-zinc-500 mt-1">Ask Quiz Crafter from the assistant bubble. Results and previews will appear here.</p></div><div className="flex flex-wrap gap-2">{generationStatus && <span className="inline-flex items-center rounded-full border border-[#71E0DC]/20 bg-[#071A1D]/70 px-3 py-1.5 text-xs font-semibold text-[#71E0DC]"><Loader2 size={13} className="mr-2 animate-spin" />{generationStatus}</span>}<div className="inline-flex rounded-md border border-white/10 bg-zinc-950/70 p-1"><button type="button" onClick={() => setGenerationMode("quick")} className={`rounded px-2.5 py-1 text-[11px] font-bold ${generationMode === "quick" ? "bg-[#71E0DC] text-zinc-950" : "text-zinc-400 hover:text-white"}`}>Quick</button><button type="button" onClick={() => setGenerationMode("polished")} className={`rounded px-2.5 py-1 text-[11px] font-bold ${generationMode === "polished" ? "bg-[#AEB2EF] text-zinc-950" : "text-zinc-400 hover:text-white"}`}>Polished</button></div><Button type="button" variant="outline" disabled={loading} onClick={onBuildRound} className="h-9 border-white/10 text-zinc-300 hover:text-white"><Sparkles size={14} className="mr-2" />Build this round</Button><Button type="button" variant="outline" disabled={loading} onClick={() => onAsk(`Find replacements for the weakest question in ${activeRoundName}`)} className="h-9 border-white/10 text-zinc-300 hover:text-white"><RefreshCw size={14} className="mr-2" />Find replacements</Button>{undoSnapshot && <Button type="button" variant="outline" onClick={onUndo} className="h-9 border-[#71E0DC]/25 text-[#71E0DC] hover:text-white hover:bg-[#71E0DC]/10"><RefreshCw size={14} className="mr-2" />Undo</Button>}</div></div><div className="mt-3 flex flex-wrap items-end gap-2 border-t border-white/5 pt-3"><label className="text-xs text-zinc-400">Category<select value={otdbCategory} onChange={(e) => setOtdbCategory(e.target.value)} className="mt-1 h-9 rounded-md bg-zinc-950 border border-white/10 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60">{OPENTDB_CATEGORIES.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label><label className="text-xs text-zinc-400">Type<select value={otdbType} onChange={(e) => setOtdbType(e.target.value)} className="mt-1 h-9 rounded-md bg-zinc-950 border border-white/10 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60"><option value="multiple_choice">Multiple Choice</option><option value="true_false">True/False</option></select></label><label className="text-xs text-zinc-400">Difficulty<select value={otdbDifficulty} onChange={(e) => setOtdbDifficulty(e.target.value)} className="mt-1 h-9 rounded-md bg-zinc-950 border border-white/10 px-2 text-sm text-white outline-none focus:border-[#71E0DC]/60"><option value="">Any</option><option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option></select></label><label className="text-xs text-zinc-400">Count<Input value={otdbCount} onChange={(e) => setOtdbCount(e.target.value)} className="mt-1 h-9 w-16 bg-zinc-950 border-white/10 text-white text-center text-sm" /></label><Button type="button" variant="outline" disabled={loading} title="Pulls ready-made questions from Open Trivia DB, a community question bank -- no AI rewriting, so nothing is invented." onClick={onImportOpenTrivia} className="h-9 border-white/10 text-zinc-300 hover:text-white"><Database size={14} className="mr-2" />Import from Open Trivia DB</Button></div></div>;
 const BuildAssistantResults = ({ preview, onAcceptPreview, onDiscardPreview, aiCandidates, aiActionId, mediaQuestionId, settingsQuestionId, onAddToSession, onAddAll, onSaveToLibrary, onRegenerate, onRecategorize, onRecategorizeAll, recategorizingAll, onConvertType, onTuneDifficulty, onStyleFeedback, onOpenMedia, onOpenSettings, onEditCandidate }) => {
   if (!preview && !aiCandidates.length) return null;

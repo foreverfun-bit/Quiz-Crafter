@@ -67,6 +67,8 @@ import {
 import { toast } from "sonner";
 import { hostToolsStorageKey, loadHostSetupSettings, loadHostToolsSessionState, loadProfileValue, profileKeys, readCurrentProjectSessionId, resetHostToolsSessionState, saveHostSetupSettings, saveHostToolsSessionState, updateUserMetadata, writeCurrentProjectSessionId } from "../lib/profileState";
 import { readHostStyleProfile, rememberStyleFeedback } from "../lib/hostStyleMemory";
+import { fetchVenueInsights } from "../lib/venueInsights";
+import VenueInsightsPanel from "../components/VenueInsightsPanel";
 
 const STORAGE_BASE = process.env.REACT_APP_SUPABASE_URL ? `${process.env.REACT_APP_SUPABASE_URL}/storage/v1/object/public/` : "";
 const PRODUCTION_HOSTNAMES = new Set(["quizcrafter.fun", "www.quizcrafter.fun", "quiz-crafter-foreverfun-bits-projects.vercel.app"]);
@@ -635,6 +637,8 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   const liveStateSaveKeyRef = useRef("");
   const liveRosterSyncKeyRef = useRef("");
   const [session, setSession] = useState(null);
+  const [venueInsights, setVenueInsights] = useState(null);
+  const [venueInsightsLoading, setVenueInsightsLoading] = useState(false);
   const [approvedCategories, setApprovedCategories] = useState([]);
   const [liveGameId, setLiveGameId] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -906,6 +910,25 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     };
     loadSession();
   }, [applyStoredLiveEvents, id, navigate]);
+
+  // Mirrors BuildSession.jsx's identical effect -- same shared
+  // fetchVenueInsights, same loading/clear-on-no-venue behavior, so the
+  // merged workspace shows the same "what this venue has taught the AI"
+  // signal the standalone Build page always has.
+  useEffect(() => {
+    let cancelled = false;
+    const venueId = session?.venue_id;
+    if (!venueId) {
+      setVenueInsights(null);
+      return undefined;
+    }
+    setVenueInsightsLoading(true);
+    fetchVenueInsights(venueId)
+      .then((insights) => { if (!cancelled) setVenueInsights(insights); })
+      .catch((error) => { console.warn("Venue insights unavailable:", error); if (!cancelled) setVenueInsights(null); })
+      .finally(() => { if (!cancelled) setVenueInsightsLoading(false); });
+    return () => { cancelled = true; };
+  }, [session?.venue_id]);
 
   useEffect(() => {
     const loadDurablePlayerEvents = async () => {
@@ -2113,6 +2136,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
           request,
           context: {
             session: { name: sessionName, activeRound: round.name },
+            venue: session?.venue_id ? { name: session?.venue || "", insights: venueInsights } : null,
             conversation,
             questions: round.questions.map((question) => ({
               category: question.category,
@@ -2930,6 +2954,9 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
             approvedCategories={approvedCategories}
             addGeneratedQuestionsToRound={addGeneratedQuestionsToRound}
             venueId={session?.venue_id}
+            venueName={session?.venue}
+            venueInsights={venueInsights}
+            venueInsightsLoading={venueInsightsLoading}
             branding={branding}
             markAnswer={markAnswer}
             addManualAnswer={addManualAnswer}
@@ -3988,7 +4015,7 @@ const QuestionListView = ({
   displayedQuestion, goToQuestion, reviewQuestion, onBackToLive, onGoLiveWithThis,
   answersForQuestionIndex, gradedAnswers, players, hostAnswers, fairPlayStats,
   showAnswer, showFunFact, timeRemaining, viewPointsPerQuestion, viewTimerSeconds, viewWagerMode, viewWagerLimit, viewWagerTiming,
-  onUpdateSettings, renameRound, describeRound, setEmptyRoundSettings, moveRound, deleteRound, createRound, createEmptyRound, moveQuestionToRound, moveQuestionWithinRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, addGeneratedQuestionsToRound, updateQuestionContent, editQuestionWithAi, askCoHost, saveQuestionToLibrary, venueId, approvedCategories, branding, markAnswer, addManualAnswer, editWager, editAnswerText, editPoints, releaseMode,
+  onUpdateSettings, renameRound, describeRound, setEmptyRoundSettings, moveRound, deleteRound, createRound, createEmptyRound, moveQuestionToRound, moveQuestionWithinRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, addGeneratedQuestionsToRound, updateQuestionContent, editQuestionWithAi, askCoHost, saveQuestionToLibrary, venueId, venueName, venueInsights, venueInsightsLoading, approvedCategories, branding, markAnswer, addManualAnswer, editWager, editAnswerText, editPoints, releaseMode,
   hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, resetQuestionAt,
 }) => {
   // Only one round is shown at a time (see RoundHeader/RoundSwitcher) --
@@ -4050,6 +4077,7 @@ const QuestionListView = ({
   };
   const existingQuestionTexts = new Set(questions.map((question) => String(question.questionText || "").trim().toLowerCase()).filter(Boolean));
   return <div className="space-y-3">
+    {venueId && <VenueInsightsPanel venueName={venueName || "This venue"} insights={venueInsights} loading={venueInsightsLoading} />}
     <section>
       <RoundHeader
         rounds={rounds}
