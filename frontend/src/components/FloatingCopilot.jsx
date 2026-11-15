@@ -297,11 +297,22 @@ export default function FloatingCopilot({ user }) {
   }), [baseContext, pageContext, pageName, workingState]);
 
   const promptHint = useMemo(() => {
-    if (location.pathname.startsWith("/build")) return "Try: Replace question 4, build Round 2, make this less obvious...";
+    if (isBuildToolPage(location.pathname)) return "Try: Give me question suggestions, build this round, replace question 4...";
     if (location.pathname.startsWith("/library")) return "Try: Find biology questions, mark this reusable, import this PDF...";
     if (location.pathname === "/") return "Try: What should I work on next? Continue my next show...";
     if (location.pathname.startsWith("/host-session")) return "Try: Who has not answered? Show me live feedback...";
     return "Ask Quiz Crafter anything about this page...";
+  }, [location.pathname]);
+
+  // On a page that can actually stage/add drafted questions (isBuildToolPage),
+  // the chips are worded to match isBuildDraftRequest/isPreviewRequest's
+  // phrasing exactly so the first click lands on the real add-to-round path
+  // instead of a plain chat reply the host then has to retype more
+  // specifically (see the "Use my style memory" chip, which only chats --
+  // kept elsewhere since it's not a drafting request).
+  const quickChips = useMemo(() => {
+    if (isBuildToolPage(location.pathname)) return ["Give me question suggestions for this round", "Build this round", "Find a replacement for a weak question"];
+    return ["What should I work on next?", "Open the right tool", "Use my style memory"];
   }, [location.pathname]);
 
   const runBuildCommand = (request, commandId) => {
@@ -455,7 +466,7 @@ export default function FloatingCopilot({ user }) {
 
             <div className="border-t border-white/10 p-3">
               <div className="mb-2 flex flex-wrap gap-1.5">
-                {["What should I work on next?", "Open the right tool", "Use my style memory"].map((chip) => (
+                {quickChips.map((chip) => (
                   <button key={chip} type="button" onClick={() => handleSubmit(chip)} className="rounded-full border border-white/10 bg-zinc-950 px-2.5 py-1 text-[11px] font-semibold text-zinc-400 hover:border-[#71E0DC]/35 hover:text-white">{chip}</button>
                 ))}
               </div>
