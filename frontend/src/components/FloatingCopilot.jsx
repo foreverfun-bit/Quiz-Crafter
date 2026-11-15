@@ -179,6 +179,11 @@ const formatBuildResult = (result = {}) => {
   if (result.undoAvailable) lines.push("", "Undo is available in the Build helper strip.");
   return lines.join("\n");
 };
+// Pages whose own listener (BuildSession.jsx) or (HostSession.jsx, the
+// merged workspace) turns a quiz-crafter-copilot-command event into real
+// AI-drafted questions the host can add, not just a chat reply.
+const isBuildToolPage = (pathname) => pathname.startsWith("/build") || pathname.startsWith("/session/");
+
 const routeForIntent = (text) => {
   const lower = text.toLowerCase();
   if (/\b(import|upload)\b/.test(lower) && /\b(pdf|csv|file)\b/.test(lower)) return "/import";
@@ -316,7 +321,7 @@ export default function FloatingCopilot({ user }) {
       return;
     }
 
-    const shouldUseBuildTool = location.pathname.startsWith("/build") && (
+    const shouldUseBuildTool = isBuildToolPage(location.pathname) && (
       isPreviewRequest(request) ||
       isConfirmedApplicationAction(request, workingState) ||
       isBuildDraftRequest(request) ||
@@ -458,7 +463,7 @@ export default function FloatingCopilot({ user }) {
                 <Textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); handleSubmit(); } }} placeholder={promptHint} className="min-h-[54px] flex-1 resize-none border-white/10 bg-zinc-950 text-white focus:border-[#71E0DC]/60" />
                 <Button type="button" onClick={() => handleSubmit()} disabled={loading || !clean(input)} className="h-auto gradient-btn px-3"><Send size={16} /></Button>
               </div>
-              {routeForIntent(input) && !location.pathname.startsWith(routeForIntent(input)) && (
+              {routeForIntent(input) && !location.pathname.startsWith(routeForIntent(input)) && !(routeForIntent(input) === "/build" && isBuildToolPage(location.pathname)) && (
                 <button type="button" onClick={() => navigate(routeForIntent(input))} className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[#71E0DC] hover:text-white">
                   <ExternalLink size={12} /> Open likely page: {routeTitle(routeForIntent(input))}
                 </button>

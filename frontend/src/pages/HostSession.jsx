@@ -641,6 +641,10 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   const [session, setSession] = useState(null);
   const [venueInsights, setVenueInsights] = useState(null);
   const [venueInsightsLoading, setVenueInsightsLoading] = useState(false);
+  // Candidates the floating Quiz Crafter assistant (FloatingCopilot.jsx)
+  // drafted via askCoHost, staged here for review -- see the
+  // quiz-crafter-copilot-command listener below for how they get here.
+  const [floatingCandidates, setFloatingCandidates] = useState([]);
   const [approvedCategories, setApprovedCategories] = useState([]);
   const [liveGameId, setLiveGameId] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -2628,6 +2632,35 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     return true;
   };
 
+  // Lets the floating Quiz Crafter assistant (FloatingCopilot.jsx) actually
+  // add questions here instead of only chatting -- mirrors BuildSession.jsx's
+  // listener for the same window event, but forwards into askCoHost (this
+  // page's own candidate-generating call) since this page has no equivalent
+  // of BuildSession's runBuilderChat. Candidates land in floatingCandidates
+  // for review/add in QuestionListView, the same "Add to Round" pattern
+  // GenerateRoundModal/CoHostChatModal already use.
+  useEffect(() => {
+    const handleCopilotCommand = async (event) => {
+      const request = String(event.detail?.request || "").trim();
+      const commandId = event.detail?.commandId;
+      if (!request) return;
+      const contextRound = currentRound || rounds[0];
+      if (!contextRound) {
+        if (commandId) window.dispatchEvent(new CustomEvent("quiz-crafter-copilot-result", { detail: { commandId, result: { ok: false, request, message: "Add a round first, then ask me for questions." } } }));
+        return;
+      }
+      const result = await askCoHost(contextRound, [], request, floatingCandidates);
+      if (!result) {
+        if (commandId) window.dispatchEvent(new CustomEvent("quiz-crafter-copilot-result", { detail: { commandId, result: { ok: false, request, message: "I couldn't finish that request." } } }));
+        return;
+      }
+      if (result.candidates?.length) setFloatingCandidates((current) => [...current, ...result.candidates]);
+      if (commandId) window.dispatchEvent(new CustomEvent("quiz-crafter-copilot-result", { detail: { commandId, result: { ok: true, request, message: result.answer || "Drafted some questions -- review them above the round list." } } }));
+    };
+    window.addEventListener("quiz-crafter-copilot-command", handleCopilotCommand);
+    return () => window.removeEventListener("quiz-crafter-copilot-command", handleCopilotCommand);
+  });
+
   // Unlike moveRound's whole-round swap, moving a single question can shift
   // an arbitrary number of other questions' positions in between its old and
   // new spot. Rather than hand-deriving that arithmetic, just flatten the
@@ -2976,6 +3009,8 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
             venueName={session?.venue}
             venueInsights={venueInsights}
             venueInsightsLoading={venueInsightsLoading}
+            floatingCandidates={floatingCandidates}
+            setFloatingCandidates={setFloatingCandidates}
             branding={branding}
             markAnswer={markAnswer}
             addManualAnswer={addManualAnswer}
@@ -4034,7 +4069,7 @@ const QuestionListView = ({
   displayedQuestion, goToQuestion, reviewQuestion, onBackToLive, onGoLiveWithThis,
   answersForQuestionIndex, gradedAnswers, players, hostAnswers, fairPlayStats,
   showAnswer, showFunFact, timeRemaining, viewPointsPerQuestion, viewTimerSeconds, viewWagerMode, viewWagerLimit, viewWagerTiming,
-  onUpdateSettings, renameRound, describeRound, setEmptyRoundSettings, moveRound, deleteRound, createRound, createEmptyRound, moveQuestionToRound, moveQuestionWithinRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, addGeneratedQuestionsToRound, updateQuestionContent, editQuestionWithAi, askCoHost, saveQuestionToLibrary, venueId, venueName, venueInsights, venueInsightsLoading, approvedCategories, branding, markAnswer, addManualAnswer, editWager, editAnswerText, editPoints, releaseMode,
+  onUpdateSettings, renameRound, describeRound, setEmptyRoundSettings, moveRound, deleteRound, createRound, createEmptyRound, moveQuestionToRound, moveQuestionWithinRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, addGeneratedQuestionsToRound, updateQuestionContent, editQuestionWithAi, askCoHost, saveQuestionToLibrary, venueId, venueName, venueInsights, venueInsightsLoading, floatingCandidates, setFloatingCandidates, approvedCategories, branding, markAnswer, addManualAnswer, editWager, editAnswerText, editPoints, releaseMode,
   hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, resetQuestionAt,
 }) => {
   // Only one round is shown at a time (see RoundHeader/RoundSwitcher) --
@@ -4097,6 +4132,34 @@ const QuestionListView = ({
   const existingQuestionTexts = new Set(questions.map((question) => String(question.questionText || "").trim().toLowerCase()).filter(Boolean));
   return <div className="space-y-3">
     {venueId && <VenueInsightsPanel venueName={venueName || "This venue"} insights={venueInsights} loading={venueInsightsLoading} />}
+    {floatingCandidates.length > 0 && (
+      <Card className="glass-card mb-4 border-[#AEB2EF]/25">
+        <CardContent className="p-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="flex items-center gap-2 text-white font-semibold"><Bot size={16} className="text-[#AEB2EF]" />Drafted by the floating assistant</p>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={() => { addGeneratedQuestionsToRound(activeRound, floatingCandidates); setFloatingCandidates([]); }} className="gradient-btn"><Check size={14} className="mr-1.5" />Add all to {activeRound.name}</Button>
+              <Button size="sm" variant="ghost" onClick={() => setFloatingCandidates([])} className="text-zinc-400 hover:text-white">Clear</Button>
+            </div>
+          </div>
+          <div className="space-y-2">
+            {floatingCandidates.map((candidate, index) => (
+              <div key={`${candidate.question_text}-${index}`} className="flex items-start justify-between gap-3 rounded-lg border border-white/10 bg-zinc-950/50 p-3">
+                <div className="min-w-0">
+                  <p className="text-xs text-zinc-500">{candidate.category}</p>
+                  <p className="text-sm text-white">{candidate.question_text}</p>
+                  <p className="text-xs text-emerald-300">Answer: {candidate.correct_answer}</p>
+                </div>
+                <div className="flex shrink-0 gap-1">
+                  <button type="button" title={`Add to ${activeRound.name}`} aria-label="Add this question" onClick={() => { addGeneratedQuestionsToRound(activeRound, [candidate]); setFloatingCandidates((current) => current.filter((item) => item !== candidate)); }} className="flex h-7 w-7 items-center justify-center rounded text-emerald-300 hover:bg-emerald-500/10"><Check size={15} /></button>
+                  <button type="button" title="Dismiss" aria-label="Dismiss this question" onClick={() => setFloatingCandidates((current) => current.filter((item) => item !== candidate))} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:bg-white/5 hover:text-white"><X size={15} /></button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+    )}
     <section>
       <RoundHeader
         rounds={rounds}
