@@ -69,6 +69,7 @@ import { hostToolsStorageKey, loadHostSetupSettings, loadHostToolsSessionState, 
 import { readHostStyleProfile, rememberStyleFeedback } from "../lib/hostStyleMemory";
 import { fetchVenueInsights } from "../lib/venueInsights";
 import VenueInsightsPanel from "../components/VenueInsightsPanel";
+import { useCopilot } from "../context/CopilotContext";
 
 const STORAGE_BASE = process.env.REACT_APP_SUPABASE_URL ? `${process.env.REACT_APP_SUPABASE_URL}/storage/v1/object/public/` : "";
 const PRODUCTION_HOSTNAMES = new Set(["quizcrafter.fun", "www.quizcrafter.fun", "quiz-crafter-foreverfun-bits-projects.vercel.app"]);
@@ -599,6 +600,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   // opening the workspace to look at questions would silently create a
   // live_games row and start broadcasting live state before "Open Event".
   const [eventOpen, setEventOpen] = useState(initialEventOpen);
+  const { updatePageContext } = useCopilot();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const isTestRun = searchParams.get("mode") === "test";
@@ -1215,6 +1217,23 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   const fairPlayStats = useMemo(() => buildFairPlayStats(players, answers, gradedAnswers), [players, answers, gradedAnswers]);
   const progress = questions.length ? Math.round(((currentIndex + 1) / questions.length) * 100) : 0;
   const sessionName = session?.name || session?.session_name || "Trivia Session";
+  // The floating Quiz Crafter assistant (FloatingCopilot.jsx) had no idea
+  // this page even existed -- unlike BuildSession.jsx, nothing here ever
+  // called updatePageContext, so asking it about this session got only
+  // generic, venue-blind answers. Mirrors BuildSession's push (same
+  // `build` key, so FloatingCopilot's venue override picks it up the same
+  // way) scoped to what's available at this component's top level.
+  useEffect(() => {
+    updatePageContext({
+      goal: "Host or edit the active trivia session",
+      build: {
+        sessionName,
+        venue: session?.venue || "",
+        venueInsights,
+        rounds: rounds.map((round) => ({ name: round.name, questionCount: round.questions?.length || 0 })),
+      },
+    });
+  }, [rounds, sessionName, session?.venue, updatePageContext, venueInsights]);
   const joinUrl = `${getPublicOrigin()}/join?session=${id}${getProtectionBypassQuery()}`;
   const timeRemaining = timerEndAt ? Math.max(0, Math.ceil((timerEndAt - now) / 1000)) : null;
   const acceptingAnswers = !answersPaused && (timeRemaining === null || timeRemaining > 0);

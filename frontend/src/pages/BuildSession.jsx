@@ -1645,6 +1645,7 @@ const BuildSession = ({ sessionIdProp, onGoLive } = {}) => {
         sessionName,
         sessionDate,
         venue: selectedVenue?.name || selectedVenue?.nightName || "",
+        venueInsights,
         template: selectedTemplate?.name || "",
         difficulty,
         activeRound: activeRound?.name || "",
@@ -1664,7 +1665,7 @@ const BuildSession = ({ sessionIdProp, onGoLive } = {}) => {
         })),
       },
     });
-  }, [activeRound, activeRoundQuestions, difficulty, fullSessionComplete, safeRounds, selectedTemplate, selectedTotal, selectedVenue, sessionDate, sessionName, templateGoal, updatePageContext]);
+  }, [activeRound, activeRoundQuestions, difficulty, fullSessionComplete, safeRounds, selectedTemplate, selectedTotal, selectedVenue, sessionDate, sessionName, templateGoal, updatePageContext, venueInsights]);
 
   return <div className="p-4 lg:p-6 max-w-7xl mx-auto animate-fade-in" data-testid="build-session-page">
     <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-4 mb-4"><div><h1 className="text-3xl md:text-4xl font-bold text-white mb-1">Build <span className="gradient-text">Session</span></h1><p className="text-zinc-500">Create or continue the active trivia session.</p></div><div className="flex gap-2 flex-wrap"><Button onClick={() => handleSave(false)} disabled={saving} variant="outline" className="border-white/15 text-zinc-300 hover:text-white hover:bg-zinc-800" data-testid="save-build-btn">{saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</> : <><Save className="mr-2" size={18} />Save Build</>}</Button><Button onClick={() => handleSave(true)} disabled={saving} className="bg-emerald-400 text-zinc-950 hover:bg-emerald-300 font-semibold" data-testid="go-live-btn"><Sparkles className="mr-2" size={18} />Go Live</Button><DropdownMenu><DropdownMenuTrigger asChild><Button variant="outline" className="border-white/15 text-zinc-300 hover:text-white hover:bg-zinc-800" aria-label="More build actions"><MoreHorizontal size={18} /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" className="border-white/10 bg-zinc-950 text-zinc-200"><DropdownMenuItem onClick={() => askFloatingCopilot("Review this session and tell me what feels weak, repetitive, missing, or off-style.")} className="cursor-pointer focus:bg-zinc-800"><Check size={15} className="mr-2" />Review Session</DropdownMenuItem><DropdownMenuItem onClick={() => askFloatingCopilot("Create host notes for this session: pacing notes, category callouts, and any fun hosting beats.")} className="cursor-pointer focus:bg-zinc-800"><MessageSquare size={15} className="mr-2" />Create Host Notes</DropdownMenuItem><DropdownMenuItem onClick={() => askFloatingCopilot("Export CSV for this build or tell me the next step if I need to save first.")} className="cursor-pointer focus:bg-zinc-800"><Save size={15} className="mr-2" />Export CSV</DropdownMenuItem>{selectedTotal > 0 && <><DropdownMenuSeparator /><DropdownMenuItem onClick={handleClearSession} className="cursor-pointer text-red-200 focus:bg-red-500/10 focus:text-red-200"><X size={15} className="mr-2" />Clear Build</DropdownMenuItem></>}</DropdownMenuContent></DropdownMenu></div></div>

@@ -10,6 +10,7 @@ import { supabase } from "../lib/supabase";
 import { loadHostSetupSettings } from "../lib/profileState";
 import { readHostStyleProfile } from "../lib/hostStyleMemory";
 import { readLocalTemplates, readLocalVenues } from "../lib/venues";
+import { fetchVenueInsights } from "../lib/venueInsights";
 import { useCopilot } from "../context/CopilotContext";
 
 const COPILOT_OPEN_KEY = "quiz-crafter-copilot-open-v1";
@@ -235,10 +236,18 @@ export default function FloatingCopilot({ user }) {
         .filter((item) => item.date)
         .sort((a, b) => new Date(a.date) - new Date(b.date))[0] || null;
       const build = summarizeBuild(currentBuildState());
-      const counts = await Promise.all([
-        supabase.from("questions").select("id", { count: "exact", head: true }),
-        supabase.from("sessions").select("id", { count: "exact", head: true }),
-      ]).catch(() => []);
+      // Default-venue fallback so the assistant has venue awareness (and
+      // the same "regulars" signal the dedicated co-host chat uses) even
+      // on pages that don't push a session-specific venue via
+      // updatePageContext (see the `venue` override in the context memo
+      // below, which prefers that live page context when present).
+      const [counts, activeVenueInsights] = await Promise.all([
+        Promise.all([
+          supabase.from("questions").select("id", { count: "exact", head: true }),
+          supabase.from("sessions").select("id", { count: "exact", head: true }),
+        ]).catch(() => []),
+        activeVenue ? fetchVenueInsights(activeVenue.id).catch(() => null) : Promise.resolve(null),
+      ]);
       if (cancelled) return;
       setBaseContext({
         route: { path: location.pathname, page: pageName },
@@ -260,6 +269,7 @@ export default function FloatingCopilot({ user }) {
           templates: limitList(templates, 6).map((template) => ({ id: template.id, name: template.name, rounds: template.roundCount, perRound: template.questionsPerRound })),
         },
         build,
+        venue: activeVenue ? { name: activeVenue.name || activeVenue.nightName || "", insights: activeVenueInsights } : null,
         hostStyleProfile: readHostStyleProfile(),
       });
     };
@@ -269,6 +279,13 @@ export default function FloatingCopilot({ user }) {
 
   const context = useMemo(() => ({
     ...baseContext,
+    // A page in view of one specific session/venue (Build, the merged
+    // Host/Build workspace) pushes its own venue + venueInsights via
+    // updatePageContext -- prefer that over the account-wide default venue
+    // from baseContext, since it's what the host is actually looking at.
+    venue: pageContext?.build?.venue
+      ? { name: pageContext.build.venue, insights: pageContext.build.venueInsights || null }
+      : baseContext.venue || null,
     pageLiveContext: pageContext,
     currentPageGoal: pageContext?.goal || pageName,
     conversationState: workingState,
