@@ -360,8 +360,13 @@ export default function FloatingCopilot({ user }) {
     // questions -- draft them directly instead of only chatting about them.
     // Same endpoint/mode askCoHost/handleAskCoHost already use, just with
     // whatever context this component has on hand (venue, style profile,
-    // approved categories if a page happened to push any).
-    if (!isBuildToolPage(location.pathname) && isBuildDraftRequest(request)) {
+    // approved categories if a page happened to push any). Also covers a
+    // bare follow-up ("try again", "harder") once workingState.currentTask
+    // is set below -- without this, a follow-up to this path's own previous
+    // reply always missed isBuildDraftRequest and fell through to a
+    // flat-text-only chat answer, since nothing here ever updated
+    // workingState the way the build-tool-page path already does.
+    if (!isBuildToolPage(location.pathname) && (isBuildDraftRequest(request) || (workingState.currentTask === "draft_candidates" && isFollowUpForPendingTask(request, workingState)))) {
       setLoading(true);
       try {
         const { data } = await axios.post("/api/host-assistant", {
@@ -378,6 +383,7 @@ export default function FloatingCopilot({ user }) {
         }, { timeout: 90000 });
         const candidates = Array.isArray(data?.candidates) ? data.candidates : [];
         setMessages((current) => [...current, { role: "assistant", content: data?.answer || "Here's what I drafted.", candidates }].slice(-24));
+        setWorkingState((state) => normalizeWorkingState({ ...state, currentTask: "draft_candidates", lastUserFeedback: request }));
       } catch (error) {
         console.error("Copilot draft error:", error);
         toast.error(error.response?.data?.error || error.message || "Quiz Crafter could not draft that");
