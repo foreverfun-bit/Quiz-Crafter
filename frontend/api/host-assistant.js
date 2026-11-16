@@ -1,3 +1,5 @@
+const { fetchExistingQuestions } = require("./_lib/existingQuestions");
+
 const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
 // The model habitually writes true/false questions as "True or False: <claim>"
 // -- redundant once the app already shows the question as a True/False type.
@@ -51,7 +53,7 @@ const styleProfileText = (profile) => {
   };
 };
 
-const collectBlockedQuestions = (context = {}) => {
+const collectBlockedQuestions = (context = {}, pastQuestions = []) => {
   const build = context.build || {};
   const raw = [
     ...safeList(context.questions, 80),
@@ -61,6 +63,11 @@ const collectBlockedQuestions = (context = {}) => {
     // block them the same mechanical way as anything already in the build,
     // not just a prompt instruction the model might not follow.
     ...safeList(context.rejectedQuestions, 80),
+    // Everything the host has ever saved to their library or used in a past
+    // session (see fetchExistingQuestions) -- mechanically blocking these,
+    // not just asking the model to avoid them in response_rules, is the same
+    // hard-filter approach generate-session-candidates.js already uses.
+    ...safeList(pastQuestions, 800),
   ];
   const textFingerprints = new Set();
   const answerPairs = new Set();
@@ -148,6 +155,12 @@ async function handler(req, res) {
 
     const buildMode = mode === "build_cohost";
     const editMode = mode === "question_edit";
+    // The host's library and every past session's questions, so drafting
+    // chat (askCoHost/the floating assistant) stops re-suggesting things
+    // the host has already written or used, same as bulk generation already
+    // does via generate-session-candidates.js's fetchExistingQuestions.
+    const pastQuestions = buildMode ? await fetchExistingQuestions() : [];
+    const pastQuestionExamples = pastQuestions.slice(0, 40).map((q) => ({ category: q.category, question_text: q.question_text, correct_answer: q.correct_answer }));
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -192,6 +205,11 @@ async function handler(req, res) {
                 player_ideas: safeList(context.ideas, 30),
                 questions: safeList(context.questions, 40),
                 rejected_questions: safeList(context.rejectedQuestions, 40),
+                // Everything the host has ever saved to the library or used
+                // in a past session (see fetchExistingQuestions) -- a sample,
+                // not the full set, since the full set is already enforced
+                // mechanically below via collectBlockedQuestions.
+                past_question_examples: buildMode ? pastQuestionExamples : [],
                 host_style_profile: styleProfileText(context.hostStyleProfile),
               },
               response_rules: editMode
@@ -217,6 +235,7 @@ async function handler(req, res) {
                     "Treat the newest user request as the highest priority.",
                     "Never suggest a question already present in host_context.questions, host_context.build.activeRoundQuestions, or host_context.build.builtQuestions.",
                     "host_context.rejected_questions are drafts the host explicitly dismissed from a previous response -- never suggest any of them again, not even reworded, rephrased, or with a different fun fact.",
+                    "host_context.past_question_examples is a sample of real questions the host has already written to their library or used in a past session -- never suggest any of them again, not even reworded, rephrased, or with a different fun fact, and avoid reusing the same specific fact/answer-angle about the same subject even under a different question.",
                     "Never reuse the same correct answer in the same category as an existing built question.",
                     "If the host rejects a direction, do not defend it; pivot and produce a materially different approach.",
                     "If you cannot satisfy the directions without duplicates, return fewer candidates and explain what constraint blocked you.",
@@ -262,7 +281,7 @@ async function handler(req, res) {
     if (!answer) throw new Error("AI returned an empty answer");
     if (buildMode) {
       const parsed = parseAssistantJson(answer);
-      const blocked = collectBlockedQuestions(context);
+      const blocked = collectBlockedQuestions(context, pastQuestions);
       const normalized = Array.isArray(parsed?.candidates) ? parsed.candidates.map(normalizeCandidate).filter(Boolean) : [];
       // "Don't repeat a category" is only a prompt instruction above, and the
       // model doesn't reliably follow it -- cap it mechanically too, same as
