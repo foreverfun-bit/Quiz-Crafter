@@ -8,7 +8,7 @@ import { Textarea } from "./ui/textarea";
 import { Badge } from "./ui/badge";
 import { supabase } from "../lib/supabase";
 import { loadHostSetupSettings } from "../lib/profileState";
-import { readHostStyleProfile } from "../lib/hostStyleMemory";
+import { readHostStyleProfile, rememberStyleFeedback } from "../lib/hostStyleMemory";
 import { readLocalTemplates, readLocalVenues } from "../lib/venues";
 import { fetchVenueInsights } from "../lib/venueInsights";
 import { useCopilot } from "../context/CopilotContext";
@@ -488,6 +488,18 @@ export default function FloatingCopilot({ user }) {
     updateCandidateStatus(messageIndex, candidateIndex, { _saved: true });
   };
 
+  // The only difficulty-feedback loop that existed before this (BuildSession.jsx's
+  // AiCandidateCard "too easy" rating) never reached this chat -- so a host who
+  // only ever drafts through the floating assistant had no way to teach
+  // hostStyleMemory that results were coming back too easy, and preferredDifficulty
+  // stayed stuck at its generic default. rememberStyleFeedback is page-agnostic
+  // (writes straight to the profile), so it works the same here as it does there.
+  const handleTooEasy = (messageIndex, candidateIndex, candidate) => {
+    rememberStyleFeedback(candidate, "too_easy", "Flagged too easy from the floating assistant").catch((error) => console.warn("Style feedback save unavailable:", error));
+    toast.success("Got it -- I'll push harder on difficulty next time");
+    updateCandidateStatus(messageIndex, candidateIndex, { _flaggedEasy: true });
+  };
+
   const startResize = (event) => {
     event.preventDefault();
     const startX = event.clientX;
@@ -565,6 +577,9 @@ export default function FloatingCopilot({ user }) {
                               )}
                               <button type="button" disabled={candidate._saved} onClick={() => handleSaveCandidateToLibrary(index, candidateIndex, candidate)} className="inline-flex items-center gap-1 rounded-full border border-white/15 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-zinc-300 disabled:opacity-50">
                                 {candidate._saved ? <><Check size={11} />Saved</> : "Add to Library"}
+                              </button>
+                              <button type="button" disabled={candidate._flaggedEasy} onClick={() => handleTooEasy(index, candidateIndex, candidate)} className="inline-flex items-center gap-1 rounded-full border border-white/15 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-zinc-400 disabled:opacity-50">
+                                {candidate._flaggedEasy ? <><Check size={11} />Noted</> : "Too easy"}
                               </button>
                             </div>
                           </div>
