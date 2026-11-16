@@ -2154,7 +2154,15 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
           mode: "build_cohost",
           request,
           context: {
-            session: { name: sessionName, activeRound: round.name },
+            // targetType matches BuildSession.jsx's handleAskCoHost -- without
+            // it, host-assistant.js's build_cohost mode has no signal that
+            // this round is locked to one question type (e.g. true_false) and
+            // defaults to a natural mix instead. A populated round (the
+            // common case) never gets a .questionType field from makeRounds
+            // -- that only exists on empty-round placeholders -- so infer it
+            // from the round's own existing questions first, same fallback
+            // order GenerateRoundModal's default type already uses.
+            session: { name: sessionName, activeRound: round.name, targetType: round?.questions?.[0]?.type || (round?.questionType && round.questionType !== "mixed" ? round.questionType : undefined) },
             venue: session?.venue_id ? { name: session?.venue || "", insights: venueInsights } : null,
             conversation,
             questions: round.questions.map((question) => ({
