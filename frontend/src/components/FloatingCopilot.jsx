@@ -131,6 +131,7 @@ const emptyWorkingState = {
   awaitingConfirmation: false,
   lastAiSuggestion: null,
   lastUserFeedback: "",
+  lastDraftRequest: "",
 };
 const normalizeWorkingState = (state = {}) => ({ ...emptyWorkingState, ...(state && typeof state === "object" ? state : {}) });
 const isFollowUpForPendingTask = (text, state) => {
@@ -138,6 +139,29 @@ const isFollowUpForPendingTask = (text, state) => {
   if (!state?.currentTask && !state?.awaitingConfirmation && !state?.pendingGeneratedQuestion) return false;
   return /^(try again|again|another|give me another|harder|make it harder|easier|make it easier|rewrite it|improve it|cancel|nevermind|never mind)$/i.test(lower) || isConfirmFollowUp(lower);
 };
+// A bare follow-up like "try again" carries no actual content of its own --
+// forwarded as-is (to either BuildSession.jsx's regex-based classifyBuildIntent
+// or host-assistant.js's build_cohost mode, which gets no conversation history
+// over this event bridge), it reads as a brand-new, context-free request and
+// produces a flat clarifying reply instead of a fresh batch of candidates.
+// Re-expand it using the actual draft request that started this task, so
+// what's actually sent/dispatched is self-contained.
+const buildEffectiveDraftRequest = (rawRequest, state) => {
+  const base = state?.lastDraftRequest || "more questions for the current round";
+  const lower = clean(rawRequest).toLowerCase();
+  if (/harder/.test(lower)) return `${base} -- but noticeably harder than last time, don't repeat the same questions`;
+  if (/easier/.test(lower)) return `${base} -- but a bit easier than last time, don't repeat the same questions`;
+  if (/rewrite|improve/.test(lower)) return `${base} -- rewrite/improve on the previous suggestions`;
+  return `${base} -- give me a different set than before, don't repeat the same ones`;
+};
+// True only for a bare follow-up that continues a drafting task specifically
+// (not a confirm/replace/preview follow-up, which already carries its own
+// meaning and doesn't need this rewrite).
+const isDraftFollowUp = (rawRequest, state) => state?.currentTask === "draft_candidates"
+  && !isBuildDraftRequest(rawRequest)
+  && !isPreviewRequest(rawRequest)
+  && !isConfirmedApplicationAction(rawRequest, state)
+  && isFollowUpForPendingTask(rawRequest, state);
 const isConfirmFollowUp = (text) => {
   const lower = clean(text).toLowerCase();
   return /^(yes|yep|yeah|correct|looks good|use it|use this|apply it|apply this|replace it)$/.test(lower)
@@ -344,10 +368,12 @@ export default function FloatingCopilot({ user }) {
     // leaves awaitingConfirmation false; nothing here asks the host to confirm
     // first) could never match, and fell through to a flat-text-only chat
     // reply instead of continuing the draft.
+    const draftFollowUp = isDraftFollowUp(request, workingState);
     const shouldUseBuildTool = isBuildToolPage(location.pathname) && (
       isPreviewRequest(request) ||
       isConfirmedApplicationAction(request, workingState) ||
       isBuildDraftRequest(request) ||
+      draftFollowUp ||
       isFollowUpForPendingTask(request, workingState)
     );
     if (shouldUseBuildTool) {
@@ -358,7 +384,13 @@ export default function FloatingCopilot({ user }) {
           ? `Updating ${workingState.activeQuestion ? `Question ${workingState.activeQuestion.number}` : "the pending suggestion"}...`
           : buildProgressText(request);
       setMessages((current) => [...current, { role: "assistant", content: progress, commandId, pending: true }].slice(-24));
-      runBuildCommand(request, commandId);
+      // A bare "try again"/"harder" carries no content of its own once it
+      // crosses the quiz-crafter-copilot-command bridge (the page listener
+      // gets only this string, no conversation history) -- expand it against
+      // the request that actually started this draft task before sending it
+      // over, or it reads as a brand-new, context-free ask.
+      if (isBuildDraftRequest(request)) setWorkingState((state) => normalizeWorkingState({ ...state, lastDraftRequest: request }));
+      runBuildCommand(draftFollowUp ? buildEffectiveDraftRequest(request, workingState) : request, commandId);
       return;
     }
 
@@ -373,12 +405,14 @@ export default function FloatingCopilot({ user }) {
     // reply always missed isBuildDraftRequest and fell through to a
     // flat-text-only chat answer, since nothing here ever updated
     // workingState the way the build-tool-page path already does.
-    if (!isBuildToolPage(location.pathname) && (isBuildDraftRequest(request) || (workingState.currentTask === "draft_candidates" && isFollowUpForPendingTask(request, workingState)))) {
+    const offPageDraftFollowUp = !isBuildToolPage(location.pathname) && isDraftFollowUp(request, workingState);
+    if (!isBuildToolPage(location.pathname) && (isBuildDraftRequest(request) || offPageDraftFollowUp)) {
+      const effectiveRequest = offPageDraftFollowUp ? buildEffectiveDraftRequest(request, workingState) : request;
       setLoading(true);
       try {
         const { data } = await axios.post("/api/host-assistant", {
           mode: "build_cohost",
-          request,
+          request: effectiveRequest,
           context: {
             session: { name: context.build?.sessionName || "", activeRound: "" },
             venue: context.venue || null,
@@ -390,7 +424,7 @@ export default function FloatingCopilot({ user }) {
         }, { timeout: 90000 });
         const candidates = Array.isArray(data?.candidates) ? data.candidates : [];
         setMessages((current) => [...current, { role: "assistant", content: data?.answer || "Here's what I drafted.", candidates }].slice(-24));
-        setWorkingState((state) => normalizeWorkingState({ ...state, currentTask: "draft_candidates", lastUserFeedback: request }));
+        setWorkingState((state) => normalizeWorkingState({ ...state, currentTask: "draft_candidates", lastUserFeedback: request, lastDraftRequest: offPageDraftFollowUp ? state.lastDraftRequest : request }));
       } catch (error) {
         console.error("Copilot draft error:", error);
         toast.error(error.response?.data?.error || error.message || "Quiz Crafter could not draft that");
