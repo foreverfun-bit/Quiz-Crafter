@@ -1207,7 +1207,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
         name: entry.name || entry.round_name || "",
         description: entry.description || entry.round_description || "",
         order: Number(entry.order ?? entry.round_order) || 0,
-        questionType: entry.question_type || "mixed",
+        questionType: entry.questionType || entry.question_type || "mixed",
         points: entry.points ?? null,
         timerSeconds: Number(entry.timer_seconds) || 30,
       }))
@@ -2322,7 +2322,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   };
 
   const setEmptyRoundSettings = (round, settings) => {
-    writeRoundMetadata(getRoundMetadata(session).map((entry) => (matchesRoundMetadata(entry, round) ? { ...entry, points: settings.points, timer_seconds: settings.timerSeconds, question_type: settings.questionType || entry.question_type } : entry)));
+    writeRoundMetadata(getRoundMetadata(session).map((entry) => (matchesRoundMetadata(entry, round) ? { ...entry, points: settings.points, timer_seconds: settings.timerSeconds, question_type: settings.questionType || entry.questionType || entry.question_type } : entry)));
   };
 
   // Adjacent-swap only (mirrors BuildSession's handleMoveRound). Renaming a
