@@ -2685,7 +2685,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
         if (commandId) window.dispatchEvent(new CustomEvent("quiz-crafter-copilot-result", { detail: { commandId, result: { ok: false, request, message: "I couldn't finish that request." } } }));
         return;
       }
-      if (commandId) window.dispatchEvent(new CustomEvent("quiz-crafter-copilot-result", { detail: { commandId, result: { ok: true, request, message: result.answer || "Here's what I drafted.", candidates: result.candidates || [] } } }));
+      if (commandId) window.dispatchEvent(new CustomEvent("quiz-crafter-copilot-result", { detail: { commandId, result: { ok: true, request, message: result.answer || "Here's what I drafted.", candidates: result.candidates || [], task: { type: "draft_candidates", round: contextRound.name } } } }));
     };
     const handleAddToSession = (event) => {
       const candidate = event.detail?.candidate;

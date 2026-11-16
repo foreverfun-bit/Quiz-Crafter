@@ -337,11 +337,18 @@ export default function FloatingCopilot({ user }) {
       return;
     }
 
+    // isFollowUpForPendingTask already requires currentTask/awaitingConfirmation/
+    // pendingGeneratedQuestion to be set before it matches anything -- gating
+    // it again on awaitingConfirmation specifically meant a bare follow-up like
+    // "try again" right after a successful draft (which sets currentTask but
+    // leaves awaitingConfirmation false; nothing here asks the host to confirm
+    // first) could never match, and fell through to a flat-text-only chat
+    // reply instead of continuing the draft.
     const shouldUseBuildTool = isBuildToolPage(location.pathname) && (
       isPreviewRequest(request) ||
       isConfirmedApplicationAction(request, workingState) ||
       isBuildDraftRequest(request) ||
-      (workingState.awaitingConfirmation && isFollowUpForPendingTask(request, workingState))
+      isFollowUpForPendingTask(request, workingState)
     );
     if (shouldUseBuildTool) {
       const commandId = `build-${Date.now()}-${Math.random().toString(16).slice(2)}`;
