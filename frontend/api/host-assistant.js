@@ -224,6 +224,7 @@ async function handler(req, res) {
                     "Each candidate must include category, question_text, correct_answer, incorrect_answers, fun_fact, difficulty, question_type, image_url.",
                     "question_type must be true_false, multiple_choice, or written.",
                     "If host_context.session.targetType is set to true_false, multiple_choice, or written, every candidate's question_type must match it -- unless the host's request explicitly asks for a mix of types or a specific different type, in which case follow the request instead.",
+                    "Treat host_context.host_style_profile.preferredDifficulty as a hard difficulty target for every candidate's difficulty field and the actual obscurity/cleverness of the clue, not just atmosphere to skim -- a host who set this to something like 'slightly hard' deliberately does not want safe, obvious, first-thing-that-comes-to-mind questions. Only go easier or harder than it when the host's own request explicitly asks for that.",
                     "For multiple_choice, incorrect_answers must contain exactly 3 plausible wrong answers.",
                     "For true_false, correct_answer must be exactly True or False.",
                     "For written, answers must be familiar/gettable enough for a live bar team.",

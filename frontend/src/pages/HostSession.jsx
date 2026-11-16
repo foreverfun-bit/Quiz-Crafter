@@ -354,6 +354,33 @@ const flattenSession = (session) => {
   return entries.sort((a, b) => a.roundOrder !== b.roundOrder ? a.roundOrder - b.roundOrder : a.sourceOrder - b.sourceOrder);
 };
 
+// Mirrors BuildSession.jsx's parseRoundNumber/parseRoundOrdinal/
+// findRoundFromPrompt -- the floating assistant's listener below used to
+// always target whichever round the host happened to be viewing/hosting,
+// silently ignoring an explicit "round 1"/"the final round" in the actual
+// request text (so asking for round 1 while live on round 2 drafted round
+// 2's type/questions instead, with no sign anything went to the wrong
+// place).
+const parseRoundNumber = (value) => {
+  const match = String(value || "").toLowerCase().match(/\bround\s*(\d+)\b/);
+  return match ? Math.max(1, Number(match[1]) || 1) : null;
+};
+const roundOrdinalWords = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7, eighth: 8 };
+const parseRoundOrdinal = (value) => {
+  const text = String(value || "").toLowerCase();
+  if (/\b(final|last)\s+round\b/.test(text)) return "last";
+  const match = Object.keys(roundOrdinalWords).find((word) => new RegExp(`\\b${word}\\s+round\\b`).test(text));
+  return match ? roundOrdinalWords[match] : null;
+};
+const findRoundFromRequest = (request, rounds, fallback) => {
+  const number = parseRoundNumber(request);
+  if (number) return rounds[number - 1] || fallback;
+  const ordinal = parseRoundOrdinal(request);
+  if (ordinal === "last") return rounds[rounds.length - 1] || fallback;
+  if (typeof ordinal === "number") return rounds[ordinal - 1] || fallback;
+  return fallback;
+};
+
 const makeRounds = (questions) => {
   const groups = new Map();
   questions.forEach((question, index) => {
@@ -2648,7 +2675,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
       const request = String(event.detail?.request || "").trim();
       const commandId = event.detail?.commandId;
       if (!request) return;
-      const contextRound = currentRound || rounds[0];
+      const contextRound = findRoundFromRequest(request, rounds, currentRound || rounds[0]);
       if (!contextRound) {
         if (commandId) window.dispatchEvent(new CustomEvent("quiz-crafter-copilot-result", { detail: { commandId, result: { ok: false, request, message: "Add a round first, then ask me for questions." } } }));
         return;
