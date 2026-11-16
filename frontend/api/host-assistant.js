@@ -55,7 +55,7 @@ const styleProfileText = (profile) => {
 
 const collectBlockedQuestions = (context = {}, pastQuestions = []) => {
   const build = context.build || {};
-  const raw = [
+  const roundScoped = [
     ...safeList(context.questions, 80),
     ...safeList(build.activeRoundQuestions, 80),
     ...safeList(build.builtQuestions, 160),
@@ -63,23 +63,31 @@ const collectBlockedQuestions = (context = {}, pastQuestions = []) => {
     // block them the same mechanical way as anything already in the build,
     // not just a prompt instruction the model might not follow.
     ...safeList(context.rejectedQuestions, 80),
-    // Everything the host has ever saved to their library or used in a past
-    // session (see fetchExistingQuestions) -- mechanically blocking these,
-    // not just asking the model to avoid them in response_rules, is the same
-    // hard-filter approach generate-session-candidates.js already uses.
-    ...safeList(pastQuestions, 800),
   ];
+  // Everything the host has ever saved to their library or used in a past
+  // session (see fetchExistingQuestions) -- mechanically blocking exact/
+  // near-exact repeats, not just asking the model to avoid them in
+  // response_rules, is the same hard-filter approach
+  // generate-session-candidates.js already uses. Kept out of answersByCategory
+  // below: that rule means "don't reuse the same answer twice in this round,"
+  // which is sound for a handful of in-round questions but blocks nearly
+  // every future candidate once applied to hundreds of past true_false
+  // questions -- True/False only has two possible answers, so any category
+  // the host has ever used in a true_false question already owns both.
+  const historyScoped = safeList(pastQuestions, 800);
   const textFingerprints = new Set();
   const answerPairs = new Set();
   const answersByCategory = new Set();
-  raw.forEach((question) => {
+  const addQuestion = (question, { scopeCategory = true } = {}) => {
     const text = question?.question_text || question?.question;
     const answer = question?.correct_answer || question?.answer;
     const category = question?.category;
     if (text) textFingerprints.add(fingerprint(text));
     if (text && answer) answerPairs.add(answerPairFingerprint(text, answer));
-    if (category && answer) answersByCategory.add(`${fingerprint(category)}::${fingerprint(answer)}`);
-  });
+    if (scopeCategory && category && answer) answersByCategory.add(`${fingerprint(category)}::${fingerprint(answer)}`);
+  };
+  roundScoped.forEach((question) => addQuestion(question, { scopeCategory: true }));
+  historyScoped.forEach((question) => addQuestion(question, { scopeCategory: false }));
   return { textFingerprints, answerPairs, answersByCategory };
 };
 
