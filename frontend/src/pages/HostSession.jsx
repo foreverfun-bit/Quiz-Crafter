@@ -67,6 +67,9 @@ import {
 import { toast } from "sonner";
 import { hostToolsStorageKey, loadHostSetupSettings, loadHostToolsSessionState, loadProfileValue, profileKeys, readCurrentProjectSessionId, resetHostToolsSessionState, saveHostSetupSettings, saveHostToolsSessionState, updateUserMetadata, writeCurrentProjectSessionId } from "../lib/profileState";
 import { readHostStyleProfile, rememberStyleFeedback } from "../lib/hostStyleMemory";
+import { fetchVenueInsights } from "../lib/venueInsights";
+import VenueInsightsPanel from "../components/VenueInsightsPanel";
+import { useCopilot } from "../context/CopilotContext";
 
 const STORAGE_BASE = process.env.REACT_APP_SUPABASE_URL ? `${process.env.REACT_APP_SUPABASE_URL}/storage/v1/object/public/` : "";
 const PRODUCTION_HOSTNAMES = new Set(["quizcrafter.fun", "www.quizcrafter.fun", "quiz-crafter-foreverfun-bits-projects.vercel.app"]);
@@ -597,6 +600,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   // opening the workspace to look at questions would silently create a
   // live_games row and start broadcasting live state before "Open Event".
   const [eventOpen, setEventOpen] = useState(initialEventOpen);
+  const { updatePageContext } = useCopilot();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const isTestRun = searchParams.get("mode") === "test";
@@ -635,6 +639,12 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   const liveStateSaveKeyRef = useRef("");
   const liveRosterSyncKeyRef = useRef("");
   const [session, setSession] = useState(null);
+  const [venueInsights, setVenueInsights] = useState(null);
+  const [venueInsightsLoading, setVenueInsightsLoading] = useState(false);
+  // Candidates the floating Quiz Crafter assistant (FloatingCopilot.jsx)
+  // drafted via askCoHost, staged here for review -- see the
+  // quiz-crafter-copilot-command listener below for how they get here.
+  const [floatingCandidates, setFloatingCandidates] = useState([]);
   const [approvedCategories, setApprovedCategories] = useState([]);
   const [liveGameId, setLiveGameId] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -906,6 +916,25 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     };
     loadSession();
   }, [applyStoredLiveEvents, id, navigate]);
+
+  // Mirrors BuildSession.jsx's identical effect -- same shared
+  // fetchVenueInsights, same loading/clear-on-no-venue behavior, so the
+  // merged workspace shows the same "what this venue has taught the AI"
+  // signal the standalone Build page always has.
+  useEffect(() => {
+    let cancelled = false;
+    const venueId = session?.venue_id;
+    if (!venueId) {
+      setVenueInsights(null);
+      return undefined;
+    }
+    setVenueInsightsLoading(true);
+    fetchVenueInsights(venueId)
+      .then((insights) => { if (!cancelled) setVenueInsights(insights); })
+      .catch((error) => { console.warn("Venue insights unavailable:", error); if (!cancelled) setVenueInsights(null); })
+      .finally(() => { if (!cancelled) setVenueInsightsLoading(false); });
+    return () => { cancelled = true; };
+  }, [session?.venue_id]);
 
   useEffect(() => {
     const loadDurablePlayerEvents = async () => {
@@ -1192,6 +1221,23 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
   const fairPlayStats = useMemo(() => buildFairPlayStats(players, answers, gradedAnswers), [players, answers, gradedAnswers]);
   const progress = questions.length ? Math.round(((currentIndex + 1) / questions.length) * 100) : 0;
   const sessionName = session?.name || session?.session_name || "Trivia Session";
+  // The floating Quiz Crafter assistant (FloatingCopilot.jsx) had no idea
+  // this page even existed -- unlike BuildSession.jsx, nothing here ever
+  // called updatePageContext, so asking it about this session got only
+  // generic, venue-blind answers. Mirrors BuildSession's push (same
+  // `build` key, so FloatingCopilot's venue override picks it up the same
+  // way) scoped to what's available at this component's top level.
+  useEffect(() => {
+    updatePageContext({
+      goal: "Host or edit the active trivia session",
+      build: {
+        sessionName,
+        venue: session?.venue || "",
+        venueInsights,
+        rounds: rounds.map((round) => ({ name: round.name, questionCount: round.questions?.length || 0 })),
+      },
+    });
+  }, [rounds, sessionName, session?.venue, updatePageContext, venueInsights]);
   const joinUrl = `${getPublicOrigin()}/join?session=${id}${getProtectionBypassQuery()}`;
   const timeRemaining = timerEndAt ? Math.max(0, Math.ceil((timerEndAt - now) / 1000)) : null;
   const acceptingAnswers = !answersPaused && (timeRemaining === null || timeRemaining > 0);
@@ -2113,6 +2159,7 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
           request,
           context: {
             session: { name: sessionName, activeRound: round.name },
+            venue: session?.venue_id ? { name: session?.venue || "", insights: venueInsights } : null,
             conversation,
             questions: round.questions.map((question) => ({
               category: question.category,
@@ -2585,6 +2632,35 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
     return true;
   };
 
+  // Lets the floating Quiz Crafter assistant (FloatingCopilot.jsx) actually
+  // add questions here instead of only chatting -- mirrors BuildSession.jsx's
+  // listener for the same window event, but forwards into askCoHost (this
+  // page's own candidate-generating call) since this page has no equivalent
+  // of BuildSession's runBuilderChat. Candidates land in floatingCandidates
+  // for review/add in QuestionListView, the same "Add to Round" pattern
+  // GenerateRoundModal/CoHostChatModal already use.
+  useEffect(() => {
+    const handleCopilotCommand = async (event) => {
+      const request = String(event.detail?.request || "").trim();
+      const commandId = event.detail?.commandId;
+      if (!request) return;
+      const contextRound = currentRound || rounds[0];
+      if (!contextRound) {
+        if (commandId) window.dispatchEvent(new CustomEvent("quiz-crafter-copilot-result", { detail: { commandId, result: { ok: false, request, message: "Add a round first, then ask me for questions." } } }));
+        return;
+      }
+      const result = await askCoHost(contextRound, [], request, floatingCandidates);
+      if (!result) {
+        if (commandId) window.dispatchEvent(new CustomEvent("quiz-crafter-copilot-result", { detail: { commandId, result: { ok: false, request, message: "I couldn't finish that request." } } }));
+        return;
+      }
+      if (result.candidates?.length) setFloatingCandidates((current) => [...current, ...result.candidates]);
+      if (commandId) window.dispatchEvent(new CustomEvent("quiz-crafter-copilot-result", { detail: { commandId, result: { ok: true, request, message: result.answer || "Drafted some questions -- review them above the round list." } } }));
+    };
+    window.addEventListener("quiz-crafter-copilot-command", handleCopilotCommand);
+    return () => window.removeEventListener("quiz-crafter-copilot-command", handleCopilotCommand);
+  });
+
   // Unlike moveRound's whole-round swap, moving a single question can shift
   // an arbitrary number of other questions' positions in between its old and
   // new spot. Rather than hand-deriving that arithmetic, just flatten the
@@ -2930,6 +3006,11 @@ const HostSession = ({ sessionIdProp, onEditBuild, initialEventOpen = true } = {
             approvedCategories={approvedCategories}
             addGeneratedQuestionsToRound={addGeneratedQuestionsToRound}
             venueId={session?.venue_id}
+            venueName={session?.venue}
+            venueInsights={venueInsights}
+            venueInsightsLoading={venueInsightsLoading}
+            floatingCandidates={floatingCandidates}
+            setFloatingCandidates={setFloatingCandidates}
             branding={branding}
             markAnswer={markAnswer}
             addManualAnswer={addManualAnswer}
@@ -3988,7 +4069,7 @@ const QuestionListView = ({
   displayedQuestion, goToQuestion, reviewQuestion, onBackToLive, onGoLiveWithThis,
   answersForQuestionIndex, gradedAnswers, players, hostAnswers, fairPlayStats,
   showAnswer, showFunFact, timeRemaining, viewPointsPerQuestion, viewTimerSeconds, viewWagerMode, viewWagerLimit, viewWagerTiming,
-  onUpdateSettings, renameRound, describeRound, setEmptyRoundSettings, moveRound, deleteRound, createRound, createEmptyRound, moveQuestionToRound, moveQuestionWithinRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, addGeneratedQuestionsToRound, updateQuestionContent, editQuestionWithAi, askCoHost, saveQuestionToLibrary, venueId, approvedCategories, branding, markAnswer, addManualAnswer, editWager, editAnswerText, editPoints, releaseMode,
+  onUpdateSettings, renameRound, describeRound, setEmptyRoundSettings, moveRound, deleteRound, createRound, createEmptyRound, moveQuestionToRound, moveQuestionWithinRound, duplicateQuestion, discardQuestion, addQuestionToRound, addLibraryQuestionToRound, addGeneratedQuestionsToRound, updateQuestionContent, editQuestionWithAi, askCoHost, saveQuestionToLibrary, venueId, venueName, venueInsights, venueInsightsLoading, floatingCandidates, setFloatingCandidates, approvedCategories, branding, markAnswer, addManualAnswer, editWager, editAnswerText, editPoints, releaseMode,
   hasRevealExtra, hasFunFact, hasAudio, isPlayingAudio, onToggleAudio, onRevealAnswer, onShowFunFact, startTimer, resetTimer, resetQuestion, resetQuestionAt,
 }) => {
   // Only one round is shown at a time (see RoundHeader/RoundSwitcher) --
@@ -4050,6 +4131,35 @@ const QuestionListView = ({
   };
   const existingQuestionTexts = new Set(questions.map((question) => String(question.questionText || "").trim().toLowerCase()).filter(Boolean));
   return <div className="space-y-3">
+    {venueId && <VenueInsightsPanel venueName={venueName || "This venue"} insights={venueInsights} loading={venueInsightsLoading} />}
+    {floatingCandidates.length > 0 && (
+      <Card className="glass-card mb-4 border-[#AEB2EF]/25">
+        <CardContent className="p-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="flex items-center gap-2 text-white font-semibold"><Bot size={16} className="text-[#AEB2EF]" />Drafted by the floating assistant</p>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={() => { addGeneratedQuestionsToRound(activeRound, floatingCandidates); setFloatingCandidates([]); }} className="gradient-btn"><Check size={14} className="mr-1.5" />Add all to {activeRound.name}</Button>
+              <Button size="sm" variant="ghost" onClick={() => setFloatingCandidates([])} className="text-zinc-400 hover:text-white">Clear</Button>
+            </div>
+          </div>
+          <div className="space-y-2">
+            {floatingCandidates.map((candidate, index) => (
+              <div key={`${candidate.question_text}-${index}`} className="flex items-start justify-between gap-3 rounded-lg border border-white/10 bg-zinc-950/50 p-3">
+                <div className="min-w-0">
+                  <p className="text-xs text-zinc-500">{candidate.category}</p>
+                  <p className="text-sm text-white">{candidate.question_text}</p>
+                  <p className="text-xs text-emerald-300">Answer: {candidate.correct_answer}</p>
+                </div>
+                <div className="flex shrink-0 gap-1">
+                  <button type="button" title={`Add to ${activeRound.name}`} aria-label="Add this question" onClick={() => { addGeneratedQuestionsToRound(activeRound, [candidate]); setFloatingCandidates((current) => current.filter((item) => item !== candidate)); }} className="flex h-7 w-7 items-center justify-center rounded text-emerald-300 hover:bg-emerald-500/10"><Check size={15} /></button>
+                  <button type="button" title="Dismiss" aria-label="Dismiss this question" onClick={() => setFloatingCandidates((current) => current.filter((item) => item !== candidate))} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:bg-white/5 hover:text-white"><X size={15} /></button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+    )}
     <section>
       <RoundHeader
         rounds={rounds}

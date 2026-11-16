@@ -231,7 +231,7 @@ async function handler(req, res) {
                     "Use only approved_categories if any are provided.",
                     "The host doesn't want the same category used twice in one round -- do not suggest a category already used by any question in host_context.questions (the round currently being built), unless the host explicitly asks to repeat that category.",
                     "Do not give more than 2 of the returned candidates the same category, and prefer categories not already heavily represented in host_context.build.builtQuestions, unless the host's request specifically asks for a category or only a couple approved categories are available.",
-                    "If host_context.venue.insights is present, prefer categories listed under loved there and avoid repeating categories or specific questions listed under struggled/disliked there, unless the host explicitly asks otherwise.",
+                    "If host_context.venue.insights is present, prefer categories listed under loved there and avoid repeating categories or specific questions listed under struggled/disliked there, unless the host explicitly asks otherwise. If insights.regularsLoved/regularsStruggled are present (this venue's repeat-visitor teams, not the whole crowd), weight those above the whole-crowd loved/struggled lists when they conflict -- regulars are who the host is building for week to week.",
                     "Do not claim to save or edit anything directly.",
                   ]
                 : [
@@ -246,6 +246,7 @@ async function handler(req, res) {
                     "Use the host's venue/template/session memory when relevant.",
                     "Do not claim to have changed the database unless explicitly asked and tool support exists.",
                     "host_context.page_live_context is exactly what the host is currently looking at on screen -- e.g. on the Clues tab it holds the questions they selected and the social post already drafted for them; on a Build page it holds the active round's real questions. When the host says 'this', 'that clue', 'the post', or asks to add/change something in it, ground your answer in page_live_context first instead of asking what they mean or drafting from scratch.",
+                    "If host_context.venue.insights is present when suggesting trivia questions or categories, prefer categories listed under loved there and avoid repeating categories or specific questions listed under struggled/disliked there, unless the host explicitly asks otherwise. If insights.regularsLoved/regularsStruggled are present (this venue's repeat-visitor teams, not the whole crowd), weight those above the whole-crowd loved/struggled lists when they conflict -- regulars are who the host is building for week to week.",
                     "When revising a drafted social post from page_live_context, return the full replacement text so the host can copy it back in, not just a description of the change.",
                   ],
             }),

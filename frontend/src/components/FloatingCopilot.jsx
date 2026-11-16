@@ -10,6 +10,7 @@ import { supabase } from "../lib/supabase";
 import { loadHostSetupSettings } from "../lib/profileState";
 import { readHostStyleProfile } from "../lib/hostStyleMemory";
 import { readLocalTemplates, readLocalVenues } from "../lib/venues";
+import { fetchVenueInsights } from "../lib/venueInsights";
 import { useCopilot } from "../context/CopilotContext";
 
 const COPILOT_OPEN_KEY = "quiz-crafter-copilot-open-v1";
@@ -178,6 +179,11 @@ const formatBuildResult = (result = {}) => {
   if (result.undoAvailable) lines.push("", "Undo is available in the Build helper strip.");
   return lines.join("\n");
 };
+// Pages whose own listener (BuildSession.jsx) or (HostSession.jsx, the
+// merged workspace) turns a quiz-crafter-copilot-command event into real
+// AI-drafted questions the host can add, not just a chat reply.
+const isBuildToolPage = (pathname) => pathname.startsWith("/build") || pathname.startsWith("/session/");
+
 const routeForIntent = (text) => {
   const lower = text.toLowerCase();
   if (/\b(import|upload)\b/.test(lower) && /\b(pdf|csv|file)\b/.test(lower)) return "/import";
@@ -235,10 +241,18 @@ export default function FloatingCopilot({ user }) {
         .filter((item) => item.date)
         .sort((a, b) => new Date(a.date) - new Date(b.date))[0] || null;
       const build = summarizeBuild(currentBuildState());
-      const counts = await Promise.all([
-        supabase.from("questions").select("id", { count: "exact", head: true }),
-        supabase.from("sessions").select("id", { count: "exact", head: true }),
-      ]).catch(() => []);
+      // Default-venue fallback so the assistant has venue awareness (and
+      // the same "regulars" signal the dedicated co-host chat uses) even
+      // on pages that don't push a session-specific venue via
+      // updatePageContext (see the `venue` override in the context memo
+      // below, which prefers that live page context when present).
+      const [counts, activeVenueInsights] = await Promise.all([
+        Promise.all([
+          supabase.from("questions").select("id", { count: "exact", head: true }),
+          supabase.from("sessions").select("id", { count: "exact", head: true }),
+        ]).catch(() => []),
+        activeVenue ? fetchVenueInsights(activeVenue.id).catch(() => null) : Promise.resolve(null),
+      ]);
       if (cancelled) return;
       setBaseContext({
         route: { path: location.pathname, page: pageName },
@@ -260,6 +274,7 @@ export default function FloatingCopilot({ user }) {
           templates: limitList(templates, 6).map((template) => ({ id: template.id, name: template.name, rounds: template.roundCount, perRound: template.questionsPerRound })),
         },
         build,
+        venue: activeVenue ? { name: activeVenue.name || activeVenue.nightName || "", insights: activeVenueInsights } : null,
         hostStyleProfile: readHostStyleProfile(),
       });
     };
@@ -269,17 +284,35 @@ export default function FloatingCopilot({ user }) {
 
   const context = useMemo(() => ({
     ...baseContext,
+    // A page in view of one specific session/venue (Build, the merged
+    // Host/Build workspace) pushes its own venue + venueInsights via
+    // updatePageContext -- prefer that over the account-wide default venue
+    // from baseContext, since it's what the host is actually looking at.
+    venue: pageContext?.build?.venue
+      ? { name: pageContext.build.venue, insights: pageContext.build.venueInsights || null }
+      : baseContext.venue || null,
     pageLiveContext: pageContext,
     currentPageGoal: pageContext?.goal || pageName,
     conversationState: workingState,
   }), [baseContext, pageContext, pageName, workingState]);
 
   const promptHint = useMemo(() => {
-    if (location.pathname.startsWith("/build")) return "Try: Replace question 4, build Round 2, make this less obvious...";
+    if (isBuildToolPage(location.pathname)) return "Try: Give me question suggestions, build this round, replace question 4...";
     if (location.pathname.startsWith("/library")) return "Try: Find biology questions, mark this reusable, import this PDF...";
     if (location.pathname === "/") return "Try: What should I work on next? Continue my next show...";
     if (location.pathname.startsWith("/host-session")) return "Try: Who has not answered? Show me live feedback...";
     return "Ask Quiz Crafter anything about this page...";
+  }, [location.pathname]);
+
+  // On a page that can actually stage/add drafted questions (isBuildToolPage),
+  // the chips are worded to match isBuildDraftRequest/isPreviewRequest's
+  // phrasing exactly so the first click lands on the real add-to-round path
+  // instead of a plain chat reply the host then has to retype more
+  // specifically (see the "Use my style memory" chip, which only chats --
+  // kept elsewhere since it's not a drafting request).
+  const quickChips = useMemo(() => {
+    if (isBuildToolPage(location.pathname)) return ["Give me question suggestions for this round", "Build this round", "Find a replacement for a weak question"];
+    return ["What should I work on next?", "Open the right tool", "Use my style memory"];
   }, [location.pathname]);
 
   const runBuildCommand = (request, commandId) => {
@@ -299,7 +332,7 @@ export default function FloatingCopilot({ user }) {
       return;
     }
 
-    const shouldUseBuildTool = location.pathname.startsWith("/build") && (
+    const shouldUseBuildTool = isBuildToolPage(location.pathname) && (
       isPreviewRequest(request) ||
       isConfirmedApplicationAction(request, workingState) ||
       isBuildDraftRequest(request) ||
@@ -433,7 +466,7 @@ export default function FloatingCopilot({ user }) {
 
             <div className="border-t border-white/10 p-3">
               <div className="mb-2 flex flex-wrap gap-1.5">
-                {["What should I work on next?", "Open the right tool", "Use my style memory"].map((chip) => (
+                {quickChips.map((chip) => (
                   <button key={chip} type="button" onClick={() => handleSubmit(chip)} className="rounded-full border border-white/10 bg-zinc-950 px-2.5 py-1 text-[11px] font-semibold text-zinc-400 hover:border-[#71E0DC]/35 hover:text-white">{chip}</button>
                 ))}
               </div>
@@ -441,7 +474,7 @@ export default function FloatingCopilot({ user }) {
                 <Textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); handleSubmit(); } }} placeholder={promptHint} className="min-h-[54px] flex-1 resize-none border-white/10 bg-zinc-950 text-white focus:border-[#71E0DC]/60" />
                 <Button type="button" onClick={() => handleSubmit()} disabled={loading || !clean(input)} className="h-auto gradient-btn px-3"><Send size={16} /></Button>
               </div>
-              {routeForIntent(input) && !location.pathname.startsWith(routeForIntent(input)) && (
+              {routeForIntent(input) && !location.pathname.startsWith(routeForIntent(input)) && !(routeForIntent(input) === "/build" && isBuildToolPage(location.pathname)) && (
                 <button type="button" onClick={() => navigate(routeForIntent(input))} className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[#71E0DC] hover:text-white">
                   <ExternalLink size={12} /> Open likely page: {routeTitle(routeForIntent(input))}
                 </button>
