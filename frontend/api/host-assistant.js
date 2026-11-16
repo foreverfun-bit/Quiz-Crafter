@@ -74,7 +74,13 @@ const collectBlockedQuestions = (context = {}, pastQuestions = []) => {
   // every future candidate once applied to hundreds of past true_false
   // questions -- True/False only has two possible answers, so any category
   // the host has ever used in a true_false question already owns both.
-  const historyScoped = safeList(pastQuestions, 800);
+  // A candidate the host flagged too_easy/not_my_style/etc. through the "Too
+  // easy" button or a co-host dismiss (rememberStyleFeedback) only ever fed
+  // back in as a soft "avoidThisStyle" prompt example before this -- the
+  // model kept resurfacing the exact same flagged questions since nothing
+  // actually blocked them. Block them the same mechanical way as history.
+  const flaggedExamples = normalizeStyleProfile(context.hostStyleProfile).examplesOfBadQuestions;
+  const historyScoped = [...safeList(pastQuestions, 800), ...flaggedExamples];
   const textFingerprints = new Set();
   const answerPairs = new Set();
   const answersByCategory = new Set();
@@ -244,6 +250,7 @@ async function handler(req, res) {
                     "Never suggest a question already present in host_context.questions, host_context.build.activeRoundQuestions, or host_context.build.builtQuestions.",
                     "host_context.rejected_questions are drafts the host explicitly dismissed from a previous response -- never suggest any of them again, not even reworded, rephrased, or with a different fun fact.",
                     "host_context.past_question_examples is a sample of real questions the host has already written to their library or used in a past session -- never suggest any of them again, not even reworded, rephrased, or with a different fun fact, and avoid reusing the same specific fact/answer-angle about the same subject even under a different question.",
+                    "host_context.host_style_profile.avoidThisStyle lists specific questions the host already flagged as too easy, not their style, or otherwise rejected -- never suggest any of them again either, same as past_question_examples.",
                     "Never reuse the same correct answer in the same category as an existing built question.",
                     "If the host rejects a direction, do not defend it; pivot and produce a materially different approach.",
                     "If you cannot satisfy the directions without duplicates, return fewer candidates and explain what constraint blocked you.",
