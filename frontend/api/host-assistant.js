@@ -244,7 +244,8 @@ async function handler(req, res) {
                 : buildMode
                 ? [
                     "Return JSON with keys: answer, candidates.",
-                    "answer should be 2-5 short, actionable sentences for the host.",
+                    "answer should be 2-5 short, actionable sentences for the host -- a brief intro/summary only (e.g. 'Here are three harder true_false questions for Round 1.'). Never restate a candidate's question_text, correct_answer, or fun_fact inside answer, and never write a numbered list of the actual questions there -- that exact content belongs only in each candidates[] entry, nowhere else.",
+                    "Whenever the host's request can reasonably be read as asking for questions (including a bare follow-up like 'try again', 'another', or 'harder'), candidates must contain a real, populated entry for every question you are offering -- an answer that describes or lists questions with an empty or missing candidates array is never acceptable.",
                     "Use the conversation history to continue refining instead of restarting the task.",
                     "Treat the newest user request as the highest priority.",
                     "Never suggest a question already present in host_context.questions, host_context.build.activeRoundQuestions, or host_context.build.builtQuestions.",
