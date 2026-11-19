@@ -297,6 +297,11 @@ async function handler(req, res) {
     if (!answer) throw new Error("AI returned an empty answer");
     if (buildMode) {
       const parsed = parseAssistantJson(answer);
+      // Temporary: confirms whether the model is actually populating
+      // candidates at all vs. just answering in prose, for a request that
+      // keeps coming back flat in testing (dropped stays 0 either way, so
+      // the existing "I filtered out N" text can't tell them apart).
+      console.log("host-assistant build_cohost:", JSON.stringify({ request, rawCandidateCount: Array.isArray(parsed?.candidates) ? parsed.candidates.length : null, parsedKeys: parsed ? Object.keys(parsed) : null }));
       const blocked = collectBlockedQuestions(context, pastQuestions);
       const normalized = Array.isArray(parsed?.candidates) ? parsed.candidates.map(normalizeCandidate).filter(Boolean) : [];
       // "Don't repeat a category" is only a prompt instruction above, and the
