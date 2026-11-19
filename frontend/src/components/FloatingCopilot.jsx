@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import axios from "axios";
-import { Bot, ChevronDown, ExternalLink, GripHorizontal, Loader2, Maximize2, Minimize2, Send, Sparkles, X } from "lucide-react";
+import { Bot, Check, ChevronDown, ExternalLink, GripHorizontal, Loader2, Maximize2, Minimize2, Send, Sparkles, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
 import { Badge } from "./ui/badge";
 import { supabase } from "../lib/supabase";
 import { loadHostSetupSettings } from "../lib/profileState";
-import { readHostStyleProfile } from "../lib/hostStyleMemory";
+import { readHostStyleProfile, rememberStyleFeedback } from "../lib/hostStyleMemory";
 import { readLocalTemplates, readLocalVenues } from "../lib/venues";
 import { fetchVenueInsights } from "../lib/venueInsights";
 import { useCopilot } from "../context/CopilotContext";
@@ -131,6 +131,7 @@ const emptyWorkingState = {
   awaitingConfirmation: false,
   lastAiSuggestion: null,
   lastUserFeedback: "",
+  lastDraftRequest: "",
 };
 const normalizeWorkingState = (state = {}) => ({ ...emptyWorkingState, ...(state && typeof state === "object" ? state : {}) });
 const isFollowUpForPendingTask = (text, state) => {
@@ -138,6 +139,29 @@ const isFollowUpForPendingTask = (text, state) => {
   if (!state?.currentTask && !state?.awaitingConfirmation && !state?.pendingGeneratedQuestion) return false;
   return /^(try again|again|another|give me another|harder|make it harder|easier|make it easier|rewrite it|improve it|cancel|nevermind|never mind)$/i.test(lower) || isConfirmFollowUp(lower);
 };
+// A bare follow-up like "try again" carries no actual content of its own --
+// forwarded as-is (to either BuildSession.jsx's regex-based classifyBuildIntent
+// or host-assistant.js's build_cohost mode, which gets no conversation history
+// over this event bridge), it reads as a brand-new, context-free request and
+// produces a flat clarifying reply instead of a fresh batch of candidates.
+// Re-expand it using the actual draft request that started this task, so
+// what's actually sent/dispatched is self-contained.
+const buildEffectiveDraftRequest = (rawRequest, state) => {
+  const base = state?.lastDraftRequest || "more questions for the current round";
+  const lower = clean(rawRequest).toLowerCase();
+  if (/harder/.test(lower)) return `${base} -- but noticeably harder than last time, don't repeat the same questions`;
+  if (/easier/.test(lower)) return `${base} -- but a bit easier than last time, don't repeat the same questions`;
+  if (/rewrite|improve/.test(lower)) return `${base} -- rewrite/improve on the previous suggestions`;
+  return `${base} -- give me a different set than before, don't repeat the same ones`;
+};
+// True only for a bare follow-up that continues a drafting task specifically
+// (not a confirm/replace/preview follow-up, which already carries its own
+// meaning and doesn't need this rewrite).
+const isDraftFollowUp = (rawRequest, state) => state?.currentTask === "draft_candidates"
+  && !isBuildDraftRequest(rawRequest)
+  && !isPreviewRequest(rawRequest)
+  && !isConfirmedApplicationAction(rawRequest, state)
+  && isFollowUpForPendingTask(rawRequest, state);
 const isConfirmFollowUp = (text) => {
   const lower = clean(text).toLowerCase();
   return /^(yes|yep|yeah|correct|looks good|use it|use this|apply it|apply this|replace it)$/.test(lower)
@@ -179,6 +203,11 @@ const formatBuildResult = (result = {}) => {
   if (result.undoAvailable) lines.push("", "Undo is available in the Build helper strip.");
   return lines.join("\n");
 };
+// BuildSession.jsx's runBuilderChat returns drafted candidates as `new_value`
+// (matching its other action_type results); HostSession.jsx's askCoHost
+// returns them as `candidates`. Normalizing both here means neither page's
+// existing shape has to change.
+const resultCandidates = (result = {}) => (Array.isArray(result.candidates) ? result.candidates : Array.isArray(result.new_value) ? result.new_value : []);
 // Pages whose own listener (BuildSession.jsx) or (HostSession.jsx, the
 // merged workspace) turns a quiz-crafter-copilot-command event into real
 // AI-drafted questions the host can add, not just a chat reply.
@@ -332,11 +361,20 @@ export default function FloatingCopilot({ user }) {
       return;
     }
 
+    // isFollowUpForPendingTask already requires currentTask/awaitingConfirmation/
+    // pendingGeneratedQuestion to be set before it matches anything -- gating
+    // it again on awaitingConfirmation specifically meant a bare follow-up like
+    // "try again" right after a successful draft (which sets currentTask but
+    // leaves awaitingConfirmation false; nothing here asks the host to confirm
+    // first) could never match, and fell through to a flat-text-only chat
+    // reply instead of continuing the draft.
+    const draftFollowUp = isDraftFollowUp(request, workingState);
     const shouldUseBuildTool = isBuildToolPage(location.pathname) && (
       isPreviewRequest(request) ||
       isConfirmedApplicationAction(request, workingState) ||
       isBuildDraftRequest(request) ||
-      (workingState.awaitingConfirmation && isFollowUpForPendingTask(request, workingState))
+      draftFollowUp ||
+      isFollowUpForPendingTask(request, workingState)
     );
     if (shouldUseBuildTool) {
       const commandId = `build-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -346,7 +384,54 @@ export default function FloatingCopilot({ user }) {
           ? `Updating ${workingState.activeQuestion ? `Question ${workingState.activeQuestion.number}` : "the pending suggestion"}...`
           : buildProgressText(request);
       setMessages((current) => [...current, { role: "assistant", content: progress, commandId, pending: true }].slice(-24));
-      runBuildCommand(request, commandId);
+      // A bare "try again"/"harder" carries no content of its own once it
+      // crosses the quiz-crafter-copilot-command bridge (the page listener
+      // gets only this string, no conversation history) -- expand it against
+      // the request that actually started this draft task before sending it
+      // over, or it reads as a brand-new, context-free ask.
+      if (isBuildDraftRequest(request)) setWorkingState((state) => normalizeWorkingState({ ...state, lastDraftRequest: request }));
+      runBuildCommand(draftFollowUp ? buildEffectiveDraftRequest(request, workingState) : request, commandId);
+      return;
+    }
+
+    // Off a page that can generate with its own rich context (no round/
+    // category state to draw on here), but the host still asked for
+    // questions -- draft them directly instead of only chatting about them.
+    // Same endpoint/mode askCoHost/handleAskCoHost already use, just with
+    // whatever context this component has on hand (venue, style profile,
+    // approved categories if a page happened to push any). Also covers a
+    // bare follow-up ("try again", "harder") once workingState.currentTask
+    // is set below -- without this, a follow-up to this path's own previous
+    // reply always missed isBuildDraftRequest and fell through to a
+    // flat-text-only chat answer, since nothing here ever updated
+    // workingState the way the build-tool-page path already does.
+    const offPageDraftFollowUp = !isBuildToolPage(location.pathname) && isDraftFollowUp(request, workingState);
+    if (!isBuildToolPage(location.pathname) && (isBuildDraftRequest(request) || offPageDraftFollowUp)) {
+      const effectiveRequest = offPageDraftFollowUp ? buildEffectiveDraftRequest(request, workingState) : request;
+      setLoading(true);
+      try {
+        const { data } = await axios.post("/api/host-assistant", {
+          mode: "build_cohost",
+          request: effectiveRequest,
+          context: {
+            session: { name: context.build?.sessionName || "", activeRound: "" },
+            venue: context.venue || null,
+            conversation: nextMessages.slice(-10),
+            questions: [],
+            rejectedQuestions: [],
+            hostStyleProfile: context.hostStyleProfile,
+          },
+        }, { timeout: 90000 });
+        const candidates = Array.isArray(data?.candidates) ? data.candidates : [];
+        setMessages((current) => [...current, { role: "assistant", content: data?.answer || "Here's what I drafted.", candidates }].slice(-24));
+        setWorkingState((state) => normalizeWorkingState({ ...state, currentTask: "draft_candidates", lastUserFeedback: request, lastDraftRequest: offPageDraftFollowUp ? state.lastDraftRequest : request }));
+      } catch (error) {
+        console.error("Copilot draft error:", error);
+        toast.error(error.response?.data?.error || error.message || "Quiz Crafter could not draft that");
+        setMessages((current) => [...current, { role: "assistant", content: "I couldn't draft anything just now -- try again in a moment." }].slice(-24));
+      } finally {
+        setLoading(false);
+      }
       return;
     }
 
@@ -379,9 +464,10 @@ export default function FloatingCopilot({ user }) {
       setMessages((current) => {
         const hasPending = current.some((message) => message.commandId === commandId);
         const formatted = formatBuildResult(result);
+        const candidates = resultCandidates(result);
         setWorkingState((state) => applyWorkingStateFromResult(state, result?.request || "", result));
-        if (!hasPending) return [...current, { role: "assistant", content: formatted }].slice(-24);
-        return current.map((message) => message.commandId === commandId ? { role: "assistant", content: formatted, commandId } : message).slice(-24);
+        if (!hasPending) return [...current, { role: "assistant", content: formatted, candidates }].slice(-24);
+        return current.map((message) => message.commandId === commandId ? { role: "assistant", content: formatted, commandId, candidates } : message).slice(-24);
       });
     };
     const handleOpenRequest = (event) => {
@@ -396,6 +482,70 @@ export default function FloatingCopilot({ user }) {
       window.removeEventListener("quiz-crafter-open-copilot", handleOpenRequest);
     };
   });
+
+  // Immutable per-candidate status flip (added/saved) so a card's buttons
+  // reflect what's already been done with it, keyed by its position in a
+  // specific message (candidates have no stable id coming back from either
+  // generation path, but messages/their candidate lists are never reordered).
+  const updateCandidateStatus = (messageIndex, candidateIndex, patch) => {
+    setMessages((current) => current.map((message, mi) => {
+      if (mi !== messageIndex || !message.candidates) return message;
+      return { ...message, candidates: message.candidates.map((candidate, ci) => ci === candidateIndex ? { ...candidate, ...patch } : candidate) };
+    }));
+  };
+
+  // "Add to Session" only ever renders when isBuildToolPage(location.pathname)
+  // is true (see the render below), so a listener is guaranteed to be
+  // mounted (BuildSession.jsx/HostSession.jsx) -- no ack needed, they already
+  // toast their own success/failure.
+  const handleAddToSession = (messageIndex, candidateIndex, candidate) => {
+    window.dispatchEvent(new CustomEvent("quiz-crafter-copilot-add-to-session", { detail: { candidate } }));
+    updateCandidateStatus(messageIndex, candidateIndex, { _added: true });
+  };
+
+  // Library saves are account-wide, not page-specific -- on a build-tool page,
+  // let it run through the page's own full save (handleSaveQuestionToLibrary/
+  // saveQuestionToLibrary), which also teaches the style profile via
+  // rememberStyleFeedback. Off those pages, insert directly: same payload
+  // shape BuildSession.jsx's handleSaveQuestionToLibrary uses.
+  const handleSaveCandidateToLibrary = async (messageIndex, candidateIndex, candidate) => {
+    if (isBuildToolPage(location.pathname)) {
+      window.dispatchEvent(new CustomEvent("quiz-crafter-copilot-save-to-library", { detail: { candidate } }));
+      updateCandidateStatus(messageIndex, candidateIndex, { _saved: true });
+      return;
+    }
+    if (!user?.id) { toast.error("You must be signed in"); return; }
+    const payload = {
+      user_id: user.id,
+      question_text: candidate.question_text,
+      correct_answer: candidate.correct_answer,
+      question_type: candidate.question_type || candidate.type || "written",
+      category: candidate.category || "",
+      incorrect_answers: Array.isArray(candidate.options) && candidate.options.length ? candidate.options.join("; ") : candidate.incorrect_answers || null,
+      fun_fact: candidate.fun_fact || null,
+      image_url: candidate.image_url || null,
+    };
+    const { error } = await supabase.from("questions").insert(payload);
+    if (error) {
+      console.error("Save to library error:", error);
+      toast.error(error.message || "Failed to save to library");
+      return;
+    }
+    toast.success("Saved to your library");
+    updateCandidateStatus(messageIndex, candidateIndex, { _saved: true });
+  };
+
+  // The only difficulty-feedback loop that existed before this (BuildSession.jsx's
+  // AiCandidateCard "too easy" rating) never reached this chat -- so a host who
+  // only ever drafts through the floating assistant had no way to teach
+  // hostStyleMemory that results were coming back too easy, and preferredDifficulty
+  // stayed stuck at its generic default. rememberStyleFeedback is page-agnostic
+  // (writes straight to the profile), so it works the same here as it does there.
+  const handleTooEasy = (messageIndex, candidateIndex, candidate) => {
+    rememberStyleFeedback(candidate, "too_easy", "Flagged too easy from the floating assistant").catch((error) => console.warn("Style feedback save unavailable:", error));
+    toast.success("Got it -- I'll push harder on difficulty next time");
+    updateCandidateStatus(messageIndex, candidateIndex, { _flaggedEasy: true });
+  };
 
   const startResize = (event) => {
     event.preventDefault();
@@ -454,9 +604,35 @@ export default function FloatingCopilot({ user }) {
             <div className="flex-1 space-y-3 overflow-y-auto p-4">
               {messages.map((message, index) => (
                 <div key={`${message.role}-${index}`} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
-                  <div className={`max-w-[88%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-relaxed ${message.role === "user" ? "border border-[#71E0DC]/25 bg-[#71E0DC]/15 text-white" : "border border-white/10 bg-zinc-900/90 text-zinc-200"}`}>
-                    {message.pending && <Loader2 size={14} className="mr-2 inline animate-spin text-[#71E0DC]" />}
-                    {message.content}
+                  <div className={`max-w-[88%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${message.role === "user" ? "border border-[#71E0DC]/25 bg-[#71E0DC]/15 text-white" : "border border-white/10 bg-zinc-900/90 text-zinc-200"}`}>
+                    <div className="whitespace-pre-wrap">
+                      {message.pending && <Loader2 size={14} className="mr-2 inline animate-spin text-[#71E0DC]" />}
+                      {message.content}
+                    </div>
+                    {message.candidates?.length > 0 && (
+                      <div className="mt-3 space-y-2">
+                        {message.candidates.map((candidate, candidateIndex) => (
+                          <div key={candidateIndex} className="rounded-lg border border-[#AEB2EF]/20 bg-zinc-950/60 p-3">
+                            <p className="text-[11px] uppercase tracking-wide text-zinc-500">{candidate.category}</p>
+                            <p className="mt-1 text-sm text-white">{candidate.question_text}</p>
+                            <p className="mt-1 text-xs text-emerald-300">Answer: {candidate.correct_answer}</p>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {isBuildToolPage(location.pathname) && (
+                                <button type="button" disabled={candidate._added} onClick={() => handleAddToSession(index, candidateIndex, candidate)} className="inline-flex items-center gap-1 rounded-full border border-[#71E0DC]/30 bg-[#71E0DC]/10 px-2.5 py-1 text-[11px] font-semibold text-[#71E0DC] disabled:opacity-50">
+                                  {candidate._added ? <><Check size={11} />Added</> : "Add to Session"}
+                                </button>
+                              )}
+                              <button type="button" disabled={candidate._saved} onClick={() => handleSaveCandidateToLibrary(index, candidateIndex, candidate)} className="inline-flex items-center gap-1 rounded-full border border-white/15 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-zinc-300 disabled:opacity-50">
+                                {candidate._saved ? <><Check size={11} />Saved</> : "Add to Library"}
+                              </button>
+                              <button type="button" disabled={candidate._flaggedEasy} onClick={() => handleTooEasy(index, candidateIndex, candidate)} className="inline-flex items-center gap-1 rounded-full border border-white/15 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-zinc-400 disabled:opacity-50">
+                                {candidate._flaggedEasy ? <><Check size={11} />Noted</> : "Too easy"}
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}

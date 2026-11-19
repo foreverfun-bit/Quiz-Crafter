@@ -1,3 +1,5 @@
+const { fetchExistingQuestions } = require("./_lib/existingQuestions");
+
 const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
 // The model habitually writes true/false questions as "True or False: <claim>"
 // -- redundant once the app already shows the question as a True/False type.
@@ -51,9 +53,9 @@ const styleProfileText = (profile) => {
   };
 };
 
-const collectBlockedQuestions = (context = {}) => {
+const collectBlockedQuestions = (context = {}, pastQuestions = []) => {
   const build = context.build || {};
-  const raw = [
+  const roundScoped = [
     ...safeList(context.questions, 80),
     ...safeList(build.activeRoundQuestions, 80),
     ...safeList(build.builtQuestions, 160),
@@ -62,17 +64,36 @@ const collectBlockedQuestions = (context = {}) => {
     // not just a prompt instruction the model might not follow.
     ...safeList(context.rejectedQuestions, 80),
   ];
+  // Everything the host has ever saved to their library or used in a past
+  // session (see fetchExistingQuestions) -- mechanically blocking exact/
+  // near-exact repeats, not just asking the model to avoid them in
+  // response_rules, is the same hard-filter approach
+  // generate-session-candidates.js already uses. Kept out of answersByCategory
+  // below: that rule means "don't reuse the same answer twice in this round,"
+  // which is sound for a handful of in-round questions but blocks nearly
+  // every future candidate once applied to hundreds of past true_false
+  // questions -- True/False only has two possible answers, so any category
+  // the host has ever used in a true_false question already owns both.
+  // A candidate the host flagged too_easy/not_my_style/etc. through the "Too
+  // easy" button or a co-host dismiss (rememberStyleFeedback) only ever fed
+  // back in as a soft "avoidThisStyle" prompt example before this -- the
+  // model kept resurfacing the exact same flagged questions since nothing
+  // actually blocked them. Block them the same mechanical way as history.
+  const flaggedExamples = normalizeStyleProfile(context.hostStyleProfile).examplesOfBadQuestions;
+  const historyScoped = [...safeList(pastQuestions, 800), ...flaggedExamples];
   const textFingerprints = new Set();
   const answerPairs = new Set();
   const answersByCategory = new Set();
-  raw.forEach((question) => {
+  const addQuestion = (question, { scopeCategory = true } = {}) => {
     const text = question?.question_text || question?.question;
     const answer = question?.correct_answer || question?.answer;
     const category = question?.category;
     if (text) textFingerprints.add(fingerprint(text));
     if (text && answer) answerPairs.add(answerPairFingerprint(text, answer));
-    if (category && answer) answersByCategory.add(`${fingerprint(category)}::${fingerprint(answer)}`);
-  });
+    if (scopeCategory && category && answer) answersByCategory.add(`${fingerprint(category)}::${fingerprint(answer)}`);
+  };
+  roundScoped.forEach((question) => addQuestion(question, { scopeCategory: true }));
+  historyScoped.forEach((question) => addQuestion(question, { scopeCategory: false }));
   return { textFingerprints, answerPairs, answersByCategory };
 };
 
@@ -148,6 +169,12 @@ async function handler(req, res) {
 
     const buildMode = mode === "build_cohost";
     const editMode = mode === "question_edit";
+    // The host's library and every past session's questions, so drafting
+    // chat (askCoHost/the floating assistant) stops re-suggesting things
+    // the host has already written or used, same as bulk generation already
+    // does via generate-session-candidates.js's fetchExistingQuestions.
+    const pastQuestions = buildMode ? await fetchExistingQuestions() : [];
+    const pastQuestionExamples = pastQuestions.slice(0, 40).map((q) => ({ category: q.category, question_text: q.question_text, correct_answer: q.correct_answer }));
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -192,6 +219,11 @@ async function handler(req, res) {
                 player_ideas: safeList(context.ideas, 30),
                 questions: safeList(context.questions, 40),
                 rejected_questions: safeList(context.rejectedQuestions, 40),
+                // Everything the host has ever saved to the library or used
+                // in a past session (see fetchExistingQuestions) -- a sample,
+                // not the full set, since the full set is already enforced
+                // mechanically below via collectBlockedQuestions.
+                past_question_examples: buildMode ? pastQuestionExamples : [],
                 host_style_profile: styleProfileText(context.hostStyleProfile),
               },
               response_rules: editMode
@@ -212,11 +244,14 @@ async function handler(req, res) {
                 : buildMode
                 ? [
                     "Return JSON with keys: answer, candidates.",
-                    "answer should be 2-5 short, actionable sentences for the host.",
+                    "answer should be 2-5 short, actionable sentences for the host -- a brief intro/summary only (e.g. 'Here are three harder true_false questions for Round 1.'). Never restate a candidate's question_text, correct_answer, or fun_fact inside answer, and never write a numbered list of the actual questions there -- that exact content belongs only in each candidates[] entry, nowhere else.",
+                    "Whenever the host's request can reasonably be read as asking for questions (including a bare follow-up like 'try again', 'another', or 'harder'), candidates must contain a real, populated entry for every question you are offering -- an answer that describes or lists questions with an empty or missing candidates array is never acceptable.",
                     "Use the conversation history to continue refining instead of restarting the task.",
                     "Treat the newest user request as the highest priority.",
                     "Never suggest a question already present in host_context.questions, host_context.build.activeRoundQuestions, or host_context.build.builtQuestions.",
                     "host_context.rejected_questions are drafts the host explicitly dismissed from a previous response -- never suggest any of them again, not even reworded, rephrased, or with a different fun fact.",
+                    "host_context.past_question_examples is a sample of real questions the host has already written to their library or used in a past session -- never suggest any of them again, not even reworded, rephrased, or with a different fun fact, and avoid reusing the same specific fact/answer-angle about the same subject even under a different question.",
+                    "host_context.host_style_profile.avoidThisStyle lists specific questions the host already flagged as too easy, not their style, or otherwise rejected -- never suggest any of them again either, same as past_question_examples.",
                     "Never reuse the same correct answer in the same category as an existing built question.",
                     "If the host rejects a direction, do not defend it; pivot and produce a materially different approach.",
                     "If you cannot satisfy the directions without duplicates, return fewer candidates and explain what constraint blocked you.",
@@ -224,6 +259,7 @@ async function handler(req, res) {
                     "Each candidate must include category, question_text, correct_answer, incorrect_answers, fun_fact, difficulty, question_type, image_url.",
                     "question_type must be true_false, multiple_choice, or written.",
                     "If host_context.session.targetType is set to true_false, multiple_choice, or written, every candidate's question_type must match it -- unless the host's request explicitly asks for a mix of types or a specific different type, in which case follow the request instead.",
+                    "Treat host_context.host_style_profile.preferredDifficulty as a hard difficulty target for every candidate's difficulty field and the actual obscurity/cleverness of the clue, not just atmosphere to skim -- a host who set this to something like 'slightly hard' deliberately does not want safe, obvious, first-thing-that-comes-to-mind questions. Only go easier or harder than it when the host's own request explicitly asks for that.",
                     "For multiple_choice, incorrect_answers must contain exactly 3 plausible wrong answers.",
                     "For true_false, correct_answer must be exactly True or False.",
                     "For written, answers must be familiar/gettable enough for a live bar team.",
@@ -261,7 +297,12 @@ async function handler(req, res) {
     if (!answer) throw new Error("AI returned an empty answer");
     if (buildMode) {
       const parsed = parseAssistantJson(answer);
-      const blocked = collectBlockedQuestions(context);
+      // Temporary: confirms whether the model is actually populating
+      // candidates at all vs. just answering in prose, for a request that
+      // keeps coming back flat in testing (dropped stays 0 either way, so
+      // the existing "I filtered out N" text can't tell them apart).
+      console.log("host-assistant build_cohost:", JSON.stringify({ request, rawCandidateCount: Array.isArray(parsed?.candidates) ? parsed.candidates.length : null, parsedKeys: parsed ? Object.keys(parsed) : null }));
+      const blocked = collectBlockedQuestions(context, pastQuestions);
       const normalized = Array.isArray(parsed?.candidates) ? parsed.candidates.map(normalizeCandidate).filter(Boolean) : [];
       // "Don't repeat a category" is only a prompt instruction above, and the
       // model doesn't reliably follow it -- cap it mechanically too, same as

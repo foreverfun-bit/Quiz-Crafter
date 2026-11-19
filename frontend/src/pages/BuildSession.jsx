@@ -1473,7 +1473,12 @@ const BuildSession = ({ sessionIdProp, onGoLive } = {}) => {
         setGenerationStatus("");
         setActiveRoundId(targetRound.id);
         appendBuilderAssistant(`I found ${generated.length} possible ${generated.length === 1 ? "question" : "questions"} for ${targetRound.name}. Pick the ones you want to add.`);
-        return { ok: true, message: `Found ${generated.length} candidate ${generated.length === 1 ? "question" : "questions"} for ${targetRound.name}.` };
+        // Matches generate_full_session/generate_round's return shape just above --
+        // this branch already drafted real candidates into aiCandidates, it just
+        // never put them in ITS OWN return value, so a caller that only reads the
+        // return (the floating assistant's command-dispatch listener below) saw
+        // flat text with no way to act on it even though the page quietly had them.
+        return { ok: true, success: true, action_type: "draft_candidates", changed_item_id: null, old_value: null, new_value: generated, message: `Found ${generated.length} candidate ${generated.length === 1 ? "question" : "questions"} for ${targetRound.name}.`, awaitingConfirmation: false, task: { type: "draft_candidates", session: sessionName, round: targetRound.name } };
       }
       if (["replace_question", "rewrite_question", "make_harder", "make_easier", "add_fun_fact"].includes(intent)) {
         if (/\bweakest|balance|review\b/i.test(request) && !parseQuestionNumber(request)) {
@@ -1538,6 +1543,27 @@ const BuildSession = ({ sessionIdProp, onGoLive } = {}) => {
     };
     window.addEventListener("quiz-crafter-copilot-command", handleCopilotCommand);
     return () => window.removeEventListener("quiz-crafter-copilot-command", handleCopilotCommand);
+  });
+  // Lets a candidate card rendered inside the floating assistant's own chat
+  // bubble (FloatingCopilot.jsx) actually do something -- reuses the exact
+  // same functions the page's own "Add"/"Save to Library" buttons call,
+  // just driven by an arbitrary candidate object from the chat instead of
+  // one already sitting in aiCandidates.
+  useEffect(() => {
+    const handleAddToSession = (event) => {
+      const candidate = event.detail?.candidate;
+      if (candidate) handleAddAiCandidateToSession(candidate);
+    };
+    const handleSaveToLibrary = (event) => {
+      const candidate = event.detail?.candidate;
+      if (candidate) handleSaveQuestionToLibrary(candidate);
+    };
+    window.addEventListener("quiz-crafter-copilot-add-to-session", handleAddToSession);
+    window.addEventListener("quiz-crafter-copilot-save-to-library", handleSaveToLibrary);
+    return () => {
+      window.removeEventListener("quiz-crafter-copilot-add-to-session", handleAddToSession);
+      window.removeEventListener("quiz-crafter-copilot-save-to-library", handleSaveToLibrary);
+    };
   });
   const handleSave = async (goLive = false) => {
     if (!user?.id) return toast.error("You must be signed in");
